@@ -32,8 +32,6 @@ from datetime import date
 import pandas as pd
 
 from smart_beta.benchmarks.capm import (
-    _N_CHAR_LEGS,
-    _N_SIZE_LEGS,
     _LAG_COL,
     _SCOPE_COL,
     _add_cross_sectional_groups,
@@ -84,8 +82,8 @@ def compute_ch3_factors(
     # book-to-market placeholder, not E/P.
     panel["ep_proxy"] = panel["book_value_lag"] / panel[_LAG_COL]
 
-    assert len(_SIZE_LABELS) == _N_SIZE_LEGS
-    assert len(_VALUE_LABELS) == _N_CHAR_LEGS
+    assert len(_SIZE_LABELS) == settings.benchmark_size_legs
+    assert len(_VALUE_LABELS) == settings.benchmark_char_legs
     _add_ch3_size_groups(panel, settings.bottom_mcap_exclude_pct)
     _add_cross_sectional_groups(
         panel,

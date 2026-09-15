@@ -22,8 +22,6 @@ from datetime import date
 import pandas as pd
 
 from smart_beta.benchmarks.capm import (
-    _N_CHAR_LEGS,
-    _N_SIZE_LEGS,
     _LAG_COL,
     _add_cross_sectional_groups,
     _finalize,
@@ -56,8 +54,8 @@ def compute_ff3_factors(
     # Value = lagged book value / lagged market cap (book-to-market).
     panel["book_to_market"] = panel["book_value_lag"] / panel[_LAG_COL]
 
-    assert len(_SIZE_LABELS) == _N_SIZE_LEGS
-    assert len(_VALUE_LABELS) == _N_CHAR_LEGS
+    assert len(_SIZE_LABELS) == settings.benchmark_size_legs
+    assert len(_VALUE_LABELS) == settings.benchmark_char_legs
     _add_cross_sectional_groups(panel, _LAG_COL, "size_grp", _SIZE_LABELS)
     _add_cross_sectional_groups(
         panel, "book_to_market", "value_grp", _VALUE_LABELS

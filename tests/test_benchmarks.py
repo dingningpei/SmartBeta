@@ -17,13 +17,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from smart_beta.benchmarks.capm import _load_panel, compute_market_excess_return
+from smart_beta.benchmarks.capm import (
+    _LAG_COL,
+    _load_panel,
+    _value_weighted_by,
+    _value_weighted_returns,
+    compute_market_excess_return,
+)
 from smart_beta.benchmarks.ch3 import _add_ch3_size_groups, compute_ch3_factors
 from smart_beta.benchmarks.ch4 import compute_ch4_factors
 from smart_beta.benchmarks.ff3 import compute_ff3_factors
 from smart_beta.benchmarks.ff5 import compute_ff5_factors
 from smart_beta.config.settings import DEFAULT_SETTINGS
-from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, RETURN_COL
+from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, RETURN_COL, STOCK_COL
 
 START = "2015-01-31"
 END = "2030-12-31"  # wide enough to cover the whole synthetic fixture
@@ -88,6 +94,45 @@ def test_factor_construction_is_deterministic(synthetic_source, constructor, col
     first = constructor(synthetic_source, START, END)
     second = constructor(synthetic_source, START, END)
     pd.testing.assert_frame_equal(first, second)
+
+
+def test_value_weighted_returns_excludes_nonpositive_lagged_mcap():
+    """Trap 2: a stock whose lagged market cap is zero or negative cannot be
+    held, so it must be excluded from every value-weighted return.
+
+    The synthetic fixture only ever generates strictly positive market cap, so
+    this hand-built panel is the only coverage of that guard; a naive
+    ``group_return_stats`` call (which filters NaN weights but not
+    zero/negative ones) would silently change the result.
+    """
+    date = pd.Timestamp("2020-01-31")
+    panel = pd.DataFrame(
+        {
+            DATE_COL: [date, date, date, date],
+            STOCK_COL: ["a", "b", "c", "d"],
+            RETURN_COL: [0.10, 0.50, 0.20, 0.40],
+            _LAG_COL: [100.0, -50.0, 200.0, 0.0],  # b negative, d zero
+            "grp": ["x", "x", "y", "y"],
+        }
+    )
+
+    # Whole cross-section: only a (100) and c (200) are holdable.
+    vw = _value_weighted_returns(panel)
+    expected = (0.10 * 100.0 + 0.20 * 200.0) / (100.0 + 200.0)
+    assert vw.loc[date] == pytest.approx(expected)
+
+    # A naive NaN-only weight filter would also hold b's -50 weight and d's 0
+    # weight, giving a materially different answer (0.10 instead of 0.1667),
+    # so the assertion above really exercises the positive-weight screen.
+    naive = (0.10 * 100.0 + 0.50 * -50.0 + 0.20 * 200.0 + 0.40 * 0.0) / (
+        100.0 - 50.0 + 200.0 + 0.0
+    )
+    assert vw.loc[date] != pytest.approx(naive)
+
+    # Per-group: x must drop b (negative weight), y must drop d (zero weight).
+    by_group = _value_weighted_by(panel, ["grp"])
+    assert by_group.loc[(date, "x")] == pytest.approx(0.10)
+    assert by_group.loc[(date, "y")] == pytest.approx(0.20)
 
 
 def test_capm_market_factor_tracks_ground_truth_market_return(synthetic_source):

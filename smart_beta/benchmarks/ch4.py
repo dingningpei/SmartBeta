@@ -27,8 +27,6 @@ import numpy as np
 import pandas as pd
 
 from smart_beta.benchmarks.capm import (
-    _N_CHAR_LEGS,
-    _N_SIZE_LEGS,
     _LAG_COL,
     _SCOPE_COL,
     _add_cross_sectional_groups,
@@ -46,32 +44,40 @@ from smart_beta.benchmarks.ch3 import (
     _add_ch3_size_groups,
 )
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
+from smart_beta.data.align import lag_panel
 from smart_beta.data.schema import DATE_COL, STOCK_COL, TRADING_STATUS_COLS
 from smart_beta.data.sources.base import DataSource
 
 __all__ = ["compute_ch4_factors"]
 
 _TURNOVER_LABELS = ("low", "neutral", "high")
-# Trailing window (months) used to estimate "normal" turnover.
-# TODO(settings): promote to a named Settings constant once a real turnover
-# field exists (e.g. ``turnover_abnormal_window_months``).
-_TURNOVER_WINDOW = 6
 
 
-def _add_turnover_proxy(panel: pd.DataFrame, status: pd.DataFrame) -> pd.DataFrame:
+def _add_turnover_proxy(
+    panel: pd.DataFrame, status: pd.DataFrame, window: int
+) -> pd.DataFrame:
     """Return ``panel`` plus the documented abnormal-turnover placeholder.
 
     Uses trading-status flags only.  All derived values are lagged so a row
-    dated ``t`` only contains information observable at ``t - 1``.
+    dated ``t`` only contains information observable at ``t - 1``.  ``window``
+    is the trailing window (months) used to estimate "normal" turnover.
     """
     merged = panel.merge(status, on=[DATE_COL, STOCK_COL], how="left")
     merged = merged.sort_values([STOCK_COL, DATE_COL])
 
     merged["_activity"] = 1.0 - merged["is_suspended"].astype(float)
-    # Lagged activity at t-1 and the trailing mean over t-7 .. t-2.
-    merged["_activity_lag"] = merged.groupby(STOCK_COL)["_activity"].shift(1)
+    # Lagged activity at t-1 (delegated to the canonical lag utility) and the
+    # trailing mean over t-(window+1) .. t-2.
+    lagged = lag_panel(
+        merged,
+        ["_activity"],
+        periods=1,
+        date_col=DATE_COL,
+        stock_col=STOCK_COL,
+    )
+    merged["_activity_lag"] = lagged["_activity"].to_numpy()
     merged["_activity_avg"] = merged.groupby(STOCK_COL)["_activity"].transform(
-        lambda s: s.rolling(_TURNOVER_WINDOW, min_periods=3).mean().shift(2)
+        lambda s: s.rolling(window, min_periods=3).mean().shift(2)
     )
     merged["abnormal_turnover"] = merged["_activity_lag"] - merged["_activity_avg"]
 
@@ -103,13 +109,15 @@ def compute_ch4_factors(
     panel = _load_panel(source, start, end, fields=["book_value"])
     dates = _full_dates(panel)
     status = source.get_trading_status(start, end)
-    panel = _add_turnover_proxy(panel, status)
+    panel = _add_turnover_proxy(
+        panel, status, settings.turnover_abnormal_window_months
+    )
 
     # Same E/P placeholder caveat as CH-3: book_value / mcap, not real E/P.
     panel["ep_proxy"] = panel["book_value_lag"] / panel[_LAG_COL]
 
-    assert len(_SIZE_LABELS) == _N_SIZE_LEGS
-    assert len(_VALUE_LABELS) == _N_CHAR_LEGS
+    assert len(_SIZE_LABELS) == settings.benchmark_size_legs
+    assert len(_VALUE_LABELS) == settings.benchmark_char_legs
     _add_ch3_size_groups(panel, settings.bottom_mcap_exclude_pct)
     _add_cross_sectional_groups(
         panel,

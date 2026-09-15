@@ -26,8 +26,6 @@ from datetime import date
 import pandas as pd
 
 from smart_beta.benchmarks.capm import (
-    _N_CHAR_LEGS,
-    _N_SIZE_LEGS,
     _LAG_COL,
     _add_cross_sectional_groups,
     _add_extra_lag,
@@ -69,8 +67,8 @@ def compute_ff5_factors(
         panel["book_value_lag"] / panel["book_value_lag2"] - 1.0
     )
 
-    assert len(_SIZE_LABELS) == _N_SIZE_LEGS
-    assert len(_VALUE_LABELS) == _N_CHAR_LEGS
+    assert len(_SIZE_LABELS) == settings.benchmark_size_legs
+    assert len(_VALUE_LABELS) == settings.benchmark_char_legs
     _add_cross_sectional_groups(panel, _LAG_COL, "size_grp", _SIZE_LABELS)
     _add_cross_sectional_groups(
         panel, "book_to_market", "value_grp", _VALUE_LABELS
