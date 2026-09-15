@@ -4,7 +4,7 @@ The known-answer test leans on the synthetic fixture's documented
 ground truth: ``signal`` at date *t* is constructed to have a linear effect
 (``ground_truth.true_signal_coef``) on the return at *t + 1*. Because the
 engine regresses whatever is in the panel, the fixture's signal is aligned
-to next-period returns with :func:`lag_characteristics` first.
+to next-period returns with :func:`~smart_beta.data.align.lag_panel` first.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ import pytest
 import statsmodels.api as sm
 
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
+from smart_beta.data.align import lag_panel
 from smart_beta.data.schema import DATE_COL, RETURN_COL, STOCK_COL
 from smart_beta.engines.fama_macbeth import (
     FamaMacBethResult,
     fama_macbeth,
-    lag_characteristics,
     winsorize_and_standardize,
 )
 
@@ -33,7 +33,7 @@ def _aligned_panel(synthetic_source, fields=("signal",)) -> pd.DataFrame:
     returns = synthetic_source.get_returns(START, END)
     chars = synthetic_source.get_financials(START, END, fields=fields)
     panel = returns.merge(chars, on=[DATE_COL, STOCK_COL], how="inner")
-    panel = lag_characteristics(
+    panel = lag_panel(
         panel, fields, periods=1, date_col=DATE_COL, stock_col=STOCK_COL
     )
     return panel.dropna(subset=[*fields, RETURN_COL]).reset_index(drop=True)
@@ -250,29 +250,45 @@ def test_periods_with_too_few_observations_are_skipped():
     assert (result.n_obs == 10).all()
 
 
+def test_settings_min_obs_controls_which_periods_are_skipped():
+    """Overriding ``fama_macbeth_min_obs`` must actually change the skip
+    rule, proving the Settings field (not a hardcoded module constant)
+    drives which periods survive."""
+    dates = pd.date_range("2020-01-31", periods=3, freq="ME")
+    sizes = {dates[0]: 10, dates[1]: 4, dates[2]: 2}
+    rows = []
+    for d, n in sizes.items():
+        for j in range(n):
+            rows.append(
+                {
+                    DATE_COL: d,
+                    STOCK_COL: f"S{j:03d}",
+                    "char": float(j % 3),
+                    RETURN_COL: 0.01 * (j % 3),
+                }
+            )
+    panel = pd.DataFrame(rows)
+
+    default_result = fama_macbeth(panel, ["char"], RETURN_COL, date_col=DATE_COL)
+    strict_result = fama_macbeth(
+        panel,
+        ["char"],
+        RETURN_COL,
+        date_col=DATE_COL,
+        settings=Settings(fama_macbeth_min_obs=5),
+    )
+
+    # Default (min_obs=3) keeps the 10- and 4-observation periods, skips 2.
+    assert default_result.n_periods == 2
+    assert set(default_result.coefficients.index) == {dates[0], dates[1]}
+    # Raising min_obs to 5 also drops the 4-observation period.
+    assert strict_result.n_periods == 1
+    assert set(strict_result.coefficients.index) == {dates[0]}
+
+
 def test_missing_columns_raise(synthetic_source):
     panel = _aligned_panel(synthetic_source)
     with pytest.raises(ValueError, match="missing required columns"):
         fama_macbeth(panel, ["not_a_column"], RETURN_COL, date_col=DATE_COL)
     with pytest.raises(ValueError, match="at least one column"):
         fama_macbeth(panel, [], RETURN_COL, date_col=DATE_COL)
-
-
-def test_lag_characteristics_shifts_within_stock_and_preserves_input():
-    panel = pd.DataFrame(
-        {
-            DATE_COL: pd.to_datetime(["2020-01-31", "2020-02-29", "2020-03-31"] * 2),
-            STOCK_COL: ["A"] * 3 + ["B"] * 3,
-            "char": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0],
-            RETURN_COL: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-        }
-    )
-    before = panel.copy(deep=True)
-
-    out = lag_characteristics(panel, ["char"], periods=1)
-
-    a = out.loc[out[STOCK_COL] == "A"].sort_values(DATE_COL)["char"].tolist()
-    b = out.loc[out[STOCK_COL] == "B"].sort_values(DATE_COL)["char"].tolist()
-    assert np.isnan(a[0]) and a[1:] == [1.0, 2.0]
-    assert np.isnan(b[0]) and b[1:] == [10.0, 20.0]
-    pd.testing.assert_frame_equal(panel, before)
