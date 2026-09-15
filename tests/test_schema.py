@@ -3,9 +3,11 @@ import pytest
 
 from smart_beta.data.schema import (
     DATE_COL,
+    FACTOR_PANEL_SCHEMA,
     RETURN_COL,
     RETURN_PANEL_SCHEMA,
     STOCK_COL,
+    VALUE_COL,
     SchemaError,
     validate_panel,
 )
@@ -43,3 +45,11 @@ def test_validate_panel_rejects_wrong_dtype():
     df[DATE_COL] = df[DATE_COL].astype(str)
     with pytest.raises(SchemaError, match="datetime-like"):
         validate_panel(df, RETURN_PANEL_SCHEMA, name="test")
+
+
+def test_factor_panel_schema_is_shared_with_factors_base():
+    from smart_beta.factors.base import FACTOR_PANEL_SCHEMA as base_schema
+    from smart_beta.factors.base import VALUE_COL as base_value_col
+
+    assert base_schema is FACTOR_PANEL_SCHEMA
+    assert base_value_col is VALUE_COL
