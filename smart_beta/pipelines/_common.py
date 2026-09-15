@@ -10,7 +10,8 @@ from datetime import date
 import pandas as pd
 
 from smart_beta.config.settings import Settings
-from smart_beta.data.schema import DATE_COL, STOCK_COL
+from smart_beta.data.align import lag_panel
+from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, STOCK_COL
 from smart_beta.data.sources.base import DataSource
 from smart_beta.data.universe import TRADABLE_COL, build_tradable_universe
 from smart_beta.engines.portfolio_sort import group_return_stats
@@ -39,6 +40,29 @@ def build_universe_and_tradable_returns(
         tradable_keys, on=[DATE_COL, STOCK_COL], how="inner"
     )
     return universe, tradable_returns
+
+
+def lag_market_cap(market_cap: pd.DataFrame) -> pd.DataFrame:
+    """Return ``market_cap`` with its ``mcap`` column lagged one period per stock.
+
+    A stock's market cap at date *t* is computed from its price at *t* and so
+    already embeds the return realized at *t*. Using that contemporaneous
+    value as a portfolio weight would weight a period's return by a quantity
+    that contains the very return being measured, so every *weighting* use of
+    market cap in the pipelines goes through this helper.
+
+    This is deliberately different from the market-cap use inside
+    :func:`build_universe_and_tradable_returns`, which screens whether a stock
+    is tradable *as of the current date* and does not weight a same-period
+    return.
+    """
+    return lag_panel(
+        market_cap,
+        [MARKET_CAP_COL],
+        periods=1,
+        date_col=DATE_COL,
+        stock_col=STOCK_COL,
+    )
 
 
 def value_weighted_market_return(

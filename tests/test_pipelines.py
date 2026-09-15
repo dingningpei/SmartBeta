@@ -30,6 +30,7 @@ from smart_beta.engines.portfolio_sort import (
     long_short_return,
     sort_portfolios,
 )
+from smart_beta.factors.beta import rolling_ols_beta
 from smart_beta.pipelines import (
     BetaPortfolioResult,
     FamaMacBethPipelineResult,
@@ -39,6 +40,8 @@ from smart_beta.pipelines import (
 )
 from smart_beta.pipelines._common import (
     build_universe_and_tradable_returns,
+    lag_market_cap,
+    value_weighted_market_return,
 )
 
 START = "2015-01-31"
@@ -255,3 +258,146 @@ def test_pipelines_are_deterministic(synthetic_source):
         pd.testing.assert_series_equal(
             getattr(first_fm.result, field), getattr(second_fm.result, field)
         )
+
+
+# ---------------------------------------------------------------------------
+# Market-cap weighting must be lagged, not contemporaneous
+# ---------------------------------------------------------------------------
+
+
+def test_lagged_market_cap_changes_value_weighted_results():
+    """A stock's market cap jumps with its own realized return, so the
+    value-weighted result must differ once the weight is lagged.
+
+    Stock A returns +50% on the final date and its market cap jumps from 100
+    to 150 in the same period. Weighting that return by the contemporaneous
+    cap over-weights it relative to the lagged (100) weight, both for the
+    whole-cross-section market return and for a within-group portfolio sort.
+    """
+    d0 = pd.Timestamp("2020-01-31")
+    d1 = pd.Timestamp("2020-02-29")
+    panel = pd.DataFrame(
+        {
+            DATE_COL: [d0, d0, d0, d0, d1, d1, d1, d1],
+            STOCK_COL: ["A", "B", "C", "D"] * 2,
+            RETURN_COL: [0.0, 0.0, 0.0, 0.0, 0.50, 0.0, 0.10, 0.0],
+            MARKET_CAP_COL: [100.0] * 4 + [150.0, 100.0, 100.0, 100.0],
+            "char": [5.0, 4.0, 1.0, 2.0] * 2,
+        }
+    )
+    raw_mcap = panel[[DATE_COL, STOCK_COL, MARKET_CAP_COL]]
+    lagged_mcap = lag_market_cap(raw_mcap)
+    contemporaneous = panel
+    lagged = panel.drop(columns=[MARKET_CAP_COL]).merge(
+        lagged_mcap, on=[DATE_COL, STOCK_COL], how="left"
+    )
+
+    # (1) Whole-cross-section value-weighted market return.
+    contemp_market = value_weighted_market_return(
+        contemporaneous, RETURN_COL, MARKET_CAP_COL
+    )
+    lagged_market = value_weighted_market_return(lagged, RETURN_COL, MARKET_CAP_COL)
+    assert contemp_market.loc[d1] == pytest.approx(
+        (0.50 * 150.0 + 0.10 * 100.0) / (150.0 + 100.0 + 100.0 + 100.0)
+    )
+    assert lagged_market.loc[d1] == pytest.approx(
+        (0.50 * 100.0 + 0.10 * 100.0) / (100.0 * 4)
+    )
+    assert not np.isclose(contemp_market.loc[d1], lagged_market.loc[d1])
+
+    # (2) Within-group value-weighted sort on a characteristic. A and B form
+    # the high-characteristic group; A's return dominates under the
+    # contemporaneous weight because its cap jumped that same period.
+    contemp_sorted = sort_portfolios(
+        contemporaneous,
+        char_col="char",
+        ret_col=RETURN_COL,
+        weight_col=MARKET_CAP_COL,
+        date_col=DATE_COL,
+        n_groups=2,
+    )
+    lagged_sorted = sort_portfolios(
+        lagged,
+        char_col="char",
+        ret_col=RETURN_COL,
+        weight_col=MARKET_CAP_COL,
+        date_col=DATE_COL,
+        n_groups=2,
+    )
+    contemp_ls = long_short_return(
+        contemp_sorted,
+        low_group=1,
+        high_group=2,
+        measure=VW_RETURN_COL,
+        date_col=DATE_COL,
+    )
+    lagged_ls = long_short_return(
+        lagged_sorted,
+        low_group=1,
+        high_group=2,
+        measure=VW_RETURN_COL,
+        date_col=DATE_COL,
+    )
+    assert contemp_ls.loc[d1] == pytest.approx(0.30 - 0.05)
+    assert lagged_ls.loc[d1] == pytest.approx(0.25 - 0.05)
+    assert not np.isclose(contemp_ls.loc[d1], lagged_ls.loc[d1])
+
+
+def test_pipeline_weights_use_lagged_market_cap(synthetic_source):
+    """The pipeline's market-return and sort weights are the lagged market
+    cap, not the contemporaneous one.
+
+    Reconstructs the naive (contemporaneous-weight) variant from the same
+    public primitives and shows both the beta panel (whose market return is
+    value-weighted) and the long-short spread differ.
+    """
+    result = build_beta_sorted_portfolios(synthetic_source, START, END)
+    _, tradable_returns = build_universe_and_tradable_returns(
+        synthetic_source, START, END, DEFAULT_SETTINGS
+    )
+    raw_mcap = synthetic_source.get_market_cap(START, END)
+    risk_free = synthetic_source.get_risk_free(START, END)
+
+    # (1) The market return that feeds rolling_ols_beta.
+    naive_market_return = value_weighted_market_return(
+        tradable_returns.merge(raw_mcap, on=[DATE_COL, STOCK_COL], how="inner"),
+        RETURN_COL,
+        MARKET_CAP_COL,
+    )
+    naive_beta = rolling_ols_beta(
+        tradable_returns, naive_market_return, risk_free, settings=DEFAULT_SETTINGS
+    )
+    beta_compare = result.beta.merge(
+        naive_beta, on=[DATE_COL, STOCK_COL], suffixes=("_pipe", "_naive")
+    )
+    assert not np.allclose(
+        beta_compare["value_pipe"], beta_compare["value_naive"], equal_nan=True
+    )
+
+    # (2) The sort weight itself. result.beta_lagged is already correctly
+    # lagged, so only the market-cap weight differs here.
+    naive_panel = tradable_returns.merge(
+        result.beta_lagged.rename(columns={VALUE_COL: _SORT_CHAR_COL}),
+        on=[DATE_COL, STOCK_COL],
+        how="left",
+    ).merge(raw_mcap, on=[DATE_COL, STOCK_COL], how="left")
+    naive_sorted = sort_portfolios(
+        naive_panel,
+        char_col=_SORT_CHAR_COL,
+        ret_col=RETURN_COL,
+        weight_col=MARKET_CAP_COL,
+        date_col=DATE_COL,
+    )
+    naive_long_short = long_short_return(
+        naive_sorted,
+        low_group=1,
+        high_group=DEFAULT_SETTINGS.n_portfolio_groups,
+        measure=VW_RETURN_COL,
+        date_col=DATE_COL,
+    )
+
+    common = result.long_short.index.intersection(naive_long_short.index)
+    assert len(common) > 10
+    assert not result.long_short.loc[common].equals(naive_long_short.loc[common])
+    diffs = (result.long_short.loc[common] - naive_long_short.loc[common]).abs()
+    assert diffs.max() > 1e-6

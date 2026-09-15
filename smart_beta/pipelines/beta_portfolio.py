@@ -30,6 +30,7 @@ from smart_beta.engines.portfolio_sort import (
 from smart_beta.factors.beta import rolling_ols_beta
 from smart_beta.pipelines._common import (
     build_universe_and_tradable_returns,
+    lag_market_cap,
     value_weighted_market_return,
 )
 
@@ -72,11 +73,13 @@ def build_beta_sorted_portfolios(
     universe, tradable_returns = build_universe_and_tradable_returns(
         source, start, end, settings
     )
-    market_cap = source.get_market_cap(start, end)
+    # Market cap at date t embeds the return realized at t, so it is lagged
+    # before being used to weight a same-period return (here and below).
+    lagged_market_cap = lag_market_cap(source.get_market_cap(start, end))
     risk_free = source.get_risk_free(start, end)
 
     weighting_panel = tradable_returns.merge(
-        market_cap, on=[DATE_COL, STOCK_COL], how="inner"
+        lagged_market_cap, on=[DATE_COL, STOCK_COL], how="inner"
     )
     market_return = value_weighted_market_return(
         weighting_panel, RETURN_COL, MARKET_CAP_COL
@@ -94,7 +97,9 @@ def build_beta_sorted_portfolios(
         on=[DATE_COL, STOCK_COL],
         how="left",
     )
-    sort_panel = sort_panel.merge(market_cap, on=[DATE_COL, STOCK_COL], how="left")
+    sort_panel = sort_panel.merge(
+        lagged_market_cap, on=[DATE_COL, STOCK_COL], how="left"
+    )
 
     sorted_returns = sort_portfolios(
         sort_panel,
