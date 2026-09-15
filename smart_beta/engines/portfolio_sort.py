@@ -11,12 +11,12 @@ module exists:
    ``n_groups`` "value-weighted group returns" summed to roughly the
    aggregate market return instead of being proper within-group weighted
    means. Here every group's value-weighted return divides by that group's
-   *own* valid weight sum (see :func:`_group_return_stats`).
+   *own* valid weight sum (see :func:`group_return_stats`).
 2. **Boundary-tied observations dropped.** The lowest group used ``<=``
    while every other group used strict ``<`` / ``>``, so a stock tied
    exactly on a percentile boundary could fall through every mask. Groups
    here are assigned by a rank-based partition that covers every sortable
-   observation exactly once, ties included (see :func:`_assign_groups`).
+   observation exactly once, ties included (see :func:`assign_groups`).
 3. **Silent skip of empty cross-sections.** ``if len(a) == 0 | len(b) == 0:
    continue`` (bitwise ``|`` on two ints, which also does not short-circuit)
    silently dropped an entire date from the output, misaligning every
@@ -56,6 +56,22 @@ import numpy as np
 import pandas as pd
 
 from smart_beta.config.settings import DEFAULT_SETTINGS
+
+__all__ = [
+    "assign_groups",
+    "group_return_stats",
+    "sort_portfolios",
+    "double_sort_portfolios",
+    "long_short_return",
+    "GROUP_COL",
+    "GROUP_1_COL",
+    "GROUP_2_COL",
+    "EW_RETURN_COL",
+    "VW_RETURN_COL",
+    "N_STOCKS_COL",
+    "N_RETURNS_COL",
+    "WEIGHT_SUM_COL",
+]
 
 #: Default output column names. Exposed so callers can build on them
 #: without hardcoding string literals.
@@ -101,7 +117,7 @@ def _check_n_groups(n_groups: int, *, name: str = "n_groups") -> int:
     return n_groups
 
 
-def _assign_groups(values: pd.Series, n_groups: int) -> pd.Series:
+def assign_groups(values: pd.Series, n_groups: int) -> pd.Series:
     """Partition ``values`` into ``n_groups`` equal-ish buckets.
 
     Ranks are made unique with ``method="first"`` so ties cannot straddle
@@ -113,6 +129,11 @@ def _assign_groups(values: pd.Series, n_groups: int) -> pd.Series:
 
     Returns a float Series aligned to ``values.index`` so that an
     all-NaN/empty cross-section is representable.
+
+    Exposed as public, reusable API for other modules that need the same
+    rank-based bucket assignment without depending on
+    :func:`sort_portfolios`'s full aggregation loop, such as
+    ``smart_beta.benchmarks``.
     """
     groups = pd.Series(np.nan, index=values.index, dtype="float64")
     valid = values.notna()
@@ -125,7 +146,7 @@ def _assign_groups(values: pd.Series, n_groups: int) -> pd.Series:
     return groups
 
 
-def _group_return_stats(
+def group_return_stats(
     members: pd.DataFrame, ret_col: str, weight_col: str
 ) -> tuple[float, float, int, int, float]:
     """Equal- and value-weighted return for one already-formed group.
@@ -133,6 +154,11 @@ def _group_return_stats(
     Returns ``(ew, vw, n_stocks, n_returns, weight_sum)`` where the
     value-weighted return's denominator is the group's own sum of valid
     weights -- never the full cross-section's (bug #1).
+
+    Exposed as public, reusable API for other modules that need the same
+    within-group equal-/value-weighted statistics without depending on
+    :func:`sort_portfolios`'s full aggregation loop, such as
+    ``smart_beta.benchmarks``.
     """
     n_stocks = int(len(members))
     if n_stocks == 0:
@@ -233,12 +259,12 @@ def sort_portfolios(
     group_range = range(1, n_groups + 1)
 
     for date, sub in df.groupby(date_col, sort=True, dropna=False):
-        groups = _assign_groups(sub[char_col], n_groups)
+        groups = assign_groups(sub[char_col], n_groups)
         sub = sub.assign(_portfolio_group=groups)
 
         for g in group_range:
             members = sub.loc[sub["_portfolio_group"] == g]
-            ew, vw, n_stocks, n_returns, weight_sum = _group_return_stats(
+            ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
                 members, ret_col, weight_col
             )
             records.append(
@@ -316,15 +342,15 @@ def double_sort_portfolios(
     group_2_range = range(1, n_groups_2 + 1)
 
     for date, sub in df.groupby(date_col, sort=True, dropna=False):
-        first = _assign_groups(sub[char_col_1], n_groups_1)
+        first = assign_groups(sub[char_col_1], n_groups_1)
         second = pd.Series(np.nan, index=sub.index, dtype="float64")
 
         for g1 in group_1_range:
             in_group = first == g1
             if in_group.any():
-                # _assign_groups returns a Series indexed like its input, so
+                # assign_groups returns a Series indexed like its input, so
                 # this assignment aligns on the sub-index correctly.
-                second.loc[in_group] = _assign_groups(
+                second.loc[in_group] = assign_groups(
                     sub.loc[in_group, char_col_2], n_groups_2
                 )
 
@@ -333,7 +359,7 @@ def double_sort_portfolios(
         for g1 in group_1_range:
             for g2 in group_2_range:
                 members = sub.loc[(sub["_group_1"] == g1) & (sub["_group_2"] == g2)]
-                ew, vw, n_stocks, n_returns, weight_sum = _group_return_stats(
+                ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
                     members, ret_col, weight_col
                 )
                 records.append(
