@@ -17,7 +17,9 @@ from smart_beta.engines.portfolio_sort import (
     N_STOCKS_COL,
     VW_RETURN_COL,
     WEIGHT_SUM_COL,
+    assign_groups,
     double_sort_portfolios,
+    group_return_stats,
     long_short_return,
     sort_portfolios,
 )
@@ -419,3 +421,128 @@ def test_synthetic_panel_smoke(synthetic_source):
     pd.testing.assert_series_equal(
         per_date.rename(None), expected.rename(None), check_dtype=False
     )
+
+
+# ---------------------------------------------------------------------------
+# Direct unit tests for the public primitives (used independently of the
+# full aggregation loop, e.g. by smart_beta.benchmarks).
+# ---------------------------------------------------------------------------
+def test_assign_groups_known_bucket_boundaries_with_tie():
+    # n == 10 over n_groups == 5, so ranks r map to bucket floor((r-1)/2)+1.
+    # The two observations tied at 20 get sequential ranks 2 and 3 and
+    # therefore straddle the group-1/group-2 boundary rather than being
+    # dropped or lumped entirely into one bucket.
+    values = pd.Series([10.0, 20.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0])
+    groups = assign_groups(values, 5)
+
+    assert groups.tolist() == [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0]
+    assert groups.dtype == "float64"
+    # Every sortable observation is assigned exactly once.
+    assert int(groups.notna().sum()) == len(values)
+    assert sorted(groups.dropna().unique().tolist()) == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_assign_groups_fewer_observations_than_groups_leaves_empty_buckets():
+    # n == 3 over n_groups == 5: buckets 3 and 5 receive no members but the
+    # assigned buckets are still a subset of 1..n_groups with no drops.
+    values = pd.Series([1.0, 2.0, 3.0])
+    groups = assign_groups(values, 5)
+
+    assert groups.tolist() == [1.0, 2.0, 4.0]
+    assert set(groups.dropna().unique()).issubset({1.0, 2.0, 3.0, 4.0, 5.0})
+    assert set(groups.unique()) < {1.0, 2.0, 3.0, 4.0, 5.0}
+
+
+def test_assign_groups_nan_stays_nan_and_is_excluded():
+    values = pd.Series([1.0, np.nan, 2.0, np.nan, 3.0, 4.0])
+    groups = assign_groups(values, 2)
+
+    assert np.isnan(groups.iloc[1])
+    assert np.isnan(groups.iloc[3])
+    # Only the four valid observations are ranked/partitioned.
+    assert int(groups.notna().sum()) == 4
+    assert sorted(groups.dropna().unique().tolist()) == [1.0, 2.0]
+
+
+def test_assign_groups_all_nan_returns_all_nan():
+    values = pd.Series([np.nan, np.nan], index=["a", "b"])
+    groups = assign_groups(values, 3)
+
+    assert groups.index.tolist() == ["a", "b"]
+    assert groups.isna().all()
+
+
+def test_group_return_stats_equal_and_value_weighted():
+    members = pd.DataFrame(
+        {
+            "ret": [0.01, 0.02, 0.03, 0.04],
+            "mcap": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
+        members, "ret", "mcap"
+    )
+
+    assert ew == pytest.approx(np.mean([0.01, 0.02, 0.03, 0.04]))
+    assert vw == pytest.approx(
+        np.average([0.01, 0.02, 0.03, 0.04], weights=[1.0, 2.0, 3.0, 4.0])
+    )
+    assert n_stocks == 4
+    assert n_returns == 4
+    assert weight_sum == pytest.approx(10.0)
+
+
+def test_group_return_stats_empty_group():
+    members = pd.DataFrame(
+        {
+            "ret": pd.Series(dtype="float64"),
+            "mcap": pd.Series(dtype="float64"),
+        }
+    )
+    ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
+        members, "ret", "mcap"
+    )
+
+    assert np.isnan(ew)
+    assert np.isnan(vw)
+    assert n_stocks == 0
+    assert n_returns == 0
+    assert weight_sum == 0.0
+
+
+def test_group_return_stats_ignores_nan_returns_and_nan_weights():
+    members = pd.DataFrame(
+        {
+            "ret": [0.01, np.nan, 0.03, 0.04],
+            "mcap": [1.0, 2.0, np.nan, 4.0],
+        }
+    )
+    ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
+        members, "ret", "mcap"
+    )
+
+    # EW ignores the NaN return (rows 2-4), VW additionally ignores the
+    # NaN weight (row 3), and weight_sum only counts valid-return weights.
+    assert ew == pytest.approx(np.mean([0.01, 0.03, 0.04]))
+    assert vw == pytest.approx(np.average([0.01, 0.04], weights=[1.0, 4.0]))
+    assert n_stocks == 4
+    assert n_returns == 3
+    assert weight_sum == pytest.approx(5.0)
+
+
+def test_group_return_stats_all_nan_returns_gives_nan_means():
+    members = pd.DataFrame(
+        {
+            "ret": [np.nan, np.nan],
+            "mcap": [1.0, 2.0],
+        }
+    )
+    ew, vw, n_stocks, n_returns, weight_sum = group_return_stats(
+        members, "ret", "mcap"
+    )
+
+    assert np.isnan(ew)
+    assert np.isnan(vw)
+    assert n_stocks == 2
+    assert n_returns == 0
+    assert weight_sum == 0.0
