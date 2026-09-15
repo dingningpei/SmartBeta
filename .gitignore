@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Real vendor data must never be committed (see smart_beta/data/sources/).
+/data/
+*.mat
+*.csv
