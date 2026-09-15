@@ -21,18 +21,25 @@ import abc
 
 import pandas as pd
 
-from smart_beta.data.schema import DATE_COL, STOCK_COL, PanelSchema
-
-#: Column holding the factor/characteristic value in a long-format factor panel.
-VALUE_COL = "value"
-
-# TODO(schema): promote this to smart_beta/data/schema.py once the shared
-# schema module is unfrozen. Task B may not edit shared files, so the factor
-# panel schema is defined locally here instead.
-FACTOR_PANEL_SCHEMA = PanelSchema(
-    key_columns=(DATE_COL, STOCK_COL),
-    dtypes={DATE_COL: "datetime", STOCK_COL: "string", VALUE_COL: "float"},
+from smart_beta.data.schema import (
+    DATE_COL,
+    FACTOR_PANEL_SCHEMA,
+    STOCK_COL,
+    VALUE_COL,
+    PanelSchema,
 )
+
+# ``FACTOR_PANEL_SCHEMA``, ``VALUE_COL``, ``DATE_COL`` and ``STOCK_COL`` are
+# re-exported here for backwards compatibility; they are defined once in
+# :mod:`smart_beta.data.schema`.
+__all__ = [
+    "DATE_COL",
+    "FACTOR_PANEL_SCHEMA",
+    "STOCK_COL",
+    "VALUE_COL",
+    "Factor",
+    "PanelSchema",
+]
 
 
 class Factor(abc.ABC):

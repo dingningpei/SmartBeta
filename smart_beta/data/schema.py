@@ -26,6 +26,7 @@ STOCK_COL = "stock_id"
 RETURN_COL = "ret"
 MARKET_CAP_COL = "mcap"
 RISK_FREE_COL = "rf"
+VALUE_COL = "value"
 
 TRADING_STATUS_COLS: Sequence[str] = (
     "is_suspended",
@@ -123,4 +124,10 @@ LISTING_INFO_SCHEMA = PanelSchema(
 RISK_FREE_SCHEMA = PanelSchema(
     key_columns=(DATE_COL,),
     dtypes={DATE_COL: "datetime", RISK_FREE_COL: "float"},
+)
+
+#: Factor/characteristic value panel: one value per ``(date, stock_id)``.
+FACTOR_PANEL_SCHEMA = PanelSchema(
+    key_columns=(DATE_COL, STOCK_COL),
+    dtypes={DATE_COL: "datetime", STOCK_COL: "string", VALUE_COL: "float"},
 )

@@ -37,8 +37,18 @@ class Settings:
     # --- Portfolio sorts ---
     n_portfolio_groups: int = 5
 
+    # --- Benchmark factor construction ---
+    # Arity of the size x characteristic sort used by the FF3/FF5/CH-3/CH-4
+    # benchmark portfolios (2 size legs x 3 characteristic legs).
+    benchmark_size_legs: int = 2
+    benchmark_char_legs: int = 3
+    # Trailing window, in months, used to estimate "normal" turnover for the
+    # abnormal-turnover sentiment proxy (CH-4).
+    turnover_abnormal_window_months: int = 6
+
     # --- Inference ---
     newey_west_lags: int = 6
+    fama_macbeth_min_obs: int = 3  # min cross-sectional obs per regression period
 
     # --- Implementability ---
     transaction_cost_bps: float = 30.0
