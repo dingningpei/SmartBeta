@@ -28,8 +28,9 @@ Alignment note: the engine regresses the return column on the
 characteristic columns *as they appear in the supplied panel*. It does not
 lag anything implicitly. For a predictive "characteristic at *t*, return at
 *t + 1*" regression, align the panel first (e.g. with
-:func:`lag_characteristics`). Keeping alignment explicit avoids the
-position-indexed off-by-one errors the notebook workflow was prone to.
+:func:`~smart_beta.data.align.lag_panel`). Keeping alignment explicit
+avoids the position-indexed off-by-one errors the notebook workflow was
+prone to.
 """
 
 from __future__ import annotations
@@ -42,19 +43,15 @@ import pandas as pd
 import statsmodels.api as sm
 
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
+from smart_beta.engines.inference import newey_west_ols
 
 __all__ = [
     "FamaMacBethResult",
     "fama_macbeth",
     "winsorize_and_standardize",
-    "lag_characteristics",
 ]
 
 _CONST = "const"
-
-# TODO(settings): expose the minimum number of cross-sectional observations
-# per period as a Settings field instead of a module constant.
-_MIN_OBS_PER_PERIOD = 3
 
 
 @dataclass(frozen=True)
@@ -173,53 +170,13 @@ def _newey_west_mean(
 
     # HAC requires maxlags < nobs; cap it so short panels degrade gracefully.
     maxlags = int(max(0, min(int(lags), n - 1)))
-    design = np.ones((n, 1))
-    fit = sm.OLS(values, design).fit(
-        cov_type="HAC", cov_kwds={"maxlags": maxlags}
-    )
+    fit = newey_west_ols(values, np.ones(n), lags=maxlags)
     return (
         float(fit.params[0]),
         float(fit.bse[0]),
         float(fit.tvalues[0]),
         float(fit.pvalues[0]),
     )
-
-
-def lag_characteristics(
-    panel: pd.DataFrame,
-    characteristic_cols: Sequence[str],
-    periods: int = 1,
-    date_col: str = "date",
-    stock_col: str = "stock_id",
-) -> pd.DataFrame:
-    """Shift characteristics forward within each stock.
-
-    Returns a copy of ``panel`` (sorted by ``[stock_col, date_col]``) in
-    which each column in ``characteristic_cols`` has been shifted down by
-    ``periods`` rows within its stock. With ``periods=1`` the row at date
-    *t* therefore carries the characteristic observed at *t - 1*, alongside
-    the return already recorded for *t* -- exactly the alignment needed for
-    a predictive Fama-MacBeth regression.
-
-    Implemented as a per-stock ``groupby`` shift rather than positional
-    numpy slicing, so stocks with different listing dates cannot be
-    misaligned by a global row offset. The input frame is not modified.
-    """
-    characteristic_cols = list(characteristic_cols)
-    missing = [
-        c
-        for c in [*characteristic_cols, date_col, stock_col]
-        if c not in panel.columns
-    ]
-    if missing:
-        raise ValueError(f"panel is missing required columns: {missing}")
-
-    out = panel.copy()
-    out = out.sort_values([stock_col, date_col], kind="mergesort")
-    out[characteristic_cols] = out.groupby(stock_col, sort=False)[
-        characteristic_cols
-    ].shift(periods)
-    return out.reset_index(drop=True)
 
 
 def fama_macbeth(
@@ -258,8 +215,8 @@ def fama_macbeth(
 
     Notes
     -----
-    A period is skipped when fewer than ``_MIN_OBS_PER_PERIOD`` valid
-    observations (or no more than the number of regressors) remain after
+    A period is skipped when fewer than ``settings.fama_macbeth_min_obs``
+    valid observations (or no more than the number of regressors) remain after
     dropping NaNs, since its regression would be degenerate. Rows with a
     missing return or missing characteristic are dropped per period.
     """
@@ -297,7 +254,7 @@ def fama_macbeth(
     feature_names = [_CONST, *characteristic_cols, *industry_names]
     # Need at least one more observation than parameters to avoid a
     # perfectly-determined (zero-residual) regression.
-    min_required = max(_MIN_OBS_PER_PERIOD, len(feature_names) + 1)
+    min_required = max(settings.fama_macbeth_min_obs, len(feature_names) + 1)
 
     coefficient_records: list[np.ndarray] = []
     stderr_records: list[np.ndarray] = []
