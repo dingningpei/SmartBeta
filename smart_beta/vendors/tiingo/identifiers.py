@@ -1,49 +1,55 @@
 """Tiingo ``stock_id`` resolution policy (Phase 4B, task P4B-2).
 
+Empirical finding (live ``GET`` against this account, 2026-09-16)
+----------------------------------------------------------------
+``permaTicker`` is Tiingo's permanent, security-level identifier, but it is
+**not present** on the daily-metadata dict this function is specified to
+consume (the ``TiingoClient.get_meta`` shape: ``GET /tiingo/daily/{ticker}``).
+Live AAPL and delisted TWTR daily-meta bodies contain only ``ticker``,
+``name``, ``description``, ``startDate``, ``endDate``, and ``exchangeCode``
+-- no ``permaTicker``, no CIK, no other permanent security-level field.
+The same daily-meta call *does* return ``permaTicker`` on a different
+endpoint (``GET /tiingo/fundamentals/meta``: AAPL ``US000000000038``, TWTR
+``US000000000041``, META ``US000000000059``), so the field name is real,
+present, and still populated for delisted TWTR -- just not on get_meta.
+Because ``resolve_stock_id`` takes a get_meta dict, AAPL and TWTR both
+resolve via the ticker fallback with ``is_permanent=False``. Permanent
+identifier continuity cannot be established under this account/endpoint.
+
+Rename investigation (FB -> META): **negative**. Querying the pre-rename
+ticker ``FB`` does not return Meta Platforms and does not share any
+permanent id with ``META``. Live ``GET /tiingo/daily/FB`` is a different
+security that reused the ticker (ProShares S&P 500 Dynamic Daily Buffer
+ETF, BATS, ``startDate`` 2025-06-26). ``GET /tiingo/fundamentals/meta``
+returns META's ``permaTicker`` but does not return FB at all, so
+continuity across the rename cannot be shown. Tiingo's daily-meta data
+model does not let this account query pre-rename Meta history under
+``FB``.
+
+Policy
+------
+``resolve_stock_id`` uses ``permaTicker`` as ``stock_id`` with
+``is_permanent=True`` when that field is present and non-empty on the
+input dict (so a later caller that actually has the fundamentals-meta
+row still gets the permanent key). Only when it is missing or empty does
+it fall back to ``ticker`` with ``is_permanent=False``. CIK (and any
+other issuer-level field, including a CIK buried in ``secFilingWebsite``)
+is never read.
+
 Why this module exists
 ----------------------
 Phase 3's :class:`smart_beta.pit.source.PITDataSource` treats ``stock_id``
 as an opaque, stable string that names *exactly one security* -- every PIT
 schema keys on it.  For China A-shares a numeric code is a reliable
-security-level key.  For US equities the mutable ticker is not, and the
-SEC's CIK is not either: CIK names an *issuer*, and one issuer can carry
-several securities (e.g. multiple share classes), so using CIK would let
-two securities collapse onto one ``stock_id``.  This module freezes the
-US resolution policy.
-
-Empirical finding (offline specimens in
-``tests/fixtures/tiingo/identifiers/``)
----------------------------------------
-Tiingo's security-metadata response carries a permanent, security-level
-identifier in the field ``permaTicker``.  For every specimen examined it
-was present, non-empty, and independent of the mutable ``ticker``:
-
-* **AAPL** (active, long continuous listing): ``permaTicker`` =
-  ``US0000000001`` while ``ticker`` = ``AAPL``.  Present, non-empty,
-  security-level.
-* **TWTR** (delisted 2022-10-27): ``permaTicker`` = ``US0000000002`` while
-  ``ticker`` = ``TWTR``.  The permanent identity still resolves for a
-  security that no longer trades, which is precisely the case a PIT
-  backtest must handle without silently re-keying history.
-* **FB -> META rename**: the pre-rename ``FB`` record and the current
-  ``META`` record share the same ``permaTicker`` (``US0000000003``) while
-  their ``ticker`` values differ.  So the permanent field is stable across
-  a real, documented ticker change and identifies the security rather than
-  the ticker string.
-
-Policy
-------
-``resolve_stock_id`` uses ``permaTicker`` as ``stock_id`` with
-``is_permanent=True``.  Only when that field is missing or empty does it
-fall back to ``ticker`` with ``is_permanent=False`` -- a signal that
-identifier continuity is not trustworthy for that record.  CIK (and any
-other issuer-level field) is never read.
+security-level key.  For US equities the mutable ticker is not (the live
+FB reuse is the concrete counterexample), and the SEC's CIK is not either:
+CIK names an *issuer*, and one issuer can carry several securities (e.g.
+multiple share classes), so using CIK would let two securities collapse
+onto one ``stock_id``.
 
 Provenance
 ----------
-This task ran under an offline-fixtures-only constraint: the specimens
-above are committed fixture files shaped to Tiingo's documented
-daily-metadata response rather than freshly recorded live HTTP responses.
+Raw responses are committed under ``tests/fixtures/tiingo/identifiers/``.
 This module performs no I/O and its tests make no network calls.
 """
 
@@ -52,6 +58,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 #: Tiingo response field carrying the permanent, security-level identity.
+#: Empirically confirmed on ``GET /tiingo/fundamentals/meta`` and
+#: ``GET /tiingo/utilities/search``; absent from ``GET /tiingo/daily/{ticker}``.
 PERMANENT_ID_FIELD = "permaTicker"
 
 #: Tiingo response field carrying the mutable trading symbol.

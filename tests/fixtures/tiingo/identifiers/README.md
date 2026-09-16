@@ -1,27 +1,38 @@
 # Tiingo identifier-policy fixtures (P4B-2)
 
-These are the offline specimens backing
-`smart_beta/vendors/tiingo/identifiers.py` and
-`tests/test_tiingo_identifiers.py`.
+Live-captured Tiingo JSON backing `smart_beta/vendors/tiingo/identifiers.py`
+and `tests/test_tiingo_identifiers.py`. Captured 2026-09-16 via
+`urllib.request` with `Authorization: Token` from `TIINGO_API_KEY`. The
+key is not stored in these files.
 
-| file | security | state | `ticker` | `permaTicker` |
-| --- | --- | --- | --- | --- |
-| `aapl_meta.json` | Apple Inc | active, long continuous listing | `AAPL` | `US0000000001` |
-| `twtr_meta.json` | Twitter, Inc. | delisted 2022-10-27 | `TWTR` | `US0000000002` |
-| `fb_meta.json` | Meta Platforms, Inc. | pre-rename historical ticker | `FB` | `US0000000003` |
-| `meta_meta.json` | Meta Platforms, Inc. | post-rename current ticker | `META` | `US0000000003` |
+## Daily metadata (`GET /tiingo/daily/{ticker}`) — get_meta shape
 
-What these specimens establish:
+| file | ticker | name | `permaTicker` |
+| --- | --- | --- | --- |
+| `aapl_meta.json` | `AAPL` | Apple Inc (active) | **absent** |
+| `twtr_meta.json` | `TWTR` | Twitter Inc (delisted; `endDate` 2022-10-28) | **absent** |
+| `fb_meta.json` | `FB` | ProShares S&P 500 Dynamic Daily Buffer ETF (BATS, listed 2025-06-26) | **absent** |
+| `meta_meta.json` | `META` | Meta Platforms Inc - Class A | **absent** |
 
-- `permaTicker` is present and non-empty for an active security (AAPL) and
-  for a delisted one (TWTR) — the permanent identity survives delisting.
-- `permaTicker` is constant across the FB -> META ticker change while the
-  mutable `ticker` value changes, so it is a security-level identity that
-  is stable across a real rename.
-- `ticker` is the only fallback, and CIK is never used as `stock_id`
-  (CIK names an issuer, which may map to more than one security).
+Keys observed on every daily-meta body: `ticker`, `name`, `description`,
+`startDate`, `endDate`, `exchangeCode`. No `permaTicker`, no CIK.
 
-Provenance: this task was executed under an offline-fixtures-only
-constraint, so these files are committed specimens shaped to Tiingo's
-documented daily-security-metadata schema rather than freshly recorded live
-HTTP responses. No test in this task touches the network.
+`FB` is **not** pre-rename Meta: the ticker was reused by an unrelated ETF.
+This is why ticker fallback cannot certify identifier continuity.
+
+## Fundamentals metadata (`GET /tiingo/fundamentals/meta`)
+
+| file | ticker | `permaTicker` | `isActive` |
+| --- | --- | --- | --- |
+| `aapl_fundamentals_meta.json` | `aapl` | `US000000000038` | true |
+| `twtr_fundamentals_meta.json` | `twtr` | `US000000000041` | false |
+| `meta_fundamentals_meta.json` | `meta` | `US000000000059` | true |
+
+A request that also asked for `FB` returned only the three rows above, so
+FB -> META continuity cannot be shown on this endpoint either.
+
+`permaTicker` is a real, security-level field on this endpoint (and on
+`GET /tiingo/utilities/search`), including for delisted TWTR. It is not on
+the get_meta dict `resolve_stock_id` is specified to consume.
+
+No test in this task touches the network.

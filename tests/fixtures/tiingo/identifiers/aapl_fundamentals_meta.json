@@ -1,0 +1,19 @@
+{
+  "permaTicker": "US000000000038",
+  "ticker": "aapl",
+  "name": "Apple Inc",
+  "isActive": true,
+  "isADR": false,
+  "sector": "Technology",
+  "industry": "Consumer Electronics",
+  "sicCode": 3571,
+  "sicSector": "Manufacturing",
+  "sicIndustry": "Electronic Computers",
+  "reportingCurrency": "usd",
+  "location": "California, USA",
+  "companyWebsite": "http://www.apple.com",
+  "secFilingWebsite": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193",
+  "statementLastUpdated": "2026-08-21T01:01:17.444Z",
+  "dailyLastUpdated": "2026-09-16T22:30:10.682Z",
+  "dataProviderPermaTicker": "199059"
+}
