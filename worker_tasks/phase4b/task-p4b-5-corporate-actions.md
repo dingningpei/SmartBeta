@@ -18,6 +18,17 @@ dividend adjustment-factor formula**, and it is frozen below, not left for
 you to derive under time pressure — read it carefully, because it differs
 from the split case in a way that matters.
 
+**A second, separate requirement, added after review: proving the formula
+is algebraically correct is not the same as proving Tiingo's `divCash`
+field means what the formula assumes.** The formula's correctness is a
+closed mathematical fact given its inputs; whether Tiingo's `divCash` is
+actually recorded on the true ex-dividend date, with the true per-share
+amount, is a question about the vendor's data, and algebra cannot answer
+it. You must establish this with independent evidence before treating
+`divCash` as a canonical raw fact — see "Vendor semantics validation"
+below, which is a distinct, required step from the formula's own
+correctness test.
+
 This is one of four Wave 2 tasks (P4B-4 returns/market cap, P4B-6
 fundamentals, P4B-7 listing). You touch completely disjoint files from all
 three.
@@ -136,6 +147,55 @@ def map_eod_to_corporate_actions(
     """
 ```
 
+## Vendor semantics validation (required, separate from the algebra check)
+
+Before treating `divCash` as a canonical raw fact, establish with evidence
+— not by assuming the formula's own correctness proves it — that:
+
+1. Tiingo's `divCash` value for a given EOD row is associated with the
+   **actual ex-dividend date** the adjustment convention requires (the
+   date the raw close already reflects the price drop from), rather than
+   the declaration date, record date, or payment date. These are
+   genuinely different dates for a real dividend and a vendor could
+   plausibly attach the cash amount to any of them.
+2. The per-share cash amount itself corresponds to the real dividend for
+   that event (not, e.g., an annualized figure or a different
+   distribution).
+
+Evidence must come from at least one of:
+- Tiingo's own official documentation, if it states this plainly enough
+  to settle the question, and/or
+- cross-checking at least one real dividend event in your fixture against
+  an independent, authoritative public source for that company's
+  ex-dividend date and per-share amount (e.g. the company's own
+  investor-relations dividend history, or another public dividend
+  calendar not derived from Tiingo).
+
+Record the resulting finding explicitly in `corporate_actions.py`'s module
+docstring, in a form as unambiguous as P4B-2's `is_permanent` finding,
+e.g.: `DIVIDEND_SEMANTICS_CERTIFIED = True/False`, with one or two
+sentences of supporting evidence.
+
+**If this cannot be established** (no sufficient documentation, and no
+independent source you can obtain confirms the date/amount): do not
+silently proceed as if the assumption holds. Either (a) fail closed —
+raise a clearly-named exception for dividend rows specifically (split
+rows are unaffected; their factor doesn't depend on this question) rather
+than emitting an unverified `action_type="dividend"` row, or (b) emit the
+row but record `DIVIDEND_SEMANTICS_CERTIFIED = False` in the module
+docstring and say so plainly in your final report — pick whichever you
+judge better, but the choice and its reasoning must be explicit, not
+silent, either way. Whichever path you take, state it in your report in
+terms P4B-9 can act on: P4B-9 will add a
+`DIVIDEND ADJUSTMENT SEMANTICS = NOT CERTIFIED` line to its report if and
+only if `DIVIDEND_SEMANTICS_CERTIFIED` is `False` (or the exception path
+was taken) — so your finding must be legible without P4B-9 having to
+interpret prose.
+
+This does not change corporate-action ownership: the Tiingo adapter still
+produces raw facts only; `compute_adjusted_returns` remains the sole
+adjustment owner regardless of the outcome above.
+
 ## Fixture inputs
 
 Capture, under `tests/fixtures/tiingo/corporate_actions/`:
@@ -144,7 +204,13 @@ Capture, under `tests/fixtures/tiingo/corporate_actions/`:
 2. Any real security with a plain cash dividend event in its EOD history
    (many large-caps pay quarterly dividends; pick one with a clean,
    unambiguous `divCash` value and a clear day-over-day price move you can
-   hand-verify against).
+   hand-verify against). This same event is also your vendor-semantics
+   specimen: independently look up (outside Tiingo) that company's real
+   ex-dividend date and per-share cash amount for the period your fixture
+   covers, and save a short note of what you found and where (e.g. the
+   company's investor-relations dividend-history page) alongside the
+   fixture file itself, so the cross-check is reviewable later, not just
+   asserted in prose.
 3. If you can find one under current access, a real security with a
    split AND a dividend on the *same* date — if you cannot find one, you
    may hand-construct a synthetic-but-labeled-as-such row for this one
@@ -170,10 +236,23 @@ Capture, under `tests/fixtures/tiingo/corporate_actions/`:
    This second check is the anti-tautology safeguard — it must not merely
    confirm the function returns what the formula says, but confirm the
    formula itself is right.
-3. **No pre-adjustment leakage.** Confirm this module never reads or
+3. **Vendor semantics, independently confirmed (distinct from test 2).**
+   Using your independently-sourced ex-dividend date and per-share amount
+   from the fixture-inputs step above: assert that Tiingo's `divCash`
+   value in your fixture matches the independently-sourced per-share
+   amount, and that it is attached to the row whose date matches the
+   independently-sourced ex-dividend date. This test must fail if either
+   of those two things is not true — it is not satisfied by test 2's
+   algebra passing. If your investigation could not obtain independent
+   confirmation, this test instead asserts
+   `DIVIDEND_SEMANTICS_CERTIFIED is False` (or that the fail-closed
+   exception path is what actually happens for a dividend row) — i.e.
+   the test always asserts something about the real, honest outcome of
+   your investigation, never a value assumed to be true.
+4. **No pre-adjustment leakage.** Confirm this module never reads or
    returns anything resembling an adjusted/adjClose value — grep your own
    output columns against `CORPORATE_ACTIONS_SCHEMA`'s key/dtypes only.
-4. **Same-date split+dividend combination**, using your fixture from
+5. **Same-date split+dividend combination**, using your fixture from
    input #3: both rows are emitted (two rows, same `effective_date`,
    different `action_type`), and a hand-derived combined true return
    (compute both factors, multiply them, apply to the raw return, compare
@@ -181,9 +260,9 @@ Capture, under `tests/fixtures/tiingo/corporate_actions/`:
    separately) is verified — do not skip this even if the fixture is
    constructed rather than real; it is exactly the kind of case that has
    never been proven correct before this task.
-5. **Schema conformance** via `validate_panel`.
-6. **No input mutation** of `eod_rows`.
-7. **Provenance columns present.**
+6. **Schema conformance** via `validate_panel`.
+7. **No input mutation** of `eod_rows`.
+8. **Provenance columns present.**
 
 ## Non-goals
 
@@ -222,6 +301,9 @@ above.
 
 Report: (a) the exact field names Tiingo actually uses for split
 factor/dividend cash, confirmed against your fixture; (b) the hand-derived
-dividend-formula verification's numeric result; (c) test results; (d)
-`git diff --stat`. Do not merge, do not touch `master`, do not modify
-files outside the list above.
+dividend-formula verification's numeric result; (c) your vendor-semantics
+finding — the independent source you used, what it showed, and the final
+`DIVIDEND_SEMANTICS_CERTIFIED` value (or confirmation that the fail-closed
+exception path was used instead, if semantics could not be established);
+(d) test results; (e) `git diff --stat`. Do not merge, do not touch
+`master`, do not modify files outside the list above.

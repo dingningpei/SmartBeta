@@ -14,8 +14,8 @@ real `TiingoPITSource`, using real Tiingo specimens, and produce an
 explicit, honest report: **PASS / FAIL / NOT CERTIFIED**, with the third
 outcome never collapsed into either of the other two.
 
-**This is the task where three separate "do not overclaim" decisions from
-architecture review all converge into one deliverable.** You are not
+**This is the task where several separate "do not overclaim" decisions
+from architecture review all converge into one deliverable.** You are not
 deciding these policies — they are frozen — you are the one who writes
 them down as literal, checked-in report lines:
 
@@ -23,11 +23,20 @@ them down as literal, checked-in report lines:
 RESTATEMENT/VINTAGE RECONSTRUCTION = NOT CERTIFIED
 IDENTIFIER CONTINUITY = NOT CERTIFIED          (only if P4B-2 used ticker fallback)
 FLOAT MARKET CAP = APPROXIMATED (no distinct float-adjusted figure available from Tiingo)   (only if P4B-4's investigation found this)
+DIVIDEND ADJUSTMENT SEMANTICS = NOT CERTIFIED  (only if P4B-5's DIVIDEND_SEMANTICS_CERTIFIED finding was False, or its fail-closed path was taken)
 ```
 
-Read P4B-2's and P4B-4's actual merged module docstrings/reports before
-writing your report — do not guess whether the identifier and
-float-market-cap caveats apply; check what they actually found.
+Read P4B-2's, P4B-4's, and P4B-5's actual merged module docstrings/reports
+before writing your report — do not guess whether the identifier,
+float-market-cap, or dividend-semantics caveats apply; check what each
+actually found.
+
+**A further, separate completeness requirement, added after review: no
+check that was considered relevant/applicable in principle may simply
+disappear from the report.** The four named lines above cover specific,
+known caveats; they do not exhaust every way a check could end up not
+run. See "Completeness invariant" below — it is a distinct requirement
+from the four named lines, not satisfied by them alone.
 
 **Your working directory for this task will be a git worktree** at
 `/Users/dingningpei/Developer/personal/smart_beta/worktrees/task-p4b-9-certification`
@@ -70,12 +79,17 @@ def check_survivorship_through_view(view, *, stock_id, as_of, query_start, query
 def check_build_panel_uses_exchange_calendar(view, *, year, month, expected_trading_month_end, fundamental_fields=...) -> list[ComplianceCheckResult]: ...
 def check_corporate_action_adjustment_correct(view, *, stock_id, as_of, query_start, query_end, action_date, expected_true_return) -> list[ComplianceCheckResult]: ...
 
-# DO NOT CALL against TiingoPITSource (see policy below):
-# check_fundamentals_vintages_preserved, check_restatement_not_backfilled,
-# check_future_announcement_not_visible (this one specifically requires a
-#   documented future-knowledge-date specimen; only include it if P4B-6's
-#   real AAPL fixture happens to give you one you can honestly use --
-#   check before assuming)
+# DO NOT CALL against TiingoPITSource, ever, in this task:
+# check_fundamentals_vintages_preserved, check_restatement_not_backfilled
+# (both require multi-vintage evidence this adapter cannot provide --
+# see the RESTATEMENT/VINTAGE RECONSTRUCTION policy above)
+
+# CONSIDERED BUT MAY NOT BE RUNNABLE -- see "Completeness invariant" below:
+# check_future_announcement_not_visible (requires a documented
+#   future-knowledge-date specimen; only run it if P4B-6's real AAPL
+#   fixture genuinely gives you one you can honestly use -- check before
+#   assuming. If it does not, this check's disposition in the report is
+#   NOT RUN with a stated reason, not silence.)
 
 @dataclass(frozen=True)
 class ComplianceCheckResult:
@@ -150,6 +164,20 @@ def test_restatement_vintage_reconstruction_not_invoked(): ...
     # or check_restatement_not_backfilled against TiingoPITSource -- e.g.
     # by asserting on the report's check names and confirming neither
     # appears, so a future edit that quietly adds one back is caught
+
+def test_certification_report_covers_every_considered_check(): ...
+    # a general completeness test, not specific to any one caveat: build
+    # the explicit list of every check this task considered relevant in
+    # principle (the ones actually run above, PLUS
+    # check_fundamentals_vintages_preserved, check_restatement_not_backfilled,
+    # and check_future_announcement_not_visible), parse or reference
+    # docs/phase4b_tiingo_certification.md's content, and assert every
+    # name in that list appears in the document with an explicit
+    # disposition (PASS/FAIL/NOT CERTIFIED/NOT RUN) -- so a future edit
+    # that quietly drops a line from the report, for any of the four
+    # checks or any other reason, is caught here, not just for the two
+    # restatement-specific checks test_restatement_vintage_reconstruction_
+    # not_invoked already covers.
 ```
 
 ## The certification report document
@@ -157,9 +185,27 @@ def test_restatement_vintage_reconstruction_not_invoked(): ...
 Write `docs/phase4b_tiingo_certification.md` by hand (not
 auto-generated) after your test run, containing at minimum:
 
-1. A PASS/FAIL line for every check you actually ran (name, layer, one-line
-   result), matching your test suite's real output — do not write a
-   report that claims something your tests didn't actually verify.
+1. A disposition line for every check this task considered
+   relevant/applicable in principle — not only the ones you ran. Each
+   line is one of exactly:
+   ```
+   PASS
+   FAIL
+   NOT CERTIFIED
+   NOT RUN — <one-line reason>
+   ```
+   The "ran" checks (schema/determinism/survivorship/calendar/corporate-
+   action, both layers) get PASS or FAIL, matching your test suite's real
+   output — do not write a report that claims something your tests
+   didn't actually verify. `check_fundamentals_vintages_preserved` and
+   `check_restatement_not_backfilled` get `NOT CERTIFIED` (see line 2
+   below). `check_future_announcement_not_visible` gets either a real
+   PASS/FAIL (if you found a genuine specimen and ran it) or
+   `NOT RUN — <reason>` (if you did not) — it may never simply be absent
+   from the document. This is the **completeness invariant**: every check
+   named anywhere in this spec's "APIs you consume" section above must
+   have a line in the document, with no exceptions and no silent
+   omissions, regardless of which of the reasons below apply.
 2. The literal line `RESTATEMENT/VINTAGE RECONSTRUCTION = NOT CERTIFIED`,
    with one sentence explaining why (RGEN 2024 Q2 access blocked under
    current plan tier — cite the real HTTP 400 specimen).
@@ -173,7 +219,13 @@ auto-generated) after your test run, containing at minimum:
    P4B-4's merged module docstring shows `float_mcap` was set equal to
    `total_mcap` — read the real merged code to check; omit this line
    entirely if a genuinely distinct figure was found.
-5. A short "what remains deferred" list, copied from
+5. The literal line `DIVIDEND ADJUSTMENT SEMANTICS = NOT CERTIFIED` **if
+   and only if** P4B-5's merged module docstring shows
+   `DIVIDEND_SEMANTICS_CERTIFIED == False`, or shows that its fail-closed
+   exception path was taken for dividend rows — read the real merged code
+   to check; omit this line entirely if the vendor-semantics evidence was
+   successfully established.
+6. A short "what remains deferred" list, copied from
    `worker_tasks/phase4b/phase4b-plan.md`'s scope section (SEC/XBRL,
    compositing, Phase 4C engine migration, Phase 4D China adapter) — so
    the document is a complete, standalone record of Phase 4B's actual
@@ -201,6 +253,10 @@ than imported from theirs.
   circumstance in this task.
 - Do not write a report line implying a capability is certified unless a
   passing test in this same commit actually demonstrates it.
+- Do not let any considered check (see "APIs you consume" above) be
+  absent from `docs/phase4b_tiingo_certification.md` — an unavailable
+  specimen or capability is a reason to write `NOT RUN — <reason>`, never
+  a reason to omit the line entirely.
 
 ## Acceptance criteria
 
@@ -208,8 +264,12 @@ than imported from theirs.
 - All required tests above pass.
 - `docs/phase4b_tiingo_certification.md` exists, contains the mandatory
   `RESTATEMENT/VINTAGE RECONSTRUCTION = NOT CERTIFIED` line unconditionally,
-  and contains the two conditional lines correctly included or correctly
-  omitted based on what P4B-2/P4B-4 actually found.
+  contains the three conditional lines (`IDENTIFIER CONTINUITY`,
+  `FLOAT MARKET CAP`, `DIVIDEND ADJUSTMENT SEMANTICS`) correctly included
+  or correctly omitted based on what P4B-2/P4B-4/P4B-5 actually found,
+  and satisfies the completeness invariant: every check named in "APIs
+  you consume" above has an explicit disposition line (PASS/FAIL/
+  NOT CERTIFIED/`NOT RUN — <reason>`), with none simply absent.
 - `git diff --stat` against your branch's merge-base with `master` shows
   changes to exactly `tests/test_tiingo_certification.py`,
   `docs/phase4b_tiingo_certification.md`, and files under
@@ -234,9 +294,11 @@ exactly as every prior Phase 3/4B task did.
 
 ## When done
 
-Report: (a) the full PASS/FAIL tally; (b) which of the two conditional
+Report: (a) the full PASS/FAIL/NOT CERTIFIED/NOT RUN tally, covering every
+considered check with no omissions; (b) which of the three conditional
 NOT CERTIFIED lines you included or omitted, and why (quoting what
-P4B-2/P4B-4's real merged code showed); (c) test results; (d)
-`git diff --stat`; (e) the full text of
+P4B-2/P4B-4/P4B-5's real merged code showed); (c) the disposition and
+reason for `check_future_announcement_not_visible` specifically; (d) test
+results; (e) `git diff --stat`; (f) the full text of
 `docs/phase4b_tiingo_certification.md`. Do not touch `master`, do not
 modify files outside the list above.

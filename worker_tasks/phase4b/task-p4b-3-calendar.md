@@ -47,6 +47,21 @@ You need no fixtures at all for this task — do not create a
 for the optional sanity-check test below, and if you do, keep it to that
 one subdirectory.
 
+**Never create, under any circumstance:**
+- `smart_beta/vendors/__init__.py`
+- `smart_beta/vendors/tiingo/__init__.py`
+
+These two files are unconditionally and solely owned by P4B-1. P4B-1 not
+yet being merged when you start from the Wave-1 base commit is the
+**expected** situation under the parallel Wave-1 DAG (P4B-1, P4B-2, P4B-3
+all start from the same commit) — it is not evidence of an early start.
+You do not need either file to exist: write
+`smart_beta/vendors/tiingo/calendar_source.py` directly. Python's
+implicit namespace-package support (PEP 420) means this module imports
+correctly as `smart_beta.vendors.tiingo.calendar_source` with no
+`__init__.py` present anywhere in `vendors/` or `vendors/tiingo/` — you do
+not need to verify this claim, just rely on it.
+
 ## The API you consume (already merged — read the actual file)
 
 ```python

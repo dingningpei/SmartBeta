@@ -35,15 +35,31 @@ on branch `phase4b/task-p4b-2-identifiers`, branched from `master` at
 - `tests/test_tiingo_identifiers.py`
 - `tests/fixtures/tiingo/identifiers/` — any fixture files you need
 
-**You must not modify anything else.** Do not create
-`smart_beta/vendors/__init__.py` or `smart_beta/vendors/tiingo/__init__.py`
-— assume they will exist once P4B-1 merges; if they are genuinely absent
-when you start, create only the empty marker(s) strictly needed to import
-your own module, and say so explicitly in your report (this would mean
-P4B-1 hasn't merged yet and you started early — flag it, don't silently
-proceed as if it's normal). Do not touch `pyproject.toml`, anything under
-`smart_beta/pit/`, `smart_beta/data/`, `smart_beta/config/`, any other
-`vendors/tiingo/*.py` module, or any fixture subdirectory other than
+**You must not modify anything else.** In particular:
+
+**Never create, under any circumstance:**
+- `smart_beta/vendors/__init__.py`
+- `smart_beta/vendors/tiingo/__init__.py`
+
+These two files are unconditionally and solely owned by P4B-1. P4B-1 not
+yet being merged when you start from the Wave-1 base commit is the
+**expected** situation under the parallel Wave-1 DAG (P4B-1, P4B-2, P4B-3
+all start from the same commit) — it is not evidence of an early start,
+and it is not something to flag. Do not treat it as an anomaly, and do
+not work around it by creating either marker file yourself.
+
+You do not need either file to exist to do your work: write
+`smart_beta/vendors/tiingo/identifiers.py` directly. Python's implicit
+namespace-package support (PEP 420) means this module imports correctly
+as `smart_beta.vendors.tiingo.identifiers` with no `__init__.py` present
+anywhere in `vendors/` or `vendors/tiingo/` — you do not need to verify
+this claim, just rely on it; if your import genuinely fails for an
+unrelated reason, report the actual error rather than adding a marker
+file to "fix" it.
+
+Also do not touch `pyproject.toml`, anything under `smart_beta/pit/`,
+`smart_beta/data/`, `smart_beta/config/`, any other `vendors/tiingo/*.py`
+module, or any fixture subdirectory other than
 `tests/fixtures/tiingo/identifiers/`.
 
 ## What to build
@@ -147,9 +163,8 @@ of the rename investigation (positive, negative, or inconclusive-and-why).
 - `git diff --stat` against your branch's merge-base with `master` shows
   changes to exactly `smart_beta/vendors/tiingo/identifiers.py`,
   `tests/test_tiingo_identifiers.py`, and files under
-  `tests/fixtures/tiingo/identifiers/` (plus, only if genuinely necessary
-  per the file-ownership note above, one or two empty `__init__.py`
-  markers — flagged in your report if so).
+  `tests/fixtures/tiingo/identifiers/` — no `__init__.py` file anywhere in
+  the diff.
 - The module docstring contains an explicit, readable statement of your
   empirical finding (present/stable/security-level or not) for AAPL and
   TWTR, and the outcome of the rename investigation.
