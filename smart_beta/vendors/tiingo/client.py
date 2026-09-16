@@ -20,13 +20,17 @@ Design notes
   ``_call`` -- never in the transport, which always returns the raw
   ``(status, body)`` pair. This keeps the transport a pure function of the
   request and makes the recorded RGEN 400 specimen replayable.
-* **Auth.** Tiingo documents two equivalent mechanisms: an
-  ``Authorization: Token <key>`` header and a ``token`` query parameter. The
-  live transport uses the documented Authorization header (preferred, since
-  it does not put the secret in the URL). The chosen mechanism was *not*
-  verified against a live call: this was built offline with no key. Re-verify
-  against one real successful call (``scripts/fetch_tiingo_fixtures.py``)
-  before P4B-9 certification.
+* **Auth.** Verified against live calls via
+  ``scripts/fetch_tiingo_fixtures.py``. Tiingo accepts
+  ``Authorization: Token <key>``; the live transport uses that header (not
+  a ``token`` query parameter) so the secret never appears in the URL. A
+  missing key with no injected transport still raises
+  :class:`TiingoConfigError` before any request is made.
+* **Daily metadata has no ``permaTicker``.** Real captured
+  ``GET /tiingo/daily/{ticker}`` bodies for AAPL and delisted TWTR contain
+  ``ticker``, ``name``, ``exchangeCode``, ``startDate``, ``endDate``, and
+  ``description`` only. This client does not invent a permanent-identity
+  field; P4B-2 must not assume one is present on this endpoint.
 """
 
 from __future__ import annotations
@@ -130,9 +134,11 @@ class TiingoClient:
         """Security metadata for ``ticker``.
 
         Endpoint: ``GET /tiingo/daily/{ticker}``. Returns the parsed JSON
-        object verbatim. The response's permanent-identity field (if any) is
-        intentionally passed through unexamined here; deciding what
-        ``stock_id`` means is P4B-2's job.
+        object verbatim. Live AAPL and TWTR captures contain ``ticker``,
+        ``name``, ``exchangeCode``, ``startDate``, ``endDate``, and
+        ``description`` -- and neither contains ``permaTicker`` (or any
+        other permanent-identity field). This method does not invent one;
+        deciding ``stock_id`` is P4B-2's job.
         """
         path = f"/tiingo/daily/{urllib.parse.quote(ticker)}"
         return self._call(path, {})
@@ -147,7 +153,8 @@ class TiingoClient:
 
         Endpoint: ``GET /tiingo/fundamentals/{ticker}/statements`` called
         with ``asReported=true``. Returns the parsed JSON array of
-        per-statement dicts verbatim (``date`` plus ``statementData``).
+        per-statement dicts verbatim. A live AAPL capture has top-level
+        ``date``, ``year``, ``quarter``, and ``statementData``.
         """
         path = f"/tiingo/fundamentals/{urllib.parse.quote(ticker)}/statements"
         params = self._fundamentals_params(start_date, end_date)

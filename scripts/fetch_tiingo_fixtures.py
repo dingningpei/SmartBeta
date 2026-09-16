@@ -63,12 +63,16 @@ def _specs() -> list[Spec]:
         (
             "aapl_fundamentals_asreported.json",
             "/tiingo/fundamentals/AAPL/statements",
-            lambda client: client.get_fundamentals_asreported("AAPL"),
+            lambda client: client.get_fundamentals_asreported(
+                "AAPL", "2026-01-01", "2026-12-31"
+            ),
         ),
         (
             "aapl_fundamentals_normalized.json",
             "/tiingo/fundamentals/AAPL/statements",
-            lambda client: client.get_fundamentals_normalized("AAPL"),
+            lambda client: client.get_fundamentals_normalized(
+                "AAPL", "2026-01-01", "2026-12-31"
+            ),
         ),
         (
             "rgen_fundamentals_asreported_error.json",

@@ -121,6 +121,9 @@ def test_get_meta_returns_recorded_body_verbatim() -> None:
     result = client.get_meta("AAPL")
     assert result == expected
     assert result["ticker"] == "AAPL"
+    # Live GET /tiingo/daily/{ticker} has no permanent-identity field.
+    assert "permaTicker" not in result
+    assert "cik" not in result
 
 
 def test_get_meta_answers_for_delisted_security() -> None:
@@ -128,6 +131,8 @@ def test_get_meta_answers_for_delisted_security() -> None:
     result = client.get_meta("TWTR")
     assert result == expected
     assert result["ticker"] == "TWTR"
+    assert "permaTicker" not in result
+    assert "cik" not in result
 
 
 def test_get_fundamentals_asreported_returns_recorded_body_verbatim() -> None:
@@ -135,13 +140,21 @@ def test_get_fundamentals_asreported_returns_recorded_body_verbatim() -> None:
     result = client.get_fundamentals_asreported("AAPL", "2026-01-01", "2026-12-31")
     assert result == expected
     assert all("statementData" in item for item in result)
+    # Live shape: fiscal identity is year/quarter, date is the filing date.
+    assert result[0]["year"] == 2026
+    assert result[0]["quarter"] == 3
+    assert result[0]["date"] == "2026-07-31"
+    assert "fiscalYear" not in result[0]
 
 
 def test_get_fundamentals_normalized_returns_recorded_body_verbatim() -> None:
     client, expected = _replay_for("aapl_fundamentals_normalized.json")
     result = client.get_fundamentals_normalized("AAPL", "2026-01-01", "2026-12-31")
     assert result == expected
-    assert result[0]["date"] == "2026-06-27T00:00:00.000Z"
+    # Live shape: date is the fiscal period end (not a timestamp, not 6/30).
+    assert result[0]["date"] == "2026-06-27"
+    assert result[0]["year"] == 2026
+    assert result[0]["quarter"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -389,3 +402,18 @@ def test_error_specimen_is_the_only_non_200_recording() -> None:
         if entry["status_code"] != 200
     }
     assert non_200 == {"rgen_fundamentals_asreported_error.json": 400}
+
+
+def test_daily_meta_specimens_have_no_permanent_identity_field() -> None:
+    """Live GET /tiingo/daily/{ticker} does not expose permaTicker or CIK."""
+    expected_keys = {
+        "ticker",
+        "name",
+        "description",
+        "startDate",
+        "endDate",
+        "exchangeCode",
+    }
+    for filename in ("aapl_meta.json", "twtr_meta.json"):
+        _, _, body = _recorded(filename)
+        assert set(body) == expected_keys, filename
