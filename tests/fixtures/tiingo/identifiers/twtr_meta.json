@@ -1,0 +1,9 @@
+{
+  "ticker": "TWTR",
+  "name": "Twitter, Inc.",
+  "description": "Twitter, Inc. operated as a global platform for public self-expression and conversation in real time.",
+  "startDate": "2013-11-07",
+  "endDate": "2022-10-27",
+  "exchangeCode": "NYSE",
+  "permaTicker": "US0000000002"
+}

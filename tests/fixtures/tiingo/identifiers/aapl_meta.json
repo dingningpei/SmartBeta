@@ -1,0 +1,9 @@
+{
+  "ticker": "AAPL",
+  "name": "Apple Inc",
+  "description": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide. The company also offers related services.",
+  "startDate": "1980-12-12",
+  "endDate": "2026-09-15",
+  "exchangeCode": "NASDAQ",
+  "permaTicker": "US0000000001"
+}
