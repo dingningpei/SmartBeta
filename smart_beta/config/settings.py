@@ -53,5 +53,12 @@ class Settings:
     # --- Implementability ---
     transaction_cost_bps: float = 30.0
 
+    # --- Point-in-time discipline (Phase 3) ---
+    # Additional days beyond a fact's knowledge_date before it is treated as
+    # available to a backtest; 0 by default (a fact is available exactly as of
+    # its knowledge_date), reserved for later conservatism (e.g. modeling
+    # data-vendor ingestion lag beyond the public announcement itself).
+    pit_availability_buffer_days: int = 0
+
 
 DEFAULT_SETTINGS = Settings()
