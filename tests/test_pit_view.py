@@ -819,3 +819,25 @@ def test_build_panel_with_no_fundamentals_is_empty_but_shaped() -> None:
 
     assert panel.empty
     assert list(panel.columns) == [DATE_COL, STOCK_COL, "revenue"]
+
+
+def test_build_panel_when_calendar_has_no_observation_dates_in_range() -> None:
+    """A calendar covering only January 2020 yields no month-end trading
+    dates for a February 2020 range; the result must be a correctly-shaped
+    empty panel, not a KeyError from selecting missing field columns."""
+    calendar = TradingCalendar.from_weekdays_excluding_holidays(
+        "2020-01-01", "2020-01-31"
+    )
+    source = _StubPITSource(
+        calendar=calendar,
+        fundamentals=_fundamentals(
+            [("S0001", "2019-12-31", "revenue", "2020-01-15", 5.0, False)]
+        ),
+    )
+
+    panel = PointInTimeView(source).build_panel(
+        "2020-02-01", "2020-02-29", ["revenue", "net_income"]
+    )
+
+    assert panel.empty
+    assert list(panel.columns) == [DATE_COL, STOCK_COL, "revenue", "net_income"]

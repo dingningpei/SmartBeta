@@ -322,7 +322,16 @@ class PointInTimeView:
         if pieces:
             panel = pd.concat(pieces, ignore_index=True)
         else:
-            panel = pd.DataFrame({DATE_COL: [], STOCK_COL: []})
+            # No observation dates in range (e.g. the source's calendar does
+            # not overlap [start, end]): return a correctly-shaped empty
+            # panel rather than one missing the requested field columns.
+            panel = pd.DataFrame(
+                {
+                    DATE_COL: pd.Series(dtype="datetime64[ns]"),
+                    STOCK_COL: pd.Series(dtype="string"),
+                    **{field: pd.Series(dtype="float") for field in fields},
+                }
+            )
 
         panel = panel[[DATE_COL, STOCK_COL, *fields]]
         for field in fields:
