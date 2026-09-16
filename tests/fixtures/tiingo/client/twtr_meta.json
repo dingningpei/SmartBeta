@@ -1,0 +1,9 @@
+{
+  "ticker": "TWTR",
+  "name": "Twitter Inc",
+  "exchangeCode": "NYSE",
+  "description": "Twitter Inc.",
+  "startDate": "2013-11-07",
+  "endDate": "2022-10-27",
+  "permaTicker": "US000000000971"
+}

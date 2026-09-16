@@ -1,0 +1,9 @@
+{
+  "ticker": "AAPL",
+  "name": "Apple Inc",
+  "exchangeCode": "NASDAQ",
+  "description": "Apple Inc.",
+  "startDate": "1980-12-12",
+  "endDate": "2024-06-14",
+  "permaTicker": "US000000000003"
+}

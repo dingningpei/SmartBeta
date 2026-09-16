@@ -1,0 +1,58 @@
+[
+  {
+    "date": "2026-07-31T00:00:00.000Z",
+    "statementData": {
+      "ticker": "AAPL",
+      "statementType": "incomeStatement",
+      "fiscalYear": 2026,
+      "fiscalQuarter": 3,
+      "incomeStatement": {
+        "revenue": 94036000000,
+        "costOfRevenue": 51509000000,
+        "grossProfit": 42527000000,
+        "operatingExpenses": 15136000000,
+        "researchAndDevelopment": 8053000000,
+        "sellingGeneralAndAdministrative": 7083000000,
+        "operatingIncome": 27391000000,
+        "netIncome": 23434000000,
+        "ebit": 28519000000,
+        "ebitda": 33402000000,
+        "eps": 1.57,
+        "epsDiluted": 1.57
+      }
+    }
+  },
+  {
+    "date": "2026-07-31T00:00:00.000Z",
+    "statementData": {
+      "ticker": "AAPL",
+      "statementType": "balanceSheet",
+      "fiscalYear": 2026,
+      "fiscalQuarter": 3,
+      "balanceSheet": {
+        "totalAssets": 365100000000,
+        "totalLiabilities": 285300000000,
+        "totalEquity": 79800000000,
+        "cashAndCashEquivalents": 30020000000,
+        "totalDebt": 104500000000,
+        "totalCurrentAssets": 145600000000,
+        "totalCurrentLiabilities": 137900000000
+      }
+    }
+  },
+  {
+    "date": "2026-07-31T00:00:00.000Z",
+    "statementData": {
+      "ticker": "AAPL",
+      "statementType": "cashFlow",
+      "fiscalYear": 2026,
+      "fiscalQuarter": 3,
+      "cashFlow": {
+        "operatingCashFlow": 28120000000,
+        "capitalExpenditures": -3045000000,
+        "freeCashFlow": 25075000000,
+        "netCashFlow": 1210000000
+      }
+    }
+  }
+]
