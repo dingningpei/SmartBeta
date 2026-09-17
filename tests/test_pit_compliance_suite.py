@@ -327,6 +327,50 @@ class _NonDeterministicSource(PITDataSource):
         return self._inner.get_listing_info()
 
 
+class _ExtraColumnVaryingSource(PITDataSource):
+    """Operational non-determinism: a non-canonical column changes per call.
+
+    Canonical data is identical across two calls; only ``column`` differs,
+    mirroring a real vendor adapter's per-invocation provenance stamp (e.g.
+    ``_ingested_at``). ``column`` is parameterized so the same double can
+    prove the exclusion is schema-driven, not name-driven: an ordinary-looking
+    name (no leading underscore) must be excluded exactly like a
+    provenance-looking one.
+    """
+
+    def __init__(self, column: str, inner: PITDataSource | None = None) -> None:
+        self._inner = inner if inner is not None else SyntheticPITSource()
+        self._column = column
+        self._calls = 0
+
+    def _decorate(self, frame: pd.DataFrame) -> pd.DataFrame:
+        self._calls += 1
+        decorated = frame.copy()
+        decorated[self._column] = self._calls
+        return decorated
+
+    def trading_calendar(self) -> TradingCalendar:
+        return self._inner.trading_calendar()
+
+    def get_raw_returns(self, start, end) -> pd.DataFrame:
+        return self._decorate(self._inner.get_raw_returns(start, end))
+
+    def get_corporate_actions(self, start, end) -> pd.DataFrame:
+        return self._decorate(self._inner.get_corporate_actions(start, end))
+
+    def get_market_cap(self, start, end) -> pd.DataFrame:
+        return self._decorate(self._inner.get_market_cap(start, end))
+
+    def get_fundamentals(self, start, end, fields: Sequence[str]) -> pd.DataFrame:
+        return self._decorate(self._inner.get_fundamentals(start, end, fields))
+
+    def get_trading_status(self, start, end) -> pd.DataFrame:
+        return self._decorate(self._inner.get_trading_status(start, end))
+
+    def get_listing_info(self) -> pd.DataFrame:
+        return self._decorate(self._inner.get_listing_info())
+
+
 class _NaiveMonthEndSource(PITDataSource):
     """Calendar error: uses every calendar day, so month-end is naive."""
 
@@ -1133,3 +1177,51 @@ def test_schema_and_state_checks_pass_on_reference_source() -> None:
     assert _all_passed(
         check_deterministic_results(source, FIXTURE_START, FIXTURE_END, fields)
     )
+
+
+# ===========================================================================
+# G. Canonical determinism (P4B-D1): compare schema-required columns only
+# ===========================================================================
+
+
+def test_g_differing_ingested_at_does_not_fail_determinism() -> None:
+    """A per-call provenance stamp must not be reported as non-determinism."""
+    results = check_deterministic_results(
+        _ExtraColumnVaryingSource("_ingested_at"),
+        FIXTURE_START,
+        FIXTURE_END,
+        ["revenue", "net_profit"],
+    )
+    assert len(results) == 6
+    assert _all_passed(results), [result.message for result in results]
+
+
+def test_g_differing_canonical_data_still_fails_determinism() -> None:
+    """A real canonical-value difference must still fail -- and name its method."""
+    results = check_deterministic_results(
+        _NonDeterministicSource(), FIXTURE_START, FIXTURE_END, ["revenue"]
+    )
+    failures = [result for result in results if not result.passed]
+    assert [result.name for result in failures] == ["deterministic_get_raw_returns"]
+    assert "get_raw_returns" in failures[0].message
+    assert "not deterministic" in failures[0].message
+
+
+def test_g_ordinary_named_extra_column_is_excluded_by_schema_not_name() -> None:
+    """Exclusion keys on schema membership, never on an underscore-prefix rule."""
+    results = check_deterministic_results(
+        _ExtraColumnVaryingSource("delivery_note"),
+        FIXTURE_START,
+        FIXTURE_END,
+        ["revenue", "net_profit"],
+    )
+    assert _all_passed(results), [result.message for result in results]
+
+
+def test_g_synthetic_source_remains_deterministic() -> None:
+    """Regression: the provenance-free reference fixture is unchanged."""
+    results = check_deterministic_results(
+        SyntheticPITSource(), FIXTURE_START, FIXTURE_END, ["revenue", "net_profit"]
+    )
+    assert len(results) == 6
+    assert _all_passed(results), [result.message for result in results]
