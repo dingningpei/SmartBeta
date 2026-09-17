@@ -266,31 +266,63 @@ def _decode_body(raw: bytes) -> object:
 
 def replay_transport(
     recordings: Mapping[str, "tuple[int, object]"],
+    *,
+    param_recordings: (
+        Mapping["tuple[str, str, str]", "tuple[int, object]"] | None
+    ) = None,
 ) -> Transport:
     """Build a deterministic, network-free :data:`Transport` from recorded
-    ``{request_path: (status_code, parsed_body)}`` specimens.
+    specimens.
 
-    Query params are deliberately **not** part of the lookup key: one fixture
-    scenario exercises exactly one endpoint/ticker combination, so the path
-    alone is unambiguous in practice (and it lets the same recording satisfy
-    a call with or without optional date params).
+    ``recordings`` maps ``{request_path: (status_code, parsed_body)}`` and is
+    the unchanged, exact-path lookup used when one recording exists per path.
+    Query params are deliberately not part of *this* key, so the same
+    recording can satisfy a call with or without optional date params.
 
-    Raises :class:`KeyError` naming the unmatched path when a caller asks for
-    an endpoint that was not recorded -- never a silently-empty or fabricated
-    response.
+    ``param_recordings`` (optional) maps more specific
+    ``{(path, param_name, param_value): (status_code, parsed_body)}`` entries.
+    It exists for the rarer case where two or more recordings share one path
+    and are distinguished only by one query parameter's value -- e.g.
+    Tiingo's ``asReported=true`` versus its absence on the same
+    ``/statements`` path. It is checked first (the more specific match), and
+    the lookup falls back to ``recordings`` by path alone when no
+    ``param_recordings`` entry matches. ``param_name``/``param_value`` compare
+    against ``str(params.get(param_name))``, so both string and boolean-ish
+    query values match consistently.
+
+    This mechanism is fully general: any future path/param pair can reuse it
+    unchanged -- it is not special-cased to ``asReported`` or to the
+    statements endpoint.
+
+    Raises :class:`KeyError` naming the unmatched path (and, when
+    ``param_recordings`` was supplied, the params actually sent) when nothing
+    matches -- never a silently-empty or fabricated response.
 
     This is the *one* reusable fixture-replay mechanism every later Phase 4B
     task's tests import; no other task should reimplement it.
     """
 
     def transport(path: str, params: Mapping[str, str]) -> tuple[int, object]:
+        if param_recordings:
+            for (recorded_path, param_name, param_value), response in (
+                param_recordings.items()
+            ):
+                if recorded_path != path:
+                    continue
+                if str(params.get(param_name)) == str(param_value):
+                    return response
         try:
             return recordings[path]
         except KeyError:
-            raise KeyError(
+            message = (
                 f"No recorded Tiingo response for path {path!r} "
                 f"(params={dict(params)!r}); recorded paths: "
                 f"{sorted(recordings)!r}"
-            ) from None
+            )
+            if param_recordings:
+                message += (
+                    f"; recorded param keys: {sorted(param_recordings)!r}"
+                )
+            raise KeyError(message) from None
 
     return transport

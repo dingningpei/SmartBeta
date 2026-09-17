@@ -321,6 +321,98 @@ def test_replay_transport_returns_the_recorded_tuple() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5b. replay_transport path+param disambiguation (P4B-R1)
+# ---------------------------------------------------------------------------
+_STATEMENTS_PATH = "/tiingo/fundamentals/AAPL/statements"
+
+
+def test_replay_transport_param_recordings_disambiguate_the_real_specimens() -> None:
+    """The real AAPL asReported and normalized specimens share one path and
+    differ only by the ``asReported`` query param. One transport, built from
+    both the path map and ``param_recordings``, serves both correctly."""
+    ar_path, ar_status, ar_body = _recorded("aapl_fundamentals_asreported.json")
+    norm_path, norm_status, norm_body = _recorded("aapl_fundamentals_normalized.json")
+    assert ar_path == norm_path == _STATEMENTS_PATH
+    # The two bodies really are different, so a path-only lookup cannot pass.
+    assert ar_body != norm_body
+
+    transport = replay_transport(
+        {norm_path: (norm_status, norm_body)},
+        param_recordings={
+            (ar_path, "asReported", "true"): (ar_status, ar_body),
+        },
+    )
+    client = TiingoClient(transport=transport)
+
+    assert (
+        client.get_fundamentals_asreported("AAPL", "2026-01-01", "2026-12-31")
+        == ar_body
+    )
+    assert (
+        client.get_fundamentals_normalized("AAPL", "2026-01-01", "2026-12-31")
+        == norm_body
+    )
+
+
+def test_replay_transport_param_miss_falls_back_to_path_recordings() -> None:
+    """``param_recordings`` and ``recordings`` compose: a path absent from the
+    param map still resolves through the plain path map."""
+    path, status, body = _recorded("aapl_meta.json")
+    transport = replay_transport(
+        {path: (status, body)},
+        param_recordings={
+            (_STATEMENTS_PATH, "asReported", "true"): (200, []),
+        },
+    )
+    assert transport(path, {}) == (status, body)
+
+
+def test_replay_transport_param_recordings_fail_loudly_on_a_genuine_miss() -> None:
+    """A path/param combination in neither map still raises an informative
+    ``KeyError`` naming what was requested."""
+    transport = replay_transport(
+        {"/tiingo/daily/AAPL": (200, {})},
+        param_recordings={
+            (_STATEMENTS_PATH, "asReported", "true"): (200, []),
+        },
+    )
+    with pytest.raises(KeyError) as exc_info:
+        transport(
+            "/tiingo/fundamentals/MSFT/statements",
+            {"asReported": "true", "startDate": "2020-01-01"},
+        )
+    message = str(exc_info.value)
+    assert "/tiingo/fundamentals/MSFT/statements" in message
+    assert "asReported" in message
+
+
+def test_replay_transport_param_recordings_are_general_not_hardcoded() -> None:
+    """The disambiguation mechanism is not special-cased to Tiingo
+    statements: an unrelated hypothetical path/param pair works unchanged."""
+    path = "/tiingo/hypothetical/widgets"
+    upper = (200, {"variant": "upper"})
+    lower = (200, {"variant": "lower"})
+    transport = replay_transport(
+        {},
+        param_recordings={
+            (path, "case", "upper"): upper,
+            (path, "case", "lower"): lower,
+        },
+    )
+    assert transport(path, {"case": "upper"}) == upper
+    assert transport(path, {"case": "lower"}) == lower
+    # The same param name/value on a different path must not match.
+    with pytest.raises(KeyError):
+        transport("/tiingo/hypothetical/other", {"case": "upper"})
+    # Boolean-ish query values compare consistently via ``str()``.
+    bool_transport = replay_transport(
+        {},
+        param_recordings={(path, "flag", True): (200, {"flag": True})},
+    )
+    assert bool_transport(path, {"flag": True}) == (200, {"flag": True})
+
+
+# ---------------------------------------------------------------------------
 # 6. No live network: the autouse tripwire plus an explicit sweep
 # ---------------------------------------------------------------------------
 def test_all_data_methods_run_offline_through_replay() -> None:
