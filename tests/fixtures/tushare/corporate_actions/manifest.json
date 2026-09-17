@@ -1,0 +1,85 @@
+{
+  "recordings": {
+    "dividend_ts_code-000001.SZ.json": {
+      "api_name": "dividend",
+      "params": {
+        "ts_code": "000001.SZ"
+      },
+      "status_code": 200
+    },
+    "adj_factor_end_date-20131231_start_date-20130101_ts_code-000001.SZ.json": {
+      "api_name": "adj_factor",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130101",
+        "end_date": "20131231"
+      },
+      "status_code": 200
+    },
+    "daily_end_date-20130701_start_date-20130601_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130601",
+        "end_date": "20130701"
+      },
+      "status_code": 200
+    },
+    "daily_basic_end_date-20130701_start_date-20130601_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130601",
+        "end_date": "20130701"
+      },
+      "status_code": 200
+    },
+    "daily_basic_end_date-20140701_start_date-20140601_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20140601",
+        "end_date": "20140701"
+      },
+      "status_code": 200
+    },
+    "daily_end_date-20140701_start_date-20140601_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20140601",
+        "end_date": "20140701"
+      },
+      "status_code": 200
+    },
+    "daily_end_date-20121031_start_date-20121001_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20121001",
+        "end_date": "20121031"
+      },
+      "status_code": 200
+    },
+    "adj_factor_end_date-20121231_start_date-20120101_ts_code-000001.SZ.json": {
+      "api_name": "adj_factor",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20120101",
+        "end_date": "20121231"
+      },
+      "status_code": 200
+    }
+  },
+  "_comment": "Fixture manifest for P4DB-5 Tushare corporate-action tests. Each entry maps a raw response body file (the verbatim proxy JSON envelope, no wrapper) to the api_name + params that produced it and the HTTP status observed. The loader reads body['data'] as the {fields, items} payload.",
+  "_provenance": {
+    "live_recorded": true,
+    "access_path": "proxy:pcd.mobcvb.cn/tushare/pro (X-API-Key header; GET)",
+    "recorded_at": "2026-09-17T23:39Z",
+    "samples_per_request": 3,
+    "canonical_consistency_check": "smart_beta.vendors.tushare.proxy_client.record_fixture: three identical samples per request; every non-empty payload had to agree byte-for-byte or TushareNonDeterministicResponseError would have aborted the recording.",
+    "evidence_class": "proxy-observed live evidence",
+    "not_evidence_for": "Direct official Tushare API behavior. These bodies are the third-party proxy's real delivered data, not a capture from the paid official Tushare service; nothing here certifies official-API behavior at any point tier.",
+    "credential_note": "TUSHARE_PROXY_TOKEN was present in the implementation environment. The token is sent only in the X-API-Key header and never appears in any request params, response body, manifest, or test. The recording CLI prints request params only."
+  }
+}
