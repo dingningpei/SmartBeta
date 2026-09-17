@@ -2,7 +2,7 @@
 
 This is the lowest layer of the Tiingo adapter and the only place in
 Phase 4B that is allowed to talk to the network. It is deliberately thin:
-each of its four public data methods fetches one Tiingo endpoint and returns
+each of its five public data methods fetches one Tiingo endpoint and returns
 Tiingo's **native** JSON shape verbatim -- no PIT mapping, no schema
 validation, no corporate-action adjustment, no identifier resolution. Those
 are every later Phase 4B task's job.
@@ -176,6 +176,25 @@ class TiingoClient:
         fetches; it has no opinion about how its result is used downstream.
         """
         path = f"/tiingo/fundamentals/{urllib.parse.quote(ticker)}/statements"
+        params = self._fundamentals_params(start_date, end_date)
+        return self._call(path, params)
+
+    def get_fundamentals_daily(
+        self,
+        ticker: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """Daily fundamentals metrics for ``ticker``.
+
+        Endpoint: ``GET /tiingo/fundamentals/{ticker}/daily``. Returns the
+        parsed JSON array of per-day dicts verbatim -- confirmed live keys:
+        ``date, marketCap, enterpriseVal, peRatio, pbRatio, trailingPEG1Y``.
+        No field is renamed, reshaped, or dropped. This method has no
+        opinion about market-cap semantics -- it only fetches; P4B-M2 decides
+        what to do with the result.
+        """
+        path = f"/tiingo/fundamentals/{urllib.parse.quote(ticker)}/daily"
         params = self._fundamentals_params(start_date, end_date)
         return self._call(path, params)
 
