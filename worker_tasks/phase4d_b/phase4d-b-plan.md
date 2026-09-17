@@ -211,24 +211,32 @@ factor code (NOT this phase)
    ambiguity.** `knowledge_date = f_ann_date` when `f_ann_date` is
    present and parses as a valid date; `knowledge_date = ann_date` only
    under the explicit, tested fallback below; otherwise the row is
-   dropped from `get_fundamentals`'s output and counted in a
-   `dropped_ambiguous_date_count` the adapter must expose for
-   certification to report (never silently included with a guessed
-   date). **Fallback policy (the only one authorized):**
-   `f_ann_date` may be substituted with `ann_date` iff `f_ann_date` is
-   missing/null AND `ann_date` is present AND
-   `report_type in {1, 2, 3, 6, 7, 8}` (the "current-period, not-a-
-   restated-comparative" codes per Tushare's own documented table —
-   `report_type in {4, 5, 9, 10, 11, 12}`, the adjusted/pre-adjustment
+   dropped from `get_fundamentals`'s output. **Amended by the
+   2026-09-17 audit (Patch 3): a bare `dropped_ambiguous_date_count` is
+   not sufficient machine-visibility — the adapter must expose
+   `get_uncertain_observations`, a row-per-dropped-observation side
+   table keyed by `(stock_id, report_period_end, field, report_type,
+   raw_ann_date, raw_f_ann_date, reason)`, so a consumer can tell which
+   specific facts were affected, not just how many.** **Fallback policy
+   (the only one authorized):** `f_ann_date` may be substituted with
+   `ann_date` iff `f_ann_date` is missing/null AND `ann_date` is present
+   AND `report_type in {1, 2, 3, 6, 7, 8}` (the "current-period,
+   not-a-restated-comparative" codes per Tushare's own documented table
+   — `report_type in {4, 5, 9, 10, 11, 12}`, the adjusted/pre-adjustment
    families, are never eligible for the fallback, since those are
    exactly the codes associated with reprocessing in the evidence
-   above). This fallback must be unit-tested against a real specimen
-   where it fires and a real specimen where it correctly refuses to
-   fire (ambiguous/ineligible report_type). **This rule is an adapter-
-   internal parsing policy for Tushare's specific field semantics as
-   observed through this proxy — it must not be written or documented as
-   a general claim about what `f_ann_date` means for any other vendor or
-   for direct official-Tushare access.** Owned by P4DB-6.
+   above). **Amended by the 2026-09-17 audit (Patch 1): this fallback
+   must be unit-tested against five distinct lettered cases — (A) a
+   valid `f_ann_date` present, (B) the fallback actually firing
+   (`f_ann_date` missing, eligible `report_type`, `ann_date` used), (C)
+   the fallback correctly refusing to fire on an ineligible
+   `report_type`, (D) a malformed `f_ann_date` never being coerced, and
+   (E) both dates missing/invalid — `ann_date == f_ann_date` covers case
+   A only and must never be read as covering case B.** **This rule is an
+   adapter-internal parsing policy for Tushare's specific field semantics
+   as observed through this proxy — it must not be written or documented
+   as a general claim about what `f_ann_date` means for any other vendor
+   or for direct official-Tushare access.** Owned by P4DB-6.
 
 4. **Vendor-specific parsing belongs in the adapter (this whole
    subpackage):** `report_type` interpretation, `ann_date`/`f_ann_date`
@@ -247,33 +255,53 @@ factor code (NOT this phase)
 6. **Distinct semantic states, never collapsed.** The adapter's
    fundamentals output distinguishes, as real, inspectable state (extra
    columns / a small result object, not silent `NaN`/absent-row
-   conflation): a genuinely blanked-out value (`002450.SZ` FY2016/17
-   pattern — `is_blank_out=True`, `value=NaN` is acceptable *only* when
-   tagged this way, since `FUNDAMENTALS_FACT_SCHEMA.value` is typed
-   `float` and cannot itself carry a sentinel); a row dropped for
-   ambiguous knowledge-date (counted, not silently included — see
-   policy 3); and incomplete vintage coverage (policy 2). `pit.
-   fundamentals.latest_known_value`'s existing "absent group = no row"
-   behavior already correctly represents "nothing knowable as of t" —
-   that part needs no adapter-side change; the adapter's job is only to
-   never manufacture a row that hides one of the three states above
-   inside an ordinary-looking `False`/`0.0`/absent value.
+   conflation): a genuinely blanked-out value, i.e. `KnownMissing`
+   (`002450.SZ` FY2016/17 pattern — `is_blank_out=True`, `value=NaN` is
+   acceptable *only* when tagged this way, since
+   `FUNDAMENTALS_FACT_SCHEMA.value` is typed `float` and cannot itself
+   carry a sentinel); `UnknownAsOf`, correctly left to `pit.fundamentals.
+   latest_known_value`'s existing, unmodified "absent group = no row"
+   behavior (no adapter-side change needed — that machinery already
+   correctly represents "nothing knowable as of t"); `Ambiguous/
+   UncertifiedKnowledgeDate` — a row dropped for ambiguous knowledge-date
+   per policy 3, now required to be individually visible (not just
+   counted) via `get_uncertain_observations`; and `Incomplete/
+   NotCertifiedVintageCoverage` (policy 2), which is necessarily a
+   dataset-level disposition carried at the certification-report level,
+   since the adapter has no way to detect a restatement it was never
+   given evidence of. The adapter's job is to never manufacture a row
+   that hides any of these four states inside an ordinary-looking
+   `False`/`0.0`/absent value, and never to let a per-row state stand in
+   for the dataset-level one or vice versa.
 
 7. **CH3 economic target: net profit excluding non-recurring gains/
    losses.** `profit_dedt` (`fina_indicator`) is the value source — it
    is the only place this exact fact is directly reported — but it is
-   emitted as `field="ni_ex_nonrecurring"` **only** when it can be
-   unambiguously joined to a single `income`/`balancesheet` vintage for
-   the same `(stock_id, report_period_end)` (i.e., that period shows no
-   evidence of reprocessing: no `report_type=4/5/9/10/11/12` row exists
-   for it, and its own `income` `report_type=1` row has `ann_date ==
-   f_ann_date`). When that join is ambiguous (reprocessing evidence
-   exists for the period), the adapter must **not** emit a
-   `ni_ex_nonrecurring` fact for that `(stock_id, report_period_end)` at
-   all — silence, not a guessed vintage, exactly matching policy 6's
-   "never manufacture a row." P4DB-9's certification report must contain
-   the literal line `CH3 NI-EX-NONRECURRING = FIELD-LEVEL, VINTAGE-
-   JOIN-DEPENDENT, NOT A SINGLE CANONICAL FIELD`. Owned by P4DB-6.
+   emitted as `field="ni_ex_nonrecurring"` **only** when three
+   conditions all hold (amended by the 2026-09-17 audit, Patch 2 — a
+   match on `(stock_id, report_period_end)` plus absence of reprocessing
+   evidence *elsewhere* was found insufficient; positive evidence is
+   required): (i) that period's `income` `report_type=1` row has
+   `ann_date == f_ann_date`; (ii) no `report_type in
+   {4,5,9,10,11,12}` row exists for it in `income` or `balancesheet`;
+   and (iii) `fina_indicator`'s own `ann_date` for the same
+   `(ts_code, end_date)` — investigated empirically for presence — equals
+   the anchor `income` row's `ann_date`. A matching date is necessary
+   corroborating evidence, not proof by itself, that `profit_dedt`
+   belongs to that vintage; it must never be documented as universally
+   proving vintage identity. If `fina_indicator` is found to expose no
+   comparable date field at all, condition (iii) can never be satisfied
+   and CH3 must not be emitted for any period this phase — never
+   degrade back to the two-condition rule to preserve coverage. When any
+   condition fails, the adapter must **not** emit a `ni_ex_nonrecurring`
+   fact for that `(stock_id, report_period_end)` at all — silence, not a
+   guessed vintage — and must record the suppression in
+   `get_uncertain_observations` with
+   `reason="ch3_vintage_join_not_certified"`, the executable form of
+   `PIT CH3 VALUE = NOT CERTIFIED / UNAVAILABLE`. P4DB-9's certification
+   report must contain the literal line `CH3 NI-EX-NONRECURRING =
+   FIELD-LEVEL, VINTAGE-JOIN-DEPENDENT, NOT A SINGLE CANONICAL FIELD`.
+   Owned by P4DB-6.
 
 8. **Reporting basis, explicit, adapter-owned column.** Every
    fundamentals fact carries an extra `reporting_basis` column valued
@@ -437,45 +465,24 @@ touches a file owned by Phase 3, Phase 4B, or Phase 4C.
 
 ## Certification criteria (binding on P4DB-9)
 
-`docs/phase4d_b_tushare_certification.md` must, for each of the items
-below, contain an explicit `PASS`, `FAIL`, or `NOT CERTIFIED` line (never
-a silent omission), run against the real, recorded specimens in
-requirement 10:
+**Amended by the 2026-09-17 independent audit (Patch 5).** This section
+previously maintained its own independently-numbered copy of the
+required certification line-items, which drifted from
+`task-p4db-9-certification.md`'s own list (different count, missing
+`DELISTING CORROBORATION`, and combining the two proxy-readiness lines
+into one bullet where they must be independently frozen). To eliminate
+that drift permanently, **`worker_tasks/phase4d_b/task-p4db-9-
+certification.md`'s "Required certification report content" section is
+the single normative source for the required certification line-item
+list (16 items as of this amendment).** This plan does not duplicate it.
 
-1. Schema conformance (`check_schema_conformance` against all seven
-   `PITDataSource` methods).
-2. `CUMULATIVE VS SINGLE-QUARTER RECONCILIATION` — using the `000001.SZ`
-   FY2022 specimen, confirmed exactly as in evidence item 1.
-3. `CHINA FUNDAMENTALS VINTAGE CAPABILITY` — PASS, using `600518.SH` and
-   `002450.SZ`.
-4. `CHINA FUNDAMENTALS VINTAGE COVERAGE COMPLETENESS` — NOT CERTIFIED,
-   naming `002069.SZ` FY2017 explicitly as the counterexample.
-5. `KNOWLEDGE-DATE RULE` — PASS as an adapter-internal parsing policy
-   (policy 3), with both a firing and a non-firing fallback specimen
-   tested.
-6. `CH3 NI-EX-NONRECURRING` — the literal line from policy 7.
-7. `MARKET CAP` — `total_mcap` PASS as canonical; float/circ/free
-   explicitly documented as diagnostic-only, never certified as an
-   independent float-adjusted figure (mirrors Tiingo's
-   `FLOAT MARKET CAP = NOT CERTIFIED` precedent, adapted).
-8. `CH4 TURNOVER FEASIBILITY` — PASS, mechanical only, explicitly not a
-   PIT-immutability certification of historical `total_share`.
-9. `CHANGING ADJ_FACTOR RECONSTRUCTION` — PASS, using the `000001.SZ`
-   2013-06-20 specimen.
-10. `IDENTIFIER CONTINUITY` — carries forward `NOT CERTIFIED` unless
-    P4DB-2 produces new empirical evidence changing it; if unchanged,
-    the certification report must say so explicitly, not omit it.
-11. `PROXY DETERMINISM` — PASS/FAIL per the canonical-consistency check
-    in policy 11; if `TushareNonDeterministicResponseError` ever fired
-    during fixture recording for any certification specimen, the report
-    must say `PROXY DETERMINISM = FAIL` and name the offending request.
-12. `PROXY SUFFICIENT FOR PHASE 4D-B POC` / `PROXY SUFFICIENT FOR
-    PRODUCTION` — the literal lines from policy 12.
-13. `TUSHARE LICENSING/ATTRIBUTION` — every committed fixture carries
-    `source_vendor=Tushare` and its retrieval provenance, per the
-    existing licensing disposition (fixture reproducibility, no bulk
-    redistribution) — P4DB-9 verifies this was followed by every prior
-    task, not just its own fixtures.
+The four values that no certification run may ever change, restated here
+because they are architectural, not just procedural: `CHINA FUNDAMENTALS
+VINTAGE CAPABILITY = PASS`, `CHINA FUNDAMENTALS VINTAGE COVERAGE
+COMPLETENESS = NOT CERTIFIED`, `PROXY SUFFICIENT FOR PHASE 4D-B POC =
+YES`, `PROXY SUFFICIENT FOR PRODUCTION = NO`. Proxy-observed evidence
+must never be read as certifying direct official-Tushare behavior at any
+point tier, regardless of how clean a proxy-based certification run is.
 
 ## Deferred items (explicit, not silently dropped)
 

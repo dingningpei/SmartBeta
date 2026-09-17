@@ -64,35 +64,110 @@ untouched exactly as Tiingo's `is_zero_volume` does on
 
 ## Frozen policy 3: knowledge-date rule (implement exactly this)
 
+**Amended by the 2026-09-17 independent audit (Patch 1/Patch 3) — the
+original version of this section specified the precedence/non-
+fabrication rule correctly but under-specified the required tests and
+the visibility of the "otherwise" branch. Both are corrected below; the
+rule itself is unchanged.**
+
 ```
-knowledge_date = f_ann_date                         if f_ann_date is present and valid
-knowledge_date = ann_date                           if f_ann_date is missing/null
-                                                     AND ann_date is present
-                                                     AND report_type in {1, 2, 3, 6, 7, 8}
-<row dropped, counted in dropped_ambiguous_date_count>  otherwise
+IF f_ann_date is present AND parses as a valid date:
+    knowledge_date = f_ann_date                                        # case A
+
+ELIF f_ann_date is missing/null (genuinely absent, not malformed)
+     AND ann_date is present AND parses as a valid date
+     AND report_type in {1, 2, 3, 6, 7, 8}:
+    knowledge_date = ann_date                                          # case B (fallback fires)
+
+ELSE:
+    row is dropped from get_fundamentals's output; NEVER a fabricated
+    knowledge_date. Recorded in the observation-level uncertainty
+    side-table (see the new section immediately below) with reason:
+      - "ineligible_report_type_for_fallback"   # f_ann_date missing,
+                                                 # report_type in
+                                                 # {4,5,9,10,11,12}     # case C
+      - "f_ann_date_malformed"                  # f_ann_date present
+                                                 # but fails to parse   # case D
+      - "both_dates_missing_or_invalid"         # neither date usable  # case E
 ```
 
 `report_type in {4, 5, 9, 10, 11, 12}` (the adjusted/pre-adjustment
 families) are **never** eligible for the `ann_date` fallback — these are
-exactly the codes the evidence associates with reprocessing. Expose
-`dropped_ambiguous_date_count` as an attribute or return value your tests
-can assert on (e.g. a module-level counter reset per call, or a second
-return value/attribute on a small result object — your call, document
-it).
+exactly the codes the evidence associates with reprocessing.
 
-**Required tests for this policy specifically:**
-- A real specimen where `ann_date == f_ann_date` (the common case) —
-  `knowledge_date` equals both.
-- A real specimen where they diverge and `f_ann_date` is used (`002450.SZ`
-  FY2015 `report_type=1` row: `ann_date=20160422`, `f_ann_date=20210228`
-  — `knowledge_date` must resolve to `2021-02-28`, **not**
-  `2016-04-22`).
-- A real specimen proving the fallback correctly refuses to fire: the
-  same `002450.SZ` FY2015 `report_type=5` row has `ann_date ==
-  f_ann_date` already (no fallback needed there — find or construct,
-  from real fixture data, a case with `f_ann_date` genuinely missing on
-  an ineligible `report_type` (4/5/9/10/11/12) and assert the row is
-  dropped, not defaulted).
+**Required tests for this policy specifically (all five lettered cases
+are mandatory; `ann_date == f_ann_date` covers case A only and must
+never be treated as coverage of case B, the fallback actually firing):**
+
+- **Case A** — a real specimen where `f_ann_date` is present and valid
+  (may coincide with `ann_date`, the common case) — `knowledge_date`
+  resolves to `f_ann_date`.
+- **Case A, divergent** — a real specimen where `ann_date != f_ann_date`
+  and `f_ann_date` wins (`002450.SZ` FY2015 `report_type=1` row:
+  `ann_date=20160422`, `f_ann_date=20210228` — `knowledge_date` must
+  resolve to `2021-02-28`, **not** `2016-04-22`).
+- **Case B (the fallback actually firing — this was missing from the
+  original spec and is not covered by any case-A test)** — a real
+  specimen (or, if none is found after a genuine search, an explicitly-
+  labeled *constructed* one, documented as constructed in your test's
+  docstring) where `f_ann_date` is genuinely null/missing, `ann_date` is
+  present and valid, and `report_type` is one of `{1, 2, 3, 6, 7, 8}` —
+  assert `knowledge_date` resolves to `ann_date`.
+- **Case C** — `f_ann_date` missing on an *ineligible* `report_type`
+  (4/5/9/10/11/12) — assert the row is dropped, not defaulted, and
+  appears in the uncertainty side-table with
+  `reason="ineligible_report_type_for_fallback"`.
+- **Case D** — `f_ann_date` present but malformed/unparseable — assert
+  the row is dropped (never coerced into a best-effort date) and appears
+  in the side-table with `reason="f_ann_date_malformed"`.
+- **Case E** — both `ann_date` and `f_ann_date` missing or invalid —
+  assert the row is dropped and appears in the side-table with
+  `reason="both_dates_missing_or_invalid"`.
+
+## Observation-level uncertainty (Patch 3 — new, required)
+
+Aggregated counters are insufficient evidence for a PIT-safety claim —
+knowing "N rows were dropped" does not tell a consumer *which*
+`(stock_id, report_period_end, field)` observations are affected.
+Implement `get_uncertain_observations(start, end, fields) ->
+pd.DataFrame` in this same module (no new file, no `PITDataSource`
+signature change — this is adapter-specific extra API surface,
+analogous to how `is_blank_out` is an adapter-specific extra column, and
+it does **not** touch `smart_beta/pit/*`), returning one row per
+uncertain observation with at least: `stock_id`, `report_period_end`,
+`field`, `report_type`, `raw_ann_date`, `raw_f_ann_date`, `reason`
+(a string status — see the case C/D/E taxonomy above, plus
+`"ch3_vintage_join_not_certified"` from the CH3 section below), and
+`retrieved_at`.
+
+This side-table is the mechanism that keeps four distinct states
+machine-visible and non-collapsible into `NaN`/absence-of-row or a false
+"no restatement" reading:
+
+- **KnownMissing** — a row IS emitted in `get_fundamentals`'s normal
+  output with `is_blank_out=True` (policy 6, unchanged) — this state is
+  row-level and schema-visible, not side-table-only, though it may also
+  appear in the side-table for a unified audit trail.
+- **UnknownAsOf** — correctly left to `pit.fundamentals.
+  latest_known_value`'s existing, unmodified "absent group = no row"
+  behavior (this task never resolves an as-of query — see Non-goals).
+- **Ambiguous/UncertifiedKnowledgeDate** — cases C/D/E above: the row is
+  absent from `get_fundamentals`'s output (a fabricated knowledge_date
+  would be worse than absence) but present, with a reason, in
+  `get_uncertain_observations`.
+- **Incomplete/NotCertifiedVintageCoverage** — this one is necessarily a
+  *dataset-level* disposition, not a per-row adapter tag: the adapter
+  has no way to detect a restatement it was never given evidence of
+  (the `002069.SZ` counterexample). This state is carried at the
+  certification-report level (P4DB-9, policy 2), not invented here as a
+  per-row flag — do not attempt to synthesize a per-row "might have been
+  restated" signal; that would itself be a fabrication.
+
+**Required test for this section:** running `get_uncertain_observations`
+over a fixture set containing at least one of each of cases C, D, and E
+(construct D and E if no real specimen has them — cases C and the CH3
+suppression case below should both have real specimens) returns exactly
+one row per case, each keyed correctly and carrying the right `reason`.
 
 ## Frozen policy 6: blank-out handling
 
@@ -155,39 +230,88 @@ the evidence suggests `"CUMULATIVE_YTD"` by analogy to `income`, since
 fields, but verify this doesn't contradict any real specimen before
 freezing it.)
 
-**CH3 (`field="ni_ex_nonrecurring"`) emission rule — implement exactly:**
-For a given `(stock_id, report_period_end)`, fetch both the `income`/
-`balancesheet` vintages for that period AND the `fina_indicator`
-`profit_dedt` value for the same period. Emit a `ni_ex_nonrecurring` fact
-**only if**:
+**CH3 (`field="ni_ex_nonrecurring"`) emission rule — AMENDED by the
+2026-09-17 independent audit (Patch 2). The original two-condition rule
+is retained as necessary but is NO LONGER SUFFICIENT on its own — it
+proved a fact only by *absence of counter-evidence in other tables*,
+which is not positive evidence that `fina_indicator`'s own `profit_dedt`
+value belongs to the anchor vintage. A required third condition is
+added below.**
+
+For a given `(stock_id, report_period_end)`, fetch the `income`/
+`balancesheet` vintages for that period AND the `fina_indicator` row
+(including all fields it returns, not just `profit_dedt`) for the same
+period. **First, as a blocking sub-investigation (do this before writing
+the join logic, and report the result explicitly): does `fina_indicator`
+return its own `ann_date` field?** (It was observed doing so in earlier
+investigation output, e.g. `{'ann_date': '20230309', 'end_date':
+'20221231', 'profit_dedt': ...}`, but this was never verified as a
+required, always-present field — confirm empirically.)
+
+Emit a `ni_ex_nonrecurring` fact **only if all three hold**:
 1. The `income` `report_type=1` row for that `(stock_id,
    report_period_end)` has `ann_date == f_ann_date` (no reprocessing
-   evidence on the anchor vintage), AND
+   evidence on the anchor vintage).
 2. No `report_type in {4, 5, 9, 10, 11, 12}` row exists for the same
    `(stock_id, report_period_end)` in `income` or `balancesheet` (no
    restated-comparative vintage exists that would indicate this period
    was ever touched by a later correction).
+3. **(New, required.)** `fina_indicator`'s own `ann_date` for this
+   `(ts_code, end_date)` is present and equals the anchor `income` row's
+   `ann_date`. A matching date is *necessary* corroborating evidence,
+   not proof by itself, of vintage identity — do not claim date equality
+   "universally proves" the association; it is the best positive
+   evidence available in this dataset, used precisely because
+   `fina_indicator` carries no `report_type` of its own to check
+   directly. **If `fina_indicator` is found to expose no comparable date
+   field at all (condition 3 cannot be evaluated), CH3 must not be
+   emitted for ANY period this phase** — do not fall back to the
+   original two-condition rule; report this as a specific, named finding
+   for the certification stage rather than silently degrading the
+   safety bar.
 
-If both hold, emit `ni_ex_nonrecurring` with `value=profit_dedt`,
+If all three hold, emit `ni_ex_nonrecurring` with `value=profit_dedt`,
 `knowledge_date` = the `income` `report_type=1` row's own
-`knowledge_date` (i.e., borrowed from the anchor vintage per plan.md
-policy 9 — **not** `fina_indicator`'s own dates, since `fina_indicator`
-carries no vintage information of its own), `is_restatement=False`,
-`reporting_basis="CUMULATIVE_YTD"`. If either condition fails, **emit no
-row at all** for that `(stock_id, report_period_end, "ni_ex_nonrecurring")`
-— this is a silence, not a guess, and it must be tested explicitly (a
-real specimen where the join is correctly suppressed, not just one where
-it succeeds).
+`knowledge_date` (borrowed from the anchor vintage per plan.md policy 9
+— never `fina_indicator`'s own dates as the *knowledge_date*, since
+`fina_indicator` carries no vintage/restatement information of its own
+even when its `ann_date` is used as corroborating evidence for the join
+itself), `is_restatement=False`, `reporting_basis="CUMULATIVE_YTD"`.
+
+**If any of the three conditions fails, emit no
+`ni_ex_nonrecurring` row at all** for that `(stock_id, report_period_end)`
+— this is a silence, not a guess — **and record an entry in
+`get_uncertain_observations` (see above) with
+`field="ni_ex_nonrecurring"`, `reason="ch3_vintage_join_not_certified"`.**
+This is the executable form of `PIT CH3 VALUE = NOT CERTIFIED /
+UNAVAILABLE`: never increase apparent coverage by guessing the
+association.
 
 **Required CH3 tests:**
-- A clean specimen where the join succeeds (find one from your own
-  fixture recording — any period with no reprocessing evidence on either
-  side).
-- The `600518.SH` FY2017 specimen: the join must be suppressed (a
-  restated `report_type=4` row exists for this period) — assert no
-  `ni_ex_nonrecurring` row is emitted for `(600518.SH, 2017-12-31)`.
+- A clean specimen where all three conditions hold and the join succeeds
+  (find one from your own fixture recording — any period with no
+  reprocessing evidence on either side and a matching `fina_indicator`
+  `ann_date`).
+- The `600518.SH` FY2017 specimen: suppressed on condition 2 (a restated
+  `report_type=4` row exists) — assert no `ni_ex_nonrecurring` row is
+  emitted for `(600518.SH, 2017-12-31)`, and an entry with
+  `reason="ch3_vintage_join_not_certified"` appears in
+  `get_uncertain_observations`.
 - The `002450.SZ` FY2015 specimen: suppressed for the same reason
-  (`report_type=5` exists).
+  (`report_type=5` exists), same side-table assertion.
+- **(New, required.)** A specimen (real if found; otherwise explicitly
+  constructed and labeled as such) where conditions 1-2 hold but
+  condition 3 fails — `fina_indicator`'s own `ann_date` diverges from the
+  anchor `income` row's `ann_date` — asserting the join is still
+  suppressed. If your investigation finds `fina_indicator` never
+  diverges from `income`'s `ann_date` in any real specimen, this test
+  may be constructed, but it must exist and must be documented as
+  constructed.
+- **(New, required.)** If your investigation finds `fina_indicator`
+  exposes no comparable date field at all: a test asserting that
+  `ni_ex_nonrecurring` is never emitted for any fixture, and every
+  candidate period appears in `get_uncertain_observations` with
+  `reason="ch3_vintage_join_not_certified"`.
 
 ## Fixture inputs (all real, confirmed-reachable specimens — record all of these)
 
@@ -226,10 +350,15 @@ it succeeds).
   column set.
 - No duplicate-key row ever reaches the output (the `update_flag`
   de-duplication is exercised against a real specimen).
-- `dropped_ambiguous_date_count` is nonzero on a fixture set that
-  contains at least one genuinely-ineligible-fallback row (construct
-  this if no real specimen naturally has one — document that it's a
-  constructed edge case, distinct from your other, all-real tests).
+- `get_uncertain_observations` schema/shape conformance and the case
+  C/D/E coverage required above (an aggregate count alone no longer
+  satisfies this task — see "Observation-level uncertainty").
+- **The `002450.SZ` FY2016/17 blank-out specimen (policy 6) must be
+  exercised by a test in this task's own suite AND is required to be
+  re-exercised through the fully assembled `TushareAShareSource` at
+  certification time (P4DB-9) — do not treat your own unit-level test as
+  sufficient on its own; note this cross-reference in your final report
+  so P4DB-9's author can find it.**
 
 ## Non-goals
 
@@ -244,6 +373,11 @@ actions, no listing logic.
 - Every frozen policy above (2, 3, 6, 7, 8, 9) has at least one real-
   specimen test, named clearly enough that P4DB-9 can point to it in the
   certification report.
+- All five lettered knowledge-date cases (A-E) and all CH3 join
+  conditions (1-3, including the new condition 3's failure mode) have
+  explicit, individually identifiable tests — a single combined test
+  covering multiple cases is not acceptable, since P4DB-9's certification
+  report must be able to cite each one individually.
 
 ## Commands to run
 
@@ -262,11 +396,17 @@ above.
 
 ## When done
 
-Report: (a) exact function signatures implemented; (b) confirmation that
-the knowledge-date rule, blank-out handling, `update_flag`
-de-duplication, and CH3 join-or-suppress logic all pass against the real
-specimens listed above, with any deviation explained; (c) the
-`reporting_basis` decision for `fina_indicator`, with evidence; (d) any
-case where the `update_flag` duplicate-value assumption did not hold
-(report as a blocker if found); (e) test results; (f) `git diff --stat`.
-Do not merge, do not touch `master`.
+Report: (a) exact function signatures implemented, including
+`get_uncertain_observations`; (b) confirmation that the knowledge-date
+rule (all five lettered cases A-E), blank-out handling, `update_flag`
+de-duplication, and CH3 join-or-suppress logic (all three conditions)
+all pass against the real specimens listed above, with any deviation
+explained; (c) the `reporting_basis` decision for `fina_indicator`, with
+evidence; (d) whether `fina_indicator` exposes its own `ann_date` field
+and, if so, whether it was ever found to diverge from the anchor
+`income` row's `ann_date` in any real specimen — this directly
+determines CH3's coverage and must be stated explicitly, not left
+implicit in test names; (e) any case where the `update_flag`
+duplicate-value assumption did not hold (report as a blocker if found);
+(f) test results; (g) `git diff --stat`. Do not merge, do not touch
+`master`.
