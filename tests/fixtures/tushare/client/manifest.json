@@ -1,0 +1,70 @@
+{
+  "_comment": "Fixture manifest for the P4DB-1 Tushare proxy transport tests. Each entry maps a raw response body file (verbatim proxy JSON, no wrapper) to the api_name + params that produced it and the HTTP status code observed.",
+  "_provenance": {
+    "live_recorded": false,
+    "recorded_at": null,
+    "reason": "TUSHARE_PROXY_TOKEN was not available in the implementation environment. The proxy host pcd.mobcvb.cn is reachable and healthy, but the data route (/tushare/pro/{api_name}, GET or POST) requires an X-API-Key header and returned HTTP 401 {\"ok\":false,\"error\":\"unauthorized\"} for every unauthenticated probe. No live specimen could therefore be recorded. The transport itself uses the independently-established Phase 4D-A contract: GET with URL-encoded query params.",
+    "fixture_construction": "Every body below is modeled byte-for-byte on the wire contract frozen in worker_tasks/phase4d_b/phase4d-b-plan.md (policy 11 / evidence item 8) and task-p4db-1-client.md (Required transport policies 1-3). They are test vectors for the documented proxy contract, NOT live captures. To capture real specimens, run: TUSHARE_PROXY_TOKEN=... .venv/bin/python -m smart_beta.vendors.tushare.proxy_client --out tests/fixtures/tushare/client \"<api_name> <key>=<value> ...\". This manifest's _provenance.live_recorded must then be set true.",
+    "contract_source": "worker_tasks/phase4d_b/phase4d-b-plan.md + worker_tasks/phase4d_b/task-p4db-1-client.md"
+  },
+  "recordings": {
+    "daily_000001.SZ_20230101_20230115_success.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20230101",
+        "end_date": "20230115"
+      },
+      "status_code": 200,
+      "description": "Non-empty success envelope {code:0, data:{fields, items}}."
+    },
+    "daily_000001.SZ_20230101_20230115_upstream_pool_exhausted.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20230101",
+        "end_date": "20230115"
+      },
+      "status_code": 503,
+      "description": "Transient cold/contended failure; retryable."
+    },
+    "daily_000001.SZ_20230101_20230115_rate_limited.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20230101",
+        "end_date": "20230115"
+      },
+      "status_code": 429,
+      "description": "Transient rate-limit failure; retryable."
+    },
+    "date_range_too_large_000001.SZ_20130101_20240101.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130101",
+        "end_date": "20240101"
+      },
+      "status_code": 400,
+      "description": "Non-retryable proxy rejection: request spans more than 366 days."
+    },
+    "adj_factor_000001.SZ_20230113_empty.json": {
+      "api_name": "adj_factor",
+      "params": {
+        "ts_code": "000001.SZ",
+        "trade_date": "20230113"
+      },
+      "status_code": 200,
+      "description": "Empty-success envelope (code:0, items:[]) for a query known to have data."
+    },
+    "adj_factor_000001.SZ_20230113_nonempty.json": {
+      "api_name": "adj_factor",
+      "params": {
+        "ts_code": "000001.SZ",
+        "trade_date": "20230113"
+      },
+      "status_code": 200,
+      "description": "The same adj_factor query returning real data."
+    }
+  }
+}

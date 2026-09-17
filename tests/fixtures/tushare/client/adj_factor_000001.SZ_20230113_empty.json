@@ -1,0 +1,13 @@
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "fields": [
+      "ts_code",
+      "trade_date",
+      "adj_factor"
+    ],
+    "items": [],
+    "has_more": false
+  }
+}

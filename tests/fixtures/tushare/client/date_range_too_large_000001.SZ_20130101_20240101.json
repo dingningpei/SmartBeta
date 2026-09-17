@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "error": "date_range_too_large",
+  "message": "date range exceeds 366 days; paginate the request"
+}
