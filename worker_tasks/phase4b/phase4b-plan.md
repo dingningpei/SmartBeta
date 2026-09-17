@@ -175,7 +175,57 @@ Wave 4 (standalone) P4B-9 (certification)   (needs 8)
 
 ## Status
 
-Architecture frozen. This document and the nine task specs
-(`task-p4b-1-client.md` .. `task-p4b-9-certification.md`) exist. No
-worktrees, no venvs, no Pi workers, and no production code exist for Phase
-4B yet.
+Barrier 1 (P4B-1, P4B-2, P4B-3) and Barrier 2 (P4B-4, P4B-5, P4B-6, P4B-7)
+are both merged to `master` (`18e8308`, 659/659 tests green). The Market
+Cap Bridge (P4B-M1, P4B-M2, below) runs next, sequentially, before P4B-8.
+P4B-8 has not started.
+
+## Market Cap Bridge (P4B-M1 / P4B-M2) — pre-P4B-8 follow-up
+
+P4B-4's real investigation found `map_eod_to_market_cap` had no viable
+data path under the client surface that existed at the time, so it
+correctly fails closed (`TiingoMarketCapUnavailableError`) rather than
+fabricating a figure. Left as-is, this would produce an avoidable
+`schema_conformance_get_market_cap` FAIL in P4B-9's certification (Phase
+3's `check_schema_conformance` calls all six panel methods and turns a
+raised exception into a genuine FAIL, not a skip). Two small, sequential,
+independently reviewed follow-up tasks close this gap before P4B-8:
+
+| Task | Objective | Files | Depends on |
+|---|---|---|---|
+| P4B-M1 | Add `TiingoClient.get_fundamentals_daily` (`GET /tiingo/fundamentals/{ticker}/daily`) | `vendors/tiingo/client.py`, its test file, `tests/fixtures/tiingo/client/` | none (branches from `18e8308`) |
+| P4B-M2 | Replace `map_eod_to_market_cap`'s fail-closed placeholder with `total_mcap` from `marketCap`, `float_mcap = total_mcap` as a named, flag-and-docstring-enforced approximation (`FLOAT_MARKET_CAP_IS_APPROXIMATED`) | `vendors/tiingo/returns_and_market_cap.py`, its test file, `tests/fixtures/tiingo/returns_market_cap/` | P4B-M1 merged |
+
+Specs: `task-p4b-m1-fundamentals-daily-client.md`,
+`task-p4b-m2-market-cap-adapter.md`. Neither touches Phase 3, identifiers,
+listing, or corporate actions. P4B-8 is not created until both are merged.
+
+## Recorded, not-yet-applied finding: TWTR delisting corroboration
+
+Real TWTR EOD evidence has a trailing zero-volume run of length 1. The
+frozen `_MIN_CORROBORATING_ZERO_VOLUME_DAYS = 5` (P4B-7, correct and
+unchanged) means real TWTR's `delist_date` is `NaT` under the current
+policy — P4B-7's code is correct; this is a specimen limitation, not a
+bug. Phase 3's `check_delisted_security_history_present` will therefore
+produce a genuine, honest FAIL for its `delisted_listing_info` sub-check
+when run against TWTR (the row-presence sub-checks — raw returns, market
+cap, trading status — are independently real and should pass). This must
+never be smoothed into a pass. **Required future amendment (not yet
+applied — do not edit `task-p4b-9-certification.md` until this is
+explicitly approved):** before Wave 4, correct that spec's stale
+assumption ("the real corroborated delist_date from P4B-7's policy") and
+require the certification report to carry an explicit
+`TWTR DELISTING CORROBORATION = NOT CERTIFIED` line alongside the honest
+FAIL, with the length-1-vs-minimum-5 reason stated plainly.
+
+## Recorded status: identifier continuity
+
+`permaTicker` is real and live-confirmed, but is absent from the
+`GET /tiingo/daily/{ticker}` shape `resolve_stock_id` consumes (it lives
+on `GET /tiingo/fundamentals/meta` instead). Under the current, merged
+code, AAPL/TWTR/FB/META all resolve via the ticker fallback
+(`is_permanent=False`). **`IDENTIFIER CONTINUITY = NOT CERTIFIED`** and
+must not be silently upgraded. Whether `TiingoPITSource`'s assembly
+should consume `fundamentals/meta` to actually establish continuity is an
+explicit, to-be-reviewed P4B-8 design question, not resolved here.
+
