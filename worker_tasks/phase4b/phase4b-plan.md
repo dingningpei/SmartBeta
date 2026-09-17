@@ -175,10 +175,12 @@ Wave 4 (standalone) P4B-9 (certification)   (needs 8)
 
 ## Status
 
-Barrier 1, Barrier 2, the Market Cap Bridge (P4B-M1/M2), and P4B-8 are
-all merged to `master` (`f716b1a`, 690/690 tests green). The Determinism/
-Replay Barrier (P4B-D1, P4B-R1, below) runs next, in parallel, before
-P4B-9. P4B-9 has not started.
+Barrier 1, Barrier 2, the Market Cap Bridge (P4B-M1/M2), P4B-8, and the
+Determinism/Replay Barrier (P4B-D1/P4B-R1) are all merged to `master`
+(`4fb68ab`, 698/698 tests green). `task-p4b-9-certification.md` has been
+explicitly amended (not silently) to incorporate every empirical finding
+recorded below -- see "Applied P4B-9 spec amendment" below. P4B-9 has not
+started.
 
 ## Market Cap Bridge (P4B-M1 / P4B-M2) — pre-P4B-8 follow-up
 
@@ -200,7 +202,12 @@ Specs: `task-p4b-m1-fundamentals-daily-client.md`,
 `task-p4b-m2-market-cap-adapter.md`. Neither touches Phase 3, identifiers,
 listing, or corporate actions. P4B-8 is not created until both are merged.
 
-## Determinism/Replay Barrier (P4B-D1 / P4B-R1) — pre-P4B-9 follow-up
+## Determinism/Replay Barrier (P4B-D1 / P4B-R1) — MERGED, PASS
+
+**Status: complete.** Both merged (`1f9fddb`, `4fb68ab`); integrated
+barrier reproduction against the real `TiingoPITSource` confirmed clean
+across determinism, replay identity, market cap, TWTR, identifiers, and
+fundamentals fail-closed behavior — no integration defect found.
 
 Independent P4B-8 review reproduced Phase 3's `check_deterministic_results`
 (already-merged, unmodified) directly against the real, assembled
@@ -231,7 +238,7 @@ permitted to touch `smart_beta/pit/*`, and only `compliance.py`'s
 every other Phase 4B module — both run in the same wave. P4B-9 is not
 created until both are merged and the full suite is green.
 
-## Recorded, not-yet-applied finding: TWTR delisting corroboration
+## Recorded finding: TWTR delisting corroboration (applied to P4B-9)
 
 Real TWTR EOD evidence has a trailing zero-volume run of length 1. The
 frozen `_MIN_CORROBORATING_ZERO_VOLUME_DAYS = 5` (P4B-7, correct and
@@ -258,10 +265,11 @@ stock_id`) confirmed it wires only `get_meta` → `resolve_stock_id`, never
 `fundamentals/meta` — the frozen P4B-8 spec never authorized otherwise,
 so this status carries forward unchanged into P4B-9.
 
-## Recorded, not-yet-applied: required P4B-9 spec amendments
+## Applied P4B-9 spec amendment
 
-`task-p4b-9-certification.md` is not edited until this list is explicitly
-reviewed and approved, after the P4B-D1/P4B-R1 barrier passes:
+The following list was explicitly reviewed and has now been **applied**
+to `task-p4b-9-certification.md` (not a silent edit — every change below
+is traceable to a specific section of that file):
 
 1. **TWTR.** Remove the stale assumption of "the real corroborated
    delist_date from P4B-7's policy." Real terminal zero-volume run = 1,
