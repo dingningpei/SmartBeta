@@ -4,18 +4,19 @@ Every test here is offline. Mapping functions consume recorded (or
 hand-constructed) EOD JSON from
 ``tests/fixtures/tiingo/returns_market_cap/``. An autouse fixture replaces
 ``urllib.request.urlopen`` with a tripwire so an accidental live call fails
-loudly. One test additionally drives :class:`TiingoClient` through
-:func:`replay_transport` to prove the AAPL recording is a real
-``get_eod_prices`` body.
+loudly. Tests additionally drive :class:`TiingoClient` through
+:func:`replay_transport` to prove the recordings are real bodies.
 
-Coverage map (required tests from the P4B-4 spec):
+Coverage map (required tests from the P4B-4 and P4B-M2 specs):
 
 1. return computation correctness (AAPL ordinary day, hand-computed)
 2. first-row exclusion
 3. TWTR zero-volume row present in raw returns AND trading status
 4. ``is_zero_volume`` True exactly on zero-volume rows (TWTR terminal +
    isolated mid-history)
-5. market cap fails closed with :class:`TiingoMarketCapUnavailableError`
+5. market cap maps ``marketCap`` to ``total_mcap`` and sets ``float_mcap``
+   to the SAME value as a named, flag-and-docstring-enforced approximation
+   (``FLOAT_MARKET_CAP_IS_APPROXIMATED``), excluding missing/null rows
 6. schema conformance via ``validate_panel``
 7. provenance columns present (and extra columns do not break
    ``validate_panel``)
@@ -32,15 +33,19 @@ import pytest
 
 from smart_beta.pit.schema import (
     DATE_COL,
+    FLOAT_MARKET_CAP_COL,
+    PIT_MARKET_CAP_SCHEMA,
     PIT_RAW_RETURN_PANEL_SCHEMA,
     PIT_TRADING_STATUS_SCHEMA,
     RAW_RETURN_COL,
     STOCK_COL,
+    TOTAL_MARKET_CAP_COL,
     validate_panel,
 )
 from smart_beta.vendors.tiingo.client import TiingoClient, replay_transport
+import smart_beta.vendors.tiingo.returns_and_market_cap as market_cap_mod
 from smart_beta.vendors.tiingo.returns_and_market_cap import (
-    TiingoMarketCapUnavailableError,
+    FLOAT_MARKET_CAP_IS_APPROXIMATED,
     map_eod_to_market_cap,
     map_eod_to_raw_returns,
     map_eod_to_trading_status,
@@ -51,6 +56,7 @@ _FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "tiingo" / "return
 _AAPL_EOD = "aapl_eod_prices_2020-08-20_2020-09-05.json"
 _TWTR_EOD = "twtr_eod_prices_2022-10-20_2022-10-28.json"
 _AAPL_DAILY = "aapl_fundamentals_daily_2024-01-02_2024-01-05.json"
+_AAPL_DAILY_NULL = "constructed_aapl_fundamentals_daily_null_market_cap.json"
 _ISOLATED_EOD = "isolated_zero_volume_eod.json"
 
 _AAPL_ID = "AAPL"
@@ -61,12 +67,25 @@ _PROVENANCE_COLS = ("_source_vendor", "_source_endpoint", "_ingested_at")
 _CHINA_A_FLAGS = ("is_suspended", "is_limit_up", "is_limit_down", "is_st")
 _EOD_MCAP_LIKE = ("marketCap", "market_cap", "shares", "sharesOutstanding", "float")
 
+#: Exact, greppable sentence that must appear in the module and function
+#: docstrings so the float-vs-total approximation can never be silently
+#: presented as a verified vendor figure.
+_REQUIRED_DOC_SENTENCE = (
+    "float_mcap is an explicit approximation, never a verified vendor figure"
+)
+
 
 def _load(filename: str) -> object:
     return json.loads((_FIXTURE_DIR / filename).read_text(encoding="utf-8"))
 
 
 def _load_eod(filename: str) -> list[dict]:
+    body = _load(filename)
+    assert isinstance(body, list)
+    return body
+
+
+def _load_daily(filename: str) -> list[dict]:
     body = _load(filename)
     assert isinstance(body, list)
     return body
@@ -230,7 +249,7 @@ def test_isolated_zero_volume_row_is_preserved_in_raw_returns() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Market cap: fail closed (EOD has no figure; daily metrics unwrapped)
+# 5. Market cap from daily fundamentals (P4B-M2)
 # ---------------------------------------------------------------------------
 def test_eod_rows_have_no_market_cap_or_share_count_field() -> None:
     for filename in (_AAPL_EOD, _TWTR_EOD, _ISOLATED_EOD):
@@ -241,10 +260,9 @@ def test_eod_rows_have_no_market_cap_or_share_count_field() -> None:
 
 
 def test_daily_metrics_fixture_has_market_cap_and_no_float_distinct_figure() -> None:
-    """Investigation record: marketCap exists on an endpoint the client
-    does not wrap, with no distinct float-adjusted figure."""
-    rows = _load(_AAPL_DAILY)
-    assert isinstance(rows, list) and rows
+    """Investigation record: marketCap exists, no distinct float figure."""
+    rows = _load_daily(_AAPL_DAILY)
+    assert rows
     keys = set(rows[0])
     assert "marketCap" in keys
     assert rows[0]["marketCap"] == pytest.approx(2887212881280.0)
@@ -260,26 +278,91 @@ def test_daily_metrics_fixture_has_market_cap_and_no_float_distinct_figure() -> 
     }
 
 
-def test_map_eod_to_market_cap_raises_named_exception() -> None:
-    rows = _load_eod(_AAPL_EOD)
-    with pytest.raises(TiingoMarketCapUnavailableError, match="cannot produce a market-cap"):
-        map_eod_to_market_cap(rows, _AAPL_ID)
+# Required test 1: total_mcap matches the real marketCap for each row.
+def test_total_mcap_matches_real_market_cap_for_each_row() -> None:
+    rows = _load_daily(_AAPL_DAILY)
+    frame = map_eod_to_market_cap(rows, _AAPL_ID)
+    assert len(frame) == len(rows) == 4
+    for row in rows:
+        day = pd.to_datetime(row["date"], utc=True).date()
+        actual = _row_on(frame, day.isoformat())[TOTAL_MARKET_CAP_COL]
+        assert actual == pytest.approx(row["marketCap"])
 
 
-def test_map_eod_to_market_cap_raises_on_empty_rows_rather_than_fabricating() -> None:
-    with pytest.raises(TiingoMarketCapUnavailableError):
-        map_eod_to_market_cap([], _AAPL_ID)
+# Required test 2: float_mcap == total_mcap exactly.
+def test_float_mcap_equals_total_mcap_exactly() -> None:
+    frame = map_eod_to_market_cap(_load_daily(_AAPL_DAILY), _AAPL_ID)
+    assert (frame[FLOAT_MARKET_CAP_COL] == frame[TOTAL_MARKET_CAP_COL]).all()
+    assert (frame[FLOAT_MARKET_CAP_COL] > 0).all()
 
 
-def test_map_eod_to_market_cap_does_not_return_a_frame() -> None:
-    """Fail closed: never a schema-conformant but made-up number."""
-    try:
-        result = map_eod_to_market_cap(_load_eod(_AAPL_EOD), _AAPL_ID)
-    except TiingoMarketCapUnavailableError:
-        return
-    raise AssertionError(
-        f"map_eod_to_market_cap returned {type(result)!r} instead of raising"
+# Required test 3 (most important): the approximation cannot be silently
+# mistaken for a real float-adjusted figure. The flag and the equality are
+# asserted together so the two can never silently drift apart.
+def test_float_market_cap_is_approximation_not_verified_vendor_figure() -> None:
+    assert FLOAT_MARKET_CAP_IS_APPROXIMATED is True
+    frame = map_eod_to_market_cap(_load_daily(_AAPL_DAILY), _AAPL_ID)
+    assert (frame[FLOAT_MARKET_CAP_COL] == frame[TOTAL_MARKET_CAP_COL]).all()
+    # A future edit that made float_mcap a genuinely distinct figure would
+    # break the equality above and must flip the flag with it -- the two
+    # move together or not at all.
+
+
+def test_approximation_flag_is_exported_and_documented() -> None:
+    assert FLOAT_MARKET_CAP_IS_APPROXIMATED is True
+    assert "FLOAT_MARKET_CAP_IS_APPROXIMATED" in market_cap_mod.__all__
+    assert market_cap_mod.__doc__ is not None
+    assert _REQUIRED_DOC_SENTENCE in market_cap_mod.__doc__
+    assert map_eod_to_market_cap.__doc__ is not None
+    assert _REQUIRED_DOC_SENTENCE in map_eod_to_market_cap.__doc__
+
+
+# Required test 4: missing/null marketCap rows are excluded, not fabricated.
+def test_missing_or_null_market_cap_row_is_excluded_not_fabricated() -> None:
+    rows = _load_daily(_AAPL_DAILY_NULL)
+    frame = map_eod_to_market_cap(rows, _AAPL_ID)
+    # Fixture: 2024-01-02 real, 2024-01-03 marketCap null, 2024-01-04
+    # marketCap key absent, 2024-01-05 real.
+    assert _dates(frame) == {
+        pd.Timestamp("2024-01-02").date(),
+        pd.Timestamp("2024-01-05").date(),
+    }
+    assert len(frame) == 2
+    assert not frame[TOTAL_MARKET_CAP_COL].isna().any()
+    assert (frame[TOTAL_MARKET_CAP_COL] > 0).all()
+
+
+# Required test 5: empty input returns an empty, schema-conformant frame.
+def test_empty_daily_fundamentals_returns_empty_schema_conformant_frame() -> None:
+    frame = map_eod_to_market_cap([], _AAPL_ID)
+    assert frame.empty
+    assert FLOAT_MARKET_CAP_COL in frame.columns
+    assert TOTAL_MARKET_CAP_COL in frame.columns
+    validate_panel(frame, PIT_MARKET_CAP_SCHEMA, name="market_cap")
+
+
+def test_market_cap_does_not_mutate_input_rows() -> None:
+    rows = _load_daily(_AAPL_DAILY)
+    before = json.loads(json.dumps(rows))
+    map_eod_to_market_cap(rows, _AAPL_ID)
+    assert rows == before
+
+
+def test_market_cap_replay_client_maps_identically_to_disk_fixture() -> None:
+    body = _load_daily(_AAPL_DAILY)
+    client = TiingoClient(
+        transport=replay_transport(
+            {f"/tiingo/fundamentals/{_AAPL_ID}/daily": (200, body)}
+        )
     )
+    fetched = client.get_fundamentals_daily(_AAPL_ID, "2024-01-02", "2024-01-05")
+    assert fetched == body
+    from_disk = map_eod_to_market_cap(body, _AAPL_ID)
+    from_client = map_eod_to_market_cap(fetched, _AAPL_ID)
+    pd.testing.assert_series_equal(
+        from_disk[TOTAL_MARKET_CAP_COL], from_client[TOTAL_MARKET_CAP_COL]
+    )
+    pd.testing.assert_series_equal(from_disk[DATE_COL], from_client[DATE_COL])
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +378,12 @@ def test_trading_status_schema_conformance() -> None:
     frame = map_eod_to_trading_status(_load_eod(_TWTR_EOD), _TWTR_ID)
     validate_panel(frame, PIT_TRADING_STATUS_SCHEMA, name="trading_status")
     assert (frame[STOCK_COL] == _TWTR_ID).all()
+
+
+def test_market_cap_schema_conformance() -> None:
+    frame = map_eod_to_market_cap(_load_daily(_AAPL_DAILY), _AAPL_ID)
+    validate_panel(frame, PIT_MARKET_CAP_SCHEMA, name="market_cap")
+    assert (frame[STOCK_COL] == _AAPL_ID).all()
 
 
 def test_empty_eod_rows_still_schema_conformant() -> None:
@@ -319,6 +408,12 @@ def test_provenance_columns_on_trading_status() -> None:
     frame = map_eod_to_trading_status(_load_eod(_TWTR_EOD), _TWTR_ID)
     _assert_provenance(frame, source_endpoint="get_eod_prices")
     validate_panel(frame, PIT_TRADING_STATUS_SCHEMA, name="trading_status")
+
+
+def test_provenance_columns_on_market_cap() -> None:
+    frame = map_eod_to_market_cap(_load_daily(_AAPL_DAILY), _AAPL_ID)
+    _assert_provenance(frame, source_endpoint="get_fundamentals_daily")
+    validate_panel(frame, PIT_MARKET_CAP_SCHEMA, name="market_cap")
 
 
 def test_source_endpoint_override_is_recorded() -> None:

@@ -1,9 +1,10 @@
-"""Tiingo EOD mapping: raw returns, market cap, and trading status (P4B-4).
+"""Tiingo EOD mapping: raw returns, market cap, trading status (P4B-4/P4B-M2).
 
-All three of ``PITDataSource``'s methods owned by this task --
-``get_raw_returns``, ``get_market_cap``, and ``get_trading_status`` -- are
-derived from the same Tiingo EOD price row
-(``GET /tiingo/daily/{ticker}/prices``). Unlike China A-shares, there is no
+``get_raw_returns`` and ``get_trading_status`` are derived from the same
+Tiingo EOD price row (``GET /tiingo/daily/{ticker}/prices``);
+``get_market_cap`` is instead derived from daily-fundamentals rows
+(``GET /tiingo/fundamentals/{ticker}/daily``, wired in by P4B-M2).
+Unlike China A-shares, there is no
 separate suspension / limit-up / limit-down / ST data source in scope for
 US equities; the only trading-status signal available is volume-derived.
 
@@ -25,24 +26,30 @@ isolated illiquid day and a terminal delisting day are indistinguishable
 at this layer. Sustained-tail corroboration before asserting a
 ``delist_date`` is P4B-7's job, not this one's.
 
-Market-cap investigation (live, 2026-09-16, this account)
----------------------------------------------------------
+Market cap (P4B-M2; supersedes the P4B-4 investigation, 2026-09-16)
+-------------------------------------------------------------------
 Tiingo EOD rows contain ``date, open, high, low, close, volume, adjOpen,
 adjHigh, adjLow, adjClose, adjVolume, divCash, splitFactor`` -- and no
 market-cap, share-count, or float-share field.
 
-``GET /tiingo/fundamentals/{ticker}/daily`` DOES return a ``marketCap``
-figure under current access (AAPL specimen 2024-01-02..2024-01-05;
-history on this account begins 2023-09-18). There is no distinct
-float-adjusted figure on that endpoint (keys: ``date, marketCap,
-enterpriseVal, peRatio, pbRatio, trailingPEG1Y``). ``TiingoClient`` has
-no method for that endpoint (P4B-1 is merged and frozen for this wave).
-This module must not add one, monkeypatch the client, or duplicate
-live-transport logic inline.
+P4B-4 correctly failed closed because no client method wrapped a
+market-cap source. P4B-M1 added
+:meth:`TiingoClient.get_fundamentals_daily`
+(``GET /tiingo/fundamentals/{ticker}/daily``), which DOES return a
+``marketCap`` figure under current access (AAPL specimen
+2024-01-02..2024-01-05; history on this account begins 2023-09-18). That
+endpoint has no distinct float-adjusted figure (keys: ``date, marketCap,
+enterpriseVal, peRatio, pbRatio, trailingPEG1Y``).
 
-Therefore :func:`map_eod_to_market_cap` fails closed: it raises
-:class:`TiingoMarketCapUnavailableError` rather than fabricating a value
-from price, estimating shares, or silently calling an unwrapped endpoint.
+Therefore :func:`map_eod_to_market_cap` now reads ``marketCap`` for
+``total_mcap`` and sets ``float_mcap`` to the SAME number as a named,
+documented approximation. Rephrased plainly:
+float_mcap is an explicit approximation, never a verified vendor figure.
+The machine-checkable marker is :data:`FLOAT_MARKET_CAP_IS_APPROXIMATED`.
+The literal certification phrasing is:
+FLOAT MARKET CAP = APPROXIMATED (no distinct float-adjusted figure available from Tiingo)
+Rows whose ``marketCap`` is missing or null are excluded -- never
+fabricated, zero-filled, or forward-filled.
 
 Trading-status flags
 --------------------
@@ -72,10 +79,13 @@ import pandas as pd
 
 from smart_beta.pit.schema import (
     DATE_COL,
+    FLOAT_MARKET_CAP_COL,
+    PIT_MARKET_CAP_SCHEMA,
     PIT_RAW_RETURN_PANEL_SCHEMA,
     PIT_TRADING_STATUS_SCHEMA,
     RAW_RETURN_COL,
     STOCK_COL,
+    TOTAL_MARKET_CAP_COL,
     validate_panel,
 )
 
@@ -83,23 +93,19 @@ _PROVENANCE_VENDOR = "tiingo"
 
 _IS_ZERO_VOLUME_COL = "is_zero_volume"
 
+#: Named, testable flag: ``float_mcap`` in this adapter's output is NOT
+#: Tiingo's own float-adjusted figure -- none exists under current
+#: access. It is ``total_mcap``, repeated. Any caller (including P4B-9's
+#: certification) that treats this as a verified float-adjusted market
+#: cap is wrong; check this flag first.
+FLOAT_MARKET_CAP_IS_APPROXIMATED = True
+
 __all__ = [
-    "TiingoMarketCapUnavailableError",
+    "FLOAT_MARKET_CAP_IS_APPROXIMATED",
     "map_eod_to_market_cap",
     "map_eod_to_raw_returns",
     "map_eod_to_trading_status",
 ]
-
-
-class TiingoMarketCapUnavailableError(Exception):
-    """Raised because EOD rows cannot produce a market-cap figure.
-
-    Tiingo's EOD price endpoint has no market-cap or shares-outstanding
-    field under current access. A ``marketCap`` figure exists on
-    ``GET /tiingo/fundamentals/{ticker}/daily``, but ``TiingoClient`` has
-    no method for that endpoint and this module must not reach around
-    that boundary. Refusing to fabricate or estimate a value.
-    """
 
 
 def map_eod_to_raw_returns(
@@ -155,33 +161,55 @@ def map_eod_to_raw_returns(
 
 
 def map_eod_to_market_cap(
-    eod_rows: list[dict],
+    daily_fundamentals_rows: list[dict],
     stock_id: str,
-    source_endpoint: str = "get_eod_prices",
+    source_endpoint: str = "get_fundamentals_daily",
 ) -> pd.DataFrame:
-    """Refuse to invent a market-cap panel from EOD rows.
+    """Map Tiingo daily-fundamentals rows to a market-cap panel.
 
-    Tiingo EOD prices have no market-cap or share-count field. A
-    ``marketCap`` figure is obtainable from
-    ``GET /tiingo/fundamentals/{ticker}/daily``, but ``TiingoClient``
-    does not wrap that endpoint and this module must not reach around
-    that boundary. Always raises :class:`TiingoMarketCapUnavailableError`
-    rather than returning a schema-conformant but fabricated number.
+    Conforms to ``PIT_MARKET_CAP_SCHEMA``, plus provenance columns
+    ``_source_vendor``, ``_source_endpoint``, ``_ingested_at``.
 
-    ``stock_id`` and ``source_endpoint`` are accepted for signature
-    symmetry with the other mappers and appear in the error message;
-    they cannot produce a figure that the rows do not contain.
+    ``total_mcap`` is the row's ``marketCap`` field exactly as Tiingo
+    reports it, unmodified. ``float_mcap`` is the SAME value, because
+    Tiingo has no distinct float-adjusted figure under current access --
+    this is an explicit, named approximation; the machine-checkable
+    marker is :data:`FLOAT_MARKET_CAP_IS_APPROXIMATED`. Rephrased plainly:
+    float_mcap is an explicit approximation, never a verified vendor figure.
+    It must never be presented as Tiingo's own float-adjusted figure.
+
+    A row whose ``marketCap`` is missing or null is excluded from the
+    output -- no fabricated, zero-filled, or forward-filled value, and no
+    exception. A genuinely absent day is a normal gap in
+    daily-fundamentals coverage (history on this account begins
+    2023-09-18), not the no-data-source-at-all case the old fail-closed
+    behavior guarded. Empty input returns an empty, schema-conformant
+    frame.
+
+    ``daily_fundamentals_rows`` is sorted defensively by date and is
+    never mutated.
     """
-    observed = _observed_keys(eod_rows)
-    raise TiingoMarketCapUnavailableError(
-        f"Tiingo EOD rows cannot produce a market-cap figure for stock_id="
-        f"{stock_id!r} via {source_endpoint!r}. Observed EOD keys: "
-        f"{observed}. No market-cap or shares-outstanding field is present. "
-        "GET /tiingo/fundamentals/{ticker}/daily returns marketCap under "
-        "current access, but TiingoClient has no method for that endpoint "
-        "(P4B-1 is frozen) and this mapper must not call it, estimate "
-        "shares, or otherwise fabricate a value."
+    rows = _sorted_rows(daily_fundamentals_rows)
+    dates: list[pd.Timestamp] = []
+    market_caps: list[float] = []
+    for row in rows:
+        value = row.get("marketCap")
+        if value is None:
+            continue
+        dates.append(_parse_date(row["date"]))
+        market_caps.append(float(value))
+
+    frame = _build_frame(
+        dates=dates,
+        stock_id=stock_id,
+        extra={
+            FLOAT_MARKET_CAP_COL: pd.Series(market_caps, dtype="float64"),
+            TOTAL_MARKET_CAP_COL: pd.Series(market_caps, dtype="float64"),
+        },
+        source_endpoint=source_endpoint,
     )
+    validate_panel(frame, PIT_MARKET_CAP_SCHEMA, name="market_cap")
+    return frame
 
 
 def map_eod_to_trading_status(
@@ -247,12 +275,6 @@ def _require_close(row: dict) -> float:
 
 def _is_zero_volume(row: dict) -> bool:
     return row.get("volume") == 0
-
-
-def _observed_keys(eod_rows: Sequence[dict]) -> list[str]:
-    if not eod_rows:
-        return []
-    return sorted(eod_rows[0].keys())
 
 
 def _build_frame(
