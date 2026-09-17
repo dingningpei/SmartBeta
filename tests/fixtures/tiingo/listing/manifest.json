@@ -1,0 +1,55 @@
+{
+  "_comment": "P4B-7 fixtures. Live recordings were captured 2026-09-16 via GET /tiingo/daily/{ticker} and GET /tiingo/daily/{ticker}/prices. Constructed files are hand-built adversarial sequences, not fetched. The API key is not stored.",
+  "recordings": {
+    "twtr_meta.json": {
+      "url_path": "/tiingo/daily/TWTR",
+      "status_code": 200,
+      "source": "live GET /tiingo/daily/TWTR"
+    },
+    "twtr_eod_prices_2022-09-15_2022-11-15.json": {
+      "url_path": "/tiingo/daily/TWTR/prices",
+      "status_code": 200,
+      "source": "live GET /tiingo/daily/TWTR/prices startDate=2022-09-15 endDate=2022-11-15"
+    },
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "status_code": 200,
+      "source": "live GET /tiingo/daily/AAPL"
+    },
+    "aapl_eod_prices_2026-08-17_2026-09-16.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "status_code": 200,
+      "source": "live GET /tiingo/daily/AAPL/prices startDate=2026-08-17 endDate=2026-09-16"
+    },
+    "constructed_isolated_mid_history_zero_volume_meta.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed isolated mid-history zero-volume day"
+    },
+    "constructed_isolated_mid_history_zero_volume_eod.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed isolated mid-history zero-volume day"
+    },
+    "constructed_short_trailing_zero_volume_meta.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed trailing zero-volume run of length 4"
+    },
+    "constructed_short_trailing_zero_volume_eod.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed trailing zero-volume run of length 4"
+    },
+    "constructed_sufficient_trailing_zero_volume_meta.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed trailing zero-volume run of length 5"
+    },
+    "constructed_sufficient_trailing_zero_volume_eod.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed trailing zero-volume run of length 5"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "ticker": "LONG",
+  "name": "CONSTRUCTED: trailing zero-volume run of length MIN (not a live Tiingo security)",
+  "description": "Constructed fixture for P4B-7. Trailing run of exactly 5 consecutive zero-volume rows ending at endDate 2021-08-16, with no later rows. This is the corroboration the live TWTR EOD does not actually have (TWTR's real trailing zero-volume run is length 1).",
+  "startDate": "2017-05-01",
+  "endDate": "2021-08-16",
+  "exchangeCode": "NYSE"
+}

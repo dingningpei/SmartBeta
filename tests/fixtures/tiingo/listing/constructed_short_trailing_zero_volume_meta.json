@@ -1,0 +1,8 @@
+{
+  "ticker": "SHRT",
+  "name": "CONSTRUCTED: trailing zero-volume run shorter than MIN (not a live Tiingo security)",
+  "description": "Adversarial fixture for P4B-7. Trailing run of exactly 4 consecutive zero-volume rows ending at endDate 2021-07-14. That is shorter than _MIN_CORROBORATING_ZERO_VOLUME_DAYS (5), so delist_date must be NaT.",
+  "startDate": "2018-03-01",
+  "endDate": "2021-07-14",
+  "exchangeCode": "NYSE"
+}
