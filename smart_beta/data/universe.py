@@ -23,6 +23,14 @@ The function is stateless and never mutates its inputs.  It returns a
 ``(date, stock_id, is_tradable)`` panel aligned to the keys of the returns
 panel it is given, so downstream engines can simply join on the key and
 mask with ``is_tradable``.
+
+The actual tradability *rule* is not defined here: it lives behind
+:class:`smart_beta.research_inputs.tradability.TradabilityPolicy`.  This
+function owns only the shape validation and key alignment, then delegates
+the market-specific decision to the injected policy.  The default policy is
+:class:`~smart_beta.research_inputs.tradability.ChinaAShareTradabilityPolicy`,
+which is a faithful extraction of the rule that previously lived inline
+there, so existing callers see identical output.
 """
 
 from __future__ import annotations
@@ -33,13 +41,15 @@ from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
 from smart_beta.data.schema import (
     DATE_COL,
     LISTING_INFO_SCHEMA,
-    MARKET_CAP_COL,
     MARKET_CAP_PANEL_SCHEMA,
     RETURN_PANEL_SCHEMA,
     STOCK_COL,
-    TRADING_STATUS_COLS,
     TRADING_STATUS_SCHEMA,
     validate_panel,
+)
+from smart_beta.research_inputs.tradability import (
+    ChinaAShareTradabilityPolicy,
+    TradabilityPolicy,
 )
 
 # TODO(schema): promote to schema.py as a shared column name once the universe
@@ -53,12 +63,15 @@ def build_tradable_universe(
     trading_status: pd.DataFrame,
     listing_info: pd.DataFrame,
     settings: Settings = DEFAULT_SETTINGS,
+    *,
+    policy: TradabilityPolicy | None = None,
 ) -> pd.DataFrame:
     """Build a boolean tradability panel keyed by ``(date, stock_id)``.
 
-    The output contains exactly the keys present in ``returns`` and a single
-    ``is_tradable`` column.  A row is tradable when *all* of the following
-    hold as of that date:
+    The output contains exactly the keys present in ``returns`` and an
+    ``is_tradable`` decision column (a policy may attach additional
+    diagnostic columns; see the ``policy`` parameter).  A row is tradable
+    when *all* of the following hold as of that date:
 
     * the stock listed at least ``settings.min_listing_age_months`` earlier
       and has not yet delisted (``delist_date`` is ``NaT`` while listed);
@@ -85,89 +98,50 @@ def build_tradable_universe(
         (optionally) ``delist_date``.
     settings:
         Named thresholds; see :class:`smart_beta.config.settings.Settings`.
+    policy:
+        The market-specific :class:`TradabilityPolicy` to apply.  Defaults
+        to :class:`ChinaAShareTradabilityPolicy` when omitted -- every
+        existing caller that does not pass ``policy`` gets numerically and
+        structurally identical output to before this change.  When
+        ``policy`` is supplied, that policy's ``evaluate(...)`` result drives
+        ``is_tradable`` instead of this function's own (now removed) inline
+        logic.
 
     Returns
     -------
     pandas.DataFrame
-        Columns ``date, stock_id, is_tradable`` (``bool``), one row per
-        input return observation.
+        At least the columns ``date, stock_id, is_tradable`` (``bool``), one
+        row per input return observation.  The default (China) policy returns
+        exactly those three columns.  A policy may attach diagnostic columns
+        (for example
+        :class:`~smart_beta.research_inputs.tradability.USZeroVolumeTradabilityPolicy`
+        adds ``delisting_uncertain``); those are passed through unchanged so
+        no policy evidence is silently dropped.  Consumers that need the
+        canonical contract use ``date, stock_id, is_tradable``.
     """
     validate_panel(returns, RETURN_PANEL_SCHEMA, name="returns")
     validate_panel(market_cap, MARKET_CAP_PANEL_SCHEMA, name="market_cap")
     validate_panel(trading_status, TRADING_STATUS_SCHEMA, name="trading_status")
     validate_panel(listing_info, LISTING_INFO_SCHEMA, name="listing_info")
 
-    missing_flags = [c for c in TRADING_STATUS_COLS if c not in trading_status.columns]
-    if missing_flags:
-        raise ValueError(
-            f"trading_status is missing required columns: {missing_flags}; "
-            f"expected {list(TRADING_STATUS_COLS)}"
-        )
+    # Shape validation stays policy-independent.  The market-specific
+    # tradability rule -- including the China policy's hard requirement that
+    # the four status flags be present -- now lives entirely in the policy,
+    # so a non-China policy is not blocked by a China-only column check.
+    if policy is None:
+        policy = ChinaAShareTradabilityPolicy()
 
     # The returns panel defines the analysis sample, so its keys are the
-    # output keys.  Merges (rather than in-place assignment) keep the input
-    # frames untouched.
-    universe = returns[[DATE_COL, STOCK_COL]].copy()
-
-    universe = universe.merge(
-        market_cap[[DATE_COL, STOCK_COL, MARKET_CAP_COL]],
-        on=[DATE_COL, STOCK_COL],
-        how="left",
-        validate="one_to_one",
+    # output keys.  The policy copies before merging, so inputs stay
+    # untouched.
+    keys = returns[[DATE_COL, STOCK_COL]]
+    return policy.evaluate(
+        trading_status=trading_status,
+        listing_info=listing_info,
+        market_cap=market_cap,
+        keys=keys,
+        settings=settings,
     )
-    universe = universe.merge(
-        trading_status[[DATE_COL, STOCK_COL, *TRADING_STATUS_COLS]],
-        on=[DATE_COL, STOCK_COL],
-        how="left",
-        validate="one_to_one",
-    )
-
-    listing_columns = [STOCK_COL, "list_date"]
-    has_delist = "delist_date" in listing_info.columns
-    if has_delist:
-        listing_columns.append("delist_date")
-    universe = universe.merge(
-        listing_info[listing_columns],
-        on=STOCK_COL,
-        how="left",
-        validate="many_to_one",
-    )
-
-    # 1. Listing age: the anniversary date at which the stock becomes old
-    #    enough.  NaT list dates compare False, so unlisted-date rows drop out.
-    listing_ok = universe[DATE_COL] >= (
-        universe["list_date"]
-        + pd.DateOffset(months=settings.min_listing_age_months)
-    )
-    if has_delist:
-        # ``NaT`` means still listed; keep observations up to and including
-        # the delist date.
-        listing_ok &= universe["delist_date"].isna() | (
-            universe[DATE_COL] <= universe["delist_date"]
-        )
-
-    # 2. Trading-status flags.  A flag that is missing after the left merge
-    #    is unknown, so it blocks tradability (fillna(True) => blocked).
-    flags_ok = pd.Series(True, index=universe.index, dtype=bool)
-    for col in TRADING_STATUS_COLS:
-        flags_ok &= ~universe[col].fillna(True).astype(bool)
-
-    # 3. Bottom-pct market-cap exclusion, recomputed within each date so the
-    #    cutoff tracks the drifting cross-sectional cap distribution.
-    if settings.bottom_mcap_exclude_pct <= 0.0:
-        above_cap_cutoff = pd.Series(True, index=universe.index, dtype=bool)
-    else:
-        cutoff = universe.groupby(DATE_COL)[MARKET_CAP_COL].transform(
-            lambda caps: caps.quantile(settings.bottom_mcap_exclude_pct)
-        )
-        # Missing caps compare False and therefore stay out of the universe.
-        above_cap_cutoff = universe[MARKET_CAP_COL] > cutoff
-
-    universe[TRADABLE_COL] = (
-        listing_ok & flags_ok & above_cap_cutoff
-    ).astype(bool)
-
-    return universe[[DATE_COL, STOCK_COL, TRADABLE_COL]]
 
 
 __all__ = ["TRADABLE_COL", "build_tradable_universe"]
