@@ -1,0 +1,33 @@
+{
+  "_comment": "P4B-8 composition fixtures. Specimens are copies of the real captured Tiingo responses committed under tests/fixtures/tiingo/{client,returns_market_cap}/ and re-homed here per the frozen per-task fixture-ownership rule. aapl_fundamentals_asreported.json is the real P4B-6 specimen with the 2026 Q1 statement removed so that the as-reported and normalized coverage are a consistent pair for a ranged statements query (the real unbounded pair has a documented Q1 coverage gap that the fail-closed mapper rejects; see README.md). The API key is not stored.",
+  "recordings": {
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "status_code": 200
+    },
+    "aapl_eod_prices_2020-08-20_2020-09-05.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "status_code": 200
+    },
+    "aapl_fundamentals_asreported.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_fundamentals_normalized.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_fundamentals_daily_2024-01-02_2024-01-05.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "status_code": 200
+    },
+    "twtr_meta.json": {
+      "url_path": "/tiingo/daily/TWTR",
+      "status_code": 200
+    },
+    "twtr_eod_prices_2022-10-20_2022-10-28.json": {
+      "url_path": "/tiingo/daily/TWTR/prices",
+      "status_code": 200
+    }
+  }
+}
