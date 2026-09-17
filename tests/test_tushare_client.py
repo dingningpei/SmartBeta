@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -471,7 +472,7 @@ def test_token_is_read_at_call_time_not_construction(
     assert captured["key"] == DUMMY_TOKEN
 
 
-def test_live_transport_posts_with_x_api_key_header_and_body(
+def test_live_transport_gets_with_x_api_key_header_and_query_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(TOKEN_ENV_VAR, "secret-key")
@@ -482,8 +483,11 @@ def test_live_transport_posts_with_x_api_key_header_and_body(
         captured["url"] = request.full_url
         captured["method"] = request.get_method()
         captured["key"] = _header(request, "X-API-Key")
-        captured["content_type"] = _header(request, "Content-Type")
         captured["data"] = request.data
+        # Capture any extra call args so a test can prove no custom SSL
+        # context (which would weaken certificate verification) is passed.
+        captured["extra_args"] = args
+        captured["extra_kwargs"] = kwargs
         return _FakeHTTPResponse(200, json.dumps(body).encode())
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -491,13 +495,23 @@ def test_live_transport_posts_with_x_api_key_header_and_body(
 
     assert _call(client, DAILY_SUCCESS) == body["data"]
     entry = _entry(DAILY_SUCCESS)
-    assert captured["url"] == "https://example.test/tushare/pro/daily"
-    assert captured["method"] == "POST"
+
+    # Independent assertions about the independently-established proxy
+    # contract: GET, params in the query string, X-API-Key in the header.
+    assert captured["method"] == "GET"
+    assert captured["data"] is None  # GET carries no request body
+    url = str(captured["url"])
+    assert url.startswith("https://example.test/tushare/pro/daily?")
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert query == {key: [value] for key, value in entry["params"].items()}
     assert captured["key"] == "secret-key"
-    assert captured["content_type"] == "application/json"
-    assert json.loads(captured["data"]) == entry["params"]
-    # The token travels only in the header, never in the URL.
-    assert "secret-key" not in str(captured["url"])
+
+    # The token travels only in the header, never in the URL/query string.
+    assert "secret-key" not in url
+
+    # TLS certificate verification stays enabled: no custom SSL context.
+    assert captured["extra_args"] == ()
+    assert captured["extra_kwargs"] == {}
 
 
 def test_token_never_appears_in_any_exception_message(

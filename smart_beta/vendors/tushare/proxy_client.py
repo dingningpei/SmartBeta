@@ -10,9 +10,10 @@ it through the transport-neutral
 
 Everything proxy-specific is confined to this file:
 
-* the live HTTPS request (``POST {base_url}/{api_name}`` with an
-  ``X-API-Key`` header, the key read from the ``TUSHARE_PROXY_TOKEN``
-  environment variable at call time, never at import time and never logged);
+* the live HTTPS request (``GET {base_url}/{api_name}`` with the
+  parameters URL-encoded into the query string and an ``X-API-Key`` header,
+  the key read from the ``TUSHARE_PROXY_TOKEN`` environment variable at call
+  time, never at import time and never logged);
 * bounded retry with exponential backoff on the proxy's transient
   ``rate_limited`` (429) / ``upstream_pool_exhausted`` (503) responses;
 * the proxy's non-retryable ``date_range_too_large`` (400) rejection,
@@ -531,23 +532,24 @@ class ProxyTushareClient:
     def _live_transport(
         self, api_name: str, params: Mapping[str, str]
     ) -> tuple[int, object]:
-        """Real HTTPS POST to ``{base_url}/{api_name}``.
+        """Real HTTPS ``GET {base_url}/{api_name}?<urlencoded params>``.
 
-        The token travels only in the ``X-API-Key`` header -- never in the
-        URL, the body, or any log/exception message. A non-2xx response is
-        captured from ``HTTPError`` rather than propagated, so the retry
-        policy in :meth:`fetch` remains the single decision point.
+        The GET + query-string form is the proxy contract independently
+        established in the Phase 4D-A investigation (not inferred from the
+        proxy's machinery-discovery OpenAPI document). The token travels only
+        in the ``X-API-Key`` header -- never in the URL, the body, or any
+        log/exception message. No custom ``ssl`` context is passed to
+        ``urlopen``, so normal TLS certificate verification stays enabled. A
+        non-2xx response is captured from ``HTTPError`` rather than
+        propagated, so the retry policy in :meth:`fetch` remains the single
+        decision point.
         """
         token = self._resolve_token()
         url = f"{self._base_url}/{urllib.parse.quote(api_name)}"
-        # The proxy's OpenAPI exposes ``POST /tushare/pro/{api_name}`` with
-        # api_name in the path and no documented request body, so the body is
-        # the flat parameter object (matching the Tushare SDK's
-        # ``pro.query(api_name, **params)``). Replay-based tests do not depend
-        # on this; running the fixture recorder with a real token confirms it.
-        payload = json.dumps(dict(params)).encode("utf-8")
-        request = urllib.request.Request(url, data=payload, method="POST")
-        request.add_header("Content-Type", "application/json")
+        if params:
+            url = f"{url}?{urllib.parse.urlencode(sorted(params.items()))}"
+
+        request = urllib.request.Request(url, method="GET")
         if token:
             request.add_header("X-API-Key", token)
 
@@ -597,11 +599,12 @@ def main(argv: "list[str] | None" = None) -> int:
             "daily ts_code=000001.SZ start_date=20230101 end_date=20230115" \\
             "adj_factor ts_code=000001.SZ trade_date=20230113"
 
-    Each request is issued ``--samples`` times; non-empty payloads must agree
-    byte-for-byte or :class:`TushareNonDeterministicResponseError` is raised
-    and nothing is written for that request. Response bodies are written
-    verbatim (the token never appears in any of them) alongside a manifest
-    entry keyed by ``(api_name, sorted params)``.
+    Each request is issued ``--samples`` times as
+    ``GET {base_url}/{api_name}?<urlencoded params>``; non-empty payloads must
+    agree byte-for-byte or :class:`TushareNonDeterministicResponseError` is
+    raised and nothing is written for that request. Response bodies are
+    written verbatim (the token never appears in any of them) alongside a
+    manifest entry keyed by ``(api_name, sorted params)``.
     """
     parser = ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -639,7 +642,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     for spec in args.requests:
         api_name, params = _parse_request(spec)
-        print(f"POST {args.base_url}/{api_name} {params}", flush=True)
+        print(f"GET {args.base_url}/{api_name} {params}", flush=True)
         status, body = client.record(api_name, samples=args.samples, **params)
         filename = _sanitize_filename(api_name, params) + ".json"
         (args.out / filename).write_text(json.dumps(body, indent=2) + "\n")
