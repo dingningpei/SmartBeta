@@ -175,10 +175,10 @@ Wave 4 (standalone) P4B-9 (certification)   (needs 8)
 
 ## Status
 
-Barrier 1 (P4B-1, P4B-2, P4B-3) and Barrier 2 (P4B-4, P4B-5, P4B-6, P4B-7)
-are both merged to `master` (`18e8308`, 659/659 tests green). The Market
-Cap Bridge (P4B-M1, P4B-M2, below) runs next, sequentially, before P4B-8.
-P4B-8 has not started.
+Barrier 1, Barrier 2, the Market Cap Bridge (P4B-M1/M2), and P4B-8 are
+all merged to `master` (`f716b1a`, 690/690 tests green). The Determinism/
+Replay Barrier (P4B-D1, P4B-R1, below) runs next, in parallel, before
+P4B-9. P4B-9 has not started.
 
 ## Market Cap Bridge (P4B-M1 / P4B-M2) — pre-P4B-8 follow-up
 
@@ -200,23 +200,51 @@ Specs: `task-p4b-m1-fundamentals-daily-client.md`,
 `task-p4b-m2-market-cap-adapter.md`. Neither touches Phase 3, identifiers,
 listing, or corporate actions. P4B-8 is not created until both are merged.
 
+## Determinism/Replay Barrier (P4B-D1 / P4B-R1) — pre-P4B-9 follow-up
+
+Independent P4B-8 review reproduced Phase 3's `check_deterministic_results`
+(already-merged, unmodified) directly against the real, assembled
+`TiingoPITSource` and found it genuinely fails whenever a queried method's
+output is non-empty — not from a data bug, but because every panel method
+carries a real wall-clock `_ingested_at` provenance timestamp (frozen
+Phase 4B policy, correctly implemented identically across every Wave 2
+module). `SyntheticPITSource`, this check's only prior reference
+implementation, carries no provenance columns and could never have
+exposed this. Separately, the same review found `replay_transport`
+(P4B-1) cannot distinguish `get_fundamentals_asreported` from
+`get_fundamentals_normalized` in an offline fixture-fed client, since
+both hit one path differing only by a query parameter `replay_transport`
+discards by design; P4B-8 worked around this with an isolated,
+test-file-local wrapper. Two small, independently reviewed, **parallel**
+(no file overlap) follow-up tasks close both gaps before P4B-9:
+
+| Task | Objective | Files | Depends on |
+|---|---|---|---|
+| P4B-D1 | Amend `check_deterministic_results` (Phase 3, deliberately narrow reopening) to compare only each schema's own canonical columns, never provenance columns, using the schema `_panel_method_specs` already provides | `pit/compliance.py`, its test file | none (branches from `f716b1a`) |
+| P4B-R1 | Extend `replay_transport` with a small, general, backward-compatible path+param disambiguation mechanism | `vendors/tiingo/client.py`, its test file | none (branches from `f716b1a`) |
+
+Specs: `task-p4b-d1-canonical-determinism.md`,
+`task-p4b-r1-replay-request-identity.md`. D1 is the only Phase 4B task
+permitted to touch `smart_beta/pit/*`, and only `compliance.py`'s
+`check_deterministic_results`, narrowly. R1 touches only `client.py`'s
+`replay_transport`. File sets are fully disjoint from each other and from
+every other Phase 4B module — both run in the same wave. P4B-9 is not
+created until both are merged and the full suite is green.
+
 ## Recorded, not-yet-applied finding: TWTR delisting corroboration
 
 Real TWTR EOD evidence has a trailing zero-volume run of length 1. The
 frozen `_MIN_CORROBORATING_ZERO_VOLUME_DAYS = 5` (P4B-7, correct and
 unchanged) means real TWTR's `delist_date` is `NaT` under the current
 policy — P4B-7's code is correct; this is a specimen limitation, not a
-bug. Phase 3's `check_delisted_security_history_present` will therefore
-produce a genuine, honest FAIL for its `delisted_listing_info` sub-check
-when run against TWTR (the row-presence sub-checks — raw returns, market
-cap, trading status — are independently real and should pass). This must
-never be smoothed into a pass. **Required future amendment (not yet
-applied — do not edit `task-p4b-9-certification.md` until this is
-explicitly approved):** before Wave 4, correct that spec's stale
-assumption ("the real corroborated delist_date from P4B-7's policy") and
-require the certification report to carry an explicit
-`TWTR DELISTING CORROBORATION = NOT CERTIFIED` line alongside the honest
-FAIL, with the length-1-vs-minimum-5 reason stated plainly.
+bug. Independently reconfirmed through the fully assembled
+`TiingoPITSource` during P4B-8 review: TWTR still resolves to
+`delist_date = NaT`, unmodified by assembly. Phase 3's
+`check_delisted_security_history_present` will therefore produce a
+genuine, honest FAIL for its `delisted_listing_info` sub-check when run
+against TWTR (the row-presence sub-checks — raw returns, market cap,
+trading status — are independently real and should pass). This must
+never be smoothed into a pass.
 
 ## Recorded status: identifier continuity
 
@@ -225,7 +253,51 @@ FAIL, with the length-1-vs-minimum-5 reason stated plainly.
 on `GET /tiingo/fundamentals/meta` instead). Under the current, merged
 code, AAPL/TWTR/FB/META all resolve via the ticker fallback
 (`is_permanent=False`). **`IDENTIFIER CONTINUITY = NOT CERTIFIED`** and
-must not be silently upgraded. Whether `TiingoPITSource`'s assembly
-should consume `fundamentals/meta` to actually establish continuity is an
-explicit, to-be-reviewed P4B-8 design question, not resolved here.
+must not be silently upgraded. P4B-8's assembly (`TiingoPITSource._resolve_
+stock_id`) confirmed it wires only `get_meta` → `resolve_stock_id`, never
+`fundamentals/meta` — the frozen P4B-8 spec never authorized otherwise,
+so this status carries forward unchanged into P4B-9.
+
+## Recorded, not-yet-applied: required P4B-9 spec amendments
+
+`task-p4b-9-certification.md` is not edited until this list is explicitly
+reviewed and approved, after the P4B-D1/P4B-R1 barrier passes:
+
+1. **TWTR.** Remove the stale assumption of "the real corroborated
+   delist_date from P4B-7's policy." Real terminal zero-volume run = 1,
+   frozen threshold = 5, therefore `delist_date = NaT`. Certification
+   must distinguish historical row presence (independently real, should
+   pass) from listing-info corroboration (will not corroborate for
+   TWTR — an honest, expected FAIL, never fabricated into a pass). Carry
+   `TWTR DELISTING CORROBORATION = NOT CERTIFIED`. Never lower the
+   threshold merely to obtain PASS.
+2. **Identifiers.** Carry `IDENTIFIER CONTINUITY = NOT CERTIFIED` — the
+   resolver remains `get_meta`-based; `permaTicker` exists elsewhere but
+   is not wired.
+3. **Float market cap.** `get_market_cap` is now operational (P4B-M1/M2),
+   but `float_mcap == total_mcap` is explicitly an approximation, never
+   an independently observed or vendor-certified float-adjusted figure.
+   Carry `FLOAT MARKET CAP = NOT CERTIFIED as independently observed
+   vendor float-adjusted market capitalization`. Schema conformance is
+   not semantic certification.
+4. **Restatements.** `is_restatement=False` remains a schema-constrained
+   placeholder. Carry `RESTATEMENT/VINTAGE RECONSTRUCTION = NOT
+   CERTIFIED`, unchanged.
+5. **Fundamentals ranged-query semantics.** Add an explicit certification
+   step for the assumption identified during P4B-8 review: whether
+   Tiingo's real, live, date-bounded statements endpoints actually return
+   a mutually reconcilable fiscal-identity subset (the offline PoC only
+   assumes this). Attempt a real call over a period known to have
+   coverage on both endpoints; if access/network/vendor behavior prevents
+   verification, carry `FUNDAMENTALS RANGED-QUERY SEMANTICS = NOT
+   CERTIFIED`. Never weaken P4B-6's fail-closed reconciliation regardless
+   of the result.
+6. **Dividend semantics.** Preserve P4B-5's already independently
+   supported result (real Nasdaq + SEC 8-K cross-check) unchanged; do not
+   upgrade or downgrade without new contradictory evidence.
+
+The existing P4B-9 completeness invariant (every considered item gets an
+explicit PASS/FAIL/NOT CERTIFIED/`NOT RUN — reason`, no silent omission)
+already covers all six; these are factual updates to stale assumptions,
+not new architecture.
 
