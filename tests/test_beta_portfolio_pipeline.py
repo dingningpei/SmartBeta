@@ -1,18 +1,23 @@
-"""End-to-end tests for :mod:`smart_beta.pipelines`.
+# TODO(P4C-8): update for the new build_beta_sorted_portfolios signature.
+"""End-to-end tests for :mod:`smart_beta.pipelines.beta_portfolio`.
 
 These tests exercise the real composed modules (synthetic DataSource,
-universe, rolling beta, portfolio sort, Fama-MacBeth, CAPM benchmark and
-Newey-West inference) rather than mocks, and pin down the pipeline's
-central correctness invariant: a beta estimate from ``rolling_ols_beta`` is
+universe, rolling beta, portfolio sort, CAPM benchmark and Newey-West
+inference) rather than mocks, and pin down the pipeline's central
+correctness invariant: a beta estimate from ``rolling_ols_beta`` is
 inclusive of its own date and must be lagged one period before it is paired
 with a same-date return.
+
+The test bodies below were moved verbatim from the old shared
+``tests/test_pipelines.py`` (task P4C-7). They still call the pre-Phase-4C
+``build_universe_and_tradable_returns`` signature and will not run until
+P4C-8 migrates them.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 from statsmodels.regression.linear_model import RegressionResultsWrapper
 
 from smart_beta.benchmarks.capm import compute_market_excess_return
@@ -33,14 +38,11 @@ from smart_beta.engines.portfolio_sort import (
 from smart_beta.factors.beta import rolling_ols_beta
 from smart_beta.pipelines import (
     BetaPortfolioResult,
-    FamaMacBethPipelineResult,
     build_beta_sorted_portfolios,
-    build_fama_macbeth_premium,
     spanning_test,
 )
 from smart_beta.pipelines._common import (
     build_universe_and_tradable_returns,
-    lag_market_cap,
     value_weighted_market_return,
 )
 
@@ -185,25 +187,6 @@ def test_spanning_test_regresses_long_short_on_market_factor(synthetic_source):
 
 
 # ---------------------------------------------------------------------------
-# Required test 5: end-to-end Fama-MacBeth known answer
-# ---------------------------------------------------------------------------
-
-
-def test_pipeline_recovers_true_signal_coefficient(synthetic_source):
-    gt = synthetic_source.ground_truth
-
-    result = build_fama_macbeth_premium(
-        synthetic_source, ["signal"], START, END
-    )
-
-    assert isinstance(result, FamaMacBethPipelineResult)
-    assert result.result.mean_coefficients["signal"] == pytest.approx(
-        gt.true_signal_coef, abs=0.01
-    )
-    assert abs(result.result.t_stats["signal"]) > 3.0
-
-
-# ---------------------------------------------------------------------------
 # Required test 6: no mutation in spanning_test
 # ---------------------------------------------------------------------------
 
@@ -222,7 +205,7 @@ def test_spanning_test_does_not_mutate_inputs(synthetic_source):
 
 
 # ---------------------------------------------------------------------------
-# Required test 7: determinism
+# Required test 7 (beta half): determinism
 # ---------------------------------------------------------------------------
 
 
@@ -235,112 +218,10 @@ def test_pipelines_are_deterministic(synthetic_source):
         pd.testing.assert_frame_equal(getattr(first, field), getattr(second, field))
     pd.testing.assert_series_equal(first.long_short, second.long_short)
 
-    first_fm = build_fama_macbeth_premium(synthetic_source, ["signal"], START, END)
-    second_fm = build_fama_macbeth_premium(synthetic_source, ["signal"], START, END)
-
-    assert isinstance(first_fm, FamaMacBethPipelineResult)
-    pd.testing.assert_frame_equal(first_fm.universe, second_fm.universe)
-    pd.testing.assert_frame_equal(first_fm.aligned_panel, second_fm.aligned_panel)
-    pd.testing.assert_frame_equal(
-        first_fm.result.coefficients, second_fm.result.coefficients
-    )
-    pd.testing.assert_frame_equal(
-        first_fm.result.std_errors, second_fm.result.std_errors
-    )
-    for field in (
-        "r_squared",
-        "n_obs",
-        "mean_coefficients",
-        "mean_std_errors",
-        "t_stats",
-        "p_values",
-    ):
-        pd.testing.assert_series_equal(
-            getattr(first_fm.result, field), getattr(second_fm.result, field)
-        )
-
 
 # ---------------------------------------------------------------------------
 # Market-cap weighting must be lagged, not contemporaneous
 # ---------------------------------------------------------------------------
-
-
-def test_lagged_market_cap_changes_value_weighted_results():
-    """A stock's market cap jumps with its own realized return, so the
-    value-weighted result must differ once the weight is lagged.
-
-    Stock A returns +50% on the final date and its market cap jumps from 100
-    to 150 in the same period. Weighting that return by the contemporaneous
-    cap over-weights it relative to the lagged (100) weight, both for the
-    whole-cross-section market return and for a within-group portfolio sort.
-    """
-    d0 = pd.Timestamp("2020-01-31")
-    d1 = pd.Timestamp("2020-02-29")
-    panel = pd.DataFrame(
-        {
-            DATE_COL: [d0, d0, d0, d0, d1, d1, d1, d1],
-            STOCK_COL: ["A", "B", "C", "D"] * 2,
-            RETURN_COL: [0.0, 0.0, 0.0, 0.0, 0.50, 0.0, 0.10, 0.0],
-            MARKET_CAP_COL: [100.0] * 4 + [150.0, 100.0, 100.0, 100.0],
-            "char": [5.0, 4.0, 1.0, 2.0] * 2,
-        }
-    )
-    raw_mcap = panel[[DATE_COL, STOCK_COL, MARKET_CAP_COL]]
-    lagged_mcap = lag_market_cap(raw_mcap)
-    contemporaneous = panel
-    lagged = panel.drop(columns=[MARKET_CAP_COL]).merge(
-        lagged_mcap, on=[DATE_COL, STOCK_COL], how="left"
-    )
-
-    # (1) Whole-cross-section value-weighted market return.
-    contemp_market = value_weighted_market_return(
-        contemporaneous, RETURN_COL, MARKET_CAP_COL
-    )
-    lagged_market = value_weighted_market_return(lagged, RETURN_COL, MARKET_CAP_COL)
-    assert contemp_market.loc[d1] == pytest.approx(
-        (0.50 * 150.0 + 0.10 * 100.0) / (150.0 + 100.0 + 100.0 + 100.0)
-    )
-    assert lagged_market.loc[d1] == pytest.approx(
-        (0.50 * 100.0 + 0.10 * 100.0) / (100.0 * 4)
-    )
-    assert not np.isclose(contemp_market.loc[d1], lagged_market.loc[d1])
-
-    # (2) Within-group value-weighted sort on a characteristic. A and B form
-    # the high-characteristic group; A's return dominates under the
-    # contemporaneous weight because its cap jumped that same period.
-    contemp_sorted = sort_portfolios(
-        contemporaneous,
-        char_col="char",
-        ret_col=RETURN_COL,
-        weight_col=MARKET_CAP_COL,
-        date_col=DATE_COL,
-        n_groups=2,
-    )
-    lagged_sorted = sort_portfolios(
-        lagged,
-        char_col="char",
-        ret_col=RETURN_COL,
-        weight_col=MARKET_CAP_COL,
-        date_col=DATE_COL,
-        n_groups=2,
-    )
-    contemp_ls = long_short_return(
-        contemp_sorted,
-        low_group=1,
-        high_group=2,
-        measure=VW_RETURN_COL,
-        date_col=DATE_COL,
-    )
-    lagged_ls = long_short_return(
-        lagged_sorted,
-        low_group=1,
-        high_group=2,
-        measure=VW_RETURN_COL,
-        date_col=DATE_COL,
-    )
-    assert contemp_ls.loc[d1] == pytest.approx(0.30 - 0.05)
-    assert lagged_ls.loc[d1] == pytest.approx(0.25 - 0.05)
-    assert not np.isclose(contemp_ls.loc[d1], lagged_ls.loc[d1])
 
 
 def test_pipeline_weights_use_lagged_market_cap(synthetic_source):
