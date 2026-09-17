@@ -1,11 +1,22 @@
 """Universe -> beta -> explicit lag -> portfolio sort -> long-short -> inference.
 
+Phase 4C (task P4C-8) migrated this pipeline onto the trusted PIT boundary.
+It consumes a :class:`~smart_beta.pit.view.PointInTimeView`, an explicit
+:class:`~smart_beta.research_inputs.tradability.TradabilityPolicy`, and an
+injected :class:`~smart_beta.research_inputs.risk_free.RiskFreeProvider` --
+never a legacy ``DataSource``, which this module no longer imports at all.
+Every realized-return use is the research-inputs ``adj_ret`` (corporate-action
+adjusted, never raw ``ret``) and every weight/screen use is ``total_mcap``
+(never the approximate ``float_mcap``).
+
 Enforces, as a correctness invariant rather than a caller convention, the
 alignment rule documented in smart_beta.data.align: beta from
 rolling_ols_beta is inclusive of the return at date t, so it is always
 passed through lag_panel before being paired with a same-date return for
 sorting. No function in this module ever merges the raw (unlagged) beta
-panel onto a return panel for sorting.
+panel onto a return panel for sorting. Likewise, market cap at date t embeds
+the return at t, so it is always passed through lag_market_cap here before
+it weights a same-period return.
 """
 from __future__ import annotations
 
@@ -18,8 +29,7 @@ from statsmodels.regression.linear_model import RegressionResultsWrapper
 
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
 from smart_beta.data.align import lag_panel
-from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, RETURN_COL, STOCK_COL, VALUE_COL
-from smart_beta.data.sources.base import DataSource
+from smart_beta.data.schema import DATE_COL, RETURN_COL, STOCK_COL, VALUE_COL
 from smart_beta.engines.inference import newey_west_ols
 from smart_beta.engines.portfolio_sort import (
     GROUP_COL,
@@ -33,6 +43,11 @@ from smart_beta.pipelines._common import (
     lag_market_cap,
     value_weighted_market_return,
 )
+from smart_beta.pit.schema import ADJUSTED_RETURN_COL, TOTAL_MARKET_CAP_COL
+from smart_beta.pit.view import PointInTimeView
+from smart_beta.research_inputs.inputs import get_capitalization_weights
+from smart_beta.research_inputs.risk_free import RiskFreeProvider
+from smart_beta.research_inputs.tradability import TradabilityPolicy
 
 __all__ = ["BetaPortfolioResult", "build_beta_sorted_portfolios", "spanning_test"]
 
@@ -63,30 +78,65 @@ class BetaPortfolioResult:
 
 
 def build_beta_sorted_portfolios(
-    source: DataSource,
+    view: "PointInTimeView",
     start: date | str,
     end: date | str,
     *,
+    policy: "TradabilityPolicy",
+    risk_free: "RiskFreeProvider",
     n_groups: int = DEFAULT_SETTINGS.n_portfolio_groups,
     settings: Settings = DEFAULT_SETTINGS,
 ) -> BetaPortfolioResult:
+    """Build beta-sorted value-weighted portfolios over ``[start, end]``.
+
+    All market data comes through the trusted Phase 4C boundary:
+    ``tradable_returns`` is the corporate-action-adjusted ``adj_ret`` panel
+    (never raw ``ret``), market cap is ``total_mcap`` (never the approximate
+    ``float_mcap``), and the risk-free series is supplied by the caller's
+    injected :class:`~smart_beta.research_inputs.risk_free.RiskFreeProvider`
+    -- this function never reaches for a ``DataSource`` method and its
+    ``policy``/``risk_free`` arguments have no defaults, so a caller cannot
+    silently inherit a market assumption or a rate source.
+
+    The two frozen Phase-2 temporal invariants are enforced here and stay
+    owned here:
+
+    * ``beta(t-1) -> return(t)``: ``rolling_ols_beta``'s output is inclusive
+      of the return at ``t``, so :func:`~smart_beta.data.align.lag_panel` is
+      applied to it in this function before it is ever merged onto a
+      same-date return for sorting.
+    * ``total_mcap(t-1) -> weighting return(t)``:
+      :func:`~smart_beta.pipelines._common.lag_market_cap` is applied here,
+      before :func:`~smart_beta.engines.portfolio_sort.sort_portfolios`.
+    """
     universe, tradable_returns = build_universe_and_tradable_returns(
-        source, start, end, settings
+        view, start, end, settings, policy=policy
     )
+    # total_mcap, never float_mcap: the trusted research-inputs accessor
+    # exposes only the total figure.
+    market_cap = get_capitalization_weights(view, start, end)
     # Market cap at date t embeds the return realized at t, so it is lagged
     # before being used to weight a same-period return (here and below).
-    lagged_market_cap = lag_market_cap(source.get_market_cap(start, end))
-    risk_free = source.get_risk_free(start, end)
+    lagged_market_cap = lag_market_cap(
+        market_cap, value_col=TOTAL_MARKET_CAP_COL
+    )
+    risk_free_frame = risk_free.get_risk_free(start, end)
 
     weighting_panel = tradable_returns.merge(
         lagged_market_cap, on=[DATE_COL, STOCK_COL], how="inner"
     )
     market_return = value_weighted_market_return(
-        weighting_panel, RETURN_COL, MARKET_CAP_COL
+        weighting_panel, ADJUSTED_RETURN_COL, TOTAL_MARKET_CAP_COL
     )
 
+    # rolling_ols_beta's own (unchanged, schema-light) input contract still
+    # names its return column ``ret``. Rename a copy of the already-adjusted
+    # panel for that one call -- the VALUE is ``adj_ret``, never raw ``ret``.
+    beta_returns = tradable_returns.rename(
+        columns={ADJUSTED_RETURN_COL: RETURN_COL}
+    )
     beta = rolling_ols_beta(
-        tradable_returns, market_return, risk_free, settings=settings
+        beta_returns, market_return, risk_free_frame, settings=settings
     )
     beta_lagged = lag_panel(
         beta, [VALUE_COL], periods=1, date_col=DATE_COL, stock_col=STOCK_COL
@@ -104,8 +154,8 @@ def build_beta_sorted_portfolios(
     sorted_returns = sort_portfolios(
         sort_panel,
         char_col=_BETA_LAG_COL,
-        ret_col=RETURN_COL,
-        weight_col=MARKET_CAP_COL,
+        ret_col=ADJUSTED_RETURN_COL,
+        weight_col=TOTAL_MARKET_CAP_COL,
         date_col=DATE_COL,
         n_groups=n_groups,
     )
