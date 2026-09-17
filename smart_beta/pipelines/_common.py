@@ -1,7 +1,9 @@
 """Private helpers shared by smart_beta.pipelines submodules.
 
 Not part of the public API. Only smart_beta.pipelines.* modules (and this
-package's own tests/test_pipelines.py) should import from here.
+package's own tests/test_pipelines_common.py,
+tests/test_beta_portfolio_pipeline.py, and
+tests/test_fama_macbeth_pipeline.py) should import from here.
 """
 from __future__ import annotations
 
@@ -12,29 +14,45 @@ import pandas as pd
 from smart_beta.config.settings import Settings
 from smart_beta.data.align import lag_panel
 from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, STOCK_COL
-from smart_beta.data.sources.base import DataSource
-from smart_beta.data.universe import TRADABLE_COL, build_tradable_universe
 from smart_beta.engines.portfolio_sort import group_return_stats
+from smart_beta.pit.view import PointInTimeView
+from smart_beta.research_inputs.inputs import (
+    get_realized_returns,
+    get_tradability,
+)
+from smart_beta.research_inputs.tradability import (
+    TRADABLE_COL,
+    TradabilityPolicy,
+)
 
 
 def build_universe_and_tradable_returns(
-    source: DataSource,
+    view: PointInTimeView,
     start: date | str,
     end: date | str,
     settings: Settings,
+    *,
+    policy: TradabilityPolicy,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fetch returns/market cap/trading status/listing info from ``source``,
-    build the tradable-universe mask, and return
-    ``(universe, tradable_returns)`` where ``tradable_returns`` is the
-    ``returns`` panel restricted to rows with ``is_tradable`` True.
+    """Fetch adjusted returns, trading status, market cap, and listing info
+    through :mod:`smart_beta.research_inputs`, build the tradable-universe
+    mask with an explicit ``policy``, and return
+    ``(universe, tradable_returns)``.
+
+    ``tradable_returns`` is the realized-returns panel restricted to rows
+    with ``is_tradable`` True. Its return column is ``adj_ret`` -- never
+    ``ret``: the figure comes from
+    :func:`~smart_beta.research_inputs.inputs.get_realized_returns`, so it is
+    corporate-action adjusted and carries no raw-return discontinuity.
+
+    ``policy`` has no default. The caller must state which market's
+    tradability rule applies, so a US universe can never be silently
+    screened by the China A-share rule (see
+    :class:`~smart_beta.research_inputs.tradability.TradabilityPolicy`).
     """
-    returns = source.get_returns(start, end)
-    market_cap = source.get_market_cap(start, end)
-    trading_status = source.get_trading_status(start, end)
-    listing_info = source.get_listing_info()
-    universe = build_tradable_universe(
-        returns, market_cap, trading_status, listing_info, settings=settings
-    )
+    returns = get_realized_returns(view, start, end)
+    keys = returns[[DATE_COL, STOCK_COL]]
+    universe = get_tradability(view, start, end, keys, policy, settings)
     tradable_keys = universe.loc[universe[TRADABLE_COL], [DATE_COL, STOCK_COL]]
     tradable_returns = returns.merge(
         tradable_keys, on=[DATE_COL, STOCK_COL], how="inner"
@@ -42,8 +60,19 @@ def build_universe_and_tradable_returns(
     return universe, tradable_returns
 
 
-def lag_market_cap(market_cap: pd.DataFrame) -> pd.DataFrame:
-    """Return ``market_cap`` with its ``mcap`` column lagged one period per stock.
+def lag_market_cap(
+    market_cap: pd.DataFrame,
+    value_col: str = MARKET_CAP_COL,
+) -> pd.DataFrame:
+    """Return ``market_cap`` with its market-cap value column lagged one
+    period per stock.
+
+    ``value_col`` defaults to the legacy ``mcap`` column name. Phase 4C
+    callers that hold a PIT market-cap panel pass ``"total_mcap"``
+    explicitly, because
+    :func:`~smart_beta.research_inputs.inputs.get_capitalization_weights`
+    emits ``total_mcap`` and never ``mcap``; ``float_mcap`` is never an
+    implicit fallback.
 
     A stock's market cap at date *t* is computed from its price at *t* and so
     already embeds the return realized at *t*. Using that contemporaneous
@@ -52,13 +81,13 @@ def lag_market_cap(market_cap: pd.DataFrame) -> pd.DataFrame:
     market cap in the pipelines goes through this helper.
 
     This is deliberately different from the market-cap use inside
-    :func:`build_universe_and_tradable_returns`, which screens whether a stock
-    is tradable *as of the current date* and does not weight a same-period
-    return.
+    :func:`build_universe_and_tradable_returns` (through the injected
+    policy), which screens whether a stock is tradable *as of the current
+    date* and does not weight a same-period return.
     """
     return lag_panel(
         market_cap,
-        [MARKET_CAP_COL],
+        [value_col],
         periods=1,
         date_col=DATE_COL,
         stock_col=STOCK_COL,
