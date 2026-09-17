@@ -1,0 +1,32 @@
+{
+  "fields": [
+    "ts_code",
+    "name",
+    "list_date",
+    "delist_date",
+    "list_status"
+  ],
+  "items": [
+    [
+      "000001.SZ",
+      "平安银行",
+      "19910403",
+      null,
+      "L"
+    ],
+    [
+      "000001.SZ",
+      "平安银行",
+      "19910403",
+      null,
+      null
+    ],
+    [
+      "000001.SZ",
+      null,
+      null,
+      null,
+      null
+    ]
+  ]
+}

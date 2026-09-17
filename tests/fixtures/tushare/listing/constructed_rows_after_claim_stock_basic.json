@@ -1,0 +1,6 @@
+{
+  "fields": ["ts_code", "name", "list_date", "delist_date", "list_status"],
+  "items": [
+    ["000000.SZ", "构造退市示例", "20100101", "20240105", "D"]
+  ]
+}
