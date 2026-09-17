@@ -1,0 +1,98 @@
+[
+  {
+    "date": "2020-08-20T00:00:00.000Z",
+    "marketCap": 946200000000.0,
+    "enterpriseVal": 946200000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-21T00:00:00.000Z",
+    "marketCap": 994960000000.0,
+    "enterpriseVal": 994960000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-24T00:00:00.000Z",
+    "marketCap": 1006860000000.0,
+    "enterpriseVal": 1006860000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-25T00:00:00.000Z",
+    "marketCap": 998600000000.0,
+    "enterpriseVal": 998600000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-26T00:00:00.000Z",
+    "marketCap": 1012180000000.0,
+    "enterpriseVal": 1012180000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-27T00:00:00.000Z",
+    "marketCap": 1000080000000.0,
+    "enterpriseVal": 1000080000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-28T00:00:00.000Z",
+    "marketCap": 998460000000.0,
+    "enterpriseVal": 998460000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-08-31T00:00:00.000Z",
+    "marketCap": 258080000000.0,
+    "enterpriseVal": 258080000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-09-01T00:00:00.000Z",
+    "marketCap": 268360000000.0,
+    "enterpriseVal": 268360000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-09-02T00:00:00.000Z",
+    "marketCap": 262800000000.0,
+    "enterpriseVal": 262800000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-09-03T00:00:00.000Z",
+    "marketCap": 241760000000.0,
+    "enterpriseVal": 241760000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  },
+  {
+    "date": "2020-09-04T00:00:00.000Z",
+    "marketCap": 241920000000.0,
+    "enterpriseVal": 241920000000.0,
+    "peRatio": 30.0,
+    "pbRatio": 40.0,
+    "trailingPEG1Y": 1.8
+  }
+]
