@@ -157,6 +157,31 @@ def test_get_fundamentals_normalized_returns_recorded_body_verbatim() -> None:
     assert result[0]["quarter"] == 3
 
 
+def test_get_fundamentals_daily_returns_recorded_body_verbatim() -> None:
+    client, expected = _replay_for(
+        "aapl_fundamentals_daily_2024-01-02_2024-01-05.json"
+    )
+    result = client.get_fundamentals_daily("AAPL", "2024-01-02", "2024-01-05")
+
+    assert result == expected
+    assert len(result) == 4
+    # Ordering preserved exactly (Tiingo returns chronological rows).
+    assert [row["date"] for row in result] == [row["date"] for row in expected]
+    # Every field survives unchanged; nothing renamed/reshaped/dropped.
+    assert set(result[0]) == {
+        "date",
+        "marketCap",
+        "enterpriseVal",
+        "peRatio",
+        "pbRatio",
+        "trailingPEG1Y",
+    }
+    assert result[0] == expected[0]
+    assert result[-1] == expected[-1]
+    # This endpoint returns a real marketCap; the client does not interpret it.
+    assert expected[0]["marketCap"] == pytest.approx(2887212881280.0)
+
+
 # ---------------------------------------------------------------------------
 # 2. Config error on missing key
 # ---------------------------------------------------------------------------
@@ -250,6 +275,26 @@ def test_fundamentals_date_params_are_optional() -> None:
     assert calls[1] == {}
 
 
+def test_fundamentals_daily_date_params_are_optional() -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def spy(path: str, params) -> tuple[int, object]:
+        calls.append((path, dict(params)))
+        return 200, []
+
+    client = TiingoClient(transport=spy)
+    client.get_fundamentals_daily("AAPL")
+    client.get_fundamentals_daily("AAPL", "2024-01-02", "2024-01-05")
+
+    assert calls == [
+        ("/tiingo/fundamentals/AAPL/daily", {}),
+        (
+            "/tiingo/fundamentals/AAPL/daily",
+            {"startDate": "2024-01-02", "endDate": "2024-01-05"},
+        ),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 5. replay_transport never fabricates a response
 # ---------------------------------------------------------------------------
@@ -278,7 +323,7 @@ def test_replay_transport_returns_the_recorded_tuple() -> None:
 # ---------------------------------------------------------------------------
 # 6. No live network: the autouse tripwire plus an explicit sweep
 # ---------------------------------------------------------------------------
-def test_all_four_methods_run_offline_through_replay() -> None:
+def test_all_data_methods_run_offline_through_replay() -> None:
     """Sweep every recorded specimen through the method it belongs to, with
     the urlopen tripwire installed. Success proves none reaches the network."""
     manifest = _manifest()["recordings"]
@@ -301,8 +346,15 @@ def test_all_four_methods_run_offline_through_replay() -> None:
     )
     assert norm.get_fundamentals_normalized("AAPL")
 
-    # Sanity: the manifest really covers all six recorded specimens.
-    assert len(manifest) == 6
+    daily = TiingoClient(
+        transport=_replay_transport_for(
+            "aapl_fundamentals_daily_2024-01-02_2024-01-05.json"
+        )
+    )
+    assert daily.get_fundamentals_daily("AAPL", "2024-01-02", "2024-01-05")
+
+    # Sanity: the manifest really covers all seven recorded specimens.
+    assert len(manifest) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -417,3 +469,25 @@ def test_daily_meta_specimens_have_no_permanent_identity_field() -> None:
     for filename in ("aapl_meta.json", "twtr_meta.json"):
         _, _, body = _recorded(filename)
         assert set(body) == expected_keys, filename
+
+
+def test_fundamentals_daily_manifest_entry_matches_recorded_shape() -> None:
+    """The new fundamentals-daily specimen is registered like every other
+    fixture, and its body carries Tiingo's native per-day keys verbatim."""
+    filename = "aapl_fundamentals_daily_2024-01-02_2024-01-05.json"
+    url_path, status, body = _recorded(filename)
+    assert url_path == "/tiingo/fundamentals/AAPL/daily"
+    assert status == 200
+    assert len(body) == 4
+    assert all(
+        set(row)
+        == {
+            "date",
+            "marketCap",
+            "enterpriseVal",
+            "peRatio",
+            "pbRatio",
+            "trailingPEG1Y",
+        }
+        for row in body
+    )

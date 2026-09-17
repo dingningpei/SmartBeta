@@ -24,6 +24,10 @@
     "rgen_fundamentals_asreported_error.json": {
       "url_path": "/tiingo/fundamentals/RGEN/statements",
       "status_code": 400
+    },
+    "aapl_fundamentals_daily_2024-01-02_2024-01-05.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "status_code": 200
     }
   }
 }
