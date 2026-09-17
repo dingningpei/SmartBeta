@@ -58,6 +58,15 @@ Design constraints
   externally documented true return rather than calling
   :func:`~smart_beta.pit.corporate_actions.compute_adjusted_returns` itself
   (anti-tautology).
+* Determinism in :func:`check_deterministic_results` is *canonical-data*
+  determinism: the comparison is restricted to each panel method's own
+  schema's required columns (``key_columns`` plus ``dtypes``). Operational
+  provenance columns a vendor adapter legitimately re-stamps per call (e.g.
+  ``_ingested_at``) are excluded, while any difference in a canonical value
+  is still reported as a failure. This is a deliberate, reviewed Phase 3
+  amendment (P4B-D1), made after the Phase 4B Tiingo adapter demonstrated
+  that a real provenance-bearing source could never pass a whole-frame
+  comparison -- not a silent behavior change.
 """
 
 from __future__ import annotations
@@ -72,7 +81,7 @@ from typing import Protocol
 import pandas as pd
 
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
-from smart_beta.data.schema import SchemaError, validate_panel
+from smart_beta.data.schema import PanelSchema, SchemaError, validate_panel
 from smart_beta.pit.calendar import TradingCalendar
 from smart_beta.pit.schema import (
     ADJUSTED_RETURN_COL,
@@ -483,20 +492,51 @@ def check_no_shared_mutable_state(
     return results
 
 
+def _canonical_columns(schema: PanelSchema) -> list[str]:
+    """The exact same column set :meth:`PanelSchema.validate` itself requires.
+
+    That is ``key_columns`` plus every column named in ``dtypes``, in that
+    order, with duplicates removed. This is a POSITIVE selection (what IS
+    canonical), never a list of provenance column names to exclude: a new
+    non-canonical column added to any future mapper is automatically excluded
+    without this function needing to know its name.
+    """
+    return list(dict.fromkeys((*schema.key_columns, *schema.dtypes.keys())))
+
+
 def check_deterministic_results(
     source: PITDataSource,
     start: date | str,
     end: date | str,
     fields: Sequence[str],
 ) -> list[ComplianceCheckResult]:
-    """Per panel method: two identical calls produce identical results."""
+    """Per panel method: two identical calls produce identical CANONICAL data.
+
+    Non-canonical columns (e.g. vendor-adapter provenance such as
+    ``_source_vendor``/``_source_endpoint``/``_ingested_at``) are explicitly
+    excluded from this comparison -- they are allowed to vary between
+    invocations per the Phase 4B provenance policy, and doing so must never be
+    reported as a determinism failure. Canonical values (dates, stock ids, and
+    every value the schema actually requires) must still match exactly; any
+    real difference there is still reported as a failure.
+
+    Reopened from Phase 3 (P4B-D1): this mismatch was discovered empirically
+    only after a real, provenance-bearing vendor adapter (Phase 4B / Tiingo)
+    was integrated and checked against this function for the first time --
+    ``SyntheticPITSource``, this function's only prior reference
+    implementation, carries no provenance columns and could never have
+    exposed it. The comparison is restricted to each method's own schema's
+    required columns (see :func:`_canonical_columns`); this is a deliberate,
+    reviewed Phase 3 amendment, not a silent behavior change.
+    """
     results: list[ComplianceCheckResult] = []
 
-    for method_name, call, _schema in _panel_method_specs(source, start, end, fields):
+    for method_name, call, schema in _panel_method_specs(source, start, end, fields):
         try:
             first = call()
             second = call()
-            pd.testing.assert_frame_equal(first, second)
+            canonical = _canonical_columns(schema)
+            pd.testing.assert_frame_equal(first[canonical], second[canonical])
         except Exception as exc:  # noqa: BLE001 - determinism failure of any kind
             results.append(
                 _result(
