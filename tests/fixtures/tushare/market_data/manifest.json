@@ -1,0 +1,183 @@
+{
+  "_comment": "Fixture manifest for P4DB-4 Tushare market-data tests.",
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-17T23:43:40.651008+00:00",
+    "access_path": "proxy:pcd.mobcvb.cn/tushare/pro (X-API-Key from TUSHARE_PROXY_TOKEN)",
+    "method": "ProxyTushareClient.fetch(retry_on_empty=True), status 200 success envelopes",
+    "note": "Live proxy-observed captures, NOT direct official-Tushare access. Each body is the proxy's verbatim success envelope {code,msg,data}. These certify proxy behavior only and must never be read as certifying direct official-Tushare behavior."
+  },
+  "recordings": {
+    "daily_end_date-20230115_start_date-20230101_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20230101",
+        "end_date": "20230115"
+      },
+      "status_code": 200,
+      "n_items": 9,
+      "description": "Raw-return basic case: 000001.SZ Jan 2023."
+    },
+    "daily_end_date-20131231_start_date-20130101_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130101",
+        "end_date": "20131231"
+      },
+      "status_code": 200,
+      "n_items": 237,
+      "description": "CH4-depth window part 1 (237 rows) + 2013-06-20 ex-date boundary."
+    },
+    "daily_end_date-20140331_start_date-20140101_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20140101",
+        "end_date": "20140331"
+      },
+      "status_code": 200,
+      "n_items": 58,
+      "description": "CH4-depth window part 2 (58 rows)."
+    },
+    "daily_end_date-19911231_start_date-19910101_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "19910101",
+        "end_date": "19911231"
+      },
+      "status_code": 200,
+      "n_items": 167,
+      "description": "Historical-depth specimen (167 rows)."
+    },
+    "daily_basic_end_date-20131231_start_date-20130101_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20130101",
+        "end_date": "20131231"
+      },
+      "status_code": 200,
+      "n_items": 237,
+      "description": "Market cap + total_share step 512335->819736 at 2013-06-20 (237 rows)."
+    },
+    "daily_basic_end_date-20140331_start_date-20140101_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20140101",
+        "end_date": "20140331"
+      },
+      "status_code": 200,
+      "n_items": 58,
+      "description": "Market cap/total_share continuation 819736->952075 (58 rows)."
+    },
+    "daily_end_date-20200706_start_date-20200706_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20200706",
+        "end_date": "20200706"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "Limit-up specimen close=15.68."
+    },
+    "stk_limit_end_date-20200706_start_date-20200706_ts_code-000001.SZ.json": {
+      "api_name": "stk_limit",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20200706",
+        "end_date": "20200706"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "Vendor limit band for the 2020-07-06 limit-up specimen (up_limit=15.68)."
+    },
+    "daily_end_date-20150824_start_date-20150824_ts_code-000001.SZ.json": {
+      "api_name": "daily",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20150824",
+        "end_date": "20150824"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "Limit-down specimen close=10.35."
+    },
+    "stk_limit_end_date-20150824_start_date-20150824_ts_code-000001.SZ.json": {
+      "api_name": "stk_limit",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20150824",
+        "end_date": "20150824"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "Vendor limit band for the 2015-08-24 limit-down specimen (down_limit=10.35)."
+    },
+    "suspend_d_ts_code-002680.SZ.json": {
+      "api_name": "suspend_d",
+      "params": {
+        "ts_code": "002680.SZ"
+      },
+      "status_code": 200,
+      "n_items": 177,
+      "description": "Full suspension history for 002680.SZ (*ST长生): 177 rows, 172 S + 5 R."
+    },
+    "bak_basic_trade_date-20210413_ts_code-002450.SZ.json": {
+      "api_name": "bak_basic",
+      "params": {
+        "ts_code": "002450.SZ",
+        "trade_date": "20210413"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "ST-name specimen: name='*ST康得' on 2021-04-13."
+    },
+    "bak_basic_trade_date-20180413_ts_code-002450.SZ.json": {
+      "api_name": "bak_basic",
+      "params": {
+        "ts_code": "002450.SZ",
+        "trade_date": "20180413"
+      },
+      "status_code": 200,
+      "n_items": 1,
+      "description": "Non-ST-name control: name='康得新' on 2018-04-13."
+    },
+    "stock_basic_fields-ts_code_name_list_date_delist_date_list_status_ts_code-002450.SZ.json": {
+      "api_name": "stock_basic",
+      "params": {
+        "ts_code": "002450.SZ",
+        "fields": "ts_code,name,list_date,delist_date,list_status"
+      },
+      "status_code": 200,
+      "n_items": 2,
+      "description": "stock_basic current-name snapshot showing it exposes only the latest name."
+    },
+    "daily_basic_end_date-20230115_start_date-20230101_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "20230101",
+        "end_date": "20230115"
+      },
+      "status_code": 200,
+      "n_items": 9,
+      "description": "Market cap basic case (9 rows)."
+    },
+    "daily_basic_end_date-19911231_start_date-19910101_ts_code-000001.SZ.json": {
+      "api_name": "daily_basic",
+      "params": {
+        "ts_code": "000001.SZ",
+        "start_date": "19910101",
+        "end_date": "19911231"
+      },
+      "status_code": 200,
+      "n_items": 208,
+      "description": "Historical-depth daily_basic (208 rows returned vs 167 daily rows - proxy quirk)."
+    }
+  }
+}

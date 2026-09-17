@@ -1,0 +1,60 @@
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "fields": [
+      "trade_date",
+      "ts_code",
+      "name",
+      "industry",
+      "area",
+      "pe",
+      "float_share",
+      "total_share",
+      "total_assets",
+      "liquid_assets",
+      "fixed_assets",
+      "reserved",
+      "reserved_pershare",
+      "eps",
+      "bvps",
+      "pb",
+      "list_date",
+      "undp",
+      "per_undp",
+      "rev_yoy",
+      "profit_yoy",
+      "gpr",
+      "npr",
+      "holder_num"
+    ],
+    "items": [
+      [
+        "20180413",
+        "002450.SZ",
+        "康得新",
+        "化工原料",
+        "江苏",
+        27.9,
+        28.86,
+        35.34,
+        337.585,
+        268.1,
+        31.5809,
+        67.8169,
+        1.92,
+        0.53,
+        4.91,
+        4.02,
+        "20100716",
+        64.8721,
+        1.84,
+        32.05,
+        32.86,
+        37.92,
+        19.89,
+        90567
+      ]
+    ]
+  }
+}

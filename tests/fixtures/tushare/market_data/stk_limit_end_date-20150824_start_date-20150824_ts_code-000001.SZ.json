@@ -1,0 +1,22 @@
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "fields": [
+      "trade_date",
+      "ts_code",
+      "up_limit",
+      "down_limit",
+      "pre_close"
+    ],
+    "items": [
+      [
+        "20150824",
+        "000001.SZ",
+        12.65,
+        10.35,
+        11.5
+      ]
+    ]
+  }
+}
