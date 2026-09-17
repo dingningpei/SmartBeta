@@ -1,0 +1,19 @@
+{
+  "permaTicker": "US000000000041",
+  "ticker": "twtr",
+  "name": "Twitter Inc",
+  "isActive": false,
+  "isADR": false,
+  "sector": "Field not available for free/evaluation",
+  "industry": "Field not available for free/evaluation",
+  "sicCode": "Field not available for free/evaluation",
+  "sicSector": "Field not available for free/evaluation",
+  "sicIndustry": "Field not available for free/evaluation",
+  "reportingCurrency": "usd",
+  "location": "Field not available for free/evaluation",
+  "companyWebsite": "Field not available for free/evaluation",
+  "secFilingWebsite": "Field not available for free/evaluation",
+  "statementLastUpdated": "2024-08-01T23:48:35.035Z",
+  "dailyLastUpdated": "2024-08-01T23:48:44.765Z",
+  "dataProviderPermaTicker": "187959"
+}

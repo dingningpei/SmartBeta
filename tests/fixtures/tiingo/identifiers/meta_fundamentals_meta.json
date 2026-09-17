@@ -1,0 +1,19 @@
+{
+  "permaTicker": "US000000000059",
+  "ticker": "meta",
+  "name": "Meta Platforms Inc - Class A",
+  "isActive": true,
+  "isADR": false,
+  "sector": "Field not available for free/evaluation",
+  "industry": "Field not available for free/evaluation",
+  "sicCode": "Field not available for free/evaluation",
+  "sicSector": "Field not available for free/evaluation",
+  "sicIndustry": "Field not available for free/evaluation",
+  "reportingCurrency": "usd",
+  "location": "Field not available for free/evaluation",
+  "companyWebsite": "Field not available for free/evaluation",
+  "secFilingWebsite": "Field not available for free/evaluation",
+  "statementLastUpdated": "2026-07-31T02:19:10.330Z",
+  "dailyLastUpdated": "2026-09-16T22:26:54.875Z",
+  "dataProviderPermaTicker": "194817"
+}
