@@ -1,0 +1,61 @@
+{
+  "_comment": "P4B-9 certification fixtures. Live captures via TiingoClient on 2026-09-16; every body is the verbatim Tiingo JSON (no wrapper). The twtr_statements_*.json and twtr_fundamentals_daily.json files are real HTTP 400 error bodies (non-DOW-30 plan-tier limit) captured via TiingoAPIError and recorded here with their real status 400. The two aapl_statements_*_2026-01-01_2026-12-31.json files are the wide-range evidence for the ranged-query reconciliation finding. The API key is never stored.",
+  "recordings": {
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "status_code": 200
+    },
+    "aapl_eod_prices_2020-08-20_2020-09-05.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "status_code": 200
+    },
+    "aapl_statements_asreported_2026-03-01_2026-07-31.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_statements_normalized_2026-03-01_2026-07-31.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_fundamentals_daily_2024-01-02_2024-01-05.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "status_code": 200
+    },
+    "aapl_statements_asreported_2023-12-01_2024-02-29.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_statements_normalized_2023-12-01_2024-02-29.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "twtr_meta.json": {
+      "url_path": "/tiingo/daily/TWTR",
+      "status_code": 200
+    },
+    "twtr_eod_prices_2022-10-20_2022-10-28.json": {
+      "url_path": "/tiingo/daily/TWTR/prices",
+      "status_code": 200
+    },
+    "twtr_statements_asreported.json": {
+      "url_path": "/tiingo/fundamentals/TWTR/statements",
+      "status_code": 400
+    },
+    "twtr_statements_normalized.json": {
+      "url_path": "/tiingo/fundamentals/TWTR/statements",
+      "status_code": 400
+    },
+    "twtr_fundamentals_daily.json": {
+      "url_path": "/tiingo/fundamentals/TWTR/daily",
+      "status_code": 400
+    },
+    "aapl_statements_asreported_2026-01-01_2026-12-31.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    },
+    "aapl_statements_normalized_2026-01-01_2026-12-31.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/statements",
+      "status_code": 200
+    }
+  }
+}
