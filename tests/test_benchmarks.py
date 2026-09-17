@@ -1,44 +1,51 @@
-"""Tests for the non-migrated CH-3/CH-4 benchmark constructions.
-
-These are the CH3/CH4-relevant tests moved verbatim out of the pre-Phase-4C
-``tests/test_benchmarks.py``.  ``smart_beta/benchmarks/ch3.py`` and
-``ch4.py`` are deliberately **not** migrated in Phase 4C: they still consume
-``smart_beta.data.sources.base.DataSource`` directly, and these tests still
-exercise them against the legacy ``SyntheticDataSource`` with exactly the
-same calls and assertions as before.
+"""Tests for the benchmark factor constructions in ``smart_beta.benchmarks``.
 
 Covered:
 
 * shape/column contract: one row per date in the requested range;
 * no look-ahead: truncating the sample at date ``t`` cannot change any factor
   value at or before ``t``;
+* the CAPM/CH market factor tracks the synthetic generator's ground-truth
+  market return (the return-generating process is literally built from it);
 * CH-3's shell-stock screen really excludes the bottom 30% by market cap from
   the size sort.
-
-Do not migrate this file's calls: it is the behavior-preservation guard for
-CH3/CH4's still-valid legacy contract.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from smart_beta.benchmarks.capm import _load_panel
+from smart_beta.benchmarks.capm import (
+    _LAG_COL,
+    _load_panel,
+    _value_weighted_by,
+    _value_weighted_returns,
+    compute_market_excess_return,
+)
 from smart_beta.benchmarks.ch3 import _add_ch3_size_groups, compute_ch3_factors
 from smart_beta.benchmarks.ch4 import compute_ch4_factors
+from smart_beta.benchmarks.ff3 import compute_ff3_factors
+from smart_beta.benchmarks.ff5 import compute_ff5_factors
 from smart_beta.config.settings import DEFAULT_SETTINGS
-from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL
+from smart_beta.data.schema import DATE_COL, MARKET_CAP_COL, RETURN_COL, STOCK_COL
 
 START = "2015-01-31"
 END = "2030-12-31"  # wide enough to cover the whole synthetic fixture
 
 # (constructor, expected factor columns)
 FACTOR_CASES = [
+    (compute_market_excess_return, ("MKT",)),
+    (compute_ff3_factors, ("MKT", "SMB", "HML")),
+    (compute_ff5_factors, ("MKT", "SMB", "HML", "RMW", "CMA")),
     (compute_ch3_factors, ("MKT", "SMB", "VMG")),
     (compute_ch4_factors, ("MKT", "SMB", "VMG", "PMO")),
 ]
 CASE_IDS = [
+    "capm",
+    "ff3",
+    "ff5",
     "ch3",
     "ch4",
 ]
@@ -57,9 +64,7 @@ def test_factor_has_one_row_per_date_in_range(synthetic_source, constructor, col
 
 @pytest.mark.parametrize("constructor,columns", FACTOR_CASES, ids=CASE_IDS)
 def test_factor_has_one_row_per_date_in_subrange(synthetic_source, constructor, columns):
-    all_dates = pd.DatetimeIndex(
-        synthetic_source.get_returns(START, END)[DATE_COL].unique(), name=DATE_COL
-    )
+    all_dates = compute_market_excess_return(synthetic_source, START, END).index
     end = all_dates[len(all_dates) // 2]
     frame = constructor(synthetic_source, START, end)
     expected_dates = pd.DatetimeIndex(
@@ -89,6 +94,84 @@ def test_factor_construction_is_deterministic(synthetic_source, constructor, col
     first = constructor(synthetic_source, START, END)
     second = constructor(synthetic_source, START, END)
     pd.testing.assert_frame_equal(first, second)
+
+
+def test_value_weighted_returns_excludes_nonpositive_lagged_mcap():
+    """Trap 2: a stock whose lagged market cap is zero or negative cannot be
+    held, so it must be excluded from every value-weighted return.
+
+    The synthetic fixture only ever generates strictly positive market cap, so
+    this hand-built panel is the only coverage of that guard; a naive
+    ``group_return_stats`` call (which filters NaN weights but not
+    zero/negative ones) would silently change the result.
+    """
+    date = pd.Timestamp("2020-01-31")
+    panel = pd.DataFrame(
+        {
+            DATE_COL: [date, date, date, date],
+            STOCK_COL: ["a", "b", "c", "d"],
+            RETURN_COL: [0.10, 0.50, 0.20, 0.40],
+            _LAG_COL: [100.0, -50.0, 200.0, 0.0],  # b negative, d zero
+            "grp": ["x", "x", "y", "y"],
+        }
+    )
+
+    # Whole cross-section: only a (100) and c (200) are holdable.
+    vw = _value_weighted_returns(panel)
+    expected = (0.10 * 100.0 + 0.20 * 200.0) / (100.0 + 200.0)
+    assert vw.loc[date] == pytest.approx(expected)
+
+    # A naive NaN-only weight filter would also hold b's -50 weight and d's 0
+    # weight, giving a materially different answer (0.10 instead of 0.1667),
+    # so the assertion above really exercises the positive-weight screen.
+    naive = (0.10 * 100.0 + 0.50 * -50.0 + 0.20 * 200.0 + 0.40 * 0.0) / (
+        100.0 - 50.0 + 200.0 + 0.0
+    )
+    assert vw.loc[date] != pytest.approx(naive)
+
+    # Per-group: x must drop b (negative weight), y must drop d (zero weight).
+    by_group = _value_weighted_by(panel, ["grp"])
+    assert by_group.loc[(date, "x")] == pytest.approx(0.10)
+    assert by_group.loc[(date, "y")] == pytest.approx(0.20)
+
+
+def test_capm_market_factor_tracks_ground_truth_market_return(synthetic_source):
+    """The synthetic returns are generated as ``beta_i * M_t + ...``, so the
+    value-weighted market excess return should be nearly collinear with the
+    generator's ``ground_truth.market_return``.
+    """
+    mkt = compute_market_excess_return(synthetic_source, START, END)["MKT"]
+    truth = synthetic_source.ground_truth.market_return
+
+    common = mkt.index.intersection(truth.index)
+    pair = pd.concat([mkt.loc[common], truth.loc[common]], axis=1).dropna()
+    assert len(pair) > 50
+    corr = float(np.corrcoef(pair.iloc[:, 0], pair.iloc[:, 1])[0, 1])
+    assert corr > 0.8, f"market factor correlation with ground truth was {corr:.3f}"
+
+
+def test_capm_market_factor_subtracts_domestic_rf(synthetic_source):
+    """Excess return must subtract the source's ``rf`` (never a foreign CSV):
+    MKT == weighted market return - rf, and the two differ by exactly ``rf``.
+    """
+    mkt = compute_market_excess_return(synthetic_source, START, END)["MKT"]
+    rf = synthetic_source.get_risk_free(START, END).set_index(DATE_COL)["rf"]
+    excess = mkt.loc[mkt.notna()]
+
+    # Reconstruct the gross (not excess) value-weighted return and check that
+    # adding rf back reproduces MKT.
+    panel = _load_panel(synthetic_source, START, END)
+    weights = panel[MARKET_CAP_COL + "_lag"]
+    valid = panel[RETURN_COL].notna() & weights.notna() & (weights > 0)
+    panel = panel.loc[valid].copy()
+    panel["_weighted"] = panel[RETURN_COL] * panel[weights.name]
+    gross = panel.groupby(DATE_COL)["_weighted"].sum() / panel.groupby(DATE_COL)[
+        weights.name
+    ].sum()
+    reconstructed = (gross - rf).reindex(excess.index)
+    pd.testing.assert_series_equal(
+        reconstructed.rename("MKT"), excess.rename("MKT"), check_exact=False, atol=1e-12
+    )
 
 
 def test_ch3_size_sort_excludes_bottom_30pct_by_market_cap(synthetic_source):

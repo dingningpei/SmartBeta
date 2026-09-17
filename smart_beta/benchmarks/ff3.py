@@ -10,16 +10,9 @@ value-weighted by lagged market cap.
     SMB = (SL + SN + SH)/3 - (BL + BN + BH)/3
     HML = (SH + BH)/2     - (SL + BL)/2
 
-The value characteristic is ``book_value / total_mcap``.  The panel is built
-from a :class:`~smart_beta.pit.view.PointInTimeView` through the trusted
-:mod:`smart_beta.research_inputs` boundary, with an explicit
-:class:`~smart_beta.research_inputs.tradability.TradabilityPolicy` and a
-separately injected
-:class:`~smart_beta.research_inputs.risk_free.RiskFreeProvider`.
-Fundamentals are retrieved coverage-aware and fail closed by default; pass
-``allow_partial_fundamentals=True`` to opt into partial coverage, in which
-case the returned frame's ``.attrs`` carries the
-:class:`~smart_beta.research_inputs.fundamentals_coverage.FundamentalsCoverageReport`.
+The value characteristic is ``book_value / mcap``.  For the synthetic fixture
+that is a legitimate book-to-market ratio; for real data it must come from a
+point-in-time financials panel (``DataSource.get_financials``).
 """
 
 from __future__ import annotations
@@ -29,21 +22,17 @@ from datetime import date
 import pandas as pd
 
 from smart_beta.benchmarks.capm import (
-    FUNDAMENTALS_COVERAGE_ATTR,
-    _PIT_WEIGHT_COL,
+    _LAG_COL,
     _add_cross_sectional_groups,
     _finalize,
     _full_dates,
-    _load_pit_panel,
+    _load_panel,
     _market_factor,
     _spread,
     _two_by_three,
 )
 from smart_beta.config.settings import DEFAULT_SETTINGS, Settings
-from smart_beta.pit.schema import ADJUSTED_RETURN_COL
-from smart_beta.pit.view import PointInTimeView
-from smart_beta.research_inputs.risk_free import RiskFreeProvider
-from smart_beta.research_inputs.tradability import TradabilityPolicy
+from smart_beta.data.sources.base import DataSource
 
 __all__ = ["compute_ff3_factors"]
 
@@ -52,57 +41,30 @@ _VALUE_LABELS = ("low", "neutral", "high")
 
 
 def compute_ff3_factors(
-    view: PointInTimeView,
+    source: DataSource,
     start: date | str,
     end: date | str,
     *,
-    policy: TradabilityPolicy,
-    risk_free: RiskFreeProvider,
-    allow_partial_fundamentals: bool = False,
     settings: Settings = DEFAULT_SETTINGS,
 ) -> pd.DataFrame:
-    """Return date-indexed ``MKT``, ``SMB`` and ``HML`` factor returns.
-
-    Fundamentals retrieval is strict by default: a genuinely unreconcilable
-    ``book_value`` range raises
-    :class:`~smart_beta.research_inputs.fundamentals_coverage.FundamentalsCoverageError`
-    rather than silently shrinking the sort sample.
-    """
-    panel, coverage = _load_pit_panel(
-        view,
-        start,
-        end,
-        policy=policy,
-        risk_free=risk_free,
-        settings=settings,
-        fields=["book_value"],
-        allow_partial_fundamentals=allow_partial_fundamentals,
-    )
+    """Return date-indexed ``MKT``, ``SMB`` and ``HML`` factor returns."""
+    panel = _load_panel(source, start, end, fields=["book_value"])
     dates = _full_dates(panel)
 
-    # Value = lagged book value / lagged total market cap (book-to-market).
-    panel["book_to_market"] = panel["book_value_lag"] / panel[_PIT_WEIGHT_COL]
+    # Value = lagged book value / lagged market cap (book-to-market).
+    panel["book_to_market"] = panel["book_value_lag"] / panel[_LAG_COL]
 
     assert len(_SIZE_LABELS) == settings.benchmark_size_legs
     assert len(_VALUE_LABELS) == settings.benchmark_char_legs
-    _add_cross_sectional_groups(panel, _PIT_WEIGHT_COL, "size_grp", _SIZE_LABELS)
+    _add_cross_sectional_groups(panel, _LAG_COL, "size_grp", _SIZE_LABELS)
     _add_cross_sectional_groups(
         panel, "book_to_market", "value_grp", _VALUE_LABELS
     )
 
-    vw = _two_by_three(
-        panel,
-        "value_grp",
-        ret_col=ADJUSTED_RETURN_COL,
-        weight_col=_PIT_WEIGHT_COL,
-    )
+    vw = _two_by_three(panel, "value_grp")
     components = {
-        "MKT": _market_factor(
-            panel, ret_col=ADJUSTED_RETURN_COL, weight_col=_PIT_WEIGHT_COL
-        ),
+        "MKT": _market_factor(panel),
         "SMB": _spread(vw, "size_grp", "small", "big"),
         "HML": _spread(vw, "value_grp", "high", "low"),
     }
-    result = _finalize(components, dates)
-    result.attrs[FUNDAMENTALS_COVERAGE_ATTR] = coverage
-    return result
+    return _finalize(components, dates)
