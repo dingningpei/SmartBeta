@@ -372,7 +372,13 @@ def test_spanning_test_regresses_long_short_on_market_factor(
     legacy_source, legacy_view, legacy_rf
 ):
     result = _run_legacy(legacy_view, legacy_rf)
-    market = compute_market_excess_return(legacy_source, START, END)
+    market = compute_market_excess_return(
+        legacy_view,
+        START,
+        END,
+        policy=ChinaAShareTradabilityPolicy(),
+        risk_free=legacy_rf,
+    )
 
     fit = spanning_test(result.long_short, market)
 
@@ -383,7 +389,13 @@ def test_spanning_test_regresses_long_short_on_market_factor(
 
 def test_spanning_test_does_not_mutate_inputs(legacy_source, legacy_view, legacy_rf):
     result = _run_legacy(legacy_view, legacy_rf)
-    market = compute_market_excess_return(legacy_source, START, END)
+    market = compute_market_excess_return(
+        legacy_view,
+        START,
+        END,
+        policy=ChinaAShareTradabilityPolicy(),
+        risk_free=legacy_rf,
+    )
 
     candidate = result.long_short.copy(deep=True)
     factors = market.copy(deep=True)
