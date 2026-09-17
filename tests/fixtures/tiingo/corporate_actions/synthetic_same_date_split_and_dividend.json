@@ -1,0 +1,36 @@
+{
+  "_constructed": true,
+  "_comment": "SYNTHETIC, not a live Tiingo recording. The same-date split+dividend combination is rare; this pair of Tiingo-shaped EOD rows exists only so the adapter's two independently-computed factors can be multiplied and checked against a hand-derived economic outcome. Numbers are chosen for arithmetic clarity: a 2-for-1 split and a $1.00 per post-split-share cash dividend on 2020-01-15, with the prior close at $100.",
+  "rows": [
+    {
+      "date": "2020-01-14T00:00:00.000Z",
+      "close": 100.0,
+      "high": 100.0,
+      "low": 100.0,
+      "open": 100.0,
+      "volume": 1000,
+      "adjClose": 100.0,
+      "adjHigh": 100.0,
+      "adjLow": 100.0,
+      "adjOpen": 100.0,
+      "adjVolume": 1000,
+      "divCash": 0.0,
+      "splitFactor": 1.0
+    },
+    {
+      "date": "2020-01-15T00:00:00.000Z",
+      "close": 50.0,
+      "high": 50.0,
+      "low": 50.0,
+      "open": 50.0,
+      "volume": 2000,
+      "adjClose": 50.0,
+      "adjHigh": 50.0,
+      "adjLow": 50.0,
+      "adjOpen": 50.0,
+      "adjVolume": 2000,
+      "divCash": 1.0,
+      "splitFactor": 2.0
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "source": "Nasdaq Dividend History API",
+  "url": "https://api.nasdaq.com/api/quote/AAPL/dividends?assetclass=stocks",
+  "captured_at_utc": "2026-09-17",
+  "ticker": "AAPL",
+  "row": {
+    "exOrEffDate": "08/07/2020",
+    "type": "Cash",
+    "amount": "$0.82",
+    "declarationDate": "07/30/2020",
+    "recordDate": "08/10/2020",
+    "paymentDate": "08/13/2020",
+    "currency": "USD"
+  }
+}
