@@ -1,0 +1,8 @@
+{
+  "ticker": "ISOL",
+  "name": "CONSTRUCTED: isolated mid-history zero-volume day (not a live Tiingo security)",
+  "description": "Adversarial fixture for P4B-7. Exactly one isolated zero-volume day on 2021-06-03, followed by resumed nonzero-volume trading. endDate is 2021-06-10, well after that isolated day.",
+  "startDate": "2019-01-02",
+  "endDate": "2021-06-10",
+  "exchangeCode": "NYSE"
+}
