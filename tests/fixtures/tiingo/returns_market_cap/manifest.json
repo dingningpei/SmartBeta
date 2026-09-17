@@ -1,0 +1,25 @@
+{
+  "_comment": "P4B-4 fixtures. Live recordings were captured 2026-09-16 via TiingoClient.get_eod_prices (AAPL, TWTR) and a one-off GET /tiingo/fundamentals/AAPL/daily (market-cap investigation). isolated_zero_volume_eod.json is hand-constructed, not fetched. The API key is not stored.",
+  "recordings": {
+    "aapl_eod_prices_2020-08-20_2020-09-05.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "status_code": 200,
+      "source": "TiingoClient.get_eod_prices"
+    },
+    "twtr_eod_prices_2022-10-20_2022-10-28.json": {
+      "url_path": "/tiingo/daily/TWTR/prices",
+      "status_code": 200,
+      "source": "TiingoClient.get_eod_prices"
+    },
+    "aapl_fundamentals_daily_2024-01-02_2024-01-05.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "status_code": 200,
+      "source": "investigation GET; TiingoClient has no method for this endpoint"
+    },
+    "isolated_zero_volume_eod.json": {
+      "url_path": null,
+      "status_code": null,
+      "source": "hand-constructed isolated mid-history zero-volume day"
+    }
+  }
+}
