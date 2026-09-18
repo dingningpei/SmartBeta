@@ -1,0 +1,232 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-17",
+    "access_path": "proxy:pcd.mobcvb.cn",
+    "method": "live proxy fetch via ProxyTushareClient; each request issued 3x and canonical-consistency-checked (check_canonical_consistency); non-empty payloads agreed byte-for-byte",
+    "note": "Real proxy-observed specimens. Proxy-observed evidence does not certify direct official-Tushare behavior."
+  },
+  "recordings": {
+    "income_period-20220331_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220331"
+      },
+      "status_code": 200
+    },
+    "income_period-20220630_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220630"
+      },
+      "status_code": 200
+    },
+    "income_period-20220930_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930"
+      },
+      "status_code": 200
+    },
+    "income_period-20221231_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20221231"
+      },
+      "status_code": 200
+    },
+    "income_period-20171231_ts_code-600518.SH.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20171231"
+      },
+      "status_code": 200
+    },
+    "income_period-20180331_ts_code-600518.SH.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20180331"
+      },
+      "status_code": 200
+    },
+    "income_period-20180630_ts_code-600518.SH.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20180630"
+      },
+      "status_code": 200
+    },
+    "income_period-20180930_ts_code-600518.SH.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20180930"
+      },
+      "status_code": 200
+    },
+    "income_period-20151231_ts_code-002450.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "002450.SZ",
+        "period": "20151231"
+      },
+      "status_code": 200
+    },
+    "income_period-20161231_ts_code-002450.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "002450.SZ",
+        "period": "20161231"
+      },
+      "status_code": 200
+    },
+    "income_period-20171231_ts_code-002450.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "002450.SZ",
+        "period": "20171231"
+      },
+      "status_code": 200
+    },
+    "income_period-20171231_ts_code-002069.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "002069.SZ",
+        "period": "20171231"
+      },
+      "status_code": 200
+    },
+    "income_period-20220331_report_type-1_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220331",
+        "report_type": "1"
+      },
+      "status_code": 200
+    },
+    "income_period-20220630_report_type-1_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220630",
+        "report_type": "1"
+      },
+      "status_code": 200
+    },
+    "income_period-20220930_report_type-1_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930",
+        "report_type": "1"
+      },
+      "status_code": 200
+    },
+    "income_period-20221231_report_type-1_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20221231",
+        "report_type": "1"
+      },
+      "status_code": 200
+    },
+    "income_period-20220930_report_type-2_ts_code-000001.SZ.json": {
+      "api_name": "income",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930",
+        "report_type": "2"
+      },
+      "status_code": 200
+    },
+    "balancesheet_period-20220930_ts_code-000001.SZ.json": {
+      "api_name": "balancesheet",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930"
+      },
+      "status_code": 200
+    },
+    "balancesheet_period-20171231_ts_code-600518.SH.json": {
+      "api_name": "balancesheet",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20171231"
+      },
+      "status_code": 200
+    },
+    "balancesheet_period-20151231_ts_code-002450.SZ.json": {
+      "api_name": "balancesheet",
+      "params": {
+        "ts_code": "002450.SZ",
+        "period": "20151231"
+      },
+      "status_code": 200
+    },
+    "cashflow_period-20220930_ts_code-000001.SZ.json": {
+      "api_name": "cashflow",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930"
+      },
+      "status_code": 200
+    },
+    "fina_indicator_period-20220930_ts_code-000001.SZ.json": {
+      "api_name": "fina_indicator",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220930"
+      },
+      "status_code": 200
+    },
+    "fina_indicator_period-20220630_ts_code-000001.SZ.json": {
+      "api_name": "fina_indicator",
+      "params": {
+        "ts_code": "000001.SZ",
+        "period": "20220630"
+      },
+      "status_code": 200
+    },
+    "fina_indicator_period-20171231_ts_code-600518.SH.json": {
+      "api_name": "fina_indicator",
+      "params": {
+        "ts_code": "600518.SH",
+        "period": "20171231"
+      },
+      "status_code": 200
+    },
+    "fina_indicator_period-20151231_ts_code-002450.SZ.json": {
+      "api_name": "fina_indicator",
+      "params": {
+        "ts_code": "002450.SZ",
+        "period": "20151231"
+      },
+      "status_code": 200
+    },
+    "disclosure_date_end_date-20171231_ts_code-600518.SH.json": {
+      "api_name": "disclosure_date",
+      "params": {
+        "ts_code": "600518.SH",
+        "end_date": "20171231"
+      },
+      "status_code": 200
+    },
+    "disclosure_date_end_date-20171231_ts_code-002450.SZ.json": {
+      "api_name": "disclosure_date",
+      "params": {
+        "ts_code": "002450.SZ",
+        "end_date": "20171231"
+      },
+      "status_code": 200
+    }
+  }
+}
