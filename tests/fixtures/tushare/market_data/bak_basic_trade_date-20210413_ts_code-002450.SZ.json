@@ -1,0 +1,60 @@
+{
+  "code": 0,
+  "msg": null,
+  "data": {
+    "fields": [
+      "trade_date",
+      "ts_code",
+      "name",
+      "industry",
+      "area",
+      "pe",
+      "float_share",
+      "total_share",
+      "total_assets",
+      "liquid_assets",
+      "fixed_assets",
+      "reserved",
+      "reserved_pershare",
+      "eps",
+      "bvps",
+      "pb",
+      "list_date",
+      "undp",
+      "per_undp",
+      "rev_yoy",
+      "profit_yoy",
+      "gpr",
+      "npr",
+      "holder_num"
+    ],
+    "items": [
+      [
+        "20210413",
+        "002450.SZ",
+        "*ST康得",
+        "化工原料",
+        "江苏",
+        0.0,
+        32.43,
+        35.41,
+        81.01,
+        37.83,
+        29.74,
+        68.2,
+        1.93,
+        -0.91,
+        -2.64,
+        0.0,
+        "20100716",
+        -197.93,
+        -5.59,
+        -25.16,
+        55.31,
+        12.33,
+        -289.47,
+        133143
+      ]
+    ]
+  }
+}
