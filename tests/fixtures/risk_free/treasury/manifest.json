@@ -1,0 +1,27 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-17",
+    "retrieved_at_utc": "2026-09-18T05:51:47Z",
+    "source": "Federal Reserve Bank of St. Louis (FRED)",
+    "series_id": "DGS3MO",
+    "series_name": "Market Yield on U.S. Treasury Securities at 3-Month Constant Maturity, Quoted on an Investment Basis",
+    "units": "percent per annum, investment basis, not seasonally adjusted",
+    "retrieval_method": "HTTPS GET of FRED's public fredgraph.csv export endpoint; no API key or credential used or stored",
+    "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO&cosd=2025-09-01&coed=2026-09-16",
+    "date_range": {
+      "start": "2025-09-01",
+      "end": "2026-09-16"
+    },
+    "publication_calendar": "Treasury business days only; FRED emits a blank value on market holidays (the date row is retained, the value is empty)",
+    "note": "Offline replay source for tests/test_risk_free_treasury.py; the DGS3MO series itself is never fetched during pytest."
+  },
+  "recordings": {
+    "dgs3mo_2025-09-01_2026-09-16.json": {
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO&cosd=2025-09-01&coed=2026-09-16",
+      "status_code": 200,
+      "raw_csv_sha256": "65604d366913b9bd31885f9e6a2a9026457b22344344c7b007c595cc1ca33163",
+      "n_date_rows": 272
+    }
+  }
+}
