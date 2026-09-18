@@ -1,0 +1,18 @@
+{
+  "fields": [
+    "ts_code",
+    "name",
+    "list_date",
+    "delist_date",
+    "list_status"
+  ],
+  "items": [
+    [
+      "002069.SZ",
+      "獐子岛",
+      "20060928",
+      null,
+      "L"
+    ]
+  ]
+}

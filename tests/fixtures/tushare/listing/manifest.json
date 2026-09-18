@@ -1,0 +1,99 @@
+{
+  "stock_basic_002450.SZ.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "ts_code": "002450.SZ",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 3,
+    "has_more": null,
+    "n_items": 2
+  },
+  "stock_basic_000001.SZ.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "ts_code": "000001.SZ",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 3,
+    "has_more": null,
+    "n_items": 3
+  },
+  "stock_basic_002069.SZ.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "ts_code": "002069.SZ",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 3,
+    "has_more": null,
+    "n_items": 1
+  },
+  "stock_basic_000024.SZ.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "ts_code": "000024.SZ",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 3,
+    "has_more": null,
+    "n_items": 2
+  },
+  "daily_002450.SZ_20210301_20211231.json": {
+    "api_name": "daily",
+    "params": {
+      "ts_code": "002450.SZ",
+      "start_date": "20210301",
+      "end_date": "20211231"
+    },
+    "status_code": 200,
+    "samples": 3,
+    "has_more": null,
+    "n_items": 30
+  },
+  "stock_basic_list_status_D.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "list_status": "D",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 1,
+    "has_more": null,
+    "n_items": 339
+  },
+  "stock_basic_list_status_P.json": {
+    "api_name": "stock_basic",
+    "params": {
+      "list_status": "P",
+      "fields": "ts_code,name,list_date,delist_date,list_status"
+    },
+    "status_code": 200,
+    "samples": 1,
+    "has_more": null,
+    "n_items": 0
+  },
+  "daily_000001.SZ_20260101_20260917.json": {
+    "api_name": "daily",
+    "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260101",
+      "end_date": "20260917"
+    },
+    "status_code": 200,
+    "samples": 1,
+    "has_more": null,
+    "n_items": 173
+  },
+  "_provenance": {
+    "live_recorded": true,
+    "access_path": "proxy:pcd.mobcvb.cn",
+    "proxy_base_url": "https://pcd.mobcvb.cn/tushare/pro",
+    "captured_at_utc": "2026-09-17T23:44:39.687685+00:00",
+    "note": "Recorded live through the third-party Tushare proxy using TUSHARE_PROXY_TOKEN from the process environment. These are proxy-observed facts, NOT direct official-Tushare behavior and NOT contract-modeled data. No credential value is stored here. small specimens recorded with samples=3 (canonical-consistency checked); large list_status=D and 000001 daily recorded with a single sample to respect the proxy's rate limits."
+  }
+}
