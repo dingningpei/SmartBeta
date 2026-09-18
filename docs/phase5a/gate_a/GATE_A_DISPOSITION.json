@@ -1,0 +1,55 @@
+{
+  "gate": "A",
+  "phase": "5A",
+  "task": "P5A-2",
+  "disposition": "BLOCKED",
+  "gate_a_pass": false,
+  "real_three_name_execution": "NOT RUN",
+  "frozen_gate_a_window": {
+    "start": "2026-06-15",
+    "end": "2026-09-15"
+  },
+  "frozen_candidate_universe": ["AAPL", "MSFT", "GOOGL"],
+  "blocking_findings": [
+    {
+      "id": "GATE-A-1",
+      "classification": "persistent_entitlement_mismatch",
+      "not": "transient_rate_limit",
+      "endpoint": "GET /tiingo/fundamentals/GOOGL/daily",
+      "http_status": 400,
+      "observed_body": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "effect": "The trusted market-cap path cannot obtain GOOGL total_mcap, so the frozen three-name Gate A universe cannot be executed as specified.",
+      "disposition": "Stop P5A-2 at the frozen upstream/live-access boundary. Do not substitute a ticker, change the frozen universe, derive market cap from another endpoint, or weaken Gate A."
+    }
+  ],
+  "separate_operational_findings": [
+    {
+      "id": "GATE-A-429",
+      "classification": "temporary_operational_rate_limit",
+      "not": "persistent_entitlement_mismatch",
+      "http_status": 429,
+      "effect": "All nine live calls in the most recent recording attempt returned HTTP 429 hourly-allocation bodies; no further polling is performed merely to detect quota recovery.",
+      "disposition": "Recorded as operational evidence only. It does not by itself block Gate A; the persistent GOOGL entitlement mismatch does."
+    }
+  ],
+  "artifacts": {
+    "A": "NOT RUN",
+    "B": "NOT RUN",
+    "C": "NOT RUN"
+  },
+  "artifact_not_run_markers": [
+    "artifact_a_market_factor.NOT_RUN.txt",
+    "artifact_b_constituent_diagnostics.NOT_RUN.txt",
+    "artifact_b_risk_free_diagnostics.NOT_RUN.txt",
+    "artifact_c_statistical_summary.NOT_RUN.txt"
+  ],
+  "preserved_non_gate_a_partial_run": {
+    "path": "partial_run_entitlement_limited_not_gate_a/",
+    "label": "CONSTRUCTED-FROM-LOST-FIXTURES / NOT GATE A EVIDENCE",
+    "note": "A two-name (AAPL, MSFT) entitlement-constrained partial run produced before the live fixtures were overwritten by HTTP 429 bodies. Preserved byte-for-byte; must not be presented as Gate A evidence and its source fixtures must not be reconstructed."
+  },
+  "next_task": {
+    "p5a_3": "NOT STARTED",
+    "reason": "P5A-3 depends on P5A-2's real Gate A output, which does not exist because Gate A is BLOCKED."
+  }
+}

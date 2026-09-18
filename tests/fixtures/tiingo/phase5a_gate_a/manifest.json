@@ -1,0 +1,109 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-17",
+    "retrieved_at_utc": "2026-09-18T06:17:55Z",
+    "source": "Tiingo",
+    "retrieval_method": "Live HTTPS GETs through TiingoClient with the key read from the TIINGO_API_KEY environment variable; the key is never logged or written",
+    "api_key_stored": false,
+    "gate_a_window": {
+      "start": "2026-06-15",
+      "end": "2026-09-15"
+    },
+    "candidate_universe": [
+      "AAPL",
+      "MSFT",
+      "GOOGL"
+    ],
+    "eod_lookback_start": "2026-06-05",
+    "gate_a_disposition": "BLOCKED",
+    "gate_a_pass": false,
+    "recordings_are": "HTTP 429 hourly-allocation error bodies (verbatim), not usable observations",
+    "findings": [
+      {
+        "id": "GATE-A-429",
+        "classification": "temporary_operational_rate_limit",
+        "not": "persistent_entitlement_mismatch",
+        "http_status": 429,
+        "evidence": "Every recording below carries status_code 429 and the verbatim body 'Error: You have run over your hourly request allocation...'. This is the temporary rate-limit condition hit during live development/recording. No further polling is performed merely to detect quota recovery."
+      },
+      {
+        "id": "GATE-A-1",
+        "classification": "persistent_entitlement_mismatch",
+        "not": "transient_rate_limit",
+        "http_status": 400,
+        "endpoint": "GET /tiingo/fundamentals/GOOGL/daily",
+        "evidence": "An earlier, valid live capture returned the real HTTP 400 plan-tier body 'Error: Free and Power plans are limited to the DOW 30...' for GOOGL's daily-fundamentals/market-cap endpoint. GOOGL EOD prices are accessible; only the daily-fundamentals/market-cap endpoint is plan-tier restricted. That valid capture was subsequently overwritten by the 429 bodies above and is NOT reconstructed. This persistent entitlement mismatch with the frozen Gate A universe (AAPL, MSFT, GOOGL) is the blocking finding."
+      }
+    ],
+    "note": "Raw Tiingo response bodies (verbatim, no wrapper). This file records the rate-limited recapture (GATE-A-429); the earlier valid capture that contained the GOOGL HTTP 400 plan-tier body (GATE-A-1) was overwritten and is deliberately not reconstructed or fabricated. Gate A is BLOCKED and its required artifacts are NOT RUN. The recorder refuses to write any non-200 fixture set, so this blocked state can never be overwritten by a valid set silently, nor a valid set by a non-200 one."
+  },
+  "recordings": {
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "params": {},
+      "status_code": 429
+    },
+    "aapl_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429
+    },
+    "aapl_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429,
+      "plan_tier_limited": false
+    },
+    "msft_meta.json": {
+      "url_path": "/tiingo/daily/MSFT",
+      "params": {},
+      "status_code": 429
+    },
+    "msft_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MSFT/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429
+    },
+    "msft_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MSFT/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429,
+      "plan_tier_limited": false
+    },
+    "googl_meta.json": {
+      "url_path": "/tiingo/daily/GOOGL",
+      "params": {},
+      "status_code": 429
+    },
+    "googl_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/GOOGL/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429
+    },
+    "googl_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/GOOGL/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 429,
+      "plan_tier_limited": false
+    }
+  }
+}

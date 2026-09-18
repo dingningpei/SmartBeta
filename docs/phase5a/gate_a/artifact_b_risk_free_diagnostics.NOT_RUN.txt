@@ -1,0 +1,14 @@
+ARTIFACT B (risk-free diagnostics) — STATUS: NOT RUN
+
+Reason: the frozen Gate A universe (AAPL, MSFT, GOOGL) cannot be executed
+(GOOGL daily-fundamentals HTTP 400 "DOW 30" entitlement restriction), and the
+frozen spec forbids weakening Gate A. Gate A is BLOCKED; it is not PASS.
+
+This is a persistent entitlement mismatch with the frozen Gate A universe, NOT
+the separate temporary HTTP 429 rate-limit condition observed during live
+recording.
+
+The only risk-free diagnostics that exist are from the non-Gate-A,
+entitlement-constrained partial run preserved verbatim (unmodified) at:
+  partial_run_entitlement_limited_not_gate_a/artifact_b_risk_free_diagnostics.{csv,json}
+That run is explicitly NOT Gate A evidence.
