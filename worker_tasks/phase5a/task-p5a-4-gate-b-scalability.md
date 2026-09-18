@@ -65,7 +65,16 @@ on branch `phase5a/task-p5a-4-gate-b-scalability`, branched from
    near 30.
 4. **Freeze the surviving list before any return/factor computation.**
    Write it down, with its provenance, in `docs/phase5a/gate_b/` before
-   calling `run_capm_pilot`.
+   calling `run_capm_pilot`. **Explicit reviewer obligation (this
+   ordering is not mechanically provable after the fact — a passing test
+   cannot show the freeze genuinely preceded computation, only that the
+   two are now consistent):** the reviewer at this task's barrier must
+   inspect the commit history/diff structure of this task's branch (e.g.,
+   whether the frozen-universe provenance file's own commit could
+   plausibly precede the factor-computation artifacts, and whether the
+   completion report's own narrative account of the entitlement-probe
+   step is consistent with the committed evidence) rather than accepting
+   the "matches exactly" test alone as proof of correct ordering.
 5. **Hold it constant** for the entire Gate B window — no
    reconstitution, no substitution, even if a name is later found to
    have an issue inside the window (report that as a finding instead).
@@ -93,12 +102,27 @@ universe-selection rule to force a "pass."
 
 ## Required artifacts (under `docs/phase5a/gate_b/`)
 
-Same shape as P5A-2's Gate A artifacts (A: machine-readable `date,
-universe_count, market_return, risk_free_return, MKT`; B: diagnostic
-evidence including the frozen universe list with every exclusion and
-reason; C: statistical summary via the same frozen `newey_west_ols`
-convention), scaled to ~30 names / ~12 months, plus the universe-freeze
-provenance record from step 4 above.
+Same shape as P5A-2's Gate A artifacts, including the corrected
+Sanctioned Artifact-A decomposition in `phase5a-plan.md`/task-p5a-2 (A:
+machine-readable `date, universe_count, market_return, risk_free_return,
+MKT`, with `universe_count` an explicit upper bound and `market_return`
+derived arithmetically as `MKT + risk_free_return`, never a second CAPM
+computation; B: diagnostic evidence including the frozen universe list
+with every exclusion and reason, raw lagged `total_mcap` per name — no
+normalized-weight column, same reasoning as Gate A; C: statistical
+summary via the same frozen `newey_west_ols` convention), scaled to ~30
+names / ~12 months, plus the universe-freeze provenance record from step
+4 above.
+
+**RF date-grid derivation applies identically at this scale:** use
+`capm_pilot.py`'s exported `derive_trading_dates` helper (reused
+unmodified, same as `run_capm_pilot` itself) to derive the Gate B
+window's real trading-date sequence before constructing your own,
+separately-fixtured `TreasuryBillRiskFreeProvider` instance for the
+12-month window. `run_capm_pilot`'s own internal validation (see
+task-p5a-2) will independently re-derive and cross-check this at
+Gate B's scale too — same invariant, same fail-closed behavior, no new
+logic needed here.
 
 ## Required tests
 

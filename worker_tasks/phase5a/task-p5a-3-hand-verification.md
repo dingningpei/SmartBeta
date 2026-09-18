@@ -16,6 +16,24 @@ instead reconstructs one real `MKT` observation **from the raw recorded
 evidence, using plain arithmetic**, and compares that independent
 reconstruction to the pipeline's own output.
 
+**Independence boundary, explicit (reviewed at barrier time, not
+mechanically enforced):** your test file may read exactly one value from
+P5A-2's *processed* output — Artifact A's final `MKT` for the chosen
+date, as the comparison target. Every other input to your reconstruction
+(eligible names, lagged market caps, `adj_ret`, DGS3MO source
+values/dates) must come from the *raw* fixtures under
+`tests/fixtures/tiingo/phase5a_gate_a/` and `tests/fixtures/risk_free/
+treasury/` — never from P5A-2's own Artifact B diagnostic evidence (its
+excluded-name list, raw lagged-mcap trace, or risk-free diagnostic
+columns), even though that evidence covers the same date. Reading
+Artifact B's already-computed trace values instead of the raw fixtures
+would make this a re-statement of P5A-2's own working, not an
+independent check. **The reviewer at this task's barrier must read this
+test file's source and confirm it imports/reads only the raw fixture
+paths plus the single `MKT` comparison value — this is a stated,
+explicit reviewer obligation, not something a production or test-suite
+mechanism enforces.**
+
 **Your working directory** will be a git worktree at
 `/Users/dingningpei/Developer/personal/smart_beta/worktrees/task-p5a-3-hand-verification`
 on branch `phase5a/task-p5a-3-hand-verification`, branched from `master`

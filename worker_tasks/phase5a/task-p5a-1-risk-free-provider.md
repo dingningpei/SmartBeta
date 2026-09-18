@@ -67,9 +67,26 @@ at `0d15655d64ed23480153631c90b5a0af3bcf3d4b`.
   against. `/252` compounding is explicitly forbidden.
 - **Date alignment:** use `DGS3MO(t)` if published for that exact date;
   otherwise use the most recent **strictly prior** published
-  observation. Maximum staleness: **3 business days** — beyond that,
-  raise a named exception rather than using the value. Never use a
-  future-dated observation.
+  observation. Never use a future-dated observation.
+- **Staleness (frozen operational rule — resolves B3):** maximum 3
+  business days, where "business days" means the deterministic Phase 5A
+  data-freshness convention, not a Treasury-calendar certification:
+  ```
+  staleness_business_days(source_date, equity_date) =
+      len(TradingCalendar.from_weekdays_excluding_holidays(
+          source_date, equity_date)) - 1
+  ```
+  using the existing `smart_beta.pit.calendar.TradingCalendar` class
+  (import/call it — do not reimplement it, do not build a new calendar
+  subsystem), with no `holidays` argument (a plain Monday–Friday
+  weekday count). This does **not** claim to equal the true count of
+  Treasury-market closures (e.g. it does not exclude Columbus Day or
+  Veterans Day) — state this scope limitation verbatim in your module
+  docstring. Beyond 3 business days: raise a named exception rather than
+  using the value. **Ordering:** the staleness check is never evaluated
+  for the first row of any `[start, end]` call — that row is
+  unconditionally `NaN` per the first-observation rule below, checked
+  first.
 - **First observation:** the first date in any requested sequence has no
   preceding date to compute `delta_calendar_days` from — emit `rf =
   NaN` for it, never fetch outside the requested range to invent one.
@@ -81,33 +98,46 @@ at `0d15655d64ed23480153631c90b5a0af3bcf3d4b`.
   used, the raw annualized DGS3MO value, the staleness in business
   days, and the transformed `rf`.
 
-## Interface shape
+## Interface shape (frozen — resolves B4)
 
 `RiskFreeProvider.get_risk_free(start, end) -> DataFrame[date, rf]` is
-fixed by the existing ABC — you must implement exactly that signature.
-Because the frozen transformation needs to know each date's *preceding
-trading date* (not merely "the previous calendar day"), and the ABC's
-`get_risk_free(start, end)` has no way to receive an explicit trading-
-date sequence, you must decide and document one of:
+fixed by the existing ABC — you must implement exactly that signature,
+unmodified, no change to the ABC.
 
-(a) the provider is constructed with the trading-date sequence it will
-    be asked about (e.g. `TreasuryBillRiskFreeProvider(dgs3mo_source,
-    trading_dates=...)`, mirroring how `ConstantRiskFreeProvider` is
-    constructed with an explicit `dates` argument), and `get_risk_free`
-    filters that pre-supplied sequence to `[start, end]`; or
-(b) `get_risk_free` derives `delta_calendar_days` from the gaps between
-    consecutive dates *within its own returned `[start, end]` frame*
-    (i.e., the gap between row `i` and row `i-1` of what it itself
-    returns), accepting that the very first row of any `[start, end]`
-    call will always be `NaN` even if a real prior trading date exists
-    just before `start` outside the queried window.
+**Mandatory (not merely preferred): interface option (a).** The provider
+is constructed with an explicit trading-date sequence —
+`TreasuryBillRiskFreeProvider(dgs3mo_source, trading_dates=...)`,
+mirroring `ConstantRiskFreeProvider`'s existing constructor-supplied-
+dates pattern exactly — and `get_risk_free` filters that pre-supplied
+sequence to `[start, end]`, computing `delta_calendar_days` from the
+gaps within the *full* supplied sequence (not just the requested
+window), while still emitting `NaN` for the first row of any
+`[start, end]` *call* per the frozen first-observation rule below.
 
-**Prefer (a)**, mirroring `ConstantRiskFreeProvider`'s existing
-constructor-supplied-dates pattern exactly, since it is already the
-precedent this codebase uses for "a provider needs to know the real
-trading calendar it will be asked about." Document your choice and
-reasoning explicitly in the class docstring; if you choose (b) instead,
-justify why in your completion report.
+**Option (b) (deriving gaps only from each call's own `[start, end]`
+frame) is rejected**, not merely deprioritized: it cannot support the
+date-grid-agreement invariant `task-p5a-2-gate-a-orchestration.md`
+requires the orchestrator to check *before* calling
+`compute_market_excess_return`, because it would let the provider silently
+answer for a date sequence the orchestrator never explicitly supplied.
+
+**You do not decide or compute the trading-date sequence yourself.**
+`smart_beta/research_inputs/risk_free_treasury.py` has zero dependency on
+the PIT bitemporal machinery (`smart_beta/pit/view.py`,
+`smart_beta/pit/schema.py`, `smart_beta/pit/fundamentals.py`) or on
+`smart_beta/vendors/tiingo/*`, and never will — deriving the real equity
+trading-date sequence is `task-p5a-2-gate-a-orchestration.md`'s job (it
+has access to `PointInTimeView`/`TiingoPITSource`; you do not). Your
+provider accepts whatever date sequence it is constructed with, verbatim,
+and applies the frozen transformation/staleness/leakage rules over it —
+nothing more. **The one narrow exception** is
+`smart_beta.pit.calendar.TradingCalendar` for the staleness rule below —
+it is a small, self-contained, dependency-free date-arithmetic utility
+(its own docstring: "depends only on pandas and the standard library,
+never on any other part of `smart_beta`"), not part of the PIT bitemporal
+machinery, and importing/calling it is not the kind of PIT coupling this
+paragraph forbids. Document this ownership split explicitly in the class
+docstring.
 
 ## Required investigation and fixture
 
@@ -132,12 +162,34 @@ justify why in your completion report.
 
 - Schema conformance: `get_risk_free` output validates against the
   existing `RISK_FREE_SCHEMA`.
-- The frozen transformation formula, checked by hand against at least
-  two real fixture values (one ordinary weekday gap, one weekend gap)
-  — assert the exact numeric `rf` value to a stated tolerance.
-- Staleness: a constructed case where the nearest prior DGS3MO
-  observation is within 3 business days succeeds; a constructed case
-  beyond 3 business days raises the named exception.
+- **Non-tautological formula tests (resolves B2) — required, not
+  optional:**
+  - Specimen A (`yield=5.00%`, `delta_calendar_days=1`, expected
+    `rf = 0.05 * 1 / 365`) and Specimen B (`yield=5.00%,
+    delta_calendar_days=3`, expected `rf = 0.05 * 3 / 365`) from
+    `phase5a-plan.md`'s frozen specimens, entered as literal decimal
+    constants in the test file — computed with plain Python arithmetic
+    on literals, **never** by calling `TreasuryBillRiskFreeProvider` or
+    any helper implementing the same formula.
+  - A required negative guard: assert the production `rf` does **not**
+    match the `/252`-compounded value for the same inputs (within the
+    stated tolerance) — this must fail loudly if `/252` were ever
+    substituted for the frozen formula.
+  - At least one real fixture specimen (one ordinary weekday gap, one
+    weekend gap) whose raw DGS3MO value, source date, equity dates,
+    `delta_calendar_days`, and expected `rf` are hand-derived by you
+    (calculator/independent script, not the class under test) and
+    entered as frozen literals, then compared against the fixture-
+    replayed production output to a stated tolerance.
+- Staleness boundary tests (resolves B3):
+  - exactly 3 business days stale (per the frozen
+    `staleness_business_days` rule) -> succeeds.
+  - 4 business days stale -> raises the named exception.
+  - a queried date has no published DGS3MO observation at or before it
+    at all -> raises the same named exception (not a special case —
+    an unbounded gap is trivially beyond 3 business days).
+  - the staleness check is never evaluated for the first row of a call
+    (assert this ordering directly, not just its net effect).
 - No-future-leakage: assert the implementation never reads a DGS3MO
   observation dated after the equity date being priced (a direct
   assertion on the lookup logic, not just an absence-of-failure
@@ -171,8 +223,13 @@ inventing a workaround.
 - `.venv/bin/pytest` green, full suite unaffected.
 - Zero live network calls in `pytest`.
 - The module docstring states the transformation formula, the evidence
-  limitation caveat, and the staleness/no-future-leakage rules exactly
-  as frozen in `phase5a-plan.md`.
+  limitation caveat, the staleness/no-future-leakage rules, and the
+  staleness-calendar scope limitation ("a Phase 5A data-freshness
+  convention, not a Treasury-calendar certification") exactly as frozen
+  in `phase5a-plan.md`.
+- The class docstring documents that this provider does not derive its
+  own trading-date sequence — it is supplied one, verbatim, by its
+  caller (see "Interface shape").
 
 ## Commands to run
 
@@ -193,8 +250,8 @@ above.
 
 Report exactly:
 (a) the exact `TreasuryBillRiskFreeProvider` constructor/method
-    signatures implemented, and which interface-shape option ((a) or
-    (b) above) you chose and why;
+    signatures implemented (interface option (a) is mandatory — confirm
+    it was followed);
 (b) the exact FRED download URL/method used, and the exact date range
     live-downloaded;
 (c) confirmation the transformation formula, staleness rule, and

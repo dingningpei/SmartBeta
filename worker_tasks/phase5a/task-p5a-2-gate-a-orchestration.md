@@ -17,6 +17,13 @@ adjustment, calendar, tradability, or CAPM logic** — every substantive
 decision already lives in already-trusted code; this task is composition
 and evidence production, mirroring exactly how `smart_beta/vendors/
 tushare/source.py` was "pure composition" over already-reviewed modules.
+The two narrow exceptions, both frozen precisely below and neither a new
+substantive decision, are: (1) deriving the equity trading-date sequence
+for the risk-free provider by calling an existing trusted function a
+second time ("RF date-grid derivation"), and (2) simple arithmetic
+(`market_return = MKT + risk_free_return`) on two already-trusted, already
+-computed outputs ("Sanctioned Artifact-A decomposition"). Neither
+reimplements value-weighting, tradability, or lag logic.
 
 **Your working directory** will be a git worktree at
 `/Users/dingningpei/Developer/personal/smart_beta/worktrees/task-p5a-2-gate-a-orchestration`
@@ -42,8 +49,12 @@ on branch `phase5a/task-p5a-2-gate-a-orchestration`, branched from
 - `smart_beta/research_inputs/risk_free_treasury.py` or any other P5A-1
   file (consume it, do not edit it)
 - `smart_beta/benchmarks/capm.py`, `smart_beta/research_inputs/inputs.py`,
-  `smart_beta/research_inputs/tradability.py`, `smart_beta/pit/*`,
-  `smart_beta/vendors/tiingo/*` (all read-only dependencies)
+  `smart_beta/research_inputs/tradability.py`, `smart_beta/data/align.py`,
+  `smart_beta/pit/*`, `smart_beta/vendors/tiingo/*` (all read-only
+  dependencies — you may import and call their existing public
+  functions, per "RF date-grid derivation" and "Sanctioned Artifact-A
+  decomposition" below, but never their `_`-prefixed private symbols,
+  and never edit their source)
 - any existing test file
 - `worker_tasks/phase5a/*`
 
@@ -80,16 +91,97 @@ function must be reusable, unmodified, by P5A-4 for Gate B (only the
 `tickers`/`start`/`end`/fixture set differ) — design it generically
 enough for that now rather than requiring P5A-4 to change it later.
 
+`risk_free` is received here **already constructed** — you do not build
+it inside `run_capm_pilot`. See "RF date-grid derivation" below for who
+builds it and how, and where that construction happens relative to this
+call.
+
+## RF date-grid derivation (resolves B4 — read before writing any code)
+
+The frozen RF transformation needs each equity date's immediately
+preceding trading date. `TreasuryBillRiskFreeProvider` (P5A-1) does not
+derive this itself — it is constructed with an explicit trading-date
+sequence (P5A-1's interface option (a), now mandatory) and applies the
+frozen formula over whatever it is given. `run_capm_pilot` receives
+`risk_free` **already constructed** by its caller (the frozen signature
+is unchanged) — so the actual `TreasuryBillRiskFreeProvider(...)`
+construction happens *outside* `run_capm_pilot`, but the *validation*
+that it was constructed correctly must happen *inside* it, because only
+`run_capm_pilot` (via its own `tiingo_client` argument) can independently
+derive the authoritative date sequence to check against. This task owns
+both halves:
+
+1. **Export a reusable derivation helper from `capm_pilot.py`** —
+   e.g. `derive_trading_dates(view, start, end) -> pd.DatetimeIndex`, a
+   thin wrapper that calls `get_realized_returns(view, start, end)` (the
+   exact same trusted, pure, public call `_load_pit_panel` uses
+   internally) and returns its sorted, unique `date` values. This is the
+   one authoritative place this derivation is written; anyone
+   constructing a `TreasuryBillRiskFreeProvider` for use with this
+   pipeline (the live-recording script, the offline test setup, and
+   P5A-4 for Gate B) calls this helper first, building their own
+   `PointInTimeView` from the same `tiingo_client`/`tickers`/`start`/
+   `end` they will also pass into `run_capm_pilot` — a pure function of
+   identical inputs, so its result is structurally guaranteed to match
+   what `run_capm_pilot` derives internally in step 2.
+2. **Inside `run_capm_pilot`, before calling
+   `compute_market_excess_return`:** build its own internal `view` (as
+   it already must, to call `compute_market_excess_return` at all), call
+   `derive_trading_dates(view, start, end)` again on that internal view,
+   and assert `set(risk_free.get_risk_free(start, end)["date"]) ==
+   set(<those dates>)`. On mismatch, raise a new, named exception defined
+   in `capm_pilot.py` (e.g. `RiskFreeDateGridMismatchError`) — **fail
+   closed**, regardless of how or where the caller built `risk_free`. Do
+   not let the run proceed to a silent `NaN`-riddled `MKT` series caused
+   by an unrelated left-join inside `_load_pit_panel`.
+
+This does not reimplement anything: both call sites use the identical
+trusted function with identical arguments, so their outputs are
+structurally guaranteed to match — the assertion in step 2 exists to
+catch a real bug loudly (e.g. a caller who built `risk_free` from a
+different window, a stale fixture, or a hand-typed date list), not
+because the two are expected to ever legitimately disagree.
+
+**Required tests for this section:**
+- `derive_trading_dates` returns the correct sorted-unique dates against
+  the real fixture-replayed Gate A window.
+- The date-grid invariant holds for the real, fixture-replayed Gate A
+  run end to end (positive case): `run_capm_pilot` does not raise.
+- A deliberately mismatched `trading_dates` sequence (e.g., one real
+  date removed) used to construct the `TreasuryBillRiskFreeProvider`
+  fed into `run_capm_pilot` raises `RiskFreeDateGridMismatchError`
+  rather than silently producing a `NaN` in `MKT` for that date.
+
 ## Required artifacts (produced under `docs/phase5a/gate_a/`)
 
 - **A. Machine-readable factor output** (CSV or Parquet): `date,
-  universe_count, market_return, risk_free_return, MKT`.
-- **B. Diagnostic evidence**, sufficient to inspect: eligible names per
-  date, excluded names and the exact reason for each exclusion,
-  constituent `adj_ret` values, lagged `total_mcap` per name, normalized
-  weights, the Tiingo source observation dates used, and (from P5A-1's
-  diagnostic surface) the risk-free raw source value, source date,
-  `delta_calendar_days`, and transformed `rf` per date.
+  universe_count, market_return, risk_free_return, MKT`, populated
+  **exclusively** via the sanctioned decomposition in
+  `phase5a-plan.md`'s "Sanctioned Artifact-A decomposition" section:
+  `MKT` = `compute_market_excess_return(...)`'s own output, unmodified;
+  `risk_free_return` = the same `risk_free` instance's own
+  `get_risk_free(start, end)` output; `market_return` =
+  `MKT + risk_free_return` (arithmetic only); `universe_count` = the
+  count `get_tradability` marks tradable for that date (an explicit
+  upper bound — see the plan's weakened definition, state this caveat in
+  the artifact's own header/docstring). **No other computation path is
+  permitted for these columns** — in particular, never call
+  `smart_beta/benchmarks/capm.py`'s private helpers
+  (`_market_factor`, `_value_weighted_returns`, `_value_weighted_by`,
+  `_load_pit_panel`) to obtain any of them.
+- **B. Diagnostic evidence**, sufficient for P5A-3 to hand-reconstruct
+  one date: eligible/excluded names per date from `get_tradability` only
+  (named, with reason — explicitly scoped: this does not capture the
+  trusted pipeline's own downstream non-positive/missing-weight or
+  missing-return exclusions, per the plan's weakened definition),
+  constituent `adj_ret` values (from `get_realized_returns`), **raw**
+  lagged `total_mcap` per name (from `get_capitalization_weights` +
+  `lag_panel` — labeled explicitly as raw trace evidence, **not** a
+  reproduction of the trusted pipeline's internal normalized weight; no
+  normalized-weight column is produced here), the Tiingo source
+  observation dates used, and (from P5A-1's diagnostic surface) the
+  risk-free raw source value, source date, `delta_calendar_days`,
+  staleness, and transformed `rf` per date.
 - **C. Statistical summary**: `n`, arithmetic mean, standard deviation,
   and the Newey-West t-stat via `newey_west_ols` with
   `lags=DEFAULT_SETTINGS.newey_west_lags` — only if `n >= 20`; otherwise
@@ -111,6 +203,18 @@ enough for that now rather than requiring P5A-4 to change it later.
   `compute_market_excess_return` (or an equivalent structural check)
   confirming the orchestration calls it rather than recomputing `MKT`
   by hand.
+- **A literal source-grep test (mirrors P5A-5's DJIA-terminology sweep
+  pattern) asserting `smart_beta/pipelines/capm_pilot.py`'s own source
+  text contains no reference to any `capm.py` private symbol**
+  (`_market_factor`, `_value_weighted_returns`, `_value_weighted_by`,
+  `_load_pit_panel`, or any other leading-underscore name imported from
+  `smart_beta.benchmarks.capm`) — a mechanical guard against reach-
+  around, not just a written promise.
+- **The `derived_market_return - risk_free_return == MKT` invariant**
+  (see "Sanctioned Artifact-A decomposition"), asserted against the real
+  fixture-replayed Gate A output, within the frozen `1e-9` relative
+  tolerance.
+- The RF date-grid invariant tests from "RF date-grid derivation" above.
 - Zero live network calls in `pytest`.
 
 ## Live evidence requirement
@@ -171,9 +275,12 @@ listed above.
 
 Report exactly:
 (a) the exact frozen Gate A window (dates) and why chosen;
-(b) the exact `run_capm_pilot`/`CapmPilotResult` signatures;
+(b) the exact `run_capm_pilot`/`CapmPilotResult`/`derive_trading_dates`/
+    `RiskFreeDateGridMismatchError` signatures;
 (c) the real numeric result — every `MKT` value produced, with the
-    underlying eligible/excluded names per date;
+    underlying eligible/excluded names per date, and confirmation the
+    `derived_market_return` invariant and the date-grid invariant both
+    held for every date;
 (d) any upstream defect found, named specifically, with a proposed
     follow-up task shape, never fixed inline;
 (e) confirmation artifacts A/B/C exist and their exact file paths;

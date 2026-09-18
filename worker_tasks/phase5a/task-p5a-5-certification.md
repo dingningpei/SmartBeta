@@ -93,11 +93,31 @@ after P5A-4's barrier passes.
     committed anywhere.
 12. `FULL REGRESSION = <PASS/FAIL>` — the complete existing test suite,
     run fresh, on the fully integrated Phase 5A branch state.
+13. `RF FORMULA INDEPENDENCE = <PASS/FAIL>` (resolves false-PASS
+    scenario G — closes the B2 tautology gap) — this certification's own
+    test file independently constructs `TreasuryBillRiskFreeProvider`
+    against P5A-1's committed fixture and asserts its output against
+    frozen literal expected values **computed here, in this file, with
+    plain Python arithmetic on literals** (`0.05 * 1 / 365`,
+    `0.05 * 3 / 365`, etc.) — never copied from, or re-derived by
+    calling, P5A-1's own test file or the provider under test. Include
+    the `/252`-compounding negative guard here too, independently of
+    whether P5A-1's own test included one. This gives a second,
+    differently-authored check that would fail even if P5A-1's own test
+    were tautological.
+14. `CAPM SINGLE-AUTHORITY AUDIT = <PASS/FAIL>` (resolves false-PASS
+    scenario I — closes the B1 duplication gap) — a literal source-grep
+    of `smart_beta/pipelines/capm_pilot.py`, confirming it contains no
+    reference to any `smart_beta/benchmarks/capm.py` private symbol
+    (`_market_factor`, `_value_weighted_returns`, `_value_weighted_by`,
+    `_load_pit_panel`), and a re-run of the
+    `derived_market_return - risk_free_return == MKT` invariant test
+    against the real committed Gate A (and, if passing, Gate B) output.
 
 ## The completeness invariant test
 
 Mirror `test_phase4d_b_certification.py`'s pattern exactly: parse
-`docs/phase5a_capm_certification.md` and assert (a) all 12 items are
+`docs/phase5a_capm_certification.md` and assert (a) all 14 items are
 present with an explicit disposition, and (b) items 2, 6, and 8's
 required verbatim sentences are present exactly (whitespace-normalized),
 and (c) item 4's forbidden-terminology sweep finds nothing. State
@@ -105,6 +125,22 @@ explicitly in this test file's own docstring, exactly as P4DB-9's does,
 that this markdown-parsing test is a synchronization guard only — the
 real proof for each item is its own named executable check elsewhere in
 this file.
+
+## Explicit reviewer obligations (D and E remain reviewer-enforced, not
+mechanically enforced — state this plainly in the report, do not imply
+otherwise)
+
+- **Item 5 (hand verification)** must also record that the reviewer
+  read `tests/test_phase5a_hand_verification.py`'s own source and
+  confirmed it reads only raw fixture paths plus the single `MKT`
+  comparison value from P5A-2's Artifact A — never P5A-2's Artifact B
+  diagnostic evidence (per `task-p5a-3...md`'s independence boundary).
+  This is a stated review-time judgment, not a grep result.
+- **Item 3 (Gate B disposition)** must also record that the reviewer
+  inspected P5A-4's commit/diff structure and completion-report
+  narrative for consistency with a genuine freeze-before-computation
+  ordering (per `task-p5a-4...md`'s explicit reviewer obligation) —
+  again a stated review-time judgment, not a mechanical proof.
 
 ## Non-goals
 
@@ -123,11 +159,13 @@ actually re-checked.
 ## Exit criteria
 
 - `.venv/bin/pytest` green, full suite unaffected.
-- All 12 items present, each backed by a real executable check.
-- The three required verbatim/negative checks (items 2, 4, 6, 8) pass.
-- The Phase 5A final barrier (per `phase5a-plan.md`'s 16-point list) is
-  explicitly evaluated point by point in this report, not just implied
-  by the 12 items above.
+- All 14 items present, each backed by a real executable check.
+- The three required verbatim/negative checks (items 2, 4, 6, 8) pass,
+  plus item 13's independent `/252` negative guard and item 14's
+  source-grep.
+- The Phase 5A final barrier (per `phase5a-plan.md`'s 17-point list, see
+  point 17 added for the B1/B4 corrections) is explicitly evaluated
+  point by point in this report, not just implied by the 14 items above.
 
 ## Commands to run
 
@@ -145,8 +183,8 @@ the two files listed above.
 
 ## When done (completion-report format)
 
-Report exactly: (a) the full 12-item certification document verbatim;
-(b) explicit evaluation of all 16 final-barrier points from
+Report exactly: (a) the full 14-item certification document verbatim;
+(b) explicit evaluation of all 17 final-barrier points from
 `phase5a-plan.md`; (c) any status that required re-checking rather than
 trusting a prior task's own report, with what you found; (d) the full
 list of upstream-defect findings (if any) across the whole phase; (e)
