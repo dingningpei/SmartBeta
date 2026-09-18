@@ -60,7 +60,10 @@ on branch `phase5a/task-p5a-2-gate-a-orchestration`, branched from
 
 ## Freeze the exact Gate A window before recording anything
 
-The plan names the universe (AAPL, MSFT, GOOGL) and an approximate
+The plan names the universe (AAPL, MSFT, JPM — amended from the
+originally frozen AAPL, MSFT, GOOGL after a live entitlement probe found
+GOOGL's required daily-fundamentals endpoint plan-tier restricted; see
+`phase5a-plan.md`'s "Universe amendment history") and an approximate
 window ("~3 months") but leaves the **exact** start/end dates for you to
 freeze deliberately, not to discover accidentally from whatever happens
 to be convenient at implementation time. Pick a specific, stated,
@@ -220,7 +223,9 @@ because the two are expected to ever legitimately disagree.
 ## Live evidence requirement
 
 New, real, live-recorded Tiingo fetches (EOD prices and market cap) for
-AAPL, MSFT, GOOGL over the frozen Gate A window. Record these under
+AAPL, MSFT, JPM (the amended universe — see "Freeze the exact Gate A
+window before recording anything" above) over the frozen Gate A window.
+Record these under
 `tests/fixtures/tiingo/phase5a_gate_a/` with full provenance. Reuse
 `TiingoClient`/`replay_transport` exactly as already established in
 Phase 4B — no new transport logic. Perform the actual live recording

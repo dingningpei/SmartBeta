@@ -320,18 +320,44 @@ against `t`.
 
 **Purpose: REAL-DATA END-TO-END EXECUTION.**
 
-Universe: **AAPL, MSFT, GOOGL** (fixed, small, chosen for tractability
-and Tiingo entitlement accessibility — **not** because the window is
-free of ordinary corporate actions). Ordinary cash dividends are
-expected and are not a disqualifying condition: they are already fully
-owned by the trusted adjusted-return path (`adj_ret`) and Phase 5A does
-not re-derive or special-case them. The only exclusion criterion is a
-**stock split or spin-off**, which changes share-count/identity in a way
-worth avoiding for a first pilot's tractability, not because it would be
-mishandled. Window: approximately 3 months; exact start/end dates are
-frozen in P5A-2's own spec before any live recording happens (not
-invented here, so the worker records real, deliberate dates rather than
-whatever happens to be convenient at implementation time).
+Universe: **AAPL, MSFT, JPM** (fixed, small, chosen for tractability
+and *verified* Tiingo entitlement accessibility — **not** because the
+window is free of ordinary corporate actions, and **not** for any
+representativeness reason). Ordinary cash dividends are expected and are
+not a disqualifying condition: they are already fully owned by the
+trusted adjusted-return path (`adj_ret`) and Phase 5A does not re-derive
+or special-case them. The only exclusion criterion is a **stock split or
+spin-off**, which changes share-count/identity in a way worth avoiding
+for a first pilot's tractability, not because it would be mishandled.
+Window: approximately 3 months; exact start/end dates are frozen in
+P5A-2's own spec before any live recording happens (not invented here,
+so the worker records real, deliberate dates rather than whatever
+happens to be convenient at implementation time).
+
+**Universe amendment history (retained, never deleted):** the
+originally frozen universe was AAPL, MSFT, GOOGL. A live entitlement
+probe found a real, persistent HTTP 400 plan-tier restriction ("Free and
+Power plans are limited to the DOW 30") on GOOGL's required
+`GET /tiingo/fundamentals/GOOGL/daily` endpoint — Finding **GATE-A-1**,
+recorded and preserved in `docs/phase5a/gate_a/` as a genuine, correctly
+-handled upstream/access finding, not deleted or softened by this
+amendment. The original raw HTTP 400 response body was subsequently
+lost (overwritten before the recorder was hardened) and is **not**
+reconstructed; GATE-A-1 therefore remains a *reported*, not a currently
+re-certifiable LIVE-RECORDED, finding. GOOGL is replaced by **JPM**
+(JPMorgan Chase & Co.) — a long-tenured DOW-30 constituent, selected for
+entitlement/tractability only — after a single bounded live entitlement
+probe of `GET /tiingo/fundamentals/JPM/daily` over the frozen window
+returned a real HTTP 200 with a structurally usable response. This
+amendment changes only the third ticker; it changes no CAPM, RF, or
+inference methodology, and it upgrades no claim. **Explicit non-claim,
+stated because JPM happens to be a current real DOW-30 constituent:**
+even though two (AAPL, MSFT) and now three (AAPL, MSFT, JPM) of Gate A's
+names are DOW-30 members, this is never to be read as representative
+market evidence, historical-DJIA evidence, or survivorship-safe index
+evidence — those are Gate B's distinct claim boundary and terminology
+(see "Gate B — frozen claim" below), never Gate A's. Gate A's only
+allowed claim remains exactly "REAL-DATA END-TO-END EXECUTION."
 
 **Allowed claim:** the real-data chain executes end to end and produces
 reproducible, inspectable `MKT` observations without silently
