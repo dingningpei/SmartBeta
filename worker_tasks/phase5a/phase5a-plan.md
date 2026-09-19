@@ -359,6 +359,58 @@ evidence — those are Gate B's distinct claim boundary and terminology
 (see "Gate B — frozen claim" below), never Gate A's. Gate A's only
 allowed claim remains exactly "REAL-DATA END-TO-END EXECUTION."
 
+**Gate-A-only settings amendment (retained, resolves GATE-A-2 — do not
+delete):** running the real Gate A chain against the live-recorded
+AAPL/MSFT/JPM fixtures with `DEFAULT_SETTINGS` unmodified produced
+`universe_count = 2` on **every** date — JPM, despite real multi-million
+-share daily volume and a ~\$0.86–0.90T market cap, was marked
+non-tradable on 64/64 dates. This is Finding **GATE-A-2**: independently
+verified, not a JPM-specific artifact — `Settings.bottom_mcap_exclude_pct
+= 0.30` (its own source comment: "CH-3 style small-cap exclusion") drives
+`_above_cap_cutoff`'s per-date cross-sectional quantile screen
+(`mcap > cross-sectional quantile(0.30)`, strict). For linear
+interpolation (pandas' default), the minimum of any same-included set of
+≥2 distinct positive values can *never* strictly exceed a quantile of
+that same set for any `p` in `(0, 1)` — confirmed by 2,000 random trials
+(0 exceptions) and by the *preserved* two-name AAPL/MSFT partial run,
+where the smaller-cap name (MSFT that window) was excluded 64/64 for the
+identical reason. This is a **spec/configuration defect, not an
+implementation defect**: `_above_cap_cutoff` correctly implements a
+relative bottom-percentile screen exactly as designed for a *broad*
+cross-section (Gate B's ~30-name universe uses it, unmodified, exactly
+as intended); the defect is that Gate A's frozen orchestration silently
+inherited this CH-3-tuned default without validating it against a
+universe as small as Gate A's deliberately tiny 2–3 names, where the
+screen mathematically degenerates into "always exclude whichever name is
+smallest that date," regardless of its real economic size.
+
+**Resolution, frozen:** Gate A's live recording/artifact-generation call
+into `run_capm_pilot` uses a `Settings` instance equal to
+`DEFAULT_SETTINGS` in every field except one:
+
+```python
+settings = dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0)
+```
+
+passed via `run_capm_pilot`'s already-existing `settings` parameter —
+**no change to `run_capm_pilot`'s signature, to `smart_beta/research_
+inputs/tradability.py`, to `USZeroVolumeTradabilityPolicy`, to
+`_above_cap_cutoff`, or to `DEFAULT_SETTINGS` itself.** `_above_cap_
+cutoff` already contains the exact escape hatch this reuses
+(`bottom_mcap_exclude_pct <= 0.0` → no cap exclusion). Gate B's own
+configuration is untouched and continues to use `DEFAULT_SETTINGS`
+unmodified, since its ~30-name universe is large enough for the screen
+to carry its intended meaning. This change disables only the relative
+market-cap screen for Gate A; the zero-volume and listing-age checks
+inside `USZeroVolumeTradabilityPolicy` remain fully active, so a genuine
+future halt, delisting, or zero-volume day is still correctly excluded
+and must still be named with its reason — Gate A never requires all
+three names tradable on every date, only that any exclusion reflect a
+genuine tradability fact rather than a screening artifact of the sample
+size. This amendment changes no CAPM, RF, or inference methodology and
+upgrades no claim; GATE-A-2, like GATE-A-1, remains permanently
+documented as a named historical finding.
+
 **Allowed claim:** the real-data chain executes end to end and produces
 reproducible, inspectable `MKT` observations without silently
 compensating for an upstream defect.
