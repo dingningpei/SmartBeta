@@ -13,21 +13,31 @@ the orchestration calls the one authoritative ``MKT`` function (spy test),
 that the sanctioned Artifact-A decomposition invariant holds, and that the RF
 date-grid ownership split fails closed on a mismatched grid.
 
-Frozen Gate A window: 2026-06-15 .. 2026-09-15.
+Frozen Gate A window: 2026-06-15 .. 2026-09-15. Final universe: AAPL, MSFT,
+JPM.
 
-**Gate A is BLOCKED.** The frozen candidate universe is AAPL, MSFT, GOOGL, but
-the required GOOGL daily-fundamentals / market-cap endpoint returns a
-persistent HTTP 400 plan-tier "DOW 30" entitlement restriction. The live
-fixtures were subsequently overwritten by HTTP 429 error bodies and are not
-reconstructed. Consequently every test that replays the real Gate A fixtures
-is skipped with an explicit reason; the structural source-grep guard and the
-blocked-disposition assertions still run. The legacy ``RUN_UNIVERSE`` below is
-the entitlement-constrained two-name partial-run universe and is NOT the frozen
-Gate A universe.
+**Gate A is RUN.** Two upstream/configuration findings were resolved on the
+way here, both retained as permanent history, never deleted or softened:
+
+* **GATE-A-1** (persistent entitlement mismatch): the originally frozen
+  universe (AAPL, MSFT, GOOGL) could not execute -- GOOGL's required
+  daily-fundamentals/market-cap endpoint returned a persistent HTTP 400
+  plan-tier "DOW 30" restriction. Resolved by a universe amendment
+  (GOOGL -> JPM) after a bounded live entitlement probe. The original raw
+  HTTP 400 body was subsequently lost and is not reconstructed; GATE-A-1
+  remains a *reported*, not a re-certifiable LIVE-RECORDED, finding.
+* **GATE-A-2** (spec/configuration defect): running the real AAPL/MSFT/JPM
+  fixtures with unmodified ``DEFAULT_SETTINGS`` produced ``universe_count =
+  2`` on every date (JPM could never pass the trusted bottom-market-cap
+  screen's strict same-set quantile comparison at n=3, regardless of its
+  real ~$0.86-0.90T size). Resolved by a Gate-A-only settings override
+  (``bottom_mcap_exclude_pct = 0.0``), with no change to any trusted
+  production module.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import urllib.request
@@ -37,6 +47,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from smart_beta.config.settings import DEFAULT_SETTINGS
 from smart_beta.pipelines import capm_pilot
 from smart_beta.pipelines.capm_pilot import (
     INSUFFICIENT_OBSERVATIONS_STATUS,
@@ -50,11 +61,8 @@ from smart_beta.research_inputs.risk_free import ConstantRiskFreeProvider
 from smart_beta.research_inputs.risk_free_treasury import (
     TreasuryBillRiskFreeProvider,
 )
-from smart_beta.vendors.tiingo.client import (
-    TiingoAPIError,
-    TiingoClient,
-    replay_transport,
-)
+from smart_beta.research_inputs.tradability import TRADABLE_COL
+from smart_beta.vendors.tiingo.client import TiingoClient, replay_transport
 from smart_beta.vendors.tiingo.source import TiingoPITSource
 
 # ---------------------------------------------------------------------------
@@ -62,11 +70,14 @@ from smart_beta.vendors.tiingo.source import TiingoPITSource
 # ---------------------------------------------------------------------------
 GATE_A_START = "2026-06-15"
 GATE_A_END = "2026-09-15"
-CANDIDATE_UNIVERSE = ("AAPL", "MSFT", "GOOGL")
-RUN_UNIVERSE = ("AAPL", "MSFT")
+GATE_A_UNIVERSE = ("AAPL", "MSFT", "JPM")
 EXPECTED_TRADING_DATE_COUNT = 64
 EXPECTED_NON_NAN_MKT = 63
 DECOMPOSITION_REL_TOL = 1e-9
+
+#: GATE-A-2: the Gate-A-only settings override -- disables only the relative
+#: bottom-market-cap screen; all other fields match DEFAULT_SETTINGS exactly.
+GATE_A_SETTINGS = dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0)
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _FIXTURE_DIR = _TESTS_DIR / "fixtures" / "tiingo" / "phase5a_gate_a"
@@ -79,21 +90,7 @@ _FRED_FIXTURE = (
 )
 _ARTIFACT_DIR = _TESTS_DIR.parent / "docs" / "phase5a" / "gate_a"
 _PARTIAL_RUN_DIR = _ARTIFACT_DIR / "partial_run_entitlement_limited_not_gate_a"
-
-_GATE_A_NOT_RUN_MARKERS = (
-    "artifact_a_market_factor.NOT_RUN.txt",
-    "artifact_b_constituent_diagnostics.NOT_RUN.txt",
-    "artifact_b_risk_free_diagnostics.NOT_RUN.txt",
-    "artifact_c_statistical_summary.NOT_RUN.txt",
-)
-
-_GATE_A_BLOCKED_PREFIX = (
-    "Gate A BLOCKED: no valid live-recorded Gate A fixture set exists. "
-    "The frozen universe (AAPL, MSFT, GOOGL) cannot execute because "
-    "GET /tiingo/fundamentals/GOOGL/daily returns a persistent HTTP 400 "
-    "plan-tier 'DOW 30' entitlement restriction; the valid live fixtures "
-    "were later overwritten by HTTP 429 bodies and are not reconstructed. "
-)
+_COMPROMISED_DIR = _ARTIFACT_DIR / "gate_a_2_compromised_default_settings"
 
 _ARTIFACTS = {
     "a_csv": "artifact_a_market_factor.csv",
@@ -120,38 +117,12 @@ def _manifest() -> dict:
     return json.loads((_FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
 
 
-def _gate_a_recording_blockers() -> list[str]:
-    """Names every reason the committed fixture set is not a valid Gate A
-    recording. A valid set would be all-200 for the frozen universe; the
-    current set is a blocked recording (all HTTP 429) and the manifest says so.
-    """
-    manifest = _manifest()
-    provenance = manifest.get("_provenance", {})
-    blockers: list[str] = []
-    if provenance.get("gate_a_disposition") == "BLOCKED":
-        blockers.append("manifest _provenance.gate_a_disposition == BLOCKED")
-    for filename, entry in manifest.get("recordings", {}).items():
-        status = int(entry.get("status_code", 0))
-        if status != 200:
-            blockers.append(f"{filename}: status_code {status}")
-    return blockers
-
-
-def _require_valid_gate_a_fixtures() -> None:
-    """Skip (never silently pass) any test that needs the real Gate A
-    fixture replay while the recording is blocked."""
-    blockers = _gate_a_recording_blockers()
-    if blockers:
-        pytest.skip(_GATE_A_BLOCKED_PREFIX + "; ".join(blockers))
-
-
 def _body(filename: str):
     return json.loads((_FIXTURE_DIR / filename).read_text(encoding="utf-8"))
 
 
 def _offline_client() -> TiingoClient:
     """A fixture-fed client: one path -> one recorded response body."""
-    _require_valid_gate_a_fixtures()
     recordings: dict[str, tuple[int, object]] = {}
     for filename, entry in _manifest()["recordings"].items():
         recordings[str(entry["url_path"])] = (
@@ -161,7 +132,7 @@ def _offline_client() -> TiingoClient:
     return TiingoClient(transport=replay_transport(recordings))
 
 
-def _view(client: TiingoClient, tickers=CANDIDATE_UNIVERSE) -> PointInTimeView:
+def _view(client: TiingoClient, tickers=GATE_A_UNIVERSE) -> PointInTimeView:
     return PointInTimeView(TiingoPITSource(list(tickers), client=client))
 
 
@@ -172,7 +143,7 @@ def _fred_frame() -> pd.DataFrame:
     return pd.read_csv(io.StringIO(body["raw_csv"]))
 
 
-def _provider(client: TiingoClient, start: str, end: str, tickers=RUN_UNIVERSE):
+def _provider(client: TiingoClient, start: str, end: str, tickers=GATE_A_UNIVERSE):
     dates = derive_trading_dates(_view(client, tickers), start, end)
     return TreasuryBillRiskFreeProvider(_fred_frame(), trading_dates=dates)
 
@@ -180,7 +151,8 @@ def _provider(client: TiingoClient, start: str, end: str, tickers=RUN_UNIVERSE):
 def _run(
     start: str = GATE_A_START,
     end: str = GATE_A_END,
-    tickers=RUN_UNIVERSE,
+    tickers=GATE_A_UNIVERSE,
+    settings=GATE_A_SETTINGS,
 ):
     client = _offline_client()
     return run_capm_pilot(
@@ -189,12 +161,12 @@ def _run(
         end,
         tiingo_client=client,
         risk_free=_provider(client, start, end, tickers),
+        settings=settings,
     )
 
 
 @pytest.fixture(scope="module")
 def gate_a_result():
-    _require_valid_gate_a_fixtures()
     return _run()
 
 
@@ -270,39 +242,38 @@ def test_mismatched_trading_dates_raise_fail_closed():
     )
     with pytest.raises(RiskFreeDateGridMismatchError):
         run_capm_pilot(
-            RUN_UNIVERSE,
+            GATE_A_UNIVERSE,
             GATE_A_START,
             GATE_A_END,
             tiingo_client=client,
             risk_free=provider,
+            settings=GATE_A_SETTINGS,
         )
 
 
 # ---------------------------------------------------------------------------
 # Artifact A / C schema and consistency
 # ---------------------------------------------------------------------------
-def test_gate_a_artifacts_are_explicitly_not_run():
-    """The required Gate A artifacts do not exist as results: each carries an
-    explicit NOT RUN marker, and the machine-readable disposition says so."""
-    for marker in _GATE_A_NOT_RUN_MARKERS:
-        path = _ARTIFACT_DIR / marker
-        assert path.is_file(), marker
-        assert "NOT RUN" in path.read_text(encoding="utf-8")
-
+def test_gate_a_disposition_is_run():
+    """The required Gate A artifacts exist as a real result, and the
+    machine-readable disposition says so, with both historical findings
+    recorded as resolved."""
     disposition = json.loads(
         (_ARTIFACT_DIR / "GATE_A_DISPOSITION.json").read_text(encoding="utf-8")
     )
-    assert disposition["disposition"] == "BLOCKED"
-    assert disposition["gate_a_pass"] is False
-    assert disposition["real_three_name_execution"] == "NOT RUN"
-    assert disposition["artifacts"] == {"A": "NOT RUN", "B": "NOT RUN", "C": "NOT RUN"}
+    assert disposition["disposition"] == "RUN"
+    assert disposition["gate_a_pass"] is True
+    assert disposition["gate_a_claim"] == "REAL-DATA END-TO-END EXECUTION"
+    assert disposition["real_three_name_execution"] == "RUN"
+    assert disposition["final_gate_a_universe"] == list(GATE_A_UNIVERSE)
+    assert disposition["gate_a_settings"]["bottom_mcap_exclude_pct"] == 0.0
+    assert disposition["artifacts"] == {"A": "RUN", "B": "RUN", "C": "RUN"}
     assert disposition["next_task"]["p5a_3"] == "NOT STARTED"
-    blocking_ids = {finding["id"] for finding in disposition["blocking_findings"]}
-    assert blocking_ids == {"GATE-A-1"}
-    operational_ids = {
-        finding["id"] for finding in disposition["separate_operational_findings"]
-    }
-    assert operational_ids == {"GATE-A-429"}
+
+    resolved_ids = {f["id"] for f in disposition["resolved_findings"]}
+    assert resolved_ids == {"GATE-A-1", "GATE-A-2"}
+    for finding in disposition["resolved_findings"]:
+        assert finding["retained_as_history"] is True
 
 
 def test_partial_run_evidence_is_preserved_and_labeled_not_gate_a():
@@ -319,6 +290,56 @@ def test_partial_run_evidence_is_preserved_and_labeled_not_gate_a():
         assert (_PARTIAL_RUN_DIR / name).is_file(), name
     readme = (_PARTIAL_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "NOT Gate A evidence" in readme
+
+
+def test_gate_a_2_compromised_artifacts_are_preserved_and_labeled():
+    """The pre-fix (unmodified-DEFAULT_SETTINGS) artifacts are retained
+    byte-for-byte but are explicitly labeled NOT Gate A evidence."""
+    assert _COMPROMISED_DIR.is_dir()
+    for name in (
+        "artifact_a_market_factor.json",
+        "artifact_b_constituent_diagnostics.json",
+        "artifact_b_risk_free_diagnostics.json",
+        "artifact_c_statistical_summary.json",
+    ):
+        assert (_COMPROMISED_DIR / name).is_file(), name
+    readme = (_COMPROMISED_DIR / "README.md").read_text(encoding="utf-8")
+    assert "NOT certified Gate A output" in readme
+
+    compromised_factor = json.loads(
+        (_COMPROMISED_DIR / "artifact_a_market_factor.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # The preserved compromised record genuinely shows the GATE-A-2 defect:
+    # universe_count = 2 on every date.
+    assert {row["universe_count"] for row in compromised_factor} == {2}
+
+
+def test_manifest_records_final_universe_all_200_no_googl():
+    """The live fixture manifest reflects the final, resolved universe --
+    no trace of the original GOOGL entitlement attempt remains in the
+    fixture set itself (GATE-A-1's own evidence lives in the disposition/
+    provenance docs, not as orphaned fixture files)."""
+    manifest = _manifest()
+    provenance = manifest["_provenance"]
+    assert provenance["live_recorded"] is True
+    assert provenance["gate_a_window"] == {
+        "start": GATE_A_START,
+        "end": GATE_A_END,
+    }
+    assert provenance["candidate_universe"] == list(GATE_A_UNIVERSE)
+    assert provenance["api_key_stored"] is False
+    assert provenance["gate_a_disposition"] == "RUN"
+
+    statuses = {
+        int(entry["status_code"]) for entry in manifest["recordings"].values()
+    }
+    assert statuses == {200}
+
+    for filename in manifest["recordings"]:
+        assert "googl" not in filename.lower()
+    assert not any(_FIXTURE_DIR.glob("googl_*"))
 
 
 def test_factor_schema_conforms(gate_a_result):
@@ -341,12 +362,55 @@ def test_factor_schema_conforms(gate_a_result):
     assert factor["MKT"].notna().sum() == EXPECTED_NON_NAN_MKT
 
 
-def test_universe_count_is_an_upper_bound(gate_a_result):
+def test_universe_count_is_three_on_every_date_after_gate_a_2_fix(gate_a_result):
+    """With the Gate-A-only settings override, universe_count is 3 (an
+    upper bound from get_tradability, not a reproduction of downstream
+    exclusions) on every date -- the GATE-A-2 defect (a guaranteed 2) is
+    gone."""
     counts = gate_a_result.factor["universe_count"]
-    assert (counts >= 1).all()
-    # Never more than the entitled run universe; this is an upper bound, not
-    # a reproduction of the downstream value-weighted exclusion chain.
-    assert (counts <= len(RUN_UNIVERSE)).all()
+    assert (counts == len(GATE_A_UNIVERSE)).all()
+
+
+def test_gate_a_2_regression_default_settings_reproduces_the_defect():
+    """Regression proof, from the exact same real live-recorded fixtures:
+    unmodified DEFAULT_SETTINGS reproduces the GATE-A-2 exclusion (JPM
+    excluded on every date), while the frozen Gate-A-only settings
+    override removes it. This is a real-data regression check tied to
+    this specific Gate A dataset, not a new test of production tradability
+    policy semantics in the abstract."""
+    assert DEFAULT_SETTINGS.bottom_mcap_exclude_pct == pytest.approx(0.30)
+
+    compromised = _run(settings=DEFAULT_SETTINGS)
+    assert (compromised.factor["universe_count"] == 2).all()
+
+    jpm_rows = compromised.diagnostics.loc[
+        compromised.diagnostics["stock_id"] == "JPM"
+    ]
+    assert not jpm_rows.empty
+    assert (jpm_rows[TRADABLE_COL] == False).all()  # noqa: E712
+    assert set(jpm_rows["exclusion_reason"].dropna()) == {"tradability_policy"}
+
+    fixed = _run(settings=GATE_A_SETTINGS)
+    assert (fixed.factor["universe_count"] == 3).all()
+    fixed_jpm_rows = fixed.diagnostics.loc[fixed.diagnostics["stock_id"] == "JPM"]
+    assert (fixed_jpm_rows[TRADABLE_COL] == True).all()  # noqa: E712
+
+
+def test_recorder_script_uses_gate_a_2_settings_override():
+    """Literal source-grep guard: the live recorder's own committed source
+    must construct and pass the GATE-A-2 settings override, not silently
+    fall back to a bare DEFAULT_SETTINGS call."""
+    script_path = (
+        Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "fetch_phase5a_gate_a_fixtures.py"
+    )
+    source = script_path.read_text(encoding="utf-8")
+    assert "bottom_mcap_exclude_pct=0.0" in source
+    assert re.search(r"run_capm_pilot\([^)]*settings=", source, re.DOTALL)
+    assert not re.search(
+        r"run_capm_pilot\([^)]*settings=DEFAULT_SETTINGS[^_]", source, re.DOTALL
+    )
 
 
 def test_statistical_summary_schema(gate_a_result):
@@ -366,10 +430,7 @@ def test_statistical_summary_schema(gate_a_result):
 
 def test_insufficient_observations_summary_constructed():
     """CONSTRUCTED (not live evidence): the <20-observation branch of the
-    required Artifact-C summary is exercised directly, without the lost live
-    Gate A fixtures."""
-    from smart_beta.config.settings import DEFAULT_SETTINGS
-
+    required Artifact-C summary is exercised directly."""
     summary = capm_pilot._statistical_summary(
         pd.Series([0.01, -0.02, float("nan")]), DEFAULT_SETTINGS
     )
@@ -391,6 +452,7 @@ def test_insufficient_observations_reports_not_run():
         end,
         tiingo_client=client,
         risk_free=provider,
+        settings=GATE_A_SETTINGS,
     )
     assert result.statistics["n"] < MINIMUM_OBSERVATIONS
     assert result.statistics["status"] == INSUFFICIENT_OBSERVATIONS_STATUS
@@ -400,17 +462,28 @@ def test_insufficient_observations_reports_not_run():
 
 
 # ---------------------------------------------------------------------------
-# Artifact B: named exclusions and diagnostics
+# Artifact B: named exclusions and diagnostics (CONSTRUCTED, per the frozen
+# spec's "if none does, construct one labeled CONSTRUCTED" fallback -- the
+# real, GATE-A-2-fixed Gate A run has zero real exclusions to name).
 # ---------------------------------------------------------------------------
-def test_excluded_observation_is_named_with_reason(gate_a_result):
-    diagnostics = gate_a_result.diagnostics
-    excluded = diagnostics.loc[diagnostics["exclusion_reason"].notna()]
-    assert not excluded.empty, "expected a real tradability exclusion to name"
-    # MSFT is the real, in-window bottom-cap tradability exclusion.
-    msft = excluded.loc[excluded["stock_id"] == "MSFT"]
-    assert not msft.empty
-    assert (msft["is_tradable"] == False).all()  # noqa: E712
-    assert set(msft["exclusion_reason"]) == {"tradability_policy"}
+def test_excluded_observation_is_named_with_reason_constructed():
+    """CONSTRUCTED (not live evidence): the real, corrected Gate A run has
+    no real tradability exclusion to name (all three names are tradable on
+    every date -- see test_universe_count_is_three_on_every_date_after_
+    gate_a_2_fix). The frozen spec requires this exclusion-naming path be
+    exercised anyway; it is proven here against a small, hand-built
+    tradability frame using the same production helper."""
+    tradability = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-06-16", "2026-06-16"]),
+            "stock_id": ["AAPL", "MSFT"],
+            TRADABLE_COL: [True, False],
+            "delisting_uncertain": [False, False],
+        }
+    )
+    reasons = capm_pilot._exclusion_reasons(tradability)
+    assert pd.isna(reasons.iloc[0])
+    assert reasons.iloc[1] == "tradability_policy"
 
 
 def test_diagnostics_carry_raw_lagged_mcap_trace(gate_a_result):
@@ -480,9 +553,9 @@ def test_orchestration_calls_authoritative_market_function(monkeypatch):
 
 
 def test_source_text_has_no_capm_private_symbols():
-    """Literal source-grep guard (mirrors P5A-5's DJIA-terminology sweep):
-    the module's own source text must contain no reference to any
-    ``smart_beta.benchmarks.capm`` private symbol."""
+    """Literal source-grep guard (mirrors P5A-5's DJIA-terminology sweep
+    pattern): the module's own source text must contain no reference to
+    any ``smart_beta.benchmarks.capm`` private symbol."""
     source = Path(capm_pilot.__file__).read_text(encoding="utf-8")
 
     for symbol in _CAPM_PRIVATE_SYMBOLS:
@@ -500,55 +573,3 @@ def test_source_text_has_no_capm_private_symbols():
     assert all(not name.startswith("_") for name in imported)
     assert "capm._" not in source
     assert "benchmarks.capm as" not in source
-
-
-# ---------------------------------------------------------------------------
-# Live evidence provenance + the real GOOGL plan-tier barrier
-# ---------------------------------------------------------------------------
-def test_fixture_manifest_records_blocked_gate_a_and_both_findings():
-    """The manifest must keep the two findings separate: GATE-A-429 is the
-    temporary rate-limit recapture actually on disk; GATE-A-1 is the
-    persistent GOOGL entitlement mismatch that blocks Gate A."""
-    manifest = _manifest()
-    provenance = manifest["_provenance"]
-    assert provenance["live_recorded"] is True
-    assert provenance["gate_a_window"] == {
-        "start": GATE_A_START,
-        "end": GATE_A_END,
-    }
-    assert provenance["candidate_universe"] == list(CANDIDATE_UNIVERSE)
-    assert provenance["api_key_stored"] is False
-    assert provenance["gate_a_disposition"] == "BLOCKED"
-    assert provenance["gate_a_pass"] is False
-    # No weakened universe is recorded anywhere.
-    assert "entitlement_run_universe" not in provenance
-
-    # Every on-disk recording is the temporary 429 condition, never the 400.
-    statuses = {
-        int(entry["status_code"])
-        for entry in manifest["recordings"].values()
-    }
-    assert statuses == {429}
-
-    findings = {finding["id"]: finding for finding in provenance["findings"]}
-    assert set(findings) == {"GATE-A-429", "GATE-A-1"}
-    assert findings["GATE-A-429"]["classification"] == (
-        "temporary_operational_rate_limit"
-    )
-    assert findings["GATE-A-1"]["classification"] == (
-        "persistent_entitlement_mismatch"
-    )
-    assert findings["GATE-A-1"]["http_status"] == 400
-    assert findings["GATE-A-1"]["not"] == "transient_rate_limit"
-
-
-def test_googl_market_cap_is_plan_tier_blocked_offline():
-    """The GOOGL daily-fundamentals plan-tier restriction is the persistent
-    Gate A blocker. This test is skipped while the committed recording holds
-    only the temporary 429 bodies (the real 400 specimen was lost), and is
-    retained for the post-unblock re-record."""
-    _require_valid_gate_a_fixtures()
-    source = TiingoPITSource(["GOOGL"], client=_offline_client())
-    with pytest.raises(TiingoAPIError) as excinfo:
-        source.get_market_cap(GATE_A_START, GATE_A_END)
-    assert "DOW 30" in str(excinfo.value.body)

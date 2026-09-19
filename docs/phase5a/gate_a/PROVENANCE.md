@@ -1,36 +1,37 @@
 # Phase 5A Gate A — provenance, scope, and disposition (P5A-2)
 
-**Gate A disposition: `BLOCKED`. Gate A has not passed and is not claimed to
-have passed. Required Artifacts A, B, and C are `NOT RUN`.** See
-`GATE_A_DISPOSITION.json` (machine-readable) and
-`P5A-2_COMPLETION_REPORT.md` (narrative) in this directory.
+**Gate A disposition: `RUN`. Gate A has passed under its frozen claim.**
+Required Artifacts A, B, and C are `RUN`. See `GATE_A_DISPOSITION.json`
+(machine-readable) and `P5A-2_COMPLETION_REPORT.md` (narrative) in this
+directory.
 
-P5A-2 was stopped at the frozen upstream/live-access boundary. No further
-Tiingo polling is performed merely to detect quota recovery. P5A-3 has not
-been started.
+This branch has **not** been merged to `master`. P5A-3 has not been
+started.
 
 ## Frozen Gate A window
 
 **2026-06-15 through 2026-09-15 (inclusive)** — a specific, recent,
-uncontroversial three-calendar-month window frozen *before* any price/return
-fixture was recorded:
+uncontroversial three-calendar-month window frozen *before* any
+price/return fixture was recorded:
 
 * it lies entirely inside P5A-1's live-recorded FRED `DGS3MO` coverage
   (2025-09-01 … 2026-09-16);
 * the real Tiingo EOD `splitFactor` metadata fetched live for the frozen
   candidate names contains **no stock split or spin-off** in the window
-  (`splitFactor == 1.0` on every row for AAPL, MSFT, GOOGL). Ordinary cash
-  dividends *are* present and expected; they are fully owned by the trusted
-  `adj_ret` corporate-action adjustment path and are not disqualifying.
+  (`splitFactor == 1.0` on every row for AAPL, MSFT, JPM). Ordinary cash
+  dividends *are* present and expected; they are fully owned by the
+  trusted `adj_ret` corporate-action adjustment path and are not
+  disqualifying.
 
-The window itself is not the blocker.
+The window itself was never the blocker.
 
-## Two distinct findings — never conflated
+## Final Gate A universe: AAPL, MSFT, JPM
 
-These are separate findings with separate dispositions. Neither one explains
-away the other.
+The universe reached its final, entitlement-verified, tradability-clean
+form only after resolving two distinct upstream/configuration findings,
+both retained permanently as history — neither deleted nor softened.
 
-### Finding GATE-A-1 (persistent, blocking) — frozen Gate A universe is not fully entitled under the current Tiingo plan
+### Finding GATE-A-1 (persistent, resolved by universe amendment) — original universe not fully entitled
 
 * Module/function: `smart_beta.vendors.tiingo.source.TiingoPITSource.get_market_cap`
   → `TiingoClient.get_fundamentals_daily` → `GET /tiingo/fundamentals/GOOGL/daily`.
@@ -38,88 +39,93 @@ away the other.
   `Error: Free and Power plans are limited to the DOW 30. If you would like
   access to all supported tickers, then please E-mail support@tiingo.com to
   get the Fundamental Data API added as an add-on service.`
-* Real data that triggered it: the frozen Gate A window 2026-06-15 …
-  2026-09-15 and the frozen candidate name **GOOGL**.
-* GOOGL's EOD price endpoint (`GET /tiingo/daily/GOOGL/prices`) is
-  accessible; it is specifically the daily-fundamentals / market-cap endpoint
-  that is plan-tier restricted. The trusted market-cap path is the only
-  authorized source for `total_mcap`.
-* Effect: the frozen three-name Gate A universe (AAPL, MSFT, GOOGL) cannot be
-  executed as specified. This is a **persistent entitlement mismatch with the
-  frozen Gate A universe**, not a transient rate-limit condition.
-* Disposition: **BLOCKED.** P5A-2 stops here. The frozen spec forbids
-  substituting another ticker, changing the frozen universe, deriving market
-  cap from another endpoint, or weakening Gate A. No Gate A artifacts are
-  produced.
-* Proposed follow-up task shape: a separate, independently reviewed
-  entitlement/plan-resolution task that either (a) confirms/certifies the
-  Tiingo plan grants the Fundamentals Data API add-on for the full frozen
-  universe, or (b) amends the frozen Gate A universe through the same
-  probe-and-name-exclusion procedure Gate B already freezes — **before** any
-  Gate A artifacts are treated as evidence. This is a plan/entitlement change,
-  not an inline workaround in P5A-2.
+* Effect: the originally frozen universe (AAPL, MSFT, GOOGL) could not
+  execute — GOOGL's daily-fundamentals/market-cap endpoint was plan-tier
+  restricted (its EOD price endpoint was accessible; only the
+  fundamentals endpoint was restricted).
+* Resolution: GOOGL replaced by **JPM** (JPMorgan Chase & Co., a
+  long-tenured DOW-30 constituent), selected for entitlement/
+  tractability only, after a single bounded live entitlement probe of
+  `GET /tiingo/fundamentals/JPM/daily` returned a real HTTP 200. Spec
+  amendment commit `ea9de443f8a88945a4d6919daa72f4a95f95491c`.
+* Evidence status: the **original** raw HTTP 400 response body was
+  subsequently lost (overwritten before the recorder was hardened) and
+  is **not** reconstructed. GATE-A-1 remains a *reported*, not a
+  currently re-certifiable LIVE-RECORDED, finding — this does not change
+  now that the universe has moved on.
 
-### Finding GATE-A-429 (temporary, non-blocking in itself) — live recording hit the hourly request allocation
+### Finding GATE-A-2 (spec/configuration defect, resolved by settings amendment) — bottom-market-cap screen degenerate at n=2-3
 
-* Module/function: `TiingoClient._live_transport` (all five data methods).
-* Exact symptom: real **HTTP 429**, body
-  `Error: You have run over your hourly request allocation. Please upgrade at
-  https://api.tiingo.com/pricing to have your limits increased.`
-* Real data that triggered it: the most recent live recording attempt for the
-  frozen window/names, recorded verbatim under
-  `tests/fixtures/tiingo/phase5a_gate_a/` (all nine recordings carry
-  `status_code: 429`).
-* Effect: that recording attempt produced no usable observations. This is a
-  **temporary operational rate-limit condition caused during live
-  development/recording**, not an entitlement mismatch.
-* Disposition: recorded as operational evidence only; no further API requests
-  are made merely to detect quota recovery. The recorder is fail-closed
-  (see below) so a non-200 response can never overwrite a previously valid
-  fixture set.
+* Module/function: `smart_beta.research_inputs.tradability._above_cap_cutoff`,
+  driven by `DEFAULT_SETTINGS.bottom_mcap_exclude_pct = 0.30` ("CH-3 style
+  small-cap exclusion").
+* Exact symptom: running the real, live-recorded AAPL/MSFT/JPM fixtures
+  through `run_capm_pilot` with unmodified `DEFAULT_SETTINGS` produced
+  `universe_count = 2` on **all 64 dates** — JPM (real multi-million
+  -share daily volume, ~$0.86–0.90T market cap, validly listed) was
+  marked non-tradable on every single date.
+* Root cause, independently proven: `_above_cap_cutoff` requires
+  `mcap > cross-sectional quantile(bottom_mcap_exclude_pct)` (strict).
+  For linear interpolation (pandas' default), the minimum of any
+  same-included set of ≥2 distinct positive values can never strictly
+  exceed a quantile of that set for any `p` in `(0, 1)` — confirmed by
+  2,000 random trials (0 exceptions) and by the *preserved* two-name
+  AAPL/MSFT partial run below, where the smaller-cap name was excluded
+  64/64 for the identical reason.
+* Classification: **spec/configuration defect, not an implementation
+  defect.** `_above_cap_cutoff` correctly implements a relative
+  bottom-percentile screen exactly as designed for a broad cross-section
+  (Gate B's ~30-name universe uses it, unmodified, exactly as intended).
+  Gate A's frozen orchestration silently inherited this CH-3-tuned
+  default without validating it against a universe this small.
+* Resolution: Gate A's live-recording/artifact-generation call site
+  passes `dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0)`
+  via `run_capm_pilot`'s existing `settings` parameter. **No change** to
+  `smart_beta/research_inputs/tradability.py`,
+  `USZeroVolumeTradabilityPolicy`, `_above_cap_cutoff`, or
+  `DEFAULT_SETTINGS` itself; Gate B keeps `DEFAULT_SETTINGS` unmodified.
+  Zero-volume and listing-age checks remain fully active for Gate A — a
+  genuine future halt/delisting/zero-volume day would still be correctly
+  excluded and named. Spec amendment commit
+  `eb2a768ba836eebb7bdc4c88d268815462b77478`.
+* Evidence status: the compromised (unmodified-`DEFAULT_SETTINGS`)
+  Artifacts A/B/C are preserved byte-for-byte, explicitly labeled NOT
+  Gate A evidence, at `gate_a_2_compromised_default_settings/`. No new
+  Tiingo request was needed — the fix is a pure offline recomputation
+  from the same live-recorded fixtures.
 
-## Live fixtures: exact state (do not reconstruct)
+## Live fixtures: exact state
 
-The live fixture directory `tests/fixtures/tiingo/phase5a_gate_a/` currently
-contains **nine HTTP 429 error bodies** plus a manifest that records them.
-These are real, live-recorded responses and are preserved as evidence of
-Finding GATE-A-429.
-
-An **earlier, valid live capture** had produced the real GOOGL HTTP 400 body
-(Finding GATE-A-1) and real AAPL/MSFT observations; that valid fixture set was
-subsequently overwritten by the 429 bodies. Per the P5A-2 failure rule and the
-operator instruction, the lost live fixtures are **not reconstructed, not
-fabricated, and not substituted**.
-
-The `total_mcap` market-cap path is *not* re-sourced from another endpoint, no
-ticker is substituted, and the frozen universe is not changed.
+`tests/fixtures/tiingo/phase5a_gate_a/` contains **nine real,
+live-recorded HTTP 200 responses** for AAPL, MSFT, and JPM (meta, EOD
+prices, daily fundamentals) over the frozen window — the complete,
+valid recording the frozen universe needed. The stale `googl_*.json`
+files from the original (GATE-A-1) blocked attempt have been removed
+from the tree (their finding is preserved in text/JSON above, not by
+keeping orphaned fixture files nothing references).
 
 ## Preserved non-Gate-A partial run (explicitly labeled)
 
-Before the valid fixtures were lost, a **two-name (AAPL, MSFT)
-entitlement-constrained partial run** had been produced. Its numeric output is
-preserved byte-for-byte at:
+Before GATE-A-1 was resolved, a **two-name (AAPL, MSFT)
+entitlement-constrained partial run** had been produced (and,
+independently, exhibits the exact same GATE-A-2 mechanism — MSFT, the
+smaller of the two that window, was excluded 64/64). Its numeric output
+is preserved byte-for-byte at:
 
 ```
 partial_run_entitlement_limited_not_gate_a/
 ```
 
-That directory is **not Gate A evidence** and must never be presented as such:
-it used a two-name set that is not the frozen universe, and its source
-fixtures no longer exist. It is retained only to preserve the exact numeric
-observations already obtained (e.g. the AAPL daily `MKT` series and the
-tradability exclusion of MSFT) so the record of what was seen is not erased.
-No Gate A claim is built on it.
+That directory is **not Gate A evidence** and must never be presented
+as such. No Gate A claim is built on it.
 
 ## Artifact status
 
 | Required artifact | Status |
 |---|---|
-| A. Machine-readable factor output | **NOT RUN** |
-| B. Diagnostic evidence | **NOT RUN** |
-| C. Statistical summary | **NOT RUN** |
-
-Per-artifact `NOT_RUN` markers sit beside the historical partial-run archive;
-no Gate A artifact file is produced.
+| A. Machine-readable factor output | **RUN** |
+| B. Diagnostic evidence | **RUN** |
+| C. Statistical summary | **RUN** |
 
 ## Canonical caveats (reproduced, never softened)
 
@@ -128,26 +134,28 @@ interpretation of DGS3MO is supported by mutually consistent Treasury.gov,
 FRED, and academic documentation, but the primary Treasury Yield Curve
 Methodology technical publication has not been directly read in full."*
 
-**Staleness rule scope:** the "3 business days" maximum is a deterministic
-Phase 5A data-freshness convention using
-`TradingCalendar.from_weekdays_excluding_holidays` with no holiday table. It
-does **not** claim to equal the true count of Treasury-market closures (it
-does not exclude Columbus Day, Veterans Day, or any other Treasury-only
-holiday falling on a weekday); it is a deliberately conservative,
-deterministic simplification adequate for a bounded pilot.
+**Staleness rule scope:** the "3 business days" maximum is a
+deterministic Phase 5A data-freshness convention using
+`TradingCalendar.from_weekdays_excluding_holidays` with no holiday table.
+It does **not** claim to equal the true count of Treasury-market closures.
 
-**Gate A claim boundary:** *"Gate A does not demonstrate representative market
-coverage, scalability, a US market factor, CAPM replication, economic
-significance, or statistical significance."* Because Gate A is BLOCKED, not
-even the allowed "the real-data chain executes end to end" claim is made.
-Nothing here may be described as a representative market factor.
+**Gate A claim boundary:** *"Gate A does not demonstrate representative
+market coverage, scalability, a US market factor, CAPM replication,
+economic significance, or statistical significance."* The allowed claim
+is exactly: the real-data chain executes end to end and produces
+reproducible, inspectable `MKT` observations without silently
+compensating for an upstream defect. Nothing here may be described as a
+representative market factor, historical-DJIA evidence, or a
+survivorship-safe index — even though AAPL, MSFT, and JPM all happen to
+be current DOW-30 constituents, that is never read as representativeness.
 
 ## Recorder fail-closed guarantee
 
-`scripts/fetch_phase5a_gate_a_fixtures.py` collects **every** live response in
-memory, validates the full set, and only then writes — so a rate-limited or
-partial run cannot overwrite a committed fixture set. Under the current
-disposition the recorder refuses to downgrade to an entitlement-surviving
-subset: any non-200 other than the recorded plan-tier 400 is a hard abort, and
-the plan-tier 400 itself is reported as a Gate A blocker that writes no
-artifacts.
+`scripts/fetch_phase5a_gate_a_fixtures.py` collects **every** live
+response in memory, validates the full set, and only then writes — so a
+rate-limited or partial run cannot overwrite a committed fixture set.
+The GOOGL-specific 400-acceptance branch present during the GATE-A-1
+episode has been removed now that the universe no longer includes
+GOOGL: any non-200 for the current (AAPL, MSFT, JPM) universe is now a
+uniform, generic blocker requiring investigation, not a pre-accepted
+finding.

@@ -26,32 +26,73 @@ recorded, for these stated reasons:
   span) and lies entirely inside the FRED ``DGS3MO`` coverage P5A-1
   live-recorded (2025-09-01 -- 2026-09-16);
 * it contains **no stock split or spin-off for any of the frozen Gate A
-  names (AAPL, MSFT, GOOGL)** -- verified from the real Tiingo EOD
+  names (AAPL, MSFT, JPM)** -- verified from the real Tiingo EOD
   ``splitFactor`` metadata fetched live before recording, not assumed.
   Ordinary cash dividends *are* present and expected; they are fully owned
   by the trusted ``adj_ret`` adjustment path and are not disqualifying.
 
-A real, named Gate A barrier: the frozen universe is not fully entitled
------------------------------------------------------------------------
-The frozen plan's Gate A universe is AAPL, MSFT, GOOGL. A live entitlement
-probe found that the market-cap endpoint ``total_mcap`` depends on
-(``GET /tiingo/fundamentals/{ticker}/daily``) returns a real **HTTP 400**
-plan-tier error for GOOGL (and every other non-DOW-30 name) under the current
-Tiingo plan: *"Free and Power plans are limited to the DOW 30."* GOOGL's EOD
-price endpoint is accessible; only the daily-fundamentals / market-cap
-endpoint is plan-tier restricted. The exact observed body and the two
-distinct findings (persistent entitlement vs. temporary HTTP 429 rate limit)
-are recorded in ``docs/phase5a/gate_a/PROVENANCE.md`` and the fixture
-manifest.
+Universe amendment history (retained, resolves GATE-A-1 -- do not delete)
+---------------------------------------------------------------------------
+The **originally** frozen Gate A universe was AAPL, MSFT, GOOGL. A live
+entitlement probe found that the market-cap endpoint ``total_mcap`` depends
+on (``GET /tiingo/fundamentals/{ticker}/daily``) returns a real **HTTP 400**
+plan-tier error for GOOGL under the then-current Tiingo plan: *"Free and
+Power plans are limited to the DOW 30."* GOOGL's EOD price endpoint was
+accessible; only the daily-fundamentals / market-cap endpoint was plan-tier
+restricted. This is Finding **GATE-A-1**, a genuine persistent entitlement
+mismatch (never a transient rate limit) -- it is retained as historical
+finding evidence in ``docs/phase5a/gate_a/PROVENANCE.md`` and the fixture
+manifest, never deleted or softened by the amendment below. The original raw
+HTTP 400 response body was subsequently lost (overwritten before the
+recorder was hardened) and is **not** reconstructed; GATE-A-1 therefore
+remains a *reported*, not a currently re-certifiable LIVE-RECORDED, finding.
 
-Because the trusted market-cap path is the only authorized source for
-``total_mcap``, and because this task may not patch, wrap, substitute a
-ticker, change the frozen universe, derive market cap from another endpoint,
-or weaken Gate A, the required real Gate A execution is **BLOCKED** at this
-frozen upstream/live-access boundary: Gate A PASS is not declared and
-Artifacts A/B/C are ``NOT RUN``. No entitlement-surviving subset run is
-sanctioned as a Gate A result. See
-``docs/phase5a/gate_a/P5A-2_COMPLETION_REPORT.md``.
+Per ``worker_tasks/phase5a/phase5a-plan.md``'s "Universe amendment history",
+GOOGL is replaced by **JPM** (JPMorgan Chase & Co., a long-tenured DOW-30
+constituent), selected for entitlement/tractability only, after a single
+bounded live entitlement probe of ``GET /tiingo/fundamentals/JPM/daily``
+over the frozen window returned a real HTTP 200 with a structurally usable
+response. This amendment changed only the third ticker -- no CAPM, RF, or
+inference methodology changed, and no claim was upgraded. This module was,
+and remains, never permitted to patch, wrap, substitute a ticker on its own
+initiative, change the frozen universe unilaterally, derive market cap from
+another endpoint, or weaken Gate A; the ticker substitution above was a
+reviewed, frozen spec amendment, not an inline workaround. See
+``docs/phase5a/gate_a/P5A-2_COMPLETION_REPORT.md`` for the full disposition
+history, including the interval during which Gate A was BLOCKED under the
+original universe.
+
+Gate-A-only settings amendment (retained, resolves GATE-A-2 -- do not delete)
+-------------------------------------------------------------------------------
+Running the real Gate A chain against the live-recorded AAPL/MSFT/JPM
+fixtures with ``DEFAULT_SETTINGS`` unmodified produced ``universe_count = 2``
+on **every** date: JPM, despite real multi-million-share daily volume and a
+~$0.86-0.90T market cap, was marked non-tradable on 64/64 dates. This is
+Finding **GATE-A-2**: ``Settings.bottom_mcap_exclude_pct = 0.30`` (its own
+source comment: "CH-3 style small-cap exclusion") drives
+:func:`~smart_beta.research_inputs.tradability._above_cap_cutoff`'s per-date
+cross-sectional quantile screen, and for linear interpolation the minimum of
+any same-included set of two or more distinct positive values can never
+strictly exceed a quantile of that set for any probability in ``(0, 1)`` --
+independently proven (2,000 random trials, 0 exceptions) and confirmed
+against the preserved two-name AAPL/MSFT partial run, which exhibits the
+identical mechanism. This is a **spec/configuration defect, not an
+implementation defect**: the screen is correct for Gate B's ~30-name
+universe; Gate A's frozen orchestration silently inherited a CH-3-tuned
+default never validated against a universe this small.
+
+Resolution, frozen: the live-recording/artifact-generation call site passes
+``dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0)`` via
+:func:`run_capm_pilot`'s existing ``settings`` parameter -- **no change** to
+``smart_beta/research_inputs/tradability.py``,
+:class:`~smart_beta.research_inputs.tradability.USZeroVolumeTradabilityPolicy`,
+``_above_cap_cutoff``, or ``DEFAULT_SETTINGS`` itself; Gate B keeps
+``DEFAULT_SETTINGS`` unmodified. Zero-volume and listing-age checks remain
+fully active for Gate A -- a genuine future halt, delisting, or zero-volume
+day is still correctly excluded and must still be named with its reason.
+The compromised (unmodified-``DEFAULT_SETTINGS``) artifacts are preserved,
+explicitly labeled NOT Gate A evidence, at
+``docs/phase5a/gate_a/gate_a_2_compromised_default_settings/``.
 
 This module itself is universe- and window-agnostic on purpose; P5A-4's
 Gate B reuses :func:`run_capm_pilot` unmodified with a different ticker list,

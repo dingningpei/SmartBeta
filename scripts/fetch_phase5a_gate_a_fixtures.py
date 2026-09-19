@@ -23,21 +23,28 @@ return *on* the window start is computable offline from the recording alone.
 
 Gate A disposition enforced by this script
 ------------------------------------------
-The frozen Gate A universe is ``("AAPL", "MSFT", "GOOGL")`` and is **never**
-downgraded here. A live entitlement probe (the ``get_fundamentals_daily`` call
-below) returns a real HTTP 400 plan-tier body for GOOGL -- *"Free and Power
-plans are limited to the DOW 30."* -- which is a persistent entitlement
-mismatch with the frozen universe. When any required call is non-200 this
+The frozen Gate A universe is ``("AAPL", "MSFT", "JPM")``, amended (see
+``worker_tasks/phase5a/phase5a-plan.md``'s "Universe amendment history")
+from the originally frozen ``("AAPL", "MSFT", "GOOGL")`` after a live
+entitlement probe found a real, persistent HTTP 400 plan-tier body for
+GOOGL -- *"Free and Power plans are limited to the DOW 30."* -- on the
+required ``get_fundamentals_daily`` call. GOOGL was replaced by JPM (a
+long-tenured DOW-30 constituent) only after a single bounded live
+entitlement probe of JPM's own ``get_fundamentals_daily`` call returned a
+real HTTP 200. This universe is never downgraded or substituted by this
+script itself -- any further ticker change requires its own reviewed spec
+amendment, exactly like this one. When any required call is non-200 this
 script **writes nothing**: it reports a ``BLOCKED`` disposition and exits,
 so a rate-limited or entitlement-limited run can never overwrite a previously
-valid fixture set. No market cap is fabricated, no ticker is substituted, no
-market cap is derived from another endpoint, and the universe is never
-weakened.
+valid fixture set. No market cap is fabricated, no ticker is substituted
+inline, no market cap is derived from another endpoint, and the universe is
+never weakened.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import io
 import json
 import os
@@ -52,6 +59,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from smart_beta.config.settings import DEFAULT_SETTINGS  # noqa: E402
 from smart_beta.pipelines.capm_pilot import (  # noqa: E402
     derive_trading_dates,
     run_capm_pilot,
@@ -73,7 +81,7 @@ from smart_beta.vendors.tiingo.source import TiingoPITSource  # noqa: E402
 # ---------------------------------------------------------------------------
 GATE_A_START = "2026-06-15"
 GATE_A_END = "2026-09-15"
-CANDIDATE_TICKERS = ("AAPL", "MSFT", "GOOGL")
+CANDIDATE_TICKERS = ("AAPL", "MSFT", "JPM")
 EOD_LOOKBACK_DAYS = 10
 
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "tiingo" / "phase5a_gate_a"
@@ -100,7 +108,8 @@ def _eod_start() -> str:
 def _record(call: Callable[[], object]) -> tuple[int, object]:
     """Run one live call and return ``(status_code, body)``; a non-200
     response is captured as data (via :class:`TiingoAPIError`), never treated
-    as a script error -- the GOOGL plan-tier 400 is required evidence."""
+    as a script error, so any real error body is preserved as evidence
+    rather than crashing the script uninformatively."""
     try:
         return 200, call()
     except TiingoAPIError as exc:
@@ -174,8 +183,11 @@ def main() -> int:
 
         # Collect every live response in memory, validate it, and only then
         # write -- so a rate-limited or partial run can never overwrite a good
-        # committed fixture set with error bodies. Only the single *known*
-        # GOOGL plan-tier 400 is accepted as non-200 evidence.
+        # committed fixture set with error bodies. Every ticker in the
+        # (amended, entitlement-probed) universe is expected to return 200;
+        # no ticker's non-200 is specially pre-accepted as expected evidence
+        # any more (unlike the original GOOGL run, whose known 400 was
+        # explicitly special-cased here before the amendment).
         call_specs: list[
             tuple[str, str, dict[str, str], Callable[[], object]]
         ] = []
@@ -215,23 +227,24 @@ def main() -> int:
             collected.append((filename, path, params, status, body))
 
         # Fail closed: validate the *entire* set in memory before writing a
-        # single byte. Any non-200 -- including the known GOOGL plan-tier 400
-        # -- is a Gate A blocker, so nothing is written and no universe is
-        # silently downgraded.
+        # single byte. Any non-200 for the amended, already entitlement-probed
+        # universe is an unexpected finding -- nothing is written, no ticker
+        # is substituted inline, and no universe is silently downgraded.
         blockers: list[str] = []
         for filename, path, params, status, body in collected:
             if status == 200:
                 continue
             detail = body.get("detail") if isinstance(body, dict) else ""
-            is_googl_daily = path == _DAILY_PATH.format(ticker="GOOGL")
-            if is_googl_daily and status == 400 and "DOW 30" in str(detail):
+            if status == 429:
                 blockers.append(
-                    f"GATE-A-1 persistent entitlement: {path} -> HTTP {status} "
-                    f"{body!r}"
+                    f"GATE-A-429-class temporary rate limit: {path} -> HTTP "
+                    f"{status} {body!r}"
                 )
-            elif status == 429:
+            elif status == 400 and "DOW 30" in str(detail):
                 blockers.append(
-                    f"GATE-A-429 temporary rate limit: {path} -> HTTP {status} "
+                    f"unexpected DOW-30 plan-tier restriction (this ticker "
+                    f"was already entitlement-probed successfully -- "
+                    f"investigate before retrying): {path} -> HTTP {status} "
                     f"{body!r}"
                 )
             else:
@@ -313,12 +326,23 @@ def main() -> int:
     risk_free = TreasuryBillRiskFreeProvider(
         fred_frame, trading_dates=trading_dates
     )
+    # GATE-A-2 (see phase5a-plan.md's "Gate-A-only settings amendment"):
+    # DEFAULT_SETTINGS.bottom_mcap_exclude_pct=0.30 ("CH-3 style small-cap
+    # exclusion") mathematically cannot be satisfied by the smallest-cap
+    # member of a 2-3 name cross-section, regardless of its real size.
+    # This is a Gate-A-only call-site configuration choice -- it does not
+    # modify DEFAULT_SETTINGS, USZeroVolumeTradabilityPolicy, or
+    # _above_cap_cutoff. Zero-volume and listing-age checks stay active.
+    gate_a_settings = dataclasses.replace(
+        DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0
+    )
     result = run_capm_pilot(
         CANDIDATE_TICKERS,
         GATE_A_START,
         GATE_A_END,
         tiingo_client=offline_client,
         risk_free=risk_free,
+        settings=gate_a_settings,
     )
 
     # Artifact A: CSV (literal spec) and JSON (committed review copy).
