@@ -99,6 +99,31 @@ it inside `run_capm_pilot`. See "RF date-grid derivation" below for who
 builds it and how, and where that construction happens relative to this
 call.
 
+**`settings` for the real Gate A call (resolves GATE-A-2 — frozen, do
+not reinterpret):** `run_capm_pilot`'s signature keeps the generic
+`settings: Settings = DEFAULT_SETTINGS` default shown above — this is
+*not* changed, and `DEFAULT_SETTINGS` itself is *not* changed. The
+**caller** (the live recorder / offline artifact-generation script) that
+performs Gate A's actual run passes:
+
+```python
+settings = dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0)
+```
+
+into `run_capm_pilot(..., settings=settings)`, because `DEFAULT_SETTINGS
+.bottom_mcap_exclude_pct = 0.30` (a "CH-3 style small-cap exclusion," per
+its own source comment) mathematically cannot be satisfied by the
+smallest-cap member of any 2–3 name cross-section — see
+`phase5a-plan.md`'s "Gate-A-only settings amendment" for the full
+derivation and proof. This is a call-site configuration choice, not a
+change to `smart_beta/research_inputs/tradability.py`,
+`USZeroVolumeTradabilityPolicy`, `_above_cap_cutoff`, or
+`DEFAULT_SETTINGS`; P5A-4's Gate B call keeps `DEFAULT_SETTINGS`
+unmodified. Zero-volume and listing-age checks stay fully active for
+Gate A — a genuine tradability exclusion is still expected and must
+still be named with its reason; only the relative bottom-cap screen is
+disabled.
+
 ## RF date-grid derivation (resolves B4 — read before writing any code)
 
 The frozen RF transformation needs each equity date's immediately
