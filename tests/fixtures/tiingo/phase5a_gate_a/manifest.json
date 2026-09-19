@@ -1,0 +1,90 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-18",
+    "retrieved_at_utc": "2026-09-18T07:13:19Z",
+    "source": "Tiingo",
+    "retrieval_method": "Live HTTPS GETs through TiingoClient with the key read from the TIINGO_API_KEY environment variable; the key is never logged or written",
+    "api_key_stored": false,
+    "gate_a_window": {
+      "start": "2026-06-15",
+      "end": "2026-09-15"
+    },
+    "candidate_universe": [
+      "AAPL",
+      "MSFT",
+      "JPM"
+    ],
+    "eod_lookback_start": "2026-06-05",
+    "gate_a_disposition": "RUN",
+    "note": "Raw Tiingo response bodies (verbatim, no wrapper). Written only when every required call returned 200; a non-200 half-run is never written."
+  },
+  "recordings": {
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "params": {},
+      "status_code": 200
+    },
+    "aapl_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "aapl_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "msft_meta.json": {
+      "url_path": "/tiingo/daily/MSFT",
+      "params": {},
+      "status_code": 200
+    },
+    "msft_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MSFT/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "msft_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MSFT/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "jpm_meta.json": {
+      "url_path": "/tiingo/daily/JPM",
+      "params": {},
+      "status_code": 200
+    },
+    "jpm_eod_prices_2026-06-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/JPM/prices",
+      "params": {
+        "startDate": "2026-06-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "jpm_fundamentals_daily_2026-06-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/JPM/daily",
+      "params": {
+        "startDate": "2026-06-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    }
+  }
+}

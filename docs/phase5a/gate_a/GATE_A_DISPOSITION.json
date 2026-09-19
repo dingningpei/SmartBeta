@@ -1,0 +1,75 @@
+{
+  "gate": "A",
+  "phase": "5A",
+  "task": "P5A-2",
+  "disposition": "RUN",
+  "gate_a_pass": true,
+  "gate_a_claim": "REAL-DATA END-TO-END EXECUTION",
+  "real_three_name_execution": "RUN",
+  "frozen_gate_a_window": {
+    "start": "2026-06-15",
+    "end": "2026-09-15"
+  },
+  "final_gate_a_universe": ["AAPL", "MSFT", "JPM"],
+  "gate_a_settings": {
+    "bottom_mcap_exclude_pct": 0.0,
+    "note": "Gate-A-only override of DEFAULT_SETTINGS via dataclasses.replace; DEFAULT_SETTINGS itself, USZeroVolumeTradabilityPolicy, and _above_cap_cutoff are unmodified. See GATE-A-2."
+  },
+  "resolved_findings": [
+    {
+      "id": "GATE-A-1",
+      "classification": "persistent_entitlement_mismatch",
+      "status": "RESOLVED_BY_UNIVERSE_AMENDMENT",
+      "endpoint": "GET /tiingo/fundamentals/GOOGL/daily",
+      "http_status": 400,
+      "observed_body": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "effect": "The originally frozen universe (AAPL, MSFT, GOOGL) could not obtain GOOGL total_mcap.",
+      "resolution": "GOOGL replaced by JPM (a long-tenured DOW-30 constituent) after a single bounded live entitlement probe returned HTTP 200. Spec amendment commit ea9de443f8a88945a4d6919daa72f4a95f95491c.",
+      "original_raw_400_response": "LOST (overwritten before the recorder was hardened) -- not reconstructed; this finding remains a reported, not a re-certifiable LIVE-RECORDED, finding.",
+      "retained_as_history": true
+    },
+    {
+      "id": "GATE-A-2",
+      "classification": "spec_configuration_defect",
+      "status": "RESOLVED_BY_SETTINGS_AMENDMENT",
+      "component": "smart_beta.research_inputs.tradability._above_cap_cutoff, via DEFAULT_SETTINGS.bottom_mcap_exclude_pct=0.30",
+      "effect": "Running the real AAPL/MSFT/JPM fixtures with unmodified DEFAULT_SETTINGS produced universe_count=2 on all 64 dates: JPM (real multi-million-share volume, ~$0.86-0.90T market cap) was marked non-tradable on every date, because the smallest member of any 2-3 name cross-section can never mathematically satisfy a strict same-set quantile(0.30) comparison.",
+      "mathematical_proof": "2000 random trials of 3 distinct positive values: 0 exceptions. Independently re-confirmed against the preserved two-name AAPL/MSFT partial run (same mechanism, smaller name excluded 64/64).",
+      "resolution": "Gate A's live-recording/artifact-generation call site passes dataclasses.replace(DEFAULT_SETTINGS, bottom_mcap_exclude_pct=0.0) via run_capm_pilot's existing settings parameter. No change to tradability.py, USZeroVolumeTradabilityPolicy, _above_cap_cutoff, or DEFAULT_SETTINGS. Gate B keeps DEFAULT_SETTINGS unmodified. Spec amendment commit eb2a768ba836eebb7bdc4c88d268815462b77478.",
+      "compromised_artifacts_preserved_at": "docs/phase5a/gate_a/gate_a_2_compromised_default_settings/",
+      "retained_as_history": true
+    }
+  ],
+  "artifacts": {
+    "A": "RUN",
+    "B": "RUN",
+    "C": "RUN"
+  },
+  "artifact_paths": {
+    "A": ["artifact_a_market_factor.csv", "artifact_a_market_factor.json"],
+    "B_constituent": ["artifact_b_constituent_diagnostics.csv", "artifact_b_constituent_diagnostics.json"],
+    "B_risk_free": ["artifact_b_risk_free_diagnostics.csv", "artifact_b_risk_free_diagnostics.json"],
+    "C": ["artifact_c_statistical_summary.json"]
+  },
+  "result_summary": {
+    "n_dates": 64,
+    "n_non_nan_mkt": 63,
+    "universe_count_per_date": 3,
+    "statistics": {
+      "n": 63,
+      "mean": 0.00236841465149666,
+      "std": 0.015077343400323668,
+      "newey_west_lags": 6,
+      "newey_west_tstat": 1.5411431324823484
+    }
+  },
+  "preserved_non_gate_a_partial_run": {
+    "path": "partial_run_entitlement_limited_not_gate_a/",
+    "label": "CONSTRUCTED-FROM-LOST-FIXTURES / NOT GATE A EVIDENCE",
+    "note": "A two-name (AAPL, MSFT) entitlement-constrained partial run produced before the original live fixtures were overwritten by HTTP 429 bodies. Preserved byte-for-byte; must not be presented as Gate A evidence."
+  },
+  "next_task": {
+    "p5a_3": "NOT STARTED",
+    "reason": "P5A-3 depends on P5A-2's real Gate A output being merged and barrier-passed; this branch has not merged to master yet."
+  }
+}
