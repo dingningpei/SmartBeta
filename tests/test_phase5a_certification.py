@@ -60,6 +60,27 @@ _REPORT = _REPO_ROOT / "docs" / "phase5a_capm_certification.md"
 #: before any Phase 5A commit. Used for the "files P5A-1..4 added" sweep.
 _PHASE_BASELINE = "0d15655"
 
+#: The immutable Phase 5A completion endpoint (annotated tag
+#: ``phase5a-complete``, created at closeout, peeling to
+#: ``bae0131260d5e9622e094c13cca249cafe8ce7e1``). Item [9]'s
+#: authorized-file-set sweep below evaluates the fixed historical interval
+#: ``[_PHASE_BASELINE, _PHASE_END]``, never the moving current ``HEAD``: the
+#: invariant this test certifies is "Phase 5A itself touched only its
+#: authorized files relative to its own starting point" -- a historical fact
+#: about Phase 5A -- not "no repository HEAD may ever contain a file beyond
+#: Phase 5A's own, forever." A later phase (Phase 5B and beyond) legitimately
+#: adding files under ``smart_beta/`` must never make this assertion fail.
+#: (Amendment: certification-test scope fix, authorized separately from any
+#: Phase 5B task; Phase 5A's own certified production modules, artifacts, and
+#: numeric outputs are unchanged by this amendment.)
+_PHASE_END = "phase5a-complete"
+
+#: The exact commit the ``phase5a-complete`` tag must peel to. A regression
+#: guard below fails loudly if this ever drifts (e.g. a future accidental
+#: reversion of ``_PHASE_END`` toward a moving ref) rather than silently
+#: certifying against the wrong endpoint.
+_PHASE_END_SHA = "bae0131260d5e9622e094c13cca249cafe8ce7e1"
+
 _GATE_B_RECORDER = _REPO_ROOT / "scripts" / "fetch_phase5a_gate_b_fixtures.py"
 _GATE_B_TEST = _TESTS_DIR / "test_capm_pilot_gate_b.py"
 
@@ -359,10 +380,31 @@ def test_item09_upstream_defect_audit() -> None:
     assert "UPSTREAM DEFECT AUDIT = NONE FOUND" in document
     assert "GATE-A-1" in document and "GATE-A-2" in document
 
-    # No already-trusted production module was modified anywhere in the phase:
-    # only P5A-1's new provider and P5A-2's new orchestration module.
+    # Regression guard: _PHASE_END must remain pinned to the immutable
+    # phase5a-complete tag, never "HEAD" or any other moving ref. If this
+    # ever fails, someone edited _PHASE_END back toward moving-HEAD
+    # semantics -- fix _PHASE_END, do not weaken this assertion.
+    peeled = subprocess.run(
+        ["git", "rev-parse", f"{_PHASE_END}^{{}}"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert peeled.returncode == 0, peeled.stderr
+    assert peeled.stdout.strip() == _PHASE_END_SHA, (
+        f"_PHASE_END={_PHASE_END!r} no longer peels to the frozen Phase 5A "
+        f"completion SHA {_PHASE_END_SHA}; Item 9's endpoint must stay "
+        "pinned to the immutable phase5a-complete tag, never a moving ref"
+    )
+
+    # No already-trusted production module was modified anywhere in the
+    # sealed historical Phase 5A interval [_PHASE_BASELINE, _PHASE_END]:
+    # only P5A-1's new provider and P5A-2's new orchestration module. This
+    # is evaluated against the immutable phase5a-complete endpoint, not the
+    # moving current HEAD, so a later phase's own legitimate additions under
+    # smart_beta/ can never make this historical assertion fail.
     proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{_PHASE_BASELINE}..HEAD", "--", "smart_beta"],
+        ["git", "diff", "--name-only", f"{_PHASE_BASELINE}..{_PHASE_END}", "--", "smart_beta"],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
