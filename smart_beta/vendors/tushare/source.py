@@ -115,9 +115,13 @@ logic)
   *input* the mapper explicitly accepts, never a factor re-computation.
 * **Trading status.** ``daily`` + ``suspend_d`` + ``stk_limit`` are fetched
   per ``ts_code`` and the authoritative calendar is passed as ``trade_dates``
-  so a suspended day (which has no ``daily`` bar) still appears. No same-day
-  name source is in scope, so P4DB-4's ``is_st`` is left at its documented
-  "undeterminable" ``pd.NA`` -- never a false ``False``.
+  so a suspended day (which has no ``daily`` bar) still appears. The
+  historical same-day name P4DB-4's ``is_st`` needs comes from
+  ``bak_basic`` (per-date, unlike ``stock_basic``'s latest-only snapshot):
+  one row per trade date, keyed by the row's own ``trade_date``, is handed to
+  ``map_to_trading_status`` as ``name_by_date``. A date with no historical
+  name row stays ``pd.NA`` -- the flag is never defaulted to a false
+  ``False`` (Phase 5B P5B-ST1).
 * **Listing history.** ``get_listing_info`` fetches each security's
   ``stock_basic`` row and, when the row claims a ``delist_date``, a bounded
   ``daily`` window around that claim so P4DB-7's sustained-absence
@@ -203,6 +207,13 @@ _ENDPOINT_SUSPEND_D = "suspend_d"
 _ENDPOINT_STK_LIMIT = "stk_limit"
 _ENDPOINT_DIVIDEND = "dividend"
 _ENDPOINT_STOCK_BASIC = "stock_basic"
+_ENDPOINT_BAK_BASIC = "bak_basic"
+
+#: ``bak_basic`` fields the historical-name wiring reads: its per-date
+#: ``name`` and the ``trade_date`` that name is in force for (P4DB-4's
+#: recorded specimens use exactly this request/response shape).
+_BAK_BASIC_NAME_FIELD = "name"
+_BAK_BASIC_TRADE_DATE_FIELD = "trade_date"
 
 #: The ``stock_basic`` fields P4DB-7's selector/mapper consume. Requested
 #: explicitly so the vendor's response shape is stable and inspectable.
@@ -310,7 +321,10 @@ class TushareAShareSource(PITDataSource):
         The authoritative calendar supplies the row universe, so a suspended
         day (which has no ``daily`` bar) still appears. Delegates to
         :func:`~smart_beta.vendors.tushare.market_data.map_to_trading_status`
-        with the ``daily``/``suspend_d``/``stk_limit`` inputs it consumes.
+        with the ``daily``/``suspend_d``/``stk_limit`` inputs plus the
+        per-trade-date historical names sourced from ``bak_basic``, so
+        ``is_st`` is point-in-time wherever name evidence exists and stays
+        the fail-closed ``pd.NA`` where it does not.
         """
         start_ts = _as_naive_ts(start)
         end_ts = _as_naive_ts(end)
@@ -339,12 +353,16 @@ class TushareAShareSource(PITDataSource):
                     end_date=_compact(end_ts),
                 )
             )
+            name_by_date = _historical_name_by_date(
+                self._client, ts_code, trade_dates
+            )
             frames.append(
                 map_to_trading_status(
                     stock_id,
                     daily_rows=daily,
                     suspend_rows=suspend,
                     stk_limit_rows=stk_limit,
+                    name_by_date=name_by_date,
                     trade_dates=trade_dates,
                     source_endpoint=_TRADING_STATUS_ENDPOINT,
                 )
@@ -573,6 +591,45 @@ def _filter_range(
         return frame.reset_index(drop=True)
     mask = (frame[column] >= start) & (frame[column] <= end)
     return frame.loc[mask].reset_index(drop=True)
+
+
+def _historical_name_by_date(
+    client: TushareClient,
+    ts_code: str,
+    trade_dates: Sequence[object],
+) -> dict[pd.Timestamp, str]:
+    """Build the PIT ``name_by_date`` P4DB-4's ``is_st`` consumes.
+
+    ``bak_basic`` is the vendor's **per-date** name source (``stock_basic``
+    only exposes the latest name), so one row is requested per trade date --
+    the exact request shape P4DB-4's recorded ``bak_basic`` specimens use
+    (``ts_code`` + ``trade_date``). The returned ``name`` is keyed by the
+    row's **own** ``trade_date``, never the requested one, so a mislabeled
+    vendor row cannot copy a later name back onto an earlier date. A blank or
+    missing name contributes no entry, leaving ``is_st`` at its documented,
+    fail-closed ``pd.NA`` for that date.
+
+    This is assembly glue only: it reads two fields and delegates every ST
+    semantic decision to P4DB-4's :func:`~smart_beta.vendors.tushare.
+    market_data.is_st_name` via ``map_to_trading_status``. No ST heuristic is
+    re-derived here.
+    """
+    names: dict[pd.Timestamp, str] = {}
+    for day in trade_dates:
+        payload = client.fetch(
+            _ENDPOINT_BAK_BASIC,
+            ts_code=ts_code,
+            trade_date=_compact(_as_naive_ts(day)),
+        )
+        for row in _rows(payload):
+            raw_date = row.get(_BAK_BASIC_TRADE_DATE_FIELD)
+            name = row.get(_BAK_BASIC_NAME_FIELD)
+            if raw_date is None:
+                continue
+            if not isinstance(name, str) or not name.strip():
+                continue
+            names[_as_naive_ts(raw_date)] = name
+    return names
 
 
 def _previous_close_by_date(daily_rows: Sequence[dict]) -> dict[pd.Timestamp, float]:
