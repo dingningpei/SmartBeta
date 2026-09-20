@@ -1,0 +1,87 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-19",
+    "retrieved_at_utc": "2026-09-20T05:52:51Z",
+    "source": "People's Bank of China (PBOC) official historical benchmark RMB deposit rate table",
+    "instrument": "PBOC benchmark one-year RMB deposit interest rate (人民币一年期存款基准利率)",
+    "units": "percent per annum",
+    "provenance_class": "ECONOMIC-DEFINITION REPLICATION",
+    "evidence_categories": [
+      "LIVE-RECORDED (PBOC primary-source table fetched once)",
+      "CONSTRUCTED (one-year (announcement_date, effective_date, rate) rows built from that table)",
+      "FIXTURE-REPLAYED (tests never touch the network)"
+    ],
+    "retrieval_method": "HTTPS GET of PBOC's public historical-data page; no API key or credential used or stored",
+    "table_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/125838/125888/2968982/index.html",
+    "index_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/125838/125888/index.html",
+    "n_observations": 38,
+    "date_range": {
+      "first_effective": "1990-04-15",
+      "last_effective": "2015-10-24"
+    },
+    "note": "Offline replay source for tests/test_risk_free_china.py; the PBOC series itself is never fetched during pytest."
+  },
+  "bounded_check": {
+    "performed": true,
+    "references": [
+      {
+        "source": "Liu, Stambaugh, Yuan (2019), 'Size and Value in China', Journal of Financial Economics 134(1), 48-69",
+        "url": "https://www.nber.org/system/files/working_papers/w24458/w24458.pdf"
+      },
+      {
+        "source": "Liu, Stambaugh, Yuan, Online Appendix for 'Size and Value in China'",
+        "url": "https://faculty.wharton.upenn.edu/wp-content/uploads/2018/08/size_value_china_appendix_2_rev.pdf"
+      },
+      {
+        "source": "PBOC official benchmark RMB deposit rate historical table",
+        "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/125838/125888/index.html"
+      }
+    ],
+    "findings": {
+      "risk_free_instrument": {
+        "result": "CONFIRMED",
+        "evidence": "LSY: 'The market factor, MKT, is the return on the value-weighted portfolio of our universe, the top 70% of stocks, in excess of the one-year deposit interest rate'; data section: 'Our series for the riskfree rate, the one-year deposit rate, is obtained from ... CSMAR ... on WRDS.'"
+      },
+      "pboc_rate_history": {
+        "result": "CONFIRMED",
+        "evidence": "PBOC's own historical table records 38 effective-date changes from 1990-04-15 through 2015-10-24; the final change set the benchmark one-year deposit rate to 1.50%."
+      },
+      "announcement_vs_effective": {
+        "result": "CONFIRMED",
+        "evidence": "The 2015-10-24 change was publicly announced on 2015-10-23 (effective the next day), confirmed by the independent cross-check below; PBOC's table itself records the effective date."
+      },
+      "pro_rate_vs_compound": {
+        "result": "NOT ESTABLISHED",
+        "disposition": "RF DAILY TRANSFORMATION CONVENTION = NOT CERTIFIED. Neither LSY (2019) nor its Online Appendix states whether the annual quoted rate is converted by simple pro-rating or by compounding, nor the exact domestic day-count convention. The frozen default (simple pro-rating, Actual/365) is retained and flagged; it is not upgraded by this check and is not presented as a fact about LSY's paper."
+      },
+      "ep_formation_cadence": {
+        "result": "CONFIRMED",
+        "evidence": "LSY: 'the sort at the end of a given month uses the information in a firm's financial report having the most recent public release date prior to that month's end,' with quarterly reports from 2002-01-01 and semiannual reports before that. This is exactly the per-formation-date latest_known_value(as_of=F_m) behavior, with no additional report-period-type filter."
+      },
+      "cumulative_ytd_vs_ttm": {
+        "result": "NOT ESTABLISHED",
+        "disposition": "Open data-semantics limitation. LSY define earnings as the 'most recently reported net profit excluding nonrecurrent gains/losses' but do not state whether an interim cumulative-YTD figure is used as-filed or annualized/TTM-adjusted. No TTM adjustment is invented by this phase."
+      }
+    }
+  },
+  "independent_cross_check": {
+    "source": "People's Daily Online / 人民网 (authoritative secondary report)",
+    "url": "http://money.people.com.cn/n/2015/1023/c42877-27734190.html",
+    "published": "2015-10-23",
+    "claim_confirmed": "PBOC lowered the one-year benchmark deposit rate by 0.25 percentage points to 1.5%, effective 2015-10-24",
+    "confirms": {
+      "announcement_date": "2015-10-23",
+      "effective_date": "2015-10-24",
+      "rate": 1.5
+    },
+    "scope": "Confirms only the final (2015-10-24) rate-change event and the announcement-vs-effective distinction; the full 1990-2015 history is sourced solely from PBOC's own official table."
+  },
+  "recordings": {
+    "pboc_one_year_deposit_rate_history.json": {
+      "body_sha256": "8d90cbdda5b4d07aeeeedb8f80c8b750cfa0aa34abe91d2f5b7f393c31e44b64",
+      "n_observations": 38,
+      "n_raw_rows": 40
+    }
+  }
+}
