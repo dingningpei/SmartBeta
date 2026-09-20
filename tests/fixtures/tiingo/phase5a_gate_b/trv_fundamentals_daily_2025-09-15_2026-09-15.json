@@ -1,0 +1,2018 @@
+[
+  {
+    "date": "2025-09-15T00:00:00.000Z",
+    "marketCap": 62600955571.8,
+    "enterpriseVal": 69975955571.8,
+    "peRatio": 11.9330834106,
+    "pbRatio": 2.12077226,
+    "trailingPEG1Y": 0.0642337669
+  },
+  {
+    "date": "2025-09-16T00:00:00.000Z",
+    "marketCap": 61615381352.7,
+    "enterpriseVal": 68990381352.7,
+    "peRatio": 11.7452118476,
+    "pbRatio": 2.0873833374,
+    "trailingPEG1Y": 0.063222486
+  },
+  {
+    "date": "2025-09-17T00:00:00.000Z",
+    "marketCap": 62313213213.579994,
+    "enterpriseVal": 69688213213.57999,
+    "peRatio": 11.878233552,
+    "pbRatio": 2.1110242297,
+    "trailingPEG1Y": 0.0639385194
+  },
+  {
+    "date": "2025-09-18T00:00:00.000Z",
+    "marketCap": 62963465629.399994,
+    "enterpriseVal": 70338465629.4,
+    "peRatio": 12.0021855946,
+    "pbRatio": 2.1330532431,
+    "trailingPEG1Y": 0.0646057322
+  },
+  {
+    "date": "2025-09-19T00:00:00.000Z",
+    "marketCap": 62759553722.0,
+    "enterpriseVal": 70134553722.0,
+    "peRatio": 11.9633156161,
+    "pbRatio": 2.1261451901,
+    "trailingPEG1Y": 0.0643965017
+  },
+  {
+    "date": "2025-09-22T00:00:00.000Z",
+    "marketCap": 62557907502.46001,
+    "enterpriseVal": 69932907502.46,
+    "peRatio": 11.9248775262,
+    "pbRatio": 2.1193138933,
+    "trailingPEG1Y": 0.064189596
+  },
+  {
+    "date": "2025-09-23T00:00:00.000Z",
+    "marketCap": 62591892820.36,
+    "enterpriseVal": 69966892820.36,
+    "peRatio": 11.931355856,
+    "pbRatio": 2.1204652355,
+    "trailingPEG1Y": 0.0642244677
+  },
+  {
+    "date": "2025-09-24T00:00:00.000Z",
+    "marketCap": 62682520334.76,
+    "enterpriseVal": 70057520334.76001,
+    "peRatio": 11.948631402,
+    "pbRatio": 2.1235354812,
+    "trailingPEG1Y": 0.0643174591
+  },
+  {
+    "date": "2025-09-25T00:00:00.000Z",
+    "marketCap": 62129692496.920006,
+    "enterpriseVal": 69504692496.92001,
+    "peRatio": 11.8432505713,
+    "pbRatio": 2.1048069821,
+    "trailingPEG1Y": 0.0637502119
+  },
+  {
+    "date": "2025-09-26T00:00:00.000Z",
+    "marketCap": 62931745999.36,
+    "enterpriseVal": 70306745999.36,
+    "peRatio": 11.9961391535,
+    "pbRatio": 2.1319786571,
+    "trailingPEG1Y": 0.0645731852
+  },
+  {
+    "date": "2025-09-29T00:00:00.000Z",
+    "marketCap": 62646269329.0,
+    "enterpriseVal": 70021269329.0,
+    "peRatio": 11.9417211836,
+    "pbRatio": 2.1223073829,
+    "trailingPEG1Y": 0.0642802625
+  },
+  {
+    "date": "2025-09-30T00:00:00.000Z",
+    "marketCap": 62861871084.020004,
+    "enterpriseVal": 71399871084.02,
+    "peRatio": 10.7017145189,
+    "pbRatio": 1.9887333065,
+    "trailingPEG1Y": 0.2050851214
+  },
+  {
+    "date": "2025-10-01T00:00:00.000Z",
+    "marketCap": 62416106078.840004,
+    "enterpriseVal": 70954106078.84,
+    "peRatio": 10.6258267073,
+    "pbRatio": 1.9746308355,
+    "trailingPEG1Y": 0.2036308254
+  },
+  {
+    "date": "2025-10-02T00:00:00.000Z",
+    "marketCap": 63046480833.64001,
+    "enterpriseVal": 71584480833.64001,
+    "peRatio": 10.7331428045,
+    "pbRatio": 1.9945737237,
+    "trailingPEG1Y": 0.2056874057
+  },
+  {
+    "date": "2025-10-03T00:00:00.000Z",
+    "marketCap": 64064085794.96,
+    "enterpriseVal": 72602085794.95999,
+    "peRatio": 10.9063816471,
+    "pbRatio": 2.0267672433,
+    "trailingPEG1Y": 0.2090073138
+  },
+  {
+    "date": "2025-10-06T00:00:00.000Z",
+    "marketCap": 63652090865.93,
+    "enterpriseVal": 72190090865.93,
+    "peRatio": 10.8362429121,
+    "pbRatio": 2.0137331414,
+    "trailingPEG1Y": 0.2076631917
+  },
+  {
+    "date": "2025-10-07T00:00:00.000Z",
+    "marketCap": 64156390669.770004,
+    "enterpriseVal": 72694390669.77,
+    "peRatio": 10.9220957899,
+    "pbRatio": 2.029687452,
+    "trailingPEG1Y": 0.2093084559
+  },
+  {
+    "date": "2025-10-08T00:00:00.000Z",
+    "marketCap": 63658844881.159996,
+    "enterpriseVal": 72196844881.16,
+    "peRatio": 10.8373927275,
+    "pbRatio": 2.0139468152,
+    "trailingPEG1Y": 0.2076852265
+  },
+  {
+    "date": "2025-10-09T00:00:00.000Z",
+    "marketCap": 61778977308.810005,
+    "enterpriseVal": 70316977308.81,
+    "peRatio": 10.5173607948,
+    "pbRatio": 1.9544742734,
+    "trailingPEG1Y": 0.2015522104
+  },
+  {
+    "date": "2025-10-10T00:00:00.000Z",
+    "marketCap": 60813153130.92,
+    "enterpriseVal": 69351153130.92,
+    "peRatio": 10.3529372031,
+    "pbRatio": 1.9239189196,
+    "trailingPEG1Y": 0.1984012356
+  },
+  {
+    "date": "2025-10-13T00:00:00.000Z",
+    "marketCap": 60871687929.58,
+    "enterpriseVal": 69409687929.58,
+    "peRatio": 10.3629022693,
+    "pbRatio": 1.9257707593,
+    "trailingPEG1Y": 0.1985922038
+  },
+  {
+    "date": "2025-10-14T00:00:00.000Z",
+    "marketCap": 62055891933.24,
+    "enterpriseVal": 70593891933.23999,
+    "peRatio": 10.5645032232,
+    "pbRatio": 1.9632348993,
+    "trailingPEG1Y": 0.2024556367
+  },
+  {
+    "date": "2025-10-15T00:00:00.000Z",
+    "marketCap": 60662313457.45,
+    "enterpriseVal": 69200313457.45,
+    "peRatio": 10.3272579941,
+    "pbRatio": 1.9191468714,
+    "trailingPEG1Y": 0.1979091253
+  },
+  {
+    "date": "2025-10-16T00:00:00.000Z",
+    "marketCap": 58888258790.369995,
+    "enterpriseVal": 67426258790.369995,
+    "peRatio": 10.0252398349,
+    "pbRatio": 1.8630218859,
+    "trailingPEG1Y": 0.1921213209
+  },
+  {
+    "date": "2025-10-17T00:00:00.000Z",
+    "marketCap": 58987317680.409996,
+    "enterpriseVal": 67525317680.409996,
+    "peRatio": 10.0421037931,
+    "pbRatio": 1.8661557683,
+    "trailingPEG1Y": 0.1924444978
+  },
+  {
+    "date": "2025-10-20T00:00:00.000Z",
+    "marketCap": 59716751325.25,
+    "enterpriseVal": 68254751325.25,
+    "peRatio": 10.1662838484,
+    "pbRatio": 1.889232539,
+    "trailingPEG1Y": 0.1948242549
+  },
+  {
+    "date": "2025-10-21T00:00:00.000Z",
+    "marketCap": 60637548734.939995,
+    "enterpriseVal": 69175548734.94,
+    "peRatio": 10.3230420046,
+    "pbRatio": 1.9183634008,
+    "trailingPEG1Y": 0.1978283311
+  },
+  {
+    "date": "2025-10-22T00:00:00.000Z",
+    "marketCap": 60446184970.090004,
+    "enterpriseVal": 68984184970.09,
+    "peRatio": 10.2904639037,
+    "pbRatio": 1.9123093097,
+    "trailingPEG1Y": 0.1972040121
+  },
+  {
+    "date": "2025-10-23T00:00:00.000Z",
+    "marketCap": 60583516613.100006,
+    "enterpriseVal": 69121516613.1,
+    "peRatio": 10.313843482,
+    "pbRatio": 1.9166540103,
+    "trailingPEG1Y": 0.1976520528
+  },
+  {
+    "date": "2025-10-24T00:00:00.000Z",
+    "marketCap": 60761372347.49,
+    "enterpriseVal": 69299372347.48999,
+    "peRatio": 10.3441219522,
+    "pbRatio": 1.9222807538,
+    "trailingPEG1Y": 0.1982323022
+  },
+  {
+    "date": "2025-10-27T00:00:00.000Z",
+    "marketCap": 60862682575.939995,
+    "enterpriseVal": 69400682575.94,
+    "peRatio": 10.3613691821,
+    "pbRatio": 1.9254858609,
+    "trailingPEG1Y": 0.198562824
+  },
+  {
+    "date": "2025-10-28T00:00:00.000Z",
+    "marketCap": 60365136787.33,
+    "enterpriseVal": 68903136787.33,
+    "peRatio": 10.2766661197,
+    "pbRatio": 1.9097452241,
+    "trailingPEG1Y": 0.1969395946
+  },
+  {
+    "date": "2025-10-29T00:00:00.000Z",
+    "marketCap": 60315607342.310005,
+    "enterpriseVal": 68853607342.31,
+    "peRatio": 10.2682341407,
+    "pbRatio": 1.9081782828,
+    "trailingPEG1Y": 0.1967780062
+  },
+  {
+    "date": "2025-10-30T00:00:00.000Z",
+    "marketCap": 61013522249.409996,
+    "enterpriseVal": 69551522249.41,
+    "peRatio": 10.3870483911,
+    "pbRatio": 1.9302579091,
+    "trailingPEG1Y": 0.1990549343
+  },
+  {
+    "date": "2025-10-31T00:00:00.000Z",
+    "marketCap": 60475452369.42,
+    "enterpriseVal": 69013452369.42,
+    "peRatio": 10.2954464367,
+    "pbRatio": 1.9132352295,
+    "trailingPEG1Y": 0.1972994962
+  },
+  {
+    "date": "2025-11-03T00:00:00.000Z",
+    "marketCap": 60259323882.060005,
+    "enterpriseVal": 68797323882.06,
+    "peRatio": 10.2586523463,
+    "pbRatio": 1.9063976678,
+    "trailingPEG1Y": 0.1965943829
+  },
+  {
+    "date": "2025-11-04T00:00:00.000Z",
+    "marketCap": 62425111432.479996,
+    "enterpriseVal": 70963111432.48,
+    "peRatio": 10.6273597944,
+    "pbRatio": 1.9749157339,
+    "trailingPEG1Y": 0.2036602051
+  },
+  {
+    "date": "2025-11-05T00:00:00.000Z",
+    "marketCap": 62283277112.649994,
+    "enterpriseVal": 70821277112.65,
+    "peRatio": 10.6032136726,
+    "pbRatio": 1.970428584,
+    "trailingPEG1Y": 0.2031974746
+  },
+  {
+    "date": "2025-11-06T00:00:00.000Z",
+    "marketCap": 62195474914.659996,
+    "enterpriseVal": 70733474914.66,
+    "peRatio": 10.5882660733,
+    "pbRatio": 1.9676508246,
+    "trailingPEG1Y": 0.2029110223
+  },
+  {
+    "date": "2025-11-07T00:00:00.000Z",
+    "marketCap": 62994700050.21,
+    "enterpriseVal": 71532700050.20999,
+    "peRatio": 10.7243275537,
+    "pbRatio": 1.9929355579,
+    "trailingPEG1Y": 0.2055184723
+  },
+  {
+    "date": "2025-11-10T00:00:00.000Z",
+    "marketCap": 63575545359.99,
+    "enterpriseVal": 72113545359.98999,
+    "peRatio": 10.8232116718,
+    "pbRatio": 2.011311505,
+    "trailingPEG1Y": 0.2074134641
+  },
+  {
+    "date": "2025-11-11T00:00:00.000Z",
+    "marketCap": 64392781202.82,
+    "enterpriseVal": 72930781202.82,
+    "peRatio": 10.9623393263,
+    "pbRatio": 2.0371660351,
+    "trailingPEG1Y": 0.2100796735
+  },
+  {
+    "date": "2025-11-12T00:00:00.000Z",
+    "marketCap": 64417545925.33,
+    "enterpriseVal": 72955545925.33,
+    "peRatio": 10.9665553159,
+    "pbRatio": 2.0379495057,
+    "trailingPEG1Y": 0.2101604677
+  },
+  {
+    "date": "2025-11-13T00:00:00.000Z",
+    "marketCap": 64707968580.22,
+    "enterpriseVal": 73245968580.22,
+    "peRatio": 11.0159973749,
+    "pbRatio": 2.0471374792,
+    "trailingPEG1Y": 0.2111079636
+  },
+  {
+    "date": "2025-11-14T00:00:00.000Z",
+    "marketCap": 64678701180.89001,
+    "enterpriseVal": 73216701180.89001,
+    "peRatio": 11.0110148418,
+    "pbRatio": 2.0462115594,
+    "trailingPEG1Y": 0.2110124795
+  },
+  {
+    "date": "2025-11-17T00:00:00.000Z",
+    "marketCap": 64052829102.909996,
+    "enterpriseVal": 72590829102.91,
+    "peRatio": 10.9044652882,
+    "pbRatio": 2.0264111203,
+    "trailingPEG1Y": 0.2089705891
+  },
+  {
+    "date": "2025-11-18T00:00:00.000Z",
+    "marketCap": 64579642290.850006,
+    "enterpriseVal": 73117642290.85,
+    "peRatio": 10.9941508837,
+    "pbRatio": 2.043077677,
+    "trailingPEG1Y": 0.2106893026
+  },
+  {
+    "date": "2025-11-19T00:00:00.000Z",
+    "marketCap": 64268957590.270004,
+    "enterpriseVal": 72806957590.27,
+    "peRatio": 10.9412593787,
+    "pbRatio": 2.033248682,
+    "trailingPEG1Y": 0.2096757024
+  },
+  {
+    "date": "2025-11-20T00:00:00.000Z",
+    "marketCap": 64804776131.850006,
+    "enterpriseVal": 73342776131.85,
+    "peRatio": 11.0324780613,
+    "pbRatio": 2.050200137,
+    "trailingPEG1Y": 0.2114237956
+  },
+  {
+    "date": "2025-11-21T00:00:00.000Z",
+    "marketCap": 65304573258.869995,
+    "enterpriseVal": 73842573258.87,
+    "peRatio": 11.1175643954,
+    "pbRatio": 2.0660119984,
+    "trailingPEG1Y": 0.2130543699
+  },
+  {
+    "date": "2025-11-24T00:00:00.000Z",
+    "marketCap": 65477926316.439995,
+    "enterpriseVal": 74015926316.44,
+    "peRatio": 11.1470763222,
+    "pbRatio": 2.0714962927,
+    "trailingPEG1Y": 0.2136199295
+  },
+  {
+    "date": "2025-11-25T00:00:00.000Z",
+    "marketCap": 66121809101.7,
+    "enterpriseVal": 74659809101.7,
+    "peRatio": 11.25669205,
+    "pbRatio": 2.0918665286,
+    "trailingPEG1Y": 0.2157205794
+  },
+  {
+    "date": "2025-11-26T00:00:00.000Z",
+    "marketCap": 66306418851.32,
+    "enterpriseVal": 74844418851.32,
+    "peRatio": 11.2881203356,
+    "pbRatio": 2.0977069458,
+    "trailingPEG1Y": 0.2163228636
+  },
+  {
+    "date": "2025-11-28T00:00:00.000Z",
+    "marketCap": 65932696675.26,
+    "enterpriseVal": 74470696675.26001,
+    "peRatio": 11.2244972208,
+    "pbRatio": 2.0858836621,
+    "trailingPEG1Y": 0.2151036053
+  },
+  {
+    "date": "2025-12-01T00:00:00.000Z",
+    "marketCap": 65401380810.5,
+    "enterpriseVal": 73939380810.5,
+    "peRatio": 11.1340450818,
+    "pbRatio": 2.0690746563,
+    "trailingPEG1Y": 0.2133702019
+  },
+  {
+    "date": "2025-12-02T00:00:00.000Z",
+    "marketCap": 64955615805.32,
+    "enterpriseVal": 73493615805.32,
+    "peRatio": 11.0581572702,
+    "pbRatio": 2.0549721853,
+    "trailingPEG1Y": 0.2119159059
+  },
+  {
+    "date": "2025-12-03T00:00:00.000Z",
+    "marketCap": 63998796981.07,
+    "enterpriseVal": 72536796981.07,
+    "peRatio": 10.8952667656,
+    "pbRatio": 2.0247017299,
+    "trailingPEG1Y": 0.2087943108
+  },
+  {
+    "date": "2025-12-04T00:00:00.000Z",
+    "marketCap": 63679106926.850006,
+    "enterpriseVal": 72217106926.85,
+    "peRatio": 10.8408421735,
+    "pbRatio": 2.0145878366,
+    "trailingPEG1Y": 0.2077513309
+  },
+  {
+    "date": "2025-12-05T00:00:00.000Z",
+    "marketCap": 63237844598.49,
+    "enterpriseVal": 71775844598.48999,
+    "peRatio": 10.7657209054,
+    "pbRatio": 2.0006278148,
+    "trailingPEG1Y": 0.2063117247
+  },
+  {
+    "date": "2025-12-08T00:00:00.000Z",
+    "marketCap": 63008208080.67,
+    "enterpriseVal": 71546208080.67,
+    "peRatio": 10.7266271843,
+    "pbRatio": 1.9933629055,
+    "trailingPEG1Y": 0.2055625419
+  },
+  {
+    "date": "2025-12-09T00:00:00.000Z",
+    "marketCap": 62848363053.560005,
+    "enterpriseVal": 71386363053.56,
+    "peRatio": 10.6994148882,
+    "pbRatio": 1.9883059589,
+    "trailingPEG1Y": 0.2050410519
+  },
+  {
+    "date": "2025-12-10T00:00:00.000Z",
+    "marketCap": 62666004642.350006,
+    "enterpriseVal": 71204004642.35,
+    "peRatio": 10.6683698744,
+    "pbRatio": 1.9825367662,
+    "trailingPEG1Y": 0.2044461126
+  },
+  {
+    "date": "2025-12-11T00:00:00.000Z",
+    "marketCap": 63685860942.08,
+    "enterpriseVal": 72223860942.08,
+    "peRatio": 10.8419919888,
+    "pbRatio": 2.0148015104,
+    "trailingPEG1Y": 0.2077733656
+  },
+  {
+    "date": "2025-12-12T00:00:00.000Z",
+    "marketCap": 64232936175.71,
+    "enterpriseVal": 72770936175.70999,
+    "peRatio": 10.9351270303,
+    "pbRatio": 2.0321090884,
+    "trailingPEG1Y": 0.2095581835
+  },
+  {
+    "date": "2025-12-15T00:00:00.000Z",
+    "marketCap": 65421642856.189995,
+    "enterpriseVal": 73959642856.19,
+    "peRatio": 11.1374945278,
+    "pbRatio": 2.0697156777,
+    "trailingPEG1Y": 0.2134363063
+  },
+  {
+    "date": "2025-12-16T00:00:00.000Z",
+    "marketCap": 65201011692.01,
+    "enterpriseVal": 73739011692.01001,
+    "peRatio": 11.0999338938,
+    "pbRatio": 2.0627356668,
+    "trailingPEG1Y": 0.2127165032
+  },
+  {
+    "date": "2025-12-17T00:00:00.000Z",
+    "marketCap": 65574733868.07,
+    "enterpriseVal": 74112733868.07,
+    "peRatio": 11.1635570085,
+    "pbRatio": 2.0745589506,
+    "trailingPEG1Y": 0.2139357615
+  },
+  {
+    "date": "2025-12-18T00:00:00.000Z",
+    "marketCap": 66110552409.649994,
+    "enterpriseVal": 74648552409.65,
+    "peRatio": 11.2547756911,
+    "pbRatio": 2.0915104056,
+    "trailingPEG1Y": 0.2156838547
+  },
+  {
+    "date": "2025-12-19T00:00:00.000Z",
+    "marketCap": 65946204705.72,
+    "enterpriseVal": 74484204705.72,
+    "peRatio": 11.2267968515,
+    "pbRatio": 2.0863110097,
+    "trailingPEG1Y": 0.2151476749
+  },
+  {
+    "date": "2025-12-22T00:00:00.000Z",
+    "marketCap": 65658033389.24,
+    "enterpriseVal": 74196033389.23999,
+    "peRatio": 11.1777380642,
+    "pbRatio": 2.0771942608,
+    "trailingPEG1Y": 0.2142075239
+  },
+  {
+    "date": "2025-12-23T00:00:00.000Z",
+    "marketCap": 65842643138.85999,
+    "enterpriseVal": 74380643138.85999,
+    "peRatio": 11.2091663498,
+    "pbRatio": 2.0830346781,
+    "trailingPEG1Y": 0.2148098081
+  },
+  {
+    "date": "2025-12-24T00:00:00.000Z",
+    "marketCap": 66153327839.439995,
+    "enterpriseVal": 74691327839.44,
+    "peRatio": 11.2620578549,
+    "pbRatio": 2.092863673,
+    "trailingPEG1Y": 0.2158234084
+  },
+  {
+    "date": "2025-12-26T00:00:00.000Z",
+    "marketCap": 65766097632.92,
+    "enterpriseVal": 74304097632.92,
+    "peRatio": 11.1961351095,
+    "pbRatio": 2.0806130416,
+    "trailingPEG1Y": 0.2145600805
+  },
+  {
+    "date": "2025-12-29T00:00:00.000Z",
+    "marketCap": 65723322203.130005,
+    "enterpriseVal": 74261322203.13,
+    "peRatio": 11.1888529457,
+    "pbRatio": 2.0792597742,
+    "trailingPEG1Y": 0.2144205268
+  },
+  {
+    "date": "2025-12-30T00:00:00.000Z",
+    "marketCap": 65824632431.58,
+    "enterpriseVal": 74362632431.58,
+    "peRatio": 11.2061001756,
+    "pbRatio": 2.0824648813,
+    "trailingPEG1Y": 0.2147510487
+  },
+  {
+    "date": "2025-12-31T00:00:00.000Z",
+    "marketCap": 64701774735.020004,
+    "enterpriseVal": 73126774735.02,
+    "peRatio": 10.2897224451,
+    "pbRatio": 1.9669780123,
+    "trailingPEG1Y": 0.4535469893
+  },
+  {
+    "date": "2026-01-02T00:00:00.000Z",
+    "marketCap": 63615455894.229996,
+    "enterpriseVal": 72040455894.23,
+    "peRatio": 10.1169618152,
+    "pbRatio": 1.9339531797,
+    "trailingPEG1Y": 0.4459321033
+  },
+  {
+    "date": "2026-01-05T00:00:00.000Z",
+    "marketCap": 64188728875.92,
+    "enterpriseVal": 72613728875.92,
+    "peRatio": 10.2081311826,
+    "pbRatio": 1.9513810688,
+    "trailingPEG1Y": 0.4499506366
+  },
+  {
+    "date": "2026-01-06T00:00:00.000Z",
+    "marketCap": 63615455894.229996,
+    "enterpriseVal": 72040455894.23,
+    "peRatio": 10.1169618152,
+    "pbRatio": 1.9339531797,
+    "trailingPEG1Y": 0.4459321033
+  },
+  {
+    "date": "2026-01-07T00:00:00.000Z",
+    "marketCap": 63169329060.229996,
+    "enterpriseVal": 71594329060.23,
+    "peRatio": 10.0460128913,
+    "pbRatio": 1.9203906202,
+    "trailingPEG1Y": 0.4428048401
+  },
+  {
+    "date": "2026-01-08T00:00:00.000Z",
+    "marketCap": 63390161843.060005,
+    "enterpriseVal": 71815161843.06,
+    "peRatio": 10.0811326086,
+    "pbRatio": 1.9271040872,
+    "trailingPEG1Y": 0.4443528354
+  },
+  {
+    "date": "2026-01-09T00:00:00.000Z",
+    "marketCap": 62894961057.31999,
+    "enterpriseVal": 71319961057.31999,
+    "peRatio": 10.002379303,
+    "pbRatio": 1.9120496461,
+    "trailingPEG1Y": 0.4408815732
+  },
+  {
+    "date": "2026-01-12T00:00:00.000Z",
+    "marketCap": 62567057834.33,
+    "enterpriseVal": 70992057834.33,
+    "peRatio": 9.9502318439,
+    "pbRatio": 1.9020811648,
+    "trailingPEG1Y": 0.4385830347
+  },
+  {
+    "date": "2026-01-13T00:00:00.000Z",
+    "marketCap": 60494798690.399994,
+    "enterpriseVal": 68919798690.4,
+    "peRatio": 9.620674092,
+    "pbRatio": 1.8390830756,
+    "trailingPEG1Y": 0.4240568969
+  },
+  {
+    "date": "2026-01-14T00:00:00.000Z",
+    "marketCap": 60838316352.58,
+    "enterpriseVal": 69263316352.58,
+    "peRatio": 9.6753047635,
+    "pbRatio": 1.8495262465,
+    "trailingPEG1Y": 0.4264648896
+  },
+  {
+    "date": "2026-01-15T00:00:00.000Z",
+    "marketCap": 60526027568.77999,
+    "enterpriseVal": 68951027568.78,
+    "peRatio": 9.6256405167,
+    "pbRatio": 1.8400324548,
+    "trailingPEG1Y": 0.4242758053
+  },
+  {
+    "date": "2026-01-16T00:00:00.000Z",
+    "marketCap": 60097745808.14001,
+    "enterpriseVal": 68522745808.140015,
+    "peRatio": 9.5575295496,
+    "pbRatio": 1.8270123976,
+    "trailingPEG1Y": 0.4212736326
+  },
+  {
+    "date": "2026-01-20T00:00:00.000Z",
+    "marketCap": 60140127857.37,
+    "enterpriseVal": 68565127857.369995,
+    "peRatio": 9.5642696974,
+    "pbRatio": 1.8283008408,
+    "trailingPEG1Y": 0.4215707226
+  },
+  {
+    "date": "2026-01-21T00:00:00.000Z",
+    "marketCap": 60818240645.049995,
+    "enterpriseVal": 69243240645.04999,
+    "peRatio": 9.6721120619,
+    "pbRatio": 1.8489159313,
+    "trailingPEG1Y": 0.4263241627
+  },
+  {
+    "date": "2026-01-22T00:00:00.000Z",
+    "marketCap": 62118700366.16,
+    "enterpriseVal": 70543700366.16,
+    "peRatio": 9.8789281753,
+    "pbRatio": 1.8884507924,
+    "trailingPEG1Y": 0.4354401351
+  },
+  {
+    "date": "2026-01-23T00:00:00.000Z",
+    "marketCap": 61949172169.240005,
+    "enterpriseVal": 70374172169.24,
+    "peRatio": 9.8519675842,
+    "pbRatio": 1.8832970198,
+    "trailingPEG1Y": 0.4342517751
+  },
+  {
+    "date": "2026-01-26T00:00:00.000Z",
+    "marketCap": 62839195203.06999,
+    "enterpriseVal": 71264195203.06999,
+    "peRatio": 9.9935106875,
+    "pbRatio": 1.9103543261,
+    "trailingPEG1Y": 0.4404906653
+  },
+  {
+    "date": "2026-01-27T00:00:00.000Z",
+    "marketCap": 62741047299.59,
+    "enterpriseVal": 71166047299.59,
+    "peRatio": 9.9779019242,
+    "pbRatio": 1.907370563,
+    "trailingPEG1Y": 0.4398026673
+  },
+  {
+    "date": "2026-01-28T00:00:00.000Z",
+    "marketCap": 62912806130.68001,
+    "enterpriseVal": 71337806130.68001,
+    "peRatio": 10.00521726,
+    "pbRatio": 1.9125921484,
+    "trailingPEG1Y": 0.4410066637
+  },
+  {
+    "date": "2026-01-29T00:00:00.000Z",
+    "marketCap": 63414698818.93001,
+    "enterpriseVal": 71839698818.93001,
+    "peRatio": 10.0850347994,
+    "pbRatio": 1.9278500279,
+    "trailingPEG1Y": 0.4445248348
+  },
+  {
+    "date": "2026-01-30T00:00:00.000Z",
+    "marketCap": 63463772770.67,
+    "enterpriseVal": 71888772770.67,
+    "peRatio": 10.0928391811,
+    "pbRatio": 1.9293419095,
+    "trailingPEG1Y": 0.4448688338
+  },
+  {
+    "date": "2026-02-02T00:00:00.000Z",
+    "marketCap": 63713603797.71,
+    "enterpriseVal": 72138603797.70999,
+    "peRatio": 10.1325705785,
+    "pbRatio": 1.9369369428,
+    "trailingPEG1Y": 0.4466201012
+  },
+  {
+    "date": "2026-02-03T00:00:00.000Z",
+    "marketCap": 64293568681.91,
+    "enterpriseVal": 72718568681.91,
+    "peRatio": 10.2248041797,
+    "pbRatio": 1.9545682703,
+    "trailingPEG1Y": 0.4506855435
+  },
+  {
+    "date": "2026-02-04T00:00:00.000Z",
+    "marketCap": 65852781966.740005,
+    "enterpriseVal": 74277781966.74,
+    "peRatio": 10.472770669,
+    "pbRatio": 2.0019694159,
+    "trailingPEG1Y": 0.4616153285
+  },
+  {
+    "date": "2026-02-05T00:00:00.000Z",
+    "marketCap": 66988174759.270004,
+    "enterpriseVal": 75413174759.27,
+    "peRatio": 10.6533356805,
+    "pbRatio": 2.03648613,
+    "trailingPEG1Y": 0.4695742135
+  },
+  {
+    "date": "2026-02-06T00:00:00.000Z",
+    "marketCap": 67251389591.33,
+    "enterpriseVal": 75676389591.33,
+    "peRatio": 10.6951955457,
+    "pbRatio": 2.0444880401,
+    "trailingPEG1Y": 0.4714192988
+  },
+  {
+    "date": "2026-02-09T00:00:00.000Z",
+    "marketCap": 65317429765.939995,
+    "enterpriseVal": 73742429765.94,
+    "peRatio": 10.3876319602,
+    "pbRatio": 1.9856943444,
+    "trailingPEG1Y": 0.4578626126
+  },
+  {
+    "date": "2026-02-10T00:00:00.000Z",
+    "marketCap": 66608966950.37,
+    "enterpriseVal": 75033966950.37,
+    "peRatio": 10.5930290952,
+    "pbRatio": 2.0249579543,
+    "trailingPEG1Y": 0.4669160397
+  },
+  {
+    "date": "2026-02-11T00:00:00.000Z",
+    "marketCap": 66702653585.509995,
+    "enterpriseVal": 75127653585.51,
+    "peRatio": 10.6079283692,
+    "pbRatio": 2.0278060919,
+    "trailingPEG1Y": 0.467572765
+  },
+  {
+    "date": "2026-02-12T00:00:00.000Z",
+    "marketCap": 66345752118.310005,
+    "enterpriseVal": 74770752118.31,
+    "peRatio": 10.55116923,
+    "pbRatio": 2.0169560442,
+    "trailingPEG1Y": 0.4650709544
+  },
+  {
+    "date": "2026-02-13T00:00:00.000Z",
+    "marketCap": 65627487915.56999,
+    "enterpriseVal": 74052487915.56999,
+    "peRatio": 10.4369414624,
+    "pbRatio": 1.9951203233,
+    "trailingPEG1Y": 0.4600360606
+  },
+  {
+    "date": "2026-02-17T00:00:00.000Z",
+    "marketCap": 66747266268.91,
+    "enterpriseVal": 75172266268.91,
+    "peRatio": 10.6150232616,
+    "pbRatio": 2.0291623478,
+    "trailingPEG1Y": 0.4678854913
+  },
+  {
+    "date": "2026-02-18T00:00:00.000Z",
+    "marketCap": 66575507437.81999,
+    "enterpriseVal": 75000507437.81999,
+    "peRatio": 10.5877079259,
+    "pbRatio": 2.0239407624,
+    "trailingPEG1Y": 0.466681495
+  },
+  {
+    "date": "2026-02-19T00:00:00.000Z",
+    "marketCap": 66896718758.299995,
+    "enterpriseVal": 75321718758.29999,
+    "peRatio": 10.6387911511,
+    "pbRatio": 2.0337058053,
+    "trailingPEG1Y": 0.4689331245
+  },
+  {
+    "date": "2026-02-20T00:00:00.000Z",
+    "marketCap": 68018727745.810005,
+    "enterpriseVal": 76443727745.81,
+    "peRatio": 10.8172276949,
+    "pbRatio": 2.0678156425,
+    "trailingPEG1Y": 0.4767981916
+  },
+  {
+    "date": "2026-02-23T00:00:00.000Z",
+    "marketCap": 68121336917.63,
+    "enterpriseVal": 76546336917.63,
+    "peRatio": 10.8335459475,
+    "pbRatio": 2.0709350312,
+    "trailingPEG1Y": 0.4775174622
+  },
+  {
+    "date": "2026-02-24T00:00:00.000Z",
+    "marketCap": 68130259454.310005,
+    "enterpriseVal": 76555259454.31,
+    "peRatio": 10.8349649259,
+    "pbRatio": 2.0712062824,
+    "trailingPEG1Y": 0.4775800074
+  },
+  {
+    "date": "2026-02-25T00:00:00.000Z",
+    "marketCap": 67980806964.92,
+    "enterpriseVal": 76405806964.92,
+    "peRatio": 10.8111970364,
+    "pbRatio": 2.066662825,
+    "trailingPEG1Y": 0.4765323742
+  },
+  {
+    "date": "2026-02-26T00:00:00.000Z",
+    "marketCap": 68310940822.08,
+    "enterpriseVal": 76735940822.08,
+    "peRatio": 10.8636992402,
+    "pbRatio": 2.0766991191,
+    "trailingPEG1Y": 0.478846549
+  },
+  {
+    "date": "2026-02-27T00:00:00.000Z",
+    "marketCap": 68846293022.87999,
+    "enterpriseVal": 77271293022.87999,
+    "peRatio": 10.9488379489,
+    "pbRatio": 2.0929741905,
+    "trailingPEG1Y": 0.4825992649
+  },
+  {
+    "date": "2026-03-02T00:00:00.000Z",
+    "marketCap": 69299111759.39,
+    "enterpriseVal": 77724111759.39,
+    "peRatio": 11.0208511068,
+    "pbRatio": 2.1067401885,
+    "trailingPEG1Y": 0.4857734371
+  },
+  {
+    "date": "2026-03-03T00:00:00.000Z",
+    "marketCap": 69366030784.49,
+    "enterpriseVal": 77791030784.49,
+    "peRatio": 11.0314934454,
+    "pbRatio": 2.1087745724,
+    "trailingPEG1Y": 0.4862425266
+  },
+  {
+    "date": "2026-03-04T00:00:00.000Z",
+    "marketCap": 69602478006.51,
+    "enterpriseVal": 78027478006.51,
+    "peRatio": 11.0690963751,
+    "pbRatio": 2.115962729,
+    "trailingPEG1Y": 0.4878999761
+  },
+  {
+    "date": "2026-03-05T00:00:00.000Z",
+    "marketCap": 68400166188.88,
+    "enterpriseVal": 76825166188.88,
+    "peRatio": 10.8778890249,
+    "pbRatio": 2.079411631,
+    "trailingPEG1Y": 0.4794720017
+  },
+  {
+    "date": "2026-03-06T00:00:00.000Z",
+    "marketCap": 68326555261.270004,
+    "enterpriseVal": 76751555261.27,
+    "peRatio": 10.8661824525,
+    "pbRatio": 2.0771738086,
+    "trailingPEG1Y": 0.4789560032
+  },
+  {
+    "date": "2026-03-09T00:00:00.000Z",
+    "marketCap": 67630597400.229996,
+    "enterpriseVal": 76055597400.23,
+    "peRatio": 10.7555021311,
+    "pbRatio": 2.0560162157,
+    "trailingPEG1Y": 0.4740774726
+  },
+  {
+    "date": "2026-03-10T00:00:00.000Z",
+    "marketCap": 67463299837.479996,
+    "enterpriseVal": 75888299837.48,
+    "peRatio": 10.7288962846,
+    "pbRatio": 2.0509302559,
+    "trailingPEG1Y": 0.4729047489
+  },
+  {
+    "date": "2026-03-11T00:00:00.000Z",
+    "marketCap": 66785187049.799995,
+    "enterpriseVal": 75210187049.79999,
+    "peRatio": 10.6210539201,
+    "pbRatio": 2.0303151654,
+    "trailingPEG1Y": 0.4681513087
+  },
+  {
+    "date": "2026-03-12T00:00:00.000Z",
+    "marketCap": 67367382568.17,
+    "enterpriseVal": 75792382568.17,
+    "peRatio": 10.7136422659,
+    "pbRatio": 2.0480143056,
+    "trailingPEG1Y": 0.4722323873
+  },
+  {
+    "date": "2026-03-13T00:00:00.000Z",
+    "marketCap": 67474453008.33,
+    "enterpriseVal": 75899453008.33,
+    "peRatio": 10.7306700077,
+    "pbRatio": 2.0512693199,
+    "trailingPEG1Y": 0.4729829304
+  },
+  {
+    "date": "2026-03-16T00:00:00.000Z",
+    "marketCap": 67954039354.88,
+    "enterpriseVal": 76379039354.88,
+    "peRatio": 10.806940101,
+    "pbRatio": 2.0658490714,
+    "trailingPEG1Y": 0.4763447384
+  },
+  {
+    "date": "2026-03-17T00:00:00.000Z",
+    "marketCap": 68331016529.60999,
+    "enterpriseVal": 76756016529.60999,
+    "peRatio": 10.8668919417,
+    "pbRatio": 2.0773094342,
+    "trailingPEG1Y": 0.4789872759
+  },
+  {
+    "date": "2026-03-18T00:00:00.000Z",
+    "marketCap": 66751727537.25,
+    "enterpriseVal": 75176727537.25,
+    "peRatio": 10.6157327508,
+    "pbRatio": 2.0292979734,
+    "trailingPEG1Y": 0.467916764
+  },
+  {
+    "date": "2026-03-19T00:00:00.000Z",
+    "marketCap": 66214144702.27999,
+    "enterpriseVal": 74639144702.28,
+    "peRatio": 10.5302392974,
+    "pbRatio": 2.0129550891,
+    "trailingPEG1Y": 0.4641484118
+  },
+  {
+    "date": "2026-03-20T00:00:00.000Z",
+    "marketCap": 66160609482.200005,
+    "enterpriseVal": 74585609482.20001,
+    "peRatio": 10.5217254266,
+    "pbRatio": 2.011327582,
+    "trailingPEG1Y": 0.4637731402
+  },
+  {
+    "date": "2026-03-23T00:00:00.000Z",
+    "marketCap": 65919700991.84,
+    "enterpriseVal": 74344700991.84,
+    "peRatio": 10.4834130076,
+    "pbRatio": 2.0040037998,
+    "trailingPEG1Y": 0.462084418
+  },
+  {
+    "date": "2026-03-24T00:00:00.000Z",
+    "marketCap": 65359811815.17,
+    "enterpriseVal": 73784811815.17,
+    "peRatio": 10.394372108,
+    "pbRatio": 1.9869827876,
+    "trailingPEG1Y": 0.4581597026
+  },
+  {
+    "date": "2026-03-25T00:00:00.000Z",
+    "marketCap": 64819998346.02999,
+    "enterpriseVal": 73244998346.03,
+    "peRatio": 10.30852391,
+    "pbRatio": 1.9705720905,
+    "trailingPEG1Y": 0.4543757141
+  },
+  {
+    "date": "2026-03-26T00:00:00.000Z",
+    "marketCap": 64940452591.21,
+    "enterpriseVal": 73365452591.20999,
+    "peRatio": 10.3276801195,
+    "pbRatio": 1.9742339816,
+    "trailingPEG1Y": 0.4552200752
+  },
+  {
+    "date": "2026-03-27T00:00:00.000Z",
+    "marketCap": 63633300967.59,
+    "enterpriseVal": 72058300967.59,
+    "peRatio": 10.1197997722,
+    "pbRatio": 1.9344956821,
+    "trailingPEG1Y": 0.4460571938
+  },
+  {
+    "date": "2026-03-30T00:00:00.000Z",
+    "marketCap": 65094366348.939995,
+    "enterpriseVal": 73519366348.94,
+    "peRatio": 10.3521574982,
+    "pbRatio": 1.9789130647,
+    "trailingPEG1Y": 0.456298981
+  },
+  {
+    "date": "2026-03-31T00:00:00.000Z",
+    "marketCap": 63072271255.36,
+    "enterpriseVal": 71725271255.36,
+    "peRatio": 8.2946174718,
+    "pbRatio": 1.9718711704,
+    "trailingPEG1Y": 0.0232949484
+  },
+  {
+    "date": "2026-04-01T00:00:00.000Z",
+    "marketCap": 62823597668.06,
+    "enterpriseVal": 71476597668.06,
+    "peRatio": 8.261914475,
+    "pbRatio": 1.9640967194,
+    "trailingPEG1Y": 0.023203104
+  },
+  {
+    "date": "2026-04-02T00:00:00.000Z",
+    "marketCap": 63571780808.98,
+    "enterpriseVal": 72224780808.98001,
+    "peRatio": 8.3603078392,
+    "pbRatio": 1.9874876761,
+    "trailingPEG1Y": 0.023479436
+  },
+  {
+    "date": "2026-04-06T00:00:00.000Z",
+    "marketCap": 63909111936.100006,
+    "enterpriseVal": 72562111936.1,
+    "peRatio": 8.4046701652,
+    "pbRatio": 1.9980338878,
+    "trailingPEG1Y": 0.023604025
+  },
+  {
+    "date": "2026-04-07T00:00:00.000Z",
+    "marketCap": 63800992985.100006,
+    "enterpriseVal": 72453992985.1,
+    "peRatio": 8.3904514709,
+    "pbRatio": 1.9946536918,
+    "trailingPEG1Y": 0.0235640926
+  },
+  {
+    "date": "2026-04-08T00:00:00.000Z",
+    "marketCap": 65215188864.17999,
+    "enterpriseVal": 73868188864.18,
+    "peRatio": 8.5764319916,
+    "pbRatio": 2.0388666562,
+    "trailingPEG1Y": 0.024086408
+  },
+  {
+    "date": "2026-04-09T00:00:00.000Z",
+    "marketCap": 65569819023.46001,
+    "enterpriseVal": 74222819023.46,
+    "peRatio": 8.6230693087,
+    "pbRatio": 2.0499536992,
+    "trailingPEG1Y": 0.0242173862
+  },
+  {
+    "date": "2026-04-10T00:00:00.000Z",
+    "marketCap": 64278878748.52,
+    "enterpriseVal": 72931878748.51999,
+    "peRatio": 8.4532980995,
+    "pbRatio": 2.0095941583,
+    "trailingPEG1Y": 0.0237405937
+  },
+  {
+    "date": "2026-04-13T00:00:00.000Z",
+    "marketCap": 65154642251.62,
+    "enterpriseVal": 73807642251.62,
+    "peRatio": 8.5684695228,
+    "pbRatio": 2.0369737464,
+    "trailingPEG1Y": 0.0240640459
+  },
+  {
+    "date": "2026-04-14T00:00:00.000Z",
+    "marketCap": 64782713060.17999,
+    "enterpriseVal": 73435713060.18,
+    "peRatio": 8.5195572146,
+    "pbRatio": 2.0253458719,
+    "trailingPEG1Y": 0.0239266785
+  },
+  {
+    "date": "2026-04-15T00:00:00.000Z",
+    "marketCap": 64726491205.659996,
+    "enterpriseVal": 73379491205.66,
+    "peRatio": 8.5121634936,
+    "pbRatio": 2.02358817,
+    "trailingPEG1Y": 0.0239059137
+  },
+  {
+    "date": "2026-04-16T00:00:00.000Z",
+    "marketCap": 64620534633.67999,
+    "enterpriseVal": 73273534633.68,
+    "peRatio": 8.4982291733,
+    "pbRatio": 2.0202755779,
+    "trailingPEG1Y": 0.02386678
+  },
+  {
+    "date": "2026-04-17T00:00:00.000Z",
+    "marketCap": 65046523300.62,
+    "enterpriseVal": 73699523300.62,
+    "peRatio": 8.5542508286,
+    "pbRatio": 2.0335935503,
+    "trailingPEG1Y": 0.0240241135
+  },
+  {
+    "date": "2026-04-20T00:00:00.000Z",
+    "marketCap": 65040036163.56,
+    "enterpriseVal": 73693036163.56,
+    "peRatio": 8.5533977069,
+    "pbRatio": 2.0333907386,
+    "trailingPEG1Y": 0.0240217176
+  },
+  {
+    "date": "2026-04-21T00:00:00.000Z",
+    "marketCap": 65178428420.840004,
+    "enterpriseVal": 73831428420.84,
+    "peRatio": 8.5715976356,
+    "pbRatio": 2.0377173895,
+    "trailingPEG1Y": 0.024072831
+  },
+  {
+    "date": "2026-04-22T00:00:00.000Z",
+    "marketCap": 65234650275.36,
+    "enterpriseVal": 73887650275.36,
+    "peRatio": 8.5789913566,
+    "pbRatio": 2.0394750915,
+    "trailingPEG1Y": 0.0240935959
+  },
+  {
+    "date": "2026-04-23T00:00:00.000Z",
+    "marketCap": 66456394421.659996,
+    "enterpriseVal": 75109394421.66,
+    "peRatio": 8.7396626015,
+    "pbRatio": 2.0776713069,
+    "trailingPEG1Y": 0.0245448317
+  },
+  {
+    "date": "2026-04-24T00:00:00.000Z",
+    "marketCap": 65461700072.46001,
+    "enterpriseVal": 74114700072.46,
+    "peRatio": 8.6088506145,
+    "pbRatio": 2.0465735032,
+    "trailingPEG1Y": 0.0241774538
+  },
+  {
+    "date": "2026-04-27T00:00:00.000Z",
+    "marketCap": 65680100353.48,
+    "enterpriseVal": 74333100353.48001,
+    "peRatio": 8.6375723768,
+    "pbRatio": 2.0534014992,
+    "trailingPEG1Y": 0.0242581172
+  },
+  {
+    "date": "2026-04-28T00:00:00.000Z",
+    "marketCap": 67038074378.03999,
+    "enterpriseVal": 75691074378.04,
+    "peRatio": 8.8161591765,
+    "pbRatio": 2.0958567616,
+    "trailingPEG1Y": 0.0247596678
+  },
+  {
+    "date": "2026-04-29T00:00:00.000Z",
+    "marketCap": 65357905879.5,
+    "enterpriseVal": 74010905879.5,
+    "peRatio": 8.595200668,
+    "pbRatio": 2.043328515,
+    "trailingPEG1Y": 0.0241391188
+  },
+  {
+    "date": "2026-04-30T00:00:00.000Z",
+    "marketCap": 65982833416.28,
+    "enterpriseVal": 74635833416.28,
+    "peRatio": 8.6773847207,
+    "pbRatio": 2.0628660482,
+    "trailingPEG1Y": 0.0243699279
+  },
+  {
+    "date": "2026-05-01T00:00:00.000Z",
+    "marketCap": 65892013497.44,
+    "enterpriseVal": 74545013497.44,
+    "peRatio": 8.6654410175,
+    "pbRatio": 2.0600266835,
+    "trailingPEG1Y": 0.0243363847
+  },
+  {
+    "date": "2026-05-04T00:00:00.000Z",
+    "marketCap": 65202214590.06,
+    "enterpriseVal": 73855214590.06,
+    "peRatio": 8.5747257483,
+    "pbRatio": 2.0384610326,
+    "trailingPEG1Y": 0.0240816161
+  },
+  {
+    "date": "2026-05-05T00:00:00.000Z",
+    "marketCap": 65163291767.700005,
+    "enterpriseVal": 73816291767.70001,
+    "peRatio": 8.5696070184,
+    "pbRatio": 2.0372441621,
+    "trailingPEG1Y": 0.0240672405
+  },
+  {
+    "date": "2026-05-06T00:00:00.000Z",
+    "marketCap": 65215188864.17999,
+    "enterpriseVal": 73868188864.18,
+    "peRatio": 8.5764319916,
+    "pbRatio": 2.0388666562,
+    "trailingPEG1Y": 0.024086408
+  },
+  {
+    "date": "2026-05-07T00:00:00.000Z",
+    "marketCap": 64642158423.88,
+    "enterpriseVal": 73295158423.88,
+    "peRatio": 8.5010729121,
+    "pbRatio": 2.0209516171,
+    "trailingPEG1Y": 0.0238747665
+  },
+  {
+    "date": "2026-05-08T00:00:00.000Z",
+    "marketCap": 64447544312.08,
+    "enterpriseVal": 73100544312.08,
+    "peRatio": 8.4754792625,
+    "pbRatio": 2.0148672642,
+    "trailingPEG1Y": 0.0238028882
+  },
+  {
+    "date": "2026-05-11T00:00:00.000Z",
+    "marketCap": 64250767821.26,
+    "enterpriseVal": 72903767821.26001,
+    "peRatio": 8.449601239,
+    "pbRatio": 2.0087153074,
+    "trailingPEG1Y": 0.0237302113
+  },
+  {
+    "date": "2026-05-12T00:00:00.000Z",
+    "marketCap": 64495116650.52,
+    "enterpriseVal": 73148116650.51999,
+    "peRatio": 8.481735488,
+    "pbRatio": 2.0163545504,
+    "trailingPEG1Y": 0.0238204584
+  },
+  {
+    "date": "2026-05-13T00:00:00.000Z",
+    "marketCap": 63794505848.03999,
+    "enterpriseVal": 72447505848.04,
+    "peRatio": 8.3895983493,
+    "pbRatio": 1.99445088,
+    "trailingPEG1Y": 0.0235616967
+  },
+  {
+    "date": "2026-05-14T00:00:00.000Z",
+    "marketCap": 64501603787.58,
+    "enterpriseVal": 73154603787.58,
+    "peRatio": 8.4825886096,
+    "pbRatio": 2.0165573622,
+    "trailingPEG1Y": 0.0238228544
+  },
+  {
+    "date": "2026-05-15T00:00:00.000Z",
+    "marketCap": 64819473503.52,
+    "enterpriseVal": 73472473503.51999,
+    "peRatio": 8.5243915707,
+    "pbRatio": 2.0264951386,
+    "trailingPEG1Y": 0.0239402555
+  },
+  {
+    "date": "2026-05-18T00:00:00.000Z",
+    "marketCap": 66166635632.98,
+    "enterpriseVal": 74819635632.98001,
+    "peRatio": 8.7015565009,
+    "pbRatio": 2.0686123814,
+    "trailingPEG1Y": 0.0244378129
+  },
+  {
+    "date": "2026-05-19T00:00:00.000Z",
+    "marketCap": 66065003819.03999,
+    "enterpriseVal": 74718003819.04,
+    "peRatio": 8.6881909283,
+    "pbRatio": 2.0654349972,
+    "trailingPEG1Y": 0.0244002765
+  },
+  {
+    "date": "2026-05-20T00:00:00.000Z",
+    "marketCap": 66376386397.92,
+    "enterpriseVal": 75029386397.92,
+    "peRatio": 8.7291407677,
+    "pbRatio": 2.0751699618,
+    "trailingPEG1Y": 0.0245152817
+  },
+  {
+    "date": "2026-05-21T00:00:00.000Z",
+    "marketCap": 66434770631.46001,
+    "enterpriseVal": 75087770631.46,
+    "peRatio": 8.7368188626,
+    "pbRatio": 2.0769952677,
+    "trailingPEG1Y": 0.0245368452
+  },
+  {
+    "date": "2026-05-22T00:00:00.000Z",
+    "marketCap": 66268267446.92,
+    "enterpriseVal": 74921267446.92,
+    "peRatio": 8.7149220735,
+    "pbRatio": 2.0717897657,
+    "trailingPEG1Y": 0.0244753493
+  },
+  {
+    "date": "2026-05-26T00:00:00.000Z",
+    "marketCap": 65917962045.67999,
+    "enterpriseVal": 74570962045.68,
+    "peRatio": 8.6688535042,
+    "pbRatio": 2.0608379305,
+    "trailingPEG1Y": 0.0243459684
+  },
+  {
+    "date": "2026-05-27T00:00:00.000Z",
+    "marketCap": 64858396325.88,
+    "enterpriseVal": 73511396325.88,
+    "peRatio": 8.5295103006,
+    "pbRatio": 2.0277120092,
+    "trailingPEG1Y": 0.0239546312
+  },
+  {
+    "date": "2026-05-28T00:00:00.000Z",
+    "marketCap": 63640976937.62,
+    "enterpriseVal": 72293976937.62,
+    "peRatio": 8.3694078035,
+    "pbRatio": 1.9896510016,
+    "trailingPEG1Y": 0.0235049927
+  },
+  {
+    "date": "2026-05-29T00:00:00.000Z",
+    "marketCap": 63117681214.78,
+    "enterpriseVal": 71770681214.78,
+    "peRatio": 8.3005893234,
+    "pbRatio": 1.9732908527,
+    "trailingPEG1Y": 0.02331172
+  },
+  {
+    "date": "2026-06-01T00:00:00.000Z",
+    "marketCap": 62477617024.86,
+    "enterpriseVal": 71130617024.86,
+    "peRatio": 8.2164146535,
+    "pbRatio": 1.9532800921,
+    "trailingPEG1Y": 0.0230753204
+  },
+  {
+    "date": "2026-06-02T00:00:00.000Z",
+    "marketCap": 63111194077.72,
+    "enterpriseVal": 71764194077.72,
+    "peRatio": 8.2997362017,
+    "pbRatio": 1.9730880409,
+    "trailingPEG1Y": 0.0233093241
+  },
+  {
+    "date": "2026-06-03T00:00:00.000Z",
+    "marketCap": 62698179684.899994,
+    "enterpriseVal": 71351179684.9,
+    "peRatio": 8.2454207897,
+    "pbRatio": 1.960175692,
+    "trailingPEG1Y": 0.0231567824
+  },
+  {
+    "date": "2026-06-04T00:00:00.000Z",
+    "marketCap": 63450687583.86,
+    "enterpriseVal": 72103687583.86,
+    "peRatio": 8.3443829016,
+    "pbRatio": 1.9837018566,
+    "trailingPEG1Y": 0.0234347117
+  },
+  {
+    "date": "2026-06-05T00:00:00.000Z",
+    "marketCap": 65574143781.5,
+    "enterpriseVal": 74227143781.5,
+    "peRatio": 8.6236380565,
+    "pbRatio": 2.0500889071,
+    "trailingPEG1Y": 0.0242189835
+  },
+  {
+    "date": "2026-06-08T00:00:00.000Z",
+    "marketCap": 64164272660.46001,
+    "enterpriseVal": 72817272660.46,
+    "peRatio": 8.4382262836,
+    "pbRatio": 2.0060111505,
+    "trailingPEG1Y": 0.0236982654
+  },
+  {
+    "date": "2026-06-09T00:00:00.000Z",
+    "marketCap": 64925430075.5,
+    "enterpriseVal": 73578430075.5,
+    "peRatio": 8.538325891,
+    "pbRatio": 2.0298077307,
+    "trailingPEG1Y": 0.0239793893
+  },
+  {
+    "date": "2026-06-10T00:00:00.000Z",
+    "marketCap": 65597929950.72,
+    "enterpriseVal": 74250929950.72,
+    "peRatio": 8.6267661692,
+    "pbRatio": 2.0508325502,
+    "trailingPEG1Y": 0.0242277686
+  },
+  {
+    "date": "2026-06-11T00:00:00.000Z",
+    "marketCap": 65714698417.799995,
+    "enterpriseVal": 74367698417.79999,
+    "peRatio": 8.642122359,
+    "pbRatio": 2.0544831619,
+    "trailingPEG1Y": 0.0242708956
+  },
+  {
+    "date": "2026-06-12T00:00:00.000Z",
+    "marketCap": 65835791642.92,
+    "enterpriseVal": 74488791642.92,
+    "peRatio": 8.6580472965,
+    "pbRatio": 2.0582689815,
+    "trailingPEG1Y": 0.0243156198
+  },
+  {
+    "date": "2026-06-15T00:00:00.000Z",
+    "marketCap": 66270429825.94,
+    "enterpriseVal": 74923429825.94,
+    "peRatio": 8.7152064474,
+    "pbRatio": 2.0718573697,
+    "trailingPEG1Y": 0.024476148
+  },
+  {
+    "date": "2026-06-16T00:00:00.000Z",
+    "marketCap": 66495317244.02,
+    "enterpriseVal": 75148317244.01999,
+    "peRatio": 8.7447813314,
+    "pbRatio": 2.0788881775,
+    "trailingPEG1Y": 0.0245592073
+  },
+  {
+    "date": "2026-06-17T00:00:00.000Z",
+    "marketCap": 66183934665.14,
+    "enterpriseVal": 74836934665.14,
+    "peRatio": 8.703831492,
+    "pbRatio": 2.0691532128,
+    "trailingPEG1Y": 0.0244442021
+  },
+  {
+    "date": "2026-06-18T00:00:00.000Z",
+    "marketCap": 66560188614.62,
+    "enterpriseVal": 75213188614.62,
+    "peRatio": 8.753312548,
+    "pbRatio": 2.0809162951,
+    "trailingPEG1Y": 0.0245831667
+  },
+  {
+    "date": "2026-06-22T00:00:00.000Z",
+    "marketCap": 67165654740.22,
+    "enterpriseVal": 75818654740.22,
+    "peRatio": 8.8329372357,
+    "pbRatio": 2.099845393,
+    "trailingPEG1Y": 0.024806788
+  },
+  {
+    "date": "2026-06-23T00:00:00.000Z",
+    "marketCap": 68538765417.92,
+    "enterpriseVal": 77191765417.92,
+    "peRatio": 9.0135146525,
+    "pbRatio": 2.1427738829,
+    "trailingPEG1Y": 0.0253139291
+  },
+  {
+    "date": "2026-06-24T00:00:00.000Z",
+    "marketCap": 69356144687.48,
+    "enterpriseVal": 78009144687.48,
+    "peRatio": 9.121007981,
+    "pbRatio": 2.1683281651,
+    "trailingPEG1Y": 0.0256158179
+  },
+  {
+    "date": "2026-06-25T00:00:00.000Z",
+    "marketCap": 68826361827.58,
+    "enterpriseVal": 77479361827.58,
+    "peRatio": 9.0513363792,
+    "pbRatio": 2.1517652044,
+    "trailingPEG1Y": 0.0254201492
+  },
+  {
+    "date": "2026-06-26T00:00:00.000Z",
+    "marketCap": 70789801977.74,
+    "enterpriseVal": 79442801977.74,
+    "peRatio": 9.3095478666,
+    "pbRatio": 2.2131495647,
+    "trailingPEG1Y": 0.0261453211
+  },
+  {
+    "date": "2026-06-29T00:00:00.000Z",
+    "marketCap": 71765034915.76,
+    "enterpriseVal": 80418034915.76,
+    "peRatio": 9.4378004887,
+    "pbRatio": 2.2436389332,
+    "trailingPEG1Y": 0.0265055111
+  },
+  {
+    "date": "2026-06-30T00:00:00.000Z",
+    "marketCap": 70198266053.16,
+    "enterpriseVal": 78645266053.16,
+    "peRatio": 8.4545665486,
+    "pbRatio": 2.1194488709,
+    "trailingPEG1Y": 0.1482904133
+  },
+  {
+    "date": "2026-07-01T00:00:00.000Z",
+    "marketCap": 71155167171.66,
+    "enterpriseVal": 79602167171.66,
+    "peRatio": 8.5698141842,
+    "pbRatio": 2.1483399406,
+    "trailingPEG1Y": 0.1503118202
+  },
+  {
+    "date": "2026-07-02T00:00:00.000Z",
+    "marketCap": 72790404860.83,
+    "enterpriseVal": 81237404860.83,
+    "peRatio": 8.7667595882,
+    "pbRatio": 2.1977115685,
+    "trailingPEG1Y": 0.1537661801
+  },
+  {
+    "date": "2026-07-06T00:00:00.000Z",
+    "marketCap": 72122700524.81,
+    "enterpriseVal": 80569700524.81,
+    "peRatio": 8.6863423491,
+    "pbRatio": 2.1775520221,
+    "trailingPEG1Y": 0.1523556872
+  },
+  {
+    "date": "2026-07-07T00:00:00.000Z",
+    "marketCap": 73092360324.89,
+    "enterpriseVal": 81539360324.89,
+    "peRatio": 8.8031266199,
+    "pbRatio": 2.2068283061,
+    "trailingPEG1Y": 0.1544040463
+  },
+  {
+    "date": "2026-07-08T00:00:00.000Z",
+    "marketCap": 71861147552.42,
+    "enterpriseVal": 80308147552.42,
+    "peRatio": 8.6548413287,
+    "pbRatio": 2.1696551297,
+    "trailingPEG1Y": 0.1518031693
+  },
+  {
+    "date": "2026-07-09T00:00:00.000Z",
+    "marketCap": 71763330993.64,
+    "enterpriseVal": 80210330993.64,
+    "peRatio": 8.6430604593,
+    "pbRatio": 2.1667018204,
+    "trailingPEG1Y": 0.1515965366
+  },
+  {
+    "date": "2026-07-10T00:00:00.000Z",
+    "marketCap": 72069539351.56,
+    "enterpriseVal": 80516539351.56,
+    "peRatio": 8.6799397027,
+    "pbRatio": 2.1759469627,
+    "trailingPEG1Y": 0.1522433868
+  },
+  {
+    "date": "2026-07-13T00:00:00.000Z",
+    "marketCap": 72620289106.43,
+    "enterpriseVal": 81067289106.43,
+    "peRatio": 8.7462711196,
+    "pbRatio": 2.1925753784,
+    "trailingPEG1Y": 0.1534068188
+  },
+  {
+    "date": "2026-07-14T00:00:00.000Z",
+    "marketCap": 71625111943.19,
+    "enterpriseVal": 80072111943.19,
+    "peRatio": 8.6264135786,
+    "pbRatio": 2.1625286659,
+    "trailingPEG1Y": 0.1513045556
+  },
+  {
+    "date": "2026-07-15T00:00:00.000Z",
+    "marketCap": 70000506488.67,
+    "enterpriseVal": 78447506488.67,
+    "peRatio": 8.4307487039,
+    "pbRatio": 2.1134780498,
+    "trailingPEG1Y": 0.1478726558
+  },
+  {
+    "date": "2026-07-16T00:00:00.000Z",
+    "marketCap": 71835630189.26,
+    "enterpriseVal": 80282630189.26,
+    "peRatio": 8.6517680584,
+    "pbRatio": 2.1688847012,
+    "trailingPEG1Y": 0.1517492652
+  },
+  {
+    "date": "2026-07-17T00:00:00.000Z",
+    "marketCap": 78461638823.14,
+    "enterpriseVal": 86908638823.14,
+    "peRatio": 9.4497939086,
+    "pbRatio": 2.3689393081,
+    "trailingPEG1Y": 0.1657463852
+  },
+  {
+    "date": "2026-07-20T00:00:00.000Z",
+    "marketCap": 78359569370.5,
+    "enterpriseVal": 86806569370.5,
+    "peRatio": 9.4375008275,
+    "pbRatio": 2.365857594,
+    "trailingPEG1Y": 0.1655307685
+  },
+  {
+    "date": "2026-07-21T00:00:00.000Z",
+    "marketCap": 78599857873.59,
+    "enterpriseVal": 87046857873.59,
+    "peRatio": 9.4664407893,
+    "pbRatio": 2.3731124626,
+    "trailingPEG1Y": 0.1660383662
+  },
+  {
+    "date": "2026-07-22T00:00:00.000Z",
+    "marketCap": 79120837371.44,
+    "enterpriseVal": 87567837371.44,
+    "peRatio": 9.5291867242,
+    "pbRatio": 2.388842045,
+    "trailingPEG1Y": 0.16713891
+  },
+  {
+    "date": "2026-07-23T00:00:00.000Z",
+    "marketCap": 80033083104.41,
+    "enterpriseVal": 88480083104.41,
+    "peRatio": 9.6390561369,
+    "pbRatio": 2.4163848647,
+    "trailingPEG1Y": 0.1690659846
+  },
+  {
+    "date": "2026-07-24T00:00:00.000Z",
+    "marketCap": 82348783811.18,
+    "enterpriseVal": 90795783811.18,
+    "peRatio": 9.9179554151,
+    "pbRatio": 2.4863012533,
+    "trailingPEG1Y": 0.1739577894
+  },
+  {
+    "date": "2026-07-27T00:00:00.000Z",
+    "marketCap": 83005855912.55,
+    "enterpriseVal": 91452855912.55,
+    "peRatio": 9.9970921248,
+    "pbRatio": 2.5061397878,
+    "trailingPEG1Y": 0.1753458222
+  },
+  {
+    "date": "2026-07-28T00:00:00.000Z",
+    "marketCap": 84466724953.46,
+    "enterpriseVal": 92913724953.46,
+    "peRatio": 10.1730368485,
+    "pbRatio": 2.5502468209,
+    "trailingPEG1Y": 0.1784318368
+  },
+  {
+    "date": "2026-07-29T00:00:00.000Z",
+    "marketCap": 82720912023.93,
+    "enterpriseVal": 91167912023.93,
+    "peRatio": 9.96277394,
+    "pbRatio": 2.4975366693,
+    "trailingPEG1Y": 0.1747438921
+  },
+  {
+    "date": "2026-07-30T00:00:00.000Z",
+    "marketCap": 79952278121.07,
+    "enterpriseVal": 88399278121.07,
+    "peRatio": 9.6293241143,
+    "pbRatio": 2.4139451744,
+    "trailingPEG1Y": 0.168895288
+  },
+  {
+    "date": "2026-07-31T00:00:00.000Z",
+    "marketCap": 79605667271.48,
+    "enterpriseVal": 88052667271.48,
+    "peRatio": 9.5875788596,
+    "pbRatio": 2.4034801869,
+    "trailingPEG1Y": 0.1681630895
+  },
+  {
+    "date": "2026-08-03T00:00:00.000Z",
+    "marketCap": 79490839137.26,
+    "enterpriseVal": 87937839137.26,
+    "peRatio": 9.5737491434,
+    "pbRatio": 2.4000132586,
+    "trailingPEG1Y": 0.1679205207
+  },
+  {
+    "date": "2026-08-04T00:00:00.000Z",
+    "marketCap": 80198945964.95,
+    "enterpriseVal": 88645945964.95,
+    "peRatio": 9.6590323937,
+    "pbRatio": 2.4213926501,
+    "trailingPEG1Y": 0.1694163618
+  },
+  {
+    "date": "2026-08-05T00:00:00.000Z",
+    "marketCap": 81325962837.84999,
+    "enterpriseVal": 89772962837.84999,
+    "peRatio": 9.7947684979,
+    "pbRatio": 2.45541991,
+    "trailingPEG1Y": 0.17179713
+  },
+  {
+    "date": "2026-08-06T00:00:00.000Z",
+    "marketCap": 82080851498.0,
+    "enterpriseVal": 90527851498.0,
+    "peRatio": 9.8856860771,
+    "pbRatio": 2.4782117538,
+    "trailingPEG1Y": 0.1733917955
+  },
+  {
+    "date": "2026-08-07T00:00:00.000Z",
+    "marketCap": 81721481966.83,
+    "enterpriseVal": 90168481966.83,
+    "peRatio": 9.8424041873,
+    "pbRatio": 2.4673615521,
+    "trailingPEG1Y": 0.1726326449
+  },
+  {
+    "date": "2026-08-10T00:00:00.000Z",
+    "marketCap": 79873599584.66,
+    "enterpriseVal": 88320599584.66,
+    "peRatio": 9.6198481976,
+    "pbRatio": 2.4115696864,
+    "trailingPEG1Y": 0.1687290835
+  },
+  {
+    "date": "2026-08-11T00:00:00.000Z",
+    "marketCap": 79871473137.73,
+    "enterpriseVal": 88318473137.73,
+    "peRatio": 9.6195920917,
+    "pbRatio": 2.4115054841,
+    "trailingPEG1Y": 0.1687245915
+  },
+  {
+    "date": "2026-08-12T00:00:00.000Z",
+    "marketCap": 78712559560.88,
+    "enterpriseVal": 87159559560.88,
+    "peRatio": 9.4800143997,
+    "pbRatio": 2.3765151886,
+    "trailingPEG1Y": 0.166276443
+  },
+  {
+    "date": "2026-08-13T00:00:00.000Z",
+    "marketCap": 78678536410.0,
+    "enterpriseVal": 87125536410.0,
+    "peRatio": 9.475916706,
+    "pbRatio": 2.3754879505,
+    "trailingPEG1Y": 0.1662045708
+  },
+  {
+    "date": "2026-08-14T00:00:00.000Z",
+    "marketCap": 78755088499.48,
+    "enterpriseVal": 87202088499.48,
+    "peRatio": 9.4851365169,
+    "pbRatio": 2.3777992361,
+    "trailingPEG1Y": 0.1663662834
+  },
+  {
+    "date": "2026-08-17T00:00:00.000Z",
+    "marketCap": 77511117045.43,
+    "enterpriseVal": 85958117045.43,
+    "peRatio": 9.3353145906,
+    "pbRatio": 2.3402408455,
+    "trailingPEG1Y": 0.1637384543
+  },
+  {
+    "date": "2026-08-18T00:00:00.000Z",
+    "marketCap": 78238361895.49,
+    "enterpriseVal": 86685361895.49,
+    "peRatio": 9.4229027936,
+    "pbRatio": 2.3621980585,
+    "trailingPEG1Y": 0.1652747236
+  },
+  {
+    "date": "2026-08-19T00:00:00.000Z",
+    "marketCap": 77024160698.46,
+    "enterpriseVal": 85471160698.46,
+    "peRatio": 9.2766663493,
+    "pbRatio": 2.3255385012,
+    "trailingPEG1Y": 0.1627097828
+  },
+  {
+    "date": "2026-08-20T00:00:00.000Z",
+    "marketCap": 77506864151.57,
+    "enterpriseVal": 85953864151.57,
+    "peRatio": 9.3348023788,
+    "pbRatio": 2.3401124408,
+    "trailingPEG1Y": 0.1637294703
+  },
+  {
+    "date": "2026-08-21T00:00:00.000Z",
+    "marketCap": 77313357480.94,
+    "enterpriseVal": 85760357480.94,
+    "peRatio": 9.3114967459,
+    "pbRatio": 2.3342700245,
+    "trailingPEG1Y": 0.1633206969
+  },
+  {
+    "date": "2026-08-24T00:00:00.000Z",
+    "marketCap": 78795490991.15001,
+    "enterpriseVal": 87242490991.15001,
+    "peRatio": 9.4900025281,
+    "pbRatio": 2.3790190813,
+    "trailingPEG1Y": 0.1664516316
+  },
+  {
+    "date": "2026-08-25T00:00:00.000Z",
+    "marketCap": 78606237214.38,
+    "enterpriseVal": 87053237214.38,
+    "peRatio": 9.4672091069,
+    "pbRatio": 2.3733050697,
+    "trailingPEG1Y": 0.1660518423
+  },
+  {
+    "date": "2026-08-26T00:00:00.000Z",
+    "marketCap": 78923077806.95,
+    "enterpriseVal": 87370077806.95,
+    "peRatio": 9.5053688796,
+    "pbRatio": 2.3828712239,
+    "trailingPEG1Y": 0.1667211526
+  },
+  {
+    "date": "2026-08-27T00:00:00.000Z",
+    "marketCap": 78536064465.69,
+    "enterpriseVal": 86983064465.69,
+    "peRatio": 9.4587576136,
+    "pbRatio": 2.3711863913,
+    "trailingPEG1Y": 0.1659036058
+  },
+  {
+    "date": "2026-08-28T00:00:00.000Z",
+    "marketCap": 78657271940.7,
+    "enterpriseVal": 87104271940.7,
+    "peRatio": 9.4733556474,
+    "pbRatio": 2.3748459268,
+    "trailingPEG1Y": 0.1661596506
+  },
+  {
+    "date": "2026-08-31T00:00:00.000Z",
+    "marketCap": 77813072509.49,
+    "enterpriseVal": 86260072509.49,
+    "peRatio": 9.3716816222,
+    "pbRatio": 2.3493575831,
+    "trailingPEG1Y": 0.1643763205
+  },
+  {
+    "date": "2026-09-01T00:00:00.000Z",
+    "marketCap": 77385656676.56,
+    "enterpriseVal": 85832656676.56,
+    "peRatio": 9.320204345,
+    "pbRatio": 2.3364529053,
+    "trailingPEG1Y": 0.1634734254
+  },
+  {
+    "date": "2026-09-02T00:00:00.000Z",
+    "marketCap": 77866233682.74,
+    "enterpriseVal": 86313233682.74,
+    "peRatio": 9.3780842687,
+    "pbRatio": 2.3509626425,
+    "trailingPEG1Y": 0.1644886209
+  },
+  {
+    "date": "2026-09-03T00:00:00.000Z",
+    "marketCap": 79601414377.62,
+    "enterpriseVal": 88048414377.62,
+    "peRatio": 9.5870666479,
+    "pbRatio": 2.4033517822,
+    "trailingPEG1Y": 0.1681541055
+  },
+  {
+    "date": "2026-09-04T00:00:00.000Z",
+    "marketCap": 78540317359.55,
+    "enterpriseVal": 86987317359.55,
+    "peRatio": 9.4592698253,
+    "pbRatio": 2.371314796,
+    "trailingPEG1Y": 0.1659125898
+  },
+  {
+    "date": "2026-09-08T00:00:00.000Z",
+    "marketCap": 77755658442.38,
+    "enterpriseVal": 86202658442.38,
+    "peRatio": 9.3647667641,
+    "pbRatio": 2.3476241189,
+    "trailingPEG1Y": 0.1642550361
+  },
+  {
+    "date": "2026-09-09T00:00:00.000Z",
+    "marketCap": 78008705627.05,
+    "enterpriseVal": 86455705627.05,
+    "peRatio": 9.3952433611,
+    "pbRatio": 2.3552642018,
+    "trailingPEG1Y": 0.1647895859
+  },
+  {
+    "date": "2026-09-10T00:00:00.000Z",
+    "marketCap": 78159683359.08,
+    "enterpriseVal": 86606683359.08,
+    "peRatio": 9.4134268769,
+    "pbRatio": 2.3598225705,
+    "trailingPEG1Y": 0.165108519
+  },
+  {
+    "date": "2026-09-11T00:00:00.000Z",
+    "marketCap": 79784288813.59999,
+    "enterpriseVal": 88231288813.59999,
+    "peRatio": 9.6090917516,
+    "pbRatio": 2.4088731866,
+    "trailingPEG1Y": 0.1685404188
+  },
+  {
+    "date": "2026-09-14T00:00:00.000Z",
+    "marketCap": 80390326188.65001,
+    "enterpriseVal": 88837326188.65001,
+    "peRatio": 9.6820819208,
+    "pbRatio": 2.4271708641,
+    "trailingPEG1Y": 0.1698206432
+  },
+  {
+    "date": "2026-09-15T00:00:00.000Z",
+    "marketCap": 80373314613.21,
+    "enterpriseVal": 88820314613.21,
+    "peRatio": 9.680033074,
+    "pbRatio": 2.426657245,
+    "trailingPEG1Y": 0.1697847071
+  }
+]

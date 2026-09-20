@@ -1,0 +1,29 @@
+MMM: 200 (1 rows)
+GOOGL: 400 {'detail': 'Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.'}
+AXP: 200 (1 rows)
+AMGN: 200 (1 rows)
+AMZN: 400 {'detail': 'Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.'}
+AAPL: 200 (1 rows)
+BA: 200 (1 rows)
+CAT: 200 (1 rows)
+CVX: 200 (1 rows)
+CSCO: 200 (1 rows)
+KO: 200 (1 rows)
+DIS: 200 (1 rows)
+GS: 200 (1 rows)
+HD: 200 (1 rows)
+HON: 200 (1 rows)
+IBM: 200 (1 rows)
+JNJ: 200 (1 rows)
+JPM: 200 (1 rows)
+MCD: 200 (1 rows)
+MRK: 200 (1 rows)
+MSFT: 200 (1 rows)
+NKE: 200 (1 rows)
+NVDA: 400 {'detail': 'Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.'}
+PG: 200 (1 rows)
+CRM: 200 (1 rows)
+SHW: 400 {'detail': 'Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.'}
+TRV: 200 (1 rows)
+UNH: 200 (1 rows)
+  429 hourly allocation exhausted; sleeping 1159s until 02:00:00

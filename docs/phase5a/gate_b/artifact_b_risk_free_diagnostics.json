@@ -1,0 +1,2270 @@
+[
+  {
+    "date": "2025-09-15T00:00:00.000",
+    "preceding_date": null,
+    "delta_calendar_days": null,
+    "source_date": null,
+    "raw_yield": null,
+    "staleness_business_days": null,
+    "rf": null
+  },
+  {
+    "date": "2025-09-16T00:00:00.000",
+    "preceding_date": "2025-09-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-16T00:00:00.000",
+    "raw_yield": 4.04,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110684931507
+  },
+  {
+    "date": "2025-09-17T00:00:00.000",
+    "preceding_date": "2025-09-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-17T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-09-18T00:00:00.000",
+    "preceding_date": "2025-09-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-18T00:00:00.000",
+    "raw_yield": 4.03,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110410958904
+  },
+  {
+    "date": "2025-09-19T00:00:00.000",
+    "preceding_date": "2025-09-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-19T00:00:00.000",
+    "raw_yield": 4.03,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110410958904
+  },
+  {
+    "date": "2025-09-22T00:00:00.000",
+    "preceding_date": "2025-09-19T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-09-22T00:00:00.000",
+    "raw_yield": 4.0,
+    "staleness_business_days": 0.0,
+    "rf": 0.000328767123288
+  },
+  {
+    "date": "2025-09-23T00:00:00.000",
+    "preceding_date": "2025-09-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-23T00:00:00.000",
+    "raw_yield": 4.0,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109589041096
+  },
+  {
+    "date": "2025-09-24T00:00:00.000",
+    "preceding_date": "2025-09-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-24T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-09-25T00:00:00.000",
+    "preceding_date": "2025-09-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-25T00:00:00.000",
+    "raw_yield": 4.04,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110684931507
+  },
+  {
+    "date": "2025-09-26T00:00:00.000",
+    "preceding_date": "2025-09-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-26T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-09-29T00:00:00.000",
+    "preceding_date": "2025-09-26T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-09-29T00:00:00.000",
+    "raw_yield": 4.04,
+    "staleness_business_days": 0.0,
+    "rf": 0.000332054794521
+  },
+  {
+    "date": "2025-09-30T00:00:00.000",
+    "preceding_date": "2025-09-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-09-30T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-10-01T00:00:00.000",
+    "preceding_date": "2025-09-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-01T00:00:00.000",
+    "raw_yield": 4.01,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109863013699
+  },
+  {
+    "date": "2025-10-02T00:00:00.000",
+    "preceding_date": "2025-10-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-02T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-10-03T00:00:00.000",
+    "preceding_date": "2025-10-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-03T00:00:00.000",
+    "raw_yield": 4.03,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110410958904
+  },
+  {
+    "date": "2025-10-06T00:00:00.000",
+    "preceding_date": "2025-10-03T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-10-06T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000330410958904
+  },
+  {
+    "date": "2025-10-07T00:00:00.000",
+    "preceding_date": "2025-10-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-07T00:00:00.000",
+    "raw_yield": 4.01,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109863013699
+  },
+  {
+    "date": "2025-10-08T00:00:00.000",
+    "preceding_date": "2025-10-07T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-08T00:00:00.000",
+    "raw_yield": 4.01,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109863013699
+  },
+  {
+    "date": "2025-10-09T00:00:00.000",
+    "preceding_date": "2025-10-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-09T00:00:00.000",
+    "raw_yield": 4.03,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110410958904
+  },
+  {
+    "date": "2025-10-10T00:00:00.000",
+    "preceding_date": "2025-10-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-10T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-10-13T00:00:00.000",
+    "preceding_date": "2025-10-10T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-10-10T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 1.0,
+    "rf": 0.000330410958904
+  },
+  {
+    "date": "2025-10-14T00:00:00.000",
+    "preceding_date": "2025-10-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-14T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-10-15T00:00:00.000",
+    "preceding_date": "2025-10-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-15T00:00:00.000",
+    "raw_yield": 4.03,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110410958904
+  },
+  {
+    "date": "2025-10-16T00:00:00.000",
+    "preceding_date": "2025-10-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-16T00:00:00.000",
+    "raw_yield": 4.02,
+    "staleness_business_days": 0.0,
+    "rf": 0.000110136986301
+  },
+  {
+    "date": "2025-10-17T00:00:00.000",
+    "preceding_date": "2025-10-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-17T00:00:00.000",
+    "raw_yield": 4.0,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109589041096
+  },
+  {
+    "date": "2025-10-20T00:00:00.000",
+    "preceding_date": "2025-10-17T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-10-20T00:00:00.000",
+    "raw_yield": 3.97,
+    "staleness_business_days": 0.0,
+    "rf": 0.000326301369863
+  },
+  {
+    "date": "2025-10-21T00:00:00.000",
+    "preceding_date": "2025-10-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-21T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2025-10-22T00:00:00.000",
+    "preceding_date": "2025-10-21T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-22T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2025-10-23T00:00:00.000",
+    "preceding_date": "2025-10-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-23T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2025-10-24T00:00:00.000",
+    "preceding_date": "2025-10-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-24T00:00:00.000",
+    "raw_yield": 3.93,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107671232877
+  },
+  {
+    "date": "2025-10-27T00:00:00.000",
+    "preceding_date": "2025-10-24T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-10-27T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000319726027397
+  },
+  {
+    "date": "2025-10-28T00:00:00.000",
+    "preceding_date": "2025-10-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-28T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2025-10-29T00:00:00.000",
+    "preceding_date": "2025-10-28T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-29T00:00:00.000",
+    "raw_yield": 3.93,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107671232877
+  },
+  {
+    "date": "2025-10-30T00:00:00.000",
+    "preceding_date": "2025-10-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-30T00:00:00.000",
+    "raw_yield": 3.92,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107397260274
+  },
+  {
+    "date": "2025-10-31T00:00:00.000",
+    "preceding_date": "2025-10-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-10-31T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2025-11-03T00:00:00.000",
+    "preceding_date": "2025-10-31T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-11-03T00:00:00.000",
+    "raw_yield": 3.98,
+    "staleness_business_days": 0.0,
+    "rf": 0.000327123287671
+  },
+  {
+    "date": "2025-11-04T00:00:00.000",
+    "preceding_date": "2025-11-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-04T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2025-11-05T00:00:00.000",
+    "preceding_date": "2025-11-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-05T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2025-11-06T00:00:00.000",
+    "preceding_date": "2025-11-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-06T00:00:00.000",
+    "raw_yield": 3.93,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107671232877
+  },
+  {
+    "date": "2025-11-07T00:00:00.000",
+    "preceding_date": "2025-11-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-07T00:00:00.000",
+    "raw_yield": 3.92,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107397260274
+  },
+  {
+    "date": "2025-11-10T00:00:00.000",
+    "preceding_date": "2025-11-07T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-11-10T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000324657534247
+  },
+  {
+    "date": "2025-11-11T00:00:00.000",
+    "preceding_date": "2025-11-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-10T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 1.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2025-11-12T00:00:00.000",
+    "preceding_date": "2025-11-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-12T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2025-11-13T00:00:00.000",
+    "preceding_date": "2025-11-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-13T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2025-11-14T00:00:00.000",
+    "preceding_date": "2025-11-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-14T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2025-11-17T00:00:00.000",
+    "preceding_date": "2025-11-14T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-11-17T00:00:00.000",
+    "raw_yield": 3.97,
+    "staleness_business_days": 0.0,
+    "rf": 0.000326301369863
+  },
+  {
+    "date": "2025-11-18T00:00:00.000",
+    "preceding_date": "2025-11-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-18T00:00:00.000",
+    "raw_yield": 3.94,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107945205479
+  },
+  {
+    "date": "2025-11-19T00:00:00.000",
+    "preceding_date": "2025-11-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-19T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2025-11-20T00:00:00.000",
+    "preceding_date": "2025-11-19T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-20T00:00:00.000",
+    "raw_yield": 3.94,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107945205479
+  },
+  {
+    "date": "2025-11-21T00:00:00.000",
+    "preceding_date": "2025-11-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-21T00:00:00.000",
+    "raw_yield": 3.9,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106849315068
+  },
+  {
+    "date": "2025-11-24T00:00:00.000",
+    "preceding_date": "2025-11-21T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-11-24T00:00:00.000",
+    "raw_yield": 3.91,
+    "staleness_business_days": 0.0,
+    "rf": 0.000321369863014
+  },
+  {
+    "date": "2025-11-25T00:00:00.000",
+    "preceding_date": "2025-11-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-25T00:00:00.000",
+    "raw_yield": 3.9,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106849315068
+  },
+  {
+    "date": "2025-11-26T00:00:00.000",
+    "preceding_date": "2025-11-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-11-26T00:00:00.000",
+    "raw_yield": 3.92,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107397260274
+  },
+  {
+    "date": "2025-11-28T00:00:00.000",
+    "preceding_date": "2025-11-26T00:00:00.000",
+    "delta_calendar_days": 2.0,
+    "source_date": "2025-11-28T00:00:00.000",
+    "raw_yield": 3.88,
+    "staleness_business_days": 0.0,
+    "rf": 0.000212602739726
+  },
+  {
+    "date": "2025-12-01T00:00:00.000",
+    "preceding_date": "2025-11-28T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-12-01T00:00:00.000",
+    "raw_yield": 3.81,
+    "staleness_business_days": 0.0,
+    "rf": 0.000313150684932
+  },
+  {
+    "date": "2025-12-02T00:00:00.000",
+    "preceding_date": "2025-12-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-02T00:00:00.000",
+    "raw_yield": 3.77,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103287671233
+  },
+  {
+    "date": "2025-12-03T00:00:00.000",
+    "preceding_date": "2025-12-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-03T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101917808219
+  },
+  {
+    "date": "2025-12-04T00:00:00.000",
+    "preceding_date": "2025-12-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-04T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2025-12-05T00:00:00.000",
+    "preceding_date": "2025-12-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-05T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2025-12-08T00:00:00.000",
+    "preceding_date": "2025-12-05T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-12-08T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000306575342466
+  },
+  {
+    "date": "2025-12-09T00:00:00.000",
+    "preceding_date": "2025-12-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-09T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2025-12-10T00:00:00.000",
+    "preceding_date": "2025-12-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-10T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2025-12-11T00:00:00.000",
+    "preceding_date": "2025-12-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-11T00:00:00.000",
+    "raw_yield": 3.66,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100273972603
+  },
+  {
+    "date": "2025-12-12T00:00:00.000",
+    "preceding_date": "2025-12-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-12T00:00:00.000",
+    "raw_yield": 3.63,
+    "staleness_business_days": 0.0,
+    "rf": 9.9452054795e-05
+  },
+  {
+    "date": "2025-12-15T00:00:00.000",
+    "preceding_date": "2025-12-12T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-12-15T00:00:00.000",
+    "raw_yield": 3.65,
+    "staleness_business_days": 0.0,
+    "rf": 0.0003
+  },
+  {
+    "date": "2025-12-16T00:00:00.000",
+    "preceding_date": "2025-12-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-16T00:00:00.000",
+    "raw_yield": 3.64,
+    "staleness_business_days": 0.0,
+    "rf": 9.9726027397e-05
+  },
+  {
+    "date": "2025-12-17T00:00:00.000",
+    "preceding_date": "2025-12-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-17T00:00:00.000",
+    "raw_yield": 3.64,
+    "staleness_business_days": 0.0,
+    "rf": 9.9726027397e-05
+  },
+  {
+    "date": "2025-12-18T00:00:00.000",
+    "preceding_date": "2025-12-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-18T00:00:00.000",
+    "raw_yield": 3.62,
+    "staleness_business_days": 0.0,
+    "rf": 9.9178082192e-05
+  },
+  {
+    "date": "2025-12-19T00:00:00.000",
+    "preceding_date": "2025-12-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-19T00:00:00.000",
+    "raw_yield": 3.62,
+    "staleness_business_days": 0.0,
+    "rf": 9.9178082192e-05
+  },
+  {
+    "date": "2025-12-22T00:00:00.000",
+    "preceding_date": "2025-12-19T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-12-22T00:00:00.000",
+    "raw_yield": 3.64,
+    "staleness_business_days": 0.0,
+    "rf": 0.000299178082192
+  },
+  {
+    "date": "2025-12-23T00:00:00.000",
+    "preceding_date": "2025-12-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-23T00:00:00.000",
+    "raw_yield": 3.65,
+    "staleness_business_days": 0.0,
+    "rf": 0.0001
+  },
+  {
+    "date": "2025-12-24T00:00:00.000",
+    "preceding_date": "2025-12-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-24T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2025-12-26T00:00:00.000",
+    "preceding_date": "2025-12-24T00:00:00.000",
+    "delta_calendar_days": 2.0,
+    "source_date": "2025-12-26T00:00:00.000",
+    "raw_yield": 3.64,
+    "staleness_business_days": 0.0,
+    "rf": 0.000199452054795
+  },
+  {
+    "date": "2025-12-29T00:00:00.000",
+    "preceding_date": "2025-12-26T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2025-12-29T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000302465753425
+  },
+  {
+    "date": "2025-12-30T00:00:00.000",
+    "preceding_date": "2025-12-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-30T00:00:00.000",
+    "raw_yield": 3.65,
+    "staleness_business_days": 0.0,
+    "rf": 0.0001
+  },
+  {
+    "date": "2025-12-31T00:00:00.000",
+    "preceding_date": "2025-12-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2025-12-31T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-02T00:00:00.000",
+    "preceding_date": "2025-12-31T00:00:00.000",
+    "delta_calendar_days": 2.0,
+    "source_date": "2026-01-02T00:00:00.000",
+    "raw_yield": 3.65,
+    "staleness_business_days": 0.0,
+    "rf": 0.0002
+  },
+  {
+    "date": "2026-01-05T00:00:00.000",
+    "preceding_date": "2026-01-02T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-01-05T00:00:00.000",
+    "raw_yield": 3.64,
+    "staleness_business_days": 0.0,
+    "rf": 0.000299178082192
+  },
+  {
+    "date": "2026-01-06T00:00:00.000",
+    "preceding_date": "2026-01-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-06T00:00:00.000",
+    "raw_yield": 3.63,
+    "staleness_business_days": 0.0,
+    "rf": 9.9452054795e-05
+  },
+  {
+    "date": "2026-01-07T00:00:00.000",
+    "preceding_date": "2026-01-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-07T00:00:00.000",
+    "raw_yield": 3.62,
+    "staleness_business_days": 0.0,
+    "rf": 9.9178082192e-05
+  },
+  {
+    "date": "2026-01-08T00:00:00.000",
+    "preceding_date": "2026-01-07T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-08T00:00:00.000",
+    "raw_yield": 3.62,
+    "staleness_business_days": 0.0,
+    "rf": 9.9178082192e-05
+  },
+  {
+    "date": "2026-01-09T00:00:00.000",
+    "preceding_date": "2026-01-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-09T00:00:00.000",
+    "raw_yield": 3.62,
+    "staleness_business_days": 0.0,
+    "rf": 9.9178082192e-05
+  },
+  {
+    "date": "2026-01-12T00:00:00.000",
+    "preceding_date": "2026-01-09T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-01-12T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000301643835616
+  },
+  {
+    "date": "2026-01-13T00:00:00.000",
+    "preceding_date": "2026-01-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-13T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-14T00:00:00.000",
+    "preceding_date": "2026-01-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-14T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-15T00:00:00.000",
+    "preceding_date": "2026-01-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-15T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-01-16T00:00:00.000",
+    "preceding_date": "2026-01-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-16T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-20T00:00:00.000",
+    "preceding_date": "2026-01-16T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-01-20T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000405479452055
+  },
+  {
+    "date": "2026-01-21T00:00:00.000",
+    "preceding_date": "2026-01-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-21T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-01-22T00:00:00.000",
+    "preceding_date": "2026-01-21T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-22T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-01-23T00:00:00.000",
+    "preceding_date": "2026-01-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-23T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-01-26T00:00:00.000",
+    "preceding_date": "2026-01-23T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-01-26T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000301643835616
+  },
+  {
+    "date": "2026-01-27T00:00:00.000",
+    "preceding_date": "2026-01-26T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-27T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-28T00:00:00.000",
+    "preceding_date": "2026-01-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-28T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-01-29T00:00:00.000",
+    "preceding_date": "2026-01-28T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-29T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-01-30T00:00:00.000",
+    "preceding_date": "2026-01-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-01-30T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-02-02T00:00:00.000",
+    "preceding_date": "2026-01-30T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-02-02T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000303287671233
+  },
+  {
+    "date": "2026-02-03T00:00:00.000",
+    "preceding_date": "2026-02-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-03T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-04T00:00:00.000",
+    "preceding_date": "2026-02-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-04T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-05T00:00:00.000",
+    "preceding_date": "2026-02-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-05T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-02-06T00:00:00.000",
+    "preceding_date": "2026-02-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-06T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-02-09T00:00:00.000",
+    "preceding_date": "2026-02-06T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-02-09T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000303287671233
+  },
+  {
+    "date": "2026-02-10T00:00:00.000",
+    "preceding_date": "2026-02-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-10T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-11T00:00:00.000",
+    "preceding_date": "2026-02-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-11T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-02-12T00:00:00.000",
+    "preceding_date": "2026-02-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-12T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-02-13T00:00:00.000",
+    "preceding_date": "2026-02-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-13T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-02-17T00:00:00.000",
+    "preceding_date": "2026-02-13T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-02-17T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000404383561644
+  },
+  {
+    "date": "2026-02-18T00:00:00.000",
+    "preceding_date": "2026-02-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-18T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-02-19T00:00:00.000",
+    "preceding_date": "2026-02-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-19T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-20T00:00:00.000",
+    "preceding_date": "2026-02-19T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-20T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-23T00:00:00.000",
+    "preceding_date": "2026-02-20T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-02-23T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000303287671233
+  },
+  {
+    "date": "2026-02-24T00:00:00.000",
+    "preceding_date": "2026-02-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-24T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-25T00:00:00.000",
+    "preceding_date": "2026-02-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-25T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-02-26T00:00:00.000",
+    "preceding_date": "2026-02-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-26T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-02-27T00:00:00.000",
+    "preceding_date": "2026-02-26T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-02-27T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-03-02T00:00:00.000",
+    "preceding_date": "2026-02-27T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-03-02T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000305753424658
+  },
+  {
+    "date": "2026-03-03T00:00:00.000",
+    "preceding_date": "2026-03-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-03T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-03-04T00:00:00.000",
+    "preceding_date": "2026-03-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-04T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-03-05T00:00:00.000",
+    "preceding_date": "2026-03-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-05T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-03-06T00:00:00.000",
+    "preceding_date": "2026-03-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-06T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-03-09T00:00:00.000",
+    "preceding_date": "2026-03-06T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-03-09T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304931506849
+  },
+  {
+    "date": "2026-03-10T00:00:00.000",
+    "preceding_date": "2026-03-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-10T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-03-11T00:00:00.000",
+    "preceding_date": "2026-03-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-11T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-03-12T00:00:00.000",
+    "preceding_date": "2026-03-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-12T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101917808219
+  },
+  {
+    "date": "2026-03-13T00:00:00.000",
+    "preceding_date": "2026-03-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-13T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101917808219
+  },
+  {
+    "date": "2026-03-16T00:00:00.000",
+    "preceding_date": "2026-03-13T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-03-16T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000305753424658
+  },
+  {
+    "date": "2026-03-17T00:00:00.000",
+    "preceding_date": "2026-03-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-17T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101917808219
+  },
+  {
+    "date": "2026-03-18T00:00:00.000",
+    "preceding_date": "2026-03-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-18T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2026-03-19T00:00:00.000",
+    "preceding_date": "2026-03-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-19T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2026-03-20T00:00:00.000",
+    "preceding_date": "2026-03-19T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-20T00:00:00.000",
+    "raw_yield": 3.74,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102465753425
+  },
+  {
+    "date": "2026-03-23T00:00:00.000",
+    "preceding_date": "2026-03-20T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-03-23T00:00:00.000",
+    "raw_yield": 3.74,
+    "staleness_business_days": 0.0,
+    "rf": 0.000307397260274
+  },
+  {
+    "date": "2026-03-24T00:00:00.000",
+    "preceding_date": "2026-03-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-24T00:00:00.000",
+    "raw_yield": 3.74,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102465753425
+  },
+  {
+    "date": "2026-03-25T00:00:00.000",
+    "preceding_date": "2026-03-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-25T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2026-03-26T00:00:00.000",
+    "preceding_date": "2026-03-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-26T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2026-03-27T00:00:00.000",
+    "preceding_date": "2026-03-26T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-27T00:00:00.000",
+    "raw_yield": 3.73,
+    "staleness_business_days": 0.0,
+    "rf": 0.000102191780822
+  },
+  {
+    "date": "2026-03-30T00:00:00.000",
+    "preceding_date": "2026-03-27T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-03-30T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304931506849
+  },
+  {
+    "date": "2026-03-31T00:00:00.000",
+    "preceding_date": "2026-03-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-03-31T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-04-01T00:00:00.000",
+    "preceding_date": "2026-03-31T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-01T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-04-02T00:00:00.000",
+    "preceding_date": "2026-04-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-02T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-04-06T00:00:00.000",
+    "preceding_date": "2026-04-02T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-04-06T00:00:00.000",
+    "raw_yield": 3.72,
+    "staleness_business_days": 0.0,
+    "rf": 0.000407671232877
+  },
+  {
+    "date": "2026-04-07T00:00:00.000",
+    "preceding_date": "2026-04-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-07T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-04-08T00:00:00.000",
+    "preceding_date": "2026-04-07T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-08T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-09T00:00:00.000",
+    "preceding_date": "2026-04-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-09T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-04-10T00:00:00.000",
+    "preceding_date": "2026-04-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-10T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-13T00:00:00.000",
+    "preceding_date": "2026-04-10T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-04-13T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304931506849
+  },
+  {
+    "date": "2026-04-14T00:00:00.000",
+    "preceding_date": "2026-04-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-14T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-04-15T00:00:00.000",
+    "preceding_date": "2026-04-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-15T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101643835616
+  },
+  {
+    "date": "2026-04-16T00:00:00.000",
+    "preceding_date": "2026-04-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-16T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-04-17T00:00:00.000",
+    "preceding_date": "2026-04-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-17T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-04-20T00:00:00.000",
+    "preceding_date": "2026-04-17T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-04-20T00:00:00.000",
+    "raw_yield": 3.71,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304931506849
+  },
+  {
+    "date": "2026-04-21T00:00:00.000",
+    "preceding_date": "2026-04-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-21T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-22T00:00:00.000",
+    "preceding_date": "2026-04-21T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-22T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-23T00:00:00.000",
+    "preceding_date": "2026-04-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-23T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-24T00:00:00.000",
+    "preceding_date": "2026-04-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-24T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-04-27T00:00:00.000",
+    "preceding_date": "2026-04-24T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-04-27T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000302465753425
+  },
+  {
+    "date": "2026-04-28T00:00:00.000",
+    "preceding_date": "2026-04-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-28T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-04-29T00:00:00.000",
+    "preceding_date": "2026-04-28T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-29T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-04-30T00:00:00.000",
+    "preceding_date": "2026-04-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-04-30T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-05-01T00:00:00.000",
+    "preceding_date": "2026-04-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-01T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-05-04T00:00:00.000",
+    "preceding_date": "2026-05-01T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-05-04T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304109589041
+  },
+  {
+    "date": "2026-05-05T00:00:00.000",
+    "preceding_date": "2026-05-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-05T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-06T00:00:00.000",
+    "preceding_date": "2026-05-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-06T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-07T00:00:00.000",
+    "preceding_date": "2026-05-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-07T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-08T00:00:00.000",
+    "preceding_date": "2026-05-07T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-08T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-11T00:00:00.000",
+    "preceding_date": "2026-05-08T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-05-11T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000304109589041
+  },
+  {
+    "date": "2026-05-12T00:00:00.000",
+    "preceding_date": "2026-05-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-12T00:00:00.000",
+    "raw_yield": 3.7,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101369863014
+  },
+  {
+    "date": "2026-05-13T00:00:00.000",
+    "preceding_date": "2026-05-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-13T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-14T00:00:00.000",
+    "preceding_date": "2026-05-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-14T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-15T00:00:00.000",
+    "preceding_date": "2026-05-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-15T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-18T00:00:00.000",
+    "preceding_date": "2026-05-15T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-05-18T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000302465753425
+  },
+  {
+    "date": "2026-05-19T00:00:00.000",
+    "preceding_date": "2026-05-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-19T00:00:00.000",
+    "raw_yield": 3.67,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100547945205
+  },
+  {
+    "date": "2026-05-20T00:00:00.000",
+    "preceding_date": "2026-05-19T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-20T00:00:00.000",
+    "raw_yield": 3.65,
+    "staleness_business_days": 0.0,
+    "rf": 0.0001
+  },
+  {
+    "date": "2026-05-21T00:00:00.000",
+    "preceding_date": "2026-05-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-21T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-05-22T00:00:00.000",
+    "preceding_date": "2026-05-21T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-22T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-05-26T00:00:00.000",
+    "preceding_date": "2026-05-22T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-05-26T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000403287671233
+  },
+  {
+    "date": "2026-05-27T00:00:00.000",
+    "preceding_date": "2026-05-26T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-27T00:00:00.000",
+    "raw_yield": 3.68,
+    "staleness_business_days": 0.0,
+    "rf": 0.000100821917808
+  },
+  {
+    "date": "2026-05-28T00:00:00.000",
+    "preceding_date": "2026-05-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-28T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-05-29T00:00:00.000",
+    "preceding_date": "2026-05-28T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-05-29T00:00:00.000",
+    "raw_yield": 3.69,
+    "staleness_business_days": 0.0,
+    "rf": 0.000101095890411
+  },
+  {
+    "date": "2026-06-01T00:00:00.000",
+    "preceding_date": "2026-05-29T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-06-01T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000310684931507
+  },
+  {
+    "date": "2026-06-02T00:00:00.000",
+    "preceding_date": "2026-06-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-02T00:00:00.000",
+    "raw_yield": 3.77,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103287671233
+  },
+  {
+    "date": "2026-06-03T00:00:00.000",
+    "preceding_date": "2026-06-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-03T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103561643836
+  },
+  {
+    "date": "2026-06-04T00:00:00.000",
+    "preceding_date": "2026-06-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-04T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103561643836
+  },
+  {
+    "date": "2026-06-05T00:00:00.000",
+    "preceding_date": "2026-06-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-05T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103561643836
+  },
+  {
+    "date": "2026-06-08T00:00:00.000",
+    "preceding_date": "2026-06-05T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-06-08T00:00:00.000",
+    "raw_yield": 3.8,
+    "staleness_business_days": 0.0,
+    "rf": 0.000312328767123
+  },
+  {
+    "date": "2026-06-09T00:00:00.000",
+    "preceding_date": "2026-06-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-09T00:00:00.000",
+    "raw_yield": 3.79,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103835616438
+  },
+  {
+    "date": "2026-06-10T00:00:00.000",
+    "preceding_date": "2026-06-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-10T00:00:00.000",
+    "raw_yield": 3.79,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103835616438
+  },
+  {
+    "date": "2026-06-11T00:00:00.000",
+    "preceding_date": "2026-06-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-11T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103561643836
+  },
+  {
+    "date": "2026-06-12T00:00:00.000",
+    "preceding_date": "2026-06-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-12T00:00:00.000",
+    "raw_yield": 3.78,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103561643836
+  },
+  {
+    "date": "2026-06-15T00:00:00.000",
+    "preceding_date": "2026-06-12T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-06-15T00:00:00.000",
+    "raw_yield": 3.79,
+    "staleness_business_days": 0.0,
+    "rf": 0.000311506849315
+  },
+  {
+    "date": "2026-06-16T00:00:00.000",
+    "preceding_date": "2026-06-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-16T00:00:00.000",
+    "raw_yield": 3.79,
+    "staleness_business_days": 0.0,
+    "rf": 0.000103835616438
+  },
+  {
+    "date": "2026-06-17T00:00:00.000",
+    "preceding_date": "2026-06-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-17T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-06-18T00:00:00.000",
+    "preceding_date": "2026-06-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-18T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-06-22T00:00:00.000",
+    "preceding_date": "2026-06-18T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-06-22T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000421917808219
+  },
+  {
+    "date": "2026-06-23T00:00:00.000",
+    "preceding_date": "2026-06-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-23T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-06-24T00:00:00.000",
+    "preceding_date": "2026-06-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-24T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-06-25T00:00:00.000",
+    "preceding_date": "2026-06-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-25T00:00:00.000",
+    "raw_yield": 3.84,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105205479452
+  },
+  {
+    "date": "2026-06-26T00:00:00.000",
+    "preceding_date": "2026-06-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-26T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-06-29T00:00:00.000",
+    "preceding_date": "2026-06-26T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-06-29T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.000318082191781
+  },
+  {
+    "date": "2026-06-30T00:00:00.000",
+    "preceding_date": "2026-06-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-06-30T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-07-01T00:00:00.000",
+    "preceding_date": "2026-06-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-01T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-07-02T00:00:00.000",
+    "preceding_date": "2026-07-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-02T00:00:00.000",
+    "raw_yield": 3.82,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104657534247
+  },
+  {
+    "date": "2026-07-06T00:00:00.000",
+    "preceding_date": "2026-07-02T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-07-06T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.000424109589041
+  },
+  {
+    "date": "2026-07-07T00:00:00.000",
+    "preceding_date": "2026-07-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-07T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105753424658
+  },
+  {
+    "date": "2026-07-08T00:00:00.000",
+    "preceding_date": "2026-07-07T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-08T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-07-09T00:00:00.000",
+    "preceding_date": "2026-07-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-09T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-07-10T00:00:00.000",
+    "preceding_date": "2026-07-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-10T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-07-13T00:00:00.000",
+    "preceding_date": "2026-07-10T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-07-13T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000319726027397
+  },
+  {
+    "date": "2026-07-14T00:00:00.000",
+    "preceding_date": "2026-07-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-14T00:00:00.000",
+    "raw_yield": 3.84,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105205479452
+  },
+  {
+    "date": "2026-07-15T00:00:00.000",
+    "preceding_date": "2026-07-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-15T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-07-16T00:00:00.000",
+    "preceding_date": "2026-07-15T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-16T00:00:00.000",
+    "raw_yield": 3.84,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105205479452
+  },
+  {
+    "date": "2026-07-17T00:00:00.000",
+    "preceding_date": "2026-07-16T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-17T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-07-20T00:00:00.000",
+    "preceding_date": "2026-07-17T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-07-20T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000317260273973
+  },
+  {
+    "date": "2026-07-21T00:00:00.000",
+    "preceding_date": "2026-07-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-21T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-07-22T00:00:00.000",
+    "preceding_date": "2026-07-21T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-22T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2026-07-23T00:00:00.000",
+    "preceding_date": "2026-07-22T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-23T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2026-07-24T00:00:00.000",
+    "preceding_date": "2026-07-23T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-24T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108493150685
+  },
+  {
+    "date": "2026-07-27T00:00:00.000",
+    "preceding_date": "2026-07-24T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-07-27T00:00:00.000",
+    "raw_yield": 3.96,
+    "staleness_business_days": 0.0,
+    "rf": 0.000325479452055
+  },
+  {
+    "date": "2026-07-28T00:00:00.000",
+    "preceding_date": "2026-07-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-28T00:00:00.000",
+    "raw_yield": 3.9,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106849315068
+  },
+  {
+    "date": "2026-07-29T00:00:00.000",
+    "preceding_date": "2026-07-28T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-29T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-07-30T00:00:00.000",
+    "preceding_date": "2026-07-29T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-30T00:00:00.000",
+    "raw_yield": 3.82,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104657534247
+  },
+  {
+    "date": "2026-07-31T00:00:00.000",
+    "preceding_date": "2026-07-30T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-07-31T00:00:00.000",
+    "raw_yield": 3.83,
+    "staleness_business_days": 0.0,
+    "rf": 0.000104931506849
+  },
+  {
+    "date": "2026-08-03T00:00:00.000",
+    "preceding_date": "2026-07-31T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-08-03T00:00:00.000",
+    "raw_yield": 3.91,
+    "staleness_business_days": 0.0,
+    "rf": 0.000321369863014
+  },
+  {
+    "date": "2026-08-04T00:00:00.000",
+    "preceding_date": "2026-08-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-04T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2026-08-05T00:00:00.000",
+    "preceding_date": "2026-08-04T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-05T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2026-08-06T00:00:00.000",
+    "preceding_date": "2026-08-05T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-06T00:00:00.000",
+    "raw_yield": 3.9,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106849315068
+  },
+  {
+    "date": "2026-08-07T00:00:00.000",
+    "preceding_date": "2026-08-06T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-07T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-08-10T00:00:00.000",
+    "preceding_date": "2026-08-07T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-08-10T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000319726027397
+  },
+  {
+    "date": "2026-08-11T00:00:00.000",
+    "preceding_date": "2026-08-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-11T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2026-08-12T00:00:00.000",
+    "preceding_date": "2026-08-11T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-12T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-08-13T00:00:00.000",
+    "preceding_date": "2026-08-12T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-13T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-08-14T00:00:00.000",
+    "preceding_date": "2026-08-13T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-14T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105753424658
+  },
+  {
+    "date": "2026-08-17T00:00:00.000",
+    "preceding_date": "2026-08-14T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-08-17T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.000318082191781
+  },
+  {
+    "date": "2026-08-18T00:00:00.000",
+    "preceding_date": "2026-08-17T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-18T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105753424658
+  },
+  {
+    "date": "2026-08-19T00:00:00.000",
+    "preceding_date": "2026-08-18T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-19T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105753424658
+  },
+  {
+    "date": "2026-08-20T00:00:00.000",
+    "preceding_date": "2026-08-19T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-20T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.00010602739726
+  },
+  {
+    "date": "2026-08-21T00:00:00.000",
+    "preceding_date": "2026-08-20T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-21T00:00:00.000",
+    "raw_yield": 3.88,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106301369863
+  },
+  {
+    "date": "2026-08-24T00:00:00.000",
+    "preceding_date": "2026-08-21T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-08-24T00:00:00.000",
+    "raw_yield": 3.87,
+    "staleness_business_days": 0.0,
+    "rf": 0.000318082191781
+  },
+  {
+    "date": "2026-08-25T00:00:00.000",
+    "preceding_date": "2026-08-24T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-25T00:00:00.000",
+    "raw_yield": 3.86,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105753424658
+  },
+  {
+    "date": "2026-08-26T00:00:00.000",
+    "preceding_date": "2026-08-25T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-26T00:00:00.000",
+    "raw_yield": 3.85,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105479452055
+  },
+  {
+    "date": "2026-08-27T00:00:00.000",
+    "preceding_date": "2026-08-26T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-27T00:00:00.000",
+    "raw_yield": 3.84,
+    "staleness_business_days": 0.0,
+    "rf": 0.000105205479452
+  },
+  {
+    "date": "2026-08-28T00:00:00.000",
+    "preceding_date": "2026-08-27T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-08-28T00:00:00.000",
+    "raw_yield": 3.9,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106849315068
+  },
+  {
+    "date": "2026-08-31T00:00:00.000",
+    "preceding_date": "2026-08-28T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-08-31T00:00:00.000",
+    "raw_yield": 3.91,
+    "staleness_business_days": 0.0,
+    "rf": 0.000321369863014
+  },
+  {
+    "date": "2026-09-01T00:00:00.000",
+    "preceding_date": "2026-08-31T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-01T00:00:00.000",
+    "raw_yield": 3.92,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107397260274
+  },
+  {
+    "date": "2026-09-02T00:00:00.000",
+    "preceding_date": "2026-09-01T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-02T00:00:00.000",
+    "raw_yield": 3.92,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107397260274
+  },
+  {
+    "date": "2026-09-03T00:00:00.000",
+    "preceding_date": "2026-09-02T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-03T00:00:00.000",
+    "raw_yield": 3.89,
+    "staleness_business_days": 0.0,
+    "rf": 0.000106575342466
+  },
+  {
+    "date": "2026-09-04T00:00:00.000",
+    "preceding_date": "2026-09-03T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-04T00:00:00.000",
+    "raw_yield": 3.91,
+    "staleness_business_days": 0.0,
+    "rf": 0.000107123287671
+  },
+  {
+    "date": "2026-09-08T00:00:00.000",
+    "preceding_date": "2026-09-04T00:00:00.000",
+    "delta_calendar_days": 4.0,
+    "source_date": "2026-09-08T00:00:00.000",
+    "raw_yield": 3.94,
+    "staleness_business_days": 0.0,
+    "rf": 0.000431780821918
+  },
+  {
+    "date": "2026-09-09T00:00:00.000",
+    "preceding_date": "2026-09-08T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-09T00:00:00.000",
+    "raw_yield": 3.95,
+    "staleness_business_days": 0.0,
+    "rf": 0.000108219178082
+  },
+  {
+    "date": "2026-09-10T00:00:00.000",
+    "preceding_date": "2026-09-09T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-10T00:00:00.000",
+    "raw_yield": 4.0,
+    "staleness_business_days": 0.0,
+    "rf": 0.000109589041096
+  },
+  {
+    "date": "2026-09-11T00:00:00.000",
+    "preceding_date": "2026-09-10T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-11T00:00:00.000",
+    "raw_yield": 4.07,
+    "staleness_business_days": 0.0,
+    "rf": 0.000111506849315
+  },
+  {
+    "date": "2026-09-14T00:00:00.000",
+    "preceding_date": "2026-09-11T00:00:00.000",
+    "delta_calendar_days": 3.0,
+    "source_date": "2026-09-14T00:00:00.000",
+    "raw_yield": 4.11,
+    "staleness_business_days": 0.0,
+    "rf": 0.000337808219178
+  },
+  {
+    "date": "2026-09-15T00:00:00.000",
+    "preceding_date": "2026-09-14T00:00:00.000",
+    "delta_calendar_days": 1.0,
+    "source_date": "2026-09-15T00:00:00.000",
+    "raw_yield": 4.11,
+    "staleness_business_days": 0.0,
+    "rf": 0.000112602739726
+  }
+]

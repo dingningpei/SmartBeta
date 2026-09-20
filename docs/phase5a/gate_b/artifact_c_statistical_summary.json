@@ -1,0 +1,10 @@
+{
+  "n": 251,
+  "newey_west_lags": 6,
+  "minimum_observations": 20,
+  "lag_optimality_caveat": "lag is the frozen Phase 5A diagnostic convention inherited from existing machinery, not a claim of statistical optimality",
+  "status": "RUN",
+  "mean": 0.0005790911012229473,
+  "std": 0.008171742146400943,
+  "newey_west_tstat": 1.199857003702555
+}

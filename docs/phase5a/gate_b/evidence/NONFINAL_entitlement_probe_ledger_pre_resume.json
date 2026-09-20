@@ -1,0 +1,296 @@
+{
+  "_provenance": {
+    "status": "PARTIAL_NON_FINAL",
+    "gate": "B",
+    "note": "Non-final resume ledger. NOT a frozen universe and NOT valid provenance for any artifact. It records only already-definitive candidate outcomes so a future resume can probe the remaining unresolved candidates without re-probing resolved ones.",
+    "candidate_count": 30,
+    "definitive_count": 28,
+    "unresolved": [
+      "V",
+      "WMT"
+    ],
+    "source_evidence": {
+      "path": "docs/phase5a/gate_b/evidence/p5a4_recorder_quota_block.log",
+      "sha256": "35b4d8be4a75b9a418c37e980fc9bf3efeb7f8b46fed2ab568dbb1b1c279230e",
+      "derivation": "Definitive outcomes re-read from the preserved blocker log's 'TICKER: STATUS' lines; no outcome was invented or copied from the stale universe_snapshot.json."
+    },
+    "written_at_utc": "2026-09-19T17:40:18Z"
+  },
+  "endpoint": "/tiingo/fundamentals/{ticker}/daily",
+  "probe_date": "2026-06-15",
+  "definitive_results": {
+    "MMM": {
+      "ticker": "MMM",
+      "company": "3M",
+      "endpoint": "/tiingo/fundamentals/MMM/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "GOOGL": {
+      "ticker": "GOOGL",
+      "company": "Alphabet (Class A)",
+      "endpoint": "/tiingo/fundamentals/GOOGL/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 400,
+      "accessible": false,
+      "rows_returned": 0,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "raw_body": {
+        "detail": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      }
+    },
+    "AXP": {
+      "ticker": "AXP",
+      "company": "American Express",
+      "endpoint": "/tiingo/fundamentals/AXP/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "AMGN": {
+      "ticker": "AMGN",
+      "company": "Amgen",
+      "endpoint": "/tiingo/fundamentals/AMGN/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "AMZN": {
+      "ticker": "AMZN",
+      "company": "Amazon",
+      "endpoint": "/tiingo/fundamentals/AMZN/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 400,
+      "accessible": false,
+      "rows_returned": 0,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "raw_body": {
+        "detail": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      }
+    },
+    "AAPL": {
+      "ticker": "AAPL",
+      "company": "Apple",
+      "endpoint": "/tiingo/fundamentals/AAPL/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "BA": {
+      "ticker": "BA",
+      "company": "Boeing",
+      "endpoint": "/tiingo/fundamentals/BA/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "CAT": {
+      "ticker": "CAT",
+      "company": "Caterpillar",
+      "endpoint": "/tiingo/fundamentals/CAT/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "CVX": {
+      "ticker": "CVX",
+      "company": "Chevron",
+      "endpoint": "/tiingo/fundamentals/CVX/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "CSCO": {
+      "ticker": "CSCO",
+      "company": "Cisco",
+      "endpoint": "/tiingo/fundamentals/CSCO/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "KO": {
+      "ticker": "KO",
+      "company": "Coca-Cola",
+      "endpoint": "/tiingo/fundamentals/KO/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "DIS": {
+      "ticker": "DIS",
+      "company": "Disney",
+      "endpoint": "/tiingo/fundamentals/DIS/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "GS": {
+      "ticker": "GS",
+      "company": "Goldman Sachs",
+      "endpoint": "/tiingo/fundamentals/GS/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "HD": {
+      "ticker": "HD",
+      "company": "Home Depot",
+      "endpoint": "/tiingo/fundamentals/HD/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "HON": {
+      "ticker": "HON",
+      "company": "Honeywell Technologies",
+      "endpoint": "/tiingo/fundamentals/HON/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "IBM": {
+      "ticker": "IBM",
+      "company": "IBM",
+      "endpoint": "/tiingo/fundamentals/IBM/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "JNJ": {
+      "ticker": "JNJ",
+      "company": "Johnson & Johnson",
+      "endpoint": "/tiingo/fundamentals/JNJ/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "JPM": {
+      "ticker": "JPM",
+      "company": "JPMorgan Chase",
+      "endpoint": "/tiingo/fundamentals/JPM/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "MCD": {
+      "ticker": "MCD",
+      "company": "McDonald's",
+      "endpoint": "/tiingo/fundamentals/MCD/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "MRK": {
+      "ticker": "MRK",
+      "company": "Merck",
+      "endpoint": "/tiingo/fundamentals/MRK/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "MSFT": {
+      "ticker": "MSFT",
+      "company": "Microsoft",
+      "endpoint": "/tiingo/fundamentals/MSFT/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "NKE": {
+      "ticker": "NKE",
+      "company": "Nike",
+      "endpoint": "/tiingo/fundamentals/NKE/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "NVDA": {
+      "ticker": "NVDA",
+      "company": "Nvidia",
+      "endpoint": "/tiingo/fundamentals/NVDA/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 400,
+      "accessible": false,
+      "rows_returned": 0,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "raw_body": {
+        "detail": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      }
+    },
+    "PG": {
+      "ticker": "PG",
+      "company": "Procter & Gamble",
+      "endpoint": "/tiingo/fundamentals/PG/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "CRM": {
+      "ticker": "CRM",
+      "company": "Salesforce",
+      "endpoint": "/tiingo/fundamentals/CRM/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "SHW": {
+      "ticker": "SHW",
+      "company": "Sherwin-Williams",
+      "endpoint": "/tiingo/fundamentals/SHW/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 400,
+      "accessible": false,
+      "rows_returned": 0,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service.",
+      "raw_body": {
+        "detail": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      }
+    },
+    "TRV": {
+      "ticker": "TRV",
+      "company": "Travelers",
+      "endpoint": "/tiingo/fundamentals/TRV/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    },
+    "UNH": {
+      "ticker": "UNH",
+      "company": "UnitedHealth Group",
+      "endpoint": "/tiingo/fundamentals/UNH/daily",
+      "probe_date": "2026-06-15",
+      "status_code": 200,
+      "accessible": true,
+      "rows_returned": 1
+    }
+  },
+  "unresolved": [
+    "V",
+    "WMT"
+  ],
+  "blockers": []
+}

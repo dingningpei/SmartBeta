@@ -1,0 +1,1054 @@
+{
+  "_comment": "P5A-4 (Gate B) fixture body. 'raw_csv' is the verbatim FRED DGS3MO CSV export for the Gate B window; 'observations' is the same data parsed to JSON, with holiday values as null.",
+  "raw_csv": "observation_date,DGS3MO\n2025-09-15,4.06\n2025-09-16,4.04\n2025-09-17,4.02\n2025-09-18,4.03\n2025-09-19,4.03\n2025-09-22,4.00\n2025-09-23,4.00\n2025-09-24,4.02\n2025-09-25,4.04\n2025-09-26,4.02\n2025-09-29,4.04\n2025-09-30,4.02\n2025-10-01,4.01\n2025-10-02,4.02\n2025-10-03,4.03\n2025-10-06,4.02\n2025-10-07,4.01\n2025-10-08,4.01\n2025-10-09,4.03\n2025-10-10,4.02\n2025-10-13,\n2025-10-14,4.02\n2025-10-15,4.03\n2025-10-16,4.02\n2025-10-17,4.00\n2025-10-20,3.97\n2025-10-21,3.96\n2025-10-22,3.96\n2025-10-23,3.95\n2025-10-24,3.93\n2025-10-27,3.89\n2025-10-28,3.89\n2025-10-29,3.93\n2025-10-30,3.92\n2025-10-31,3.89\n2025-11-03,3.98\n2025-11-04,3.96\n2025-11-05,3.96\n2025-11-06,3.93\n2025-11-07,3.92\n2025-11-10,3.95\n2025-11-11,\n2025-11-12,3.95\n2025-11-13,3.96\n2025-11-14,3.95\n2025-11-17,3.97\n2025-11-18,3.94\n2025-11-19,3.95\n2025-11-20,3.94\n2025-11-21,3.90\n2025-11-24,3.91\n2025-11-25,3.90\n2025-11-26,3.92\n2025-11-27,\n2025-11-28,3.88\n2025-12-01,3.81\n2025-12-02,3.77\n2025-12-03,3.72\n2025-12-04,3.71\n2025-12-05,3.71\n2025-12-08,3.73\n2025-12-09,3.73\n2025-12-10,3.69\n2025-12-11,3.66\n2025-12-12,3.63\n2025-12-15,3.65\n2025-12-16,3.64\n2025-12-17,3.64\n2025-12-18,3.62\n2025-12-19,3.62\n2025-12-22,3.64\n2025-12-23,3.65\n2025-12-24,3.69\n2025-12-25,\n2025-12-26,3.64\n2025-12-29,3.68\n2025-12-30,3.65\n2025-12-31,3.67\n2026-01-01,\n2026-01-02,3.65\n2026-01-05,3.64\n2026-01-06,3.63\n2026-01-07,3.62\n2026-01-08,3.62\n2026-01-09,3.62\n2026-01-12,3.67\n2026-01-13,3.67\n2026-01-14,3.67\n2026-01-15,3.68\n2026-01-16,3.67\n2026-01-19,\n2026-01-20,3.70\n2026-01-21,3.70\n2026-01-22,3.71\n2026-01-23,3.70\n2026-01-26,3.67\n2026-01-27,3.67\n2026-01-28,3.68\n2026-01-29,3.67\n2026-01-30,3.67\n2026-02-02,3.69\n2026-02-03,3.69\n2026-02-04,3.69\n2026-02-05,3.67\n2026-02-06,3.68\n2026-02-09,3.69\n2026-02-10,3.69\n2026-02-11,3.70\n2026-02-12,3.70\n2026-02-13,3.68\n2026-02-16,\n2026-02-17,3.69\n2026-02-18,3.70\n2026-02-19,3.69\n2026-02-20,3.69\n2026-02-23,3.69\n2026-02-24,3.69\n2026-02-25,3.69\n2026-02-26,3.68\n2026-02-27,3.67\n2026-03-02,3.72\n2026-03-03,3.71\n2026-03-04,3.71\n2026-03-05,3.70\n2026-03-06,3.69\n2026-03-09,3.71\n2026-03-10,3.71\n2026-03-11,3.71\n2026-03-12,3.72\n2026-03-13,3.72\n2026-03-16,3.72\n2026-03-17,3.72\n2026-03-18,3.73\n2026-03-19,3.73\n2026-03-20,3.74\n2026-03-23,3.74\n2026-03-24,3.74\n2026-03-25,3.73\n2026-03-26,3.73\n2026-03-27,3.73\n2026-03-30,3.71\n2026-03-31,3.70\n2026-04-01,3.70\n2026-04-02,3.70\n2026-04-03,3.71\n2026-04-06,3.72\n2026-04-07,3.71\n2026-04-08,3.69\n2026-04-09,3.68\n2026-04-10,3.69\n2026-04-13,3.71\n2026-04-14,3.71\n2026-04-15,3.71\n2026-04-16,3.70\n2026-04-17,3.70\n2026-04-20,3.71\n2026-04-21,3.69\n2026-04-22,3.69\n2026-04-23,3.69\n2026-04-24,3.69\n2026-04-27,3.68\n2026-04-28,3.68\n2026-04-29,3.68\n2026-04-30,3.68\n2026-05-01,3.68\n2026-05-04,3.70\n2026-05-05,3.69\n2026-05-06,3.69\n2026-05-07,3.69\n2026-05-08,3.69\n2026-05-11,3.70\n2026-05-12,3.70\n2026-05-13,3.69\n2026-05-14,3.69\n2026-05-15,3.69\n2026-05-18,3.68\n2026-05-19,3.67\n2026-05-20,3.65\n2026-05-21,3.68\n2026-05-22,3.68\n2026-05-25,\n2026-05-26,3.68\n2026-05-27,3.68\n2026-05-28,3.69\n2026-05-29,3.69\n2026-06-01,3.78\n2026-06-02,3.77\n2026-06-03,3.78\n2026-06-04,3.78\n2026-06-05,3.78\n2026-06-08,3.80\n2026-06-09,3.79\n2026-06-10,3.79\n2026-06-11,3.78\n2026-06-12,3.78\n2026-06-15,3.79\n2026-06-16,3.79\n2026-06-17,3.83\n2026-06-18,3.83\n2026-06-19,\n2026-06-22,3.85\n2026-06-23,3.85\n2026-06-24,3.85\n2026-06-25,3.84\n2026-06-26,3.83\n2026-06-29,3.87\n2026-06-30,3.87\n2026-07-01,3.85\n2026-07-02,3.82\n2026-07-03,\n2026-07-06,3.87\n2026-07-07,3.86\n2026-07-08,3.87\n2026-07-09,3.83\n2026-07-10,3.85\n2026-07-13,3.89\n2026-07-14,3.84\n2026-07-15,3.83\n2026-07-16,3.84\n2026-07-17,3.85\n2026-07-20,3.86\n2026-07-21,3.87\n2026-07-22,3.89\n2026-07-23,3.95\n2026-07-24,3.96\n2026-07-27,3.96\n2026-07-28,3.90\n2026-07-29,3.83\n2026-07-30,3.82\n2026-07-31,3.83\n2026-08-03,3.91\n2026-08-04,3.89\n2026-08-05,3.89\n2026-08-06,3.90\n2026-08-07,3.87\n2026-08-10,3.89\n2026-08-11,3.89\n2026-08-12,3.87\n2026-08-13,3.87\n2026-08-14,3.86\n2026-08-17,3.87\n2026-08-18,3.86\n2026-08-19,3.86\n2026-08-20,3.87\n2026-08-21,3.88\n2026-08-24,3.87\n2026-08-25,3.86\n2026-08-26,3.85\n2026-08-27,3.84\n2026-08-28,3.90\n2026-08-31,3.91\n2026-09-01,3.92\n2026-09-02,3.92\n2026-09-03,3.89\n2026-09-04,3.91\n2026-09-07,\n2026-09-08,3.94\n2026-09-09,3.95\n2026-09-10,4.00\n2026-09-11,4.07\n2026-09-14,4.11\n2026-09-15,4.11\n",
+  "observations": [
+    {
+      "observation_date": "2025-09-15",
+      "DGS3MO": 4.06
+    },
+    {
+      "observation_date": "2025-09-16",
+      "DGS3MO": 4.04
+    },
+    {
+      "observation_date": "2025-09-17",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-09-18",
+      "DGS3MO": 4.03
+    },
+    {
+      "observation_date": "2025-09-19",
+      "DGS3MO": 4.03
+    },
+    {
+      "observation_date": "2025-09-22",
+      "DGS3MO": 4.0
+    },
+    {
+      "observation_date": "2025-09-23",
+      "DGS3MO": 4.0
+    },
+    {
+      "observation_date": "2025-09-24",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-09-25",
+      "DGS3MO": 4.04
+    },
+    {
+      "observation_date": "2025-09-26",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-09-29",
+      "DGS3MO": 4.04
+    },
+    {
+      "observation_date": "2025-09-30",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-01",
+      "DGS3MO": 4.01
+    },
+    {
+      "observation_date": "2025-10-02",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-03",
+      "DGS3MO": 4.03
+    },
+    {
+      "observation_date": "2025-10-06",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-07",
+      "DGS3MO": 4.01
+    },
+    {
+      "observation_date": "2025-10-08",
+      "DGS3MO": 4.01
+    },
+    {
+      "observation_date": "2025-10-09",
+      "DGS3MO": 4.03
+    },
+    {
+      "observation_date": "2025-10-10",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-13",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2025-10-14",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-15",
+      "DGS3MO": 4.03
+    },
+    {
+      "observation_date": "2025-10-16",
+      "DGS3MO": 4.02
+    },
+    {
+      "observation_date": "2025-10-17",
+      "DGS3MO": 4.0
+    },
+    {
+      "observation_date": "2025-10-20",
+      "DGS3MO": 3.97
+    },
+    {
+      "observation_date": "2025-10-21",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2025-10-22",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2025-10-23",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2025-10-24",
+      "DGS3MO": 3.93
+    },
+    {
+      "observation_date": "2025-10-27",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2025-10-28",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2025-10-29",
+      "DGS3MO": 3.93
+    },
+    {
+      "observation_date": "2025-10-30",
+      "DGS3MO": 3.92
+    },
+    {
+      "observation_date": "2025-10-31",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2025-11-03",
+      "DGS3MO": 3.98
+    },
+    {
+      "observation_date": "2025-11-04",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2025-11-05",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2025-11-06",
+      "DGS3MO": 3.93
+    },
+    {
+      "observation_date": "2025-11-07",
+      "DGS3MO": 3.92
+    },
+    {
+      "observation_date": "2025-11-10",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2025-11-11",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2025-11-12",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2025-11-13",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2025-11-14",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2025-11-17",
+      "DGS3MO": 3.97
+    },
+    {
+      "observation_date": "2025-11-18",
+      "DGS3MO": 3.94
+    },
+    {
+      "observation_date": "2025-11-19",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2025-11-20",
+      "DGS3MO": 3.94
+    },
+    {
+      "observation_date": "2025-11-21",
+      "DGS3MO": 3.9
+    },
+    {
+      "observation_date": "2025-11-24",
+      "DGS3MO": 3.91
+    },
+    {
+      "observation_date": "2025-11-25",
+      "DGS3MO": 3.9
+    },
+    {
+      "observation_date": "2025-11-26",
+      "DGS3MO": 3.92
+    },
+    {
+      "observation_date": "2025-11-27",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2025-11-28",
+      "DGS3MO": 3.88
+    },
+    {
+      "observation_date": "2025-12-01",
+      "DGS3MO": 3.81
+    },
+    {
+      "observation_date": "2025-12-02",
+      "DGS3MO": 3.77
+    },
+    {
+      "observation_date": "2025-12-03",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2025-12-04",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2025-12-05",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2025-12-08",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2025-12-09",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2025-12-10",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2025-12-11",
+      "DGS3MO": 3.66
+    },
+    {
+      "observation_date": "2025-12-12",
+      "DGS3MO": 3.63
+    },
+    {
+      "observation_date": "2025-12-15",
+      "DGS3MO": 3.65
+    },
+    {
+      "observation_date": "2025-12-16",
+      "DGS3MO": 3.64
+    },
+    {
+      "observation_date": "2025-12-17",
+      "DGS3MO": 3.64
+    },
+    {
+      "observation_date": "2025-12-18",
+      "DGS3MO": 3.62
+    },
+    {
+      "observation_date": "2025-12-19",
+      "DGS3MO": 3.62
+    },
+    {
+      "observation_date": "2025-12-22",
+      "DGS3MO": 3.64
+    },
+    {
+      "observation_date": "2025-12-23",
+      "DGS3MO": 3.65
+    },
+    {
+      "observation_date": "2025-12-24",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2025-12-25",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2025-12-26",
+      "DGS3MO": 3.64
+    },
+    {
+      "observation_date": "2025-12-29",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2025-12-30",
+      "DGS3MO": 3.65
+    },
+    {
+      "observation_date": "2025-12-31",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-01",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-01-02",
+      "DGS3MO": 3.65
+    },
+    {
+      "observation_date": "2026-01-05",
+      "DGS3MO": 3.64
+    },
+    {
+      "observation_date": "2026-01-06",
+      "DGS3MO": 3.63
+    },
+    {
+      "observation_date": "2026-01-07",
+      "DGS3MO": 3.62
+    },
+    {
+      "observation_date": "2026-01-08",
+      "DGS3MO": 3.62
+    },
+    {
+      "observation_date": "2026-01-09",
+      "DGS3MO": 3.62
+    },
+    {
+      "observation_date": "2026-01-12",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-13",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-14",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-15",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-01-16",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-19",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-01-20",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-01-21",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-01-22",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-01-23",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-01-26",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-27",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-28",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-01-29",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-01-30",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-02-02",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-03",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-04",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-05",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-02-06",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-02-09",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-10",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-11",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-02-12",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-02-13",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-02-16",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-02-17",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-18",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-02-19",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-20",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-23",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-24",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-25",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-02-26",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-02-27",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-03-02",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-03-03",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-04",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-05",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-03-06",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-03-09",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-10",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-11",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-12",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-03-13",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-03-16",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-03-17",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-03-18",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2026-03-19",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2026-03-20",
+      "DGS3MO": 3.74
+    },
+    {
+      "observation_date": "2026-03-23",
+      "DGS3MO": 3.74
+    },
+    {
+      "observation_date": "2026-03-24",
+      "DGS3MO": 3.74
+    },
+    {
+      "observation_date": "2026-03-25",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2026-03-26",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2026-03-27",
+      "DGS3MO": 3.73
+    },
+    {
+      "observation_date": "2026-03-30",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-03-31",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-04-01",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-04-02",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-04-03",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-06",
+      "DGS3MO": 3.72
+    },
+    {
+      "observation_date": "2026-04-07",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-08",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-09",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-04-10",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-13",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-14",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-15",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-16",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-04-17",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-04-20",
+      "DGS3MO": 3.71
+    },
+    {
+      "observation_date": "2026-04-21",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-22",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-23",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-24",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-04-27",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-04-28",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-04-29",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-04-30",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-01",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-04",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-05-05",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-06",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-07",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-08",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-11",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-05-12",
+      "DGS3MO": 3.7
+    },
+    {
+      "observation_date": "2026-05-13",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-14",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-15",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-18",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-19",
+      "DGS3MO": 3.67
+    },
+    {
+      "observation_date": "2026-05-20",
+      "DGS3MO": 3.65
+    },
+    {
+      "observation_date": "2026-05-21",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-22",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-25",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-05-26",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-27",
+      "DGS3MO": 3.68
+    },
+    {
+      "observation_date": "2026-05-28",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-05-29",
+      "DGS3MO": 3.69
+    },
+    {
+      "observation_date": "2026-06-01",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-02",
+      "DGS3MO": 3.77
+    },
+    {
+      "observation_date": "2026-06-03",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-04",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-05",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-08",
+      "DGS3MO": 3.8
+    },
+    {
+      "observation_date": "2026-06-09",
+      "DGS3MO": 3.79
+    },
+    {
+      "observation_date": "2026-06-10",
+      "DGS3MO": 3.79
+    },
+    {
+      "observation_date": "2026-06-11",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-12",
+      "DGS3MO": 3.78
+    },
+    {
+      "observation_date": "2026-06-15",
+      "DGS3MO": 3.79
+    },
+    {
+      "observation_date": "2026-06-16",
+      "DGS3MO": 3.79
+    },
+    {
+      "observation_date": "2026-06-17",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-06-18",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-06-19",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-06-22",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-06-23",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-06-24",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-06-25",
+      "DGS3MO": 3.84
+    },
+    {
+      "observation_date": "2026-06-26",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-06-29",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-06-30",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-07-01",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-07-02",
+      "DGS3MO": 3.82
+    },
+    {
+      "observation_date": "2026-07-03",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-07-06",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-07-07",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-07-08",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-07-09",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-07-10",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-07-13",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-07-14",
+      "DGS3MO": 3.84
+    },
+    {
+      "observation_date": "2026-07-15",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-07-16",
+      "DGS3MO": 3.84
+    },
+    {
+      "observation_date": "2026-07-17",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-07-20",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-07-21",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-07-22",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-07-23",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2026-07-24",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2026-07-27",
+      "DGS3MO": 3.96
+    },
+    {
+      "observation_date": "2026-07-28",
+      "DGS3MO": 3.9
+    },
+    {
+      "observation_date": "2026-07-29",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-07-30",
+      "DGS3MO": 3.82
+    },
+    {
+      "observation_date": "2026-07-31",
+      "DGS3MO": 3.83
+    },
+    {
+      "observation_date": "2026-08-03",
+      "DGS3MO": 3.91
+    },
+    {
+      "observation_date": "2026-08-04",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-08-05",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-08-06",
+      "DGS3MO": 3.9
+    },
+    {
+      "observation_date": "2026-08-07",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-10",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-08-11",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-08-12",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-13",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-14",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-08-17",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-18",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-08-19",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-08-20",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-21",
+      "DGS3MO": 3.88
+    },
+    {
+      "observation_date": "2026-08-24",
+      "DGS3MO": 3.87
+    },
+    {
+      "observation_date": "2026-08-25",
+      "DGS3MO": 3.86
+    },
+    {
+      "observation_date": "2026-08-26",
+      "DGS3MO": 3.85
+    },
+    {
+      "observation_date": "2026-08-27",
+      "DGS3MO": 3.84
+    },
+    {
+      "observation_date": "2026-08-28",
+      "DGS3MO": 3.9
+    },
+    {
+      "observation_date": "2026-08-31",
+      "DGS3MO": 3.91
+    },
+    {
+      "observation_date": "2026-09-01",
+      "DGS3MO": 3.92
+    },
+    {
+      "observation_date": "2026-09-02",
+      "DGS3MO": 3.92
+    },
+    {
+      "observation_date": "2026-09-03",
+      "DGS3MO": 3.89
+    },
+    {
+      "observation_date": "2026-09-04",
+      "DGS3MO": 3.91
+    },
+    {
+      "observation_date": "2026-09-07",
+      "DGS3MO": null
+    },
+    {
+      "observation_date": "2026-09-08",
+      "DGS3MO": 3.94
+    },
+    {
+      "observation_date": "2026-09-09",
+      "DGS3MO": 3.95
+    },
+    {
+      "observation_date": "2026-09-10",
+      "DGS3MO": 4.0
+    },
+    {
+      "observation_date": "2026-09-11",
+      "DGS3MO": 4.07
+    },
+    {
+      "observation_date": "2026-09-14",
+      "DGS3MO": 4.11
+    },
+    {
+      "observation_date": "2026-09-15",
+      "DGS3MO": 4.11
+    }
+  ]
+}

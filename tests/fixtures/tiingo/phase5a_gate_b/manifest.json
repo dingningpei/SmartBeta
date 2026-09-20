@@ -1,0 +1,673 @@
+{
+  "_provenance": {
+    "live_recorded": true,
+    "recorded_at": "2026-09-19",
+    "retrieved_at_utc": "2026-09-19T23:37:47Z",
+    "source": "Tiingo",
+    "retrieval_method": "Live HTTPS GETs through TiingoClient with the key read from the TIINGO_API_KEY environment variable; the key is never logged or written",
+    "api_key_stored": false,
+    "gate_b_window": {
+      "start": "2025-09-15",
+      "end": "2026-09-15"
+    },
+    "candidate_universe": [
+      "MMM",
+      "GOOGL",
+      "AXP",
+      "AMGN",
+      "AMZN",
+      "AAPL",
+      "BA",
+      "CAT",
+      "CVX",
+      "CSCO",
+      "KO",
+      "DIS",
+      "GS",
+      "HD",
+      "HON",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "MCD",
+      "MRK",
+      "MSFT",
+      "NKE",
+      "NVDA",
+      "PG",
+      "CRM",
+      "SHW",
+      "TRV",
+      "UNH",
+      "V",
+      "WMT"
+    ],
+    "frozen_universe": [
+      "MMM",
+      "AXP",
+      "AMGN",
+      "AAPL",
+      "BA",
+      "CAT",
+      "CVX",
+      "CSCO",
+      "KO",
+      "DIS",
+      "GS",
+      "HD",
+      "HON",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "MCD",
+      "MRK",
+      "MSFT",
+      "NKE",
+      "PG",
+      "CRM",
+      "TRV",
+      "UNH",
+      "V",
+      "WMT"
+    ],
+    "excluded_names": [
+      {
+        "ticker": "GOOGL",
+        "status_code": 400,
+        "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      },
+      {
+        "ticker": "AMZN",
+        "status_code": 400,
+        "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      },
+      {
+        "ticker": "NVDA",
+        "status_code": 400,
+        "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      },
+      {
+        "ticker": "SHW",
+        "status_code": 400,
+        "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+      }
+    ],
+    "eod_lookback_start": "2025-09-05",
+    "gate_b_disposition": "RUN",
+    "note": "Raw Tiingo response bodies (verbatim, no wrapper) for the frozen surviving universe only. Promoted atomically from a complete, hash-validated staged capture set."
+  },
+  "recordings": {
+    "mmm_meta.json": {
+      "url_path": "/tiingo/daily/MMM",
+      "params": {},
+      "status_code": 200
+    },
+    "mmm_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MMM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "mmm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MMM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "axp_meta.json": {
+      "url_path": "/tiingo/daily/AXP",
+      "params": {},
+      "status_code": 200
+    },
+    "axp_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/AXP/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "axp_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/AXP/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "amgn_meta.json": {
+      "url_path": "/tiingo/daily/AMGN",
+      "params": {},
+      "status_code": 200
+    },
+    "amgn_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/AMGN/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "amgn_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/AMGN/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "aapl_meta.json": {
+      "url_path": "/tiingo/daily/AAPL",
+      "params": {},
+      "status_code": 200
+    },
+    "aapl_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/AAPL/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "aapl_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/AAPL/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "ba_meta.json": {
+      "url_path": "/tiingo/daily/BA",
+      "params": {},
+      "status_code": 200
+    },
+    "ba_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/BA/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "ba_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/BA/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "cat_meta.json": {
+      "url_path": "/tiingo/daily/CAT",
+      "params": {},
+      "status_code": 200
+    },
+    "cat_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/CAT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "cat_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/CAT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "cvx_meta.json": {
+      "url_path": "/tiingo/daily/CVX",
+      "params": {},
+      "status_code": 200
+    },
+    "cvx_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/CVX/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "cvx_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/CVX/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "csco_meta.json": {
+      "url_path": "/tiingo/daily/CSCO",
+      "params": {},
+      "status_code": 200
+    },
+    "csco_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/CSCO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "csco_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/CSCO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "ko_meta.json": {
+      "url_path": "/tiingo/daily/KO",
+      "params": {},
+      "status_code": 200
+    },
+    "ko_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/KO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "ko_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/KO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "dis_meta.json": {
+      "url_path": "/tiingo/daily/DIS",
+      "params": {},
+      "status_code": 200
+    },
+    "dis_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/DIS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "dis_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/DIS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "gs_meta.json": {
+      "url_path": "/tiingo/daily/GS",
+      "params": {},
+      "status_code": 200
+    },
+    "gs_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/GS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "gs_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/GS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "hd_meta.json": {
+      "url_path": "/tiingo/daily/HD",
+      "params": {},
+      "status_code": 200
+    },
+    "hd_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/HD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "hd_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/HD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "hon_meta.json": {
+      "url_path": "/tiingo/daily/HON",
+      "params": {},
+      "status_code": 200
+    },
+    "hon_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/HON/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "hon_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/HON/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "ibm_meta.json": {
+      "url_path": "/tiingo/daily/IBM",
+      "params": {},
+      "status_code": 200
+    },
+    "ibm_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/IBM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "ibm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/IBM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "jnj_meta.json": {
+      "url_path": "/tiingo/daily/JNJ",
+      "params": {},
+      "status_code": 200
+    },
+    "jnj_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/JNJ/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "jnj_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/JNJ/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "jpm_meta.json": {
+      "url_path": "/tiingo/daily/JPM",
+      "params": {},
+      "status_code": 200
+    },
+    "jpm_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/JPM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "jpm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/JPM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "mcd_meta.json": {
+      "url_path": "/tiingo/daily/MCD",
+      "params": {},
+      "status_code": 200
+    },
+    "mcd_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MCD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "mcd_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MCD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "mrk_meta.json": {
+      "url_path": "/tiingo/daily/MRK",
+      "params": {},
+      "status_code": 200
+    },
+    "mrk_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MRK/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "mrk_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MRK/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "msft_meta.json": {
+      "url_path": "/tiingo/daily/MSFT",
+      "params": {},
+      "status_code": 200
+    },
+    "msft_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/MSFT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "msft_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/MSFT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "nke_meta.json": {
+      "url_path": "/tiingo/daily/NKE",
+      "params": {},
+      "status_code": 200
+    },
+    "nke_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/NKE/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "nke_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/NKE/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "pg_meta.json": {
+      "url_path": "/tiingo/daily/PG",
+      "params": {},
+      "status_code": 200
+    },
+    "pg_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/PG/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "pg_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/PG/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "crm_meta.json": {
+      "url_path": "/tiingo/daily/CRM",
+      "params": {},
+      "status_code": 200
+    },
+    "crm_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/CRM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "crm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/CRM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "trv_meta.json": {
+      "url_path": "/tiingo/daily/TRV",
+      "params": {},
+      "status_code": 200
+    },
+    "trv_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/TRV/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "trv_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/TRV/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "unh_meta.json": {
+      "url_path": "/tiingo/daily/UNH",
+      "params": {},
+      "status_code": 200
+    },
+    "unh_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/UNH/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "unh_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/UNH/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "v_meta.json": {
+      "url_path": "/tiingo/daily/V",
+      "params": {},
+      "status_code": 200
+    },
+    "v_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/V/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "v_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/V/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    },
+    "wmt_meta.json": {
+      "url_path": "/tiingo/daily/WMT",
+      "params": {},
+      "status_code": 200
+    },
+    "wmt_eod_prices_2025-09-05_2026-09-15.json": {
+      "url_path": "/tiingo/daily/WMT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200
+    },
+    "wmt_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "url_path": "/tiingo/fundamentals/WMT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "status_code": 200,
+      "plan_tier_limited": false
+    }
+  }
+}

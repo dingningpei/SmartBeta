@@ -1,0 +1,8 @@
+{
+  "ticker": "IBM",
+  "name": "International Business Machines Corp",
+  "description": "International Business Machines Corporation (IBM) is an information technology (IT) company. IBM operates in five segments: Global Technology Services (GTS), Global Business Services (GBS), Software, Systems and Technology and Global Financing. GTS primarily provides IT infrastructure services and business process services. GBS provides professional services and application management services. Software consists primarily of middleware and operating systems software. Systems and Technology provides clients with business solutions requiring advanced computing power and storage capabilities. In October 2013, International Business Machines Corporation acquired Xtify Inc. In October 2013, the Company announced that it has completed the acquisition of The Now Factory, a privately held provider of analytics software that helps communications service providers (CSPs) deliver better customer experiences and drive new revenue opportunities.",
+  "startDate": "1962-01-02",
+  "endDate": "2026-09-18",
+  "exchangeCode": "NYSE"
+}

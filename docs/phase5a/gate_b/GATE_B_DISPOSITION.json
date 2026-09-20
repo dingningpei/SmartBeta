@@ -1,0 +1,125 @@
+{
+  "gate": "B",
+  "disposition": "RUN",
+  "gate_b_pass": true,
+  "gate_b_claim": "BOUNDED FIXED-UNIVERSE SCALABILITY",
+  "universe_terminology": "a fixed universe selected from a dated DJIA constituent snapshot",
+  "window": {
+    "start": "2025-09-15",
+    "end": "2026-09-15"
+  },
+  "candidate_universe": [
+    "MMM",
+    "GOOGL",
+    "AXP",
+    "AMGN",
+    "AMZN",
+    "AAPL",
+    "BA",
+    "CAT",
+    "CVX",
+    "CSCO",
+    "KO",
+    "DIS",
+    "GS",
+    "HD",
+    "HON",
+    "IBM",
+    "JNJ",
+    "JPM",
+    "MCD",
+    "MRK",
+    "MSFT",
+    "NKE",
+    "NVDA",
+    "PG",
+    "CRM",
+    "SHW",
+    "TRV",
+    "UNH",
+    "V",
+    "WMT"
+  ],
+  "candidate_universe_count": 30,
+  "frozen_universe": [
+    "MMM",
+    "AXP",
+    "AMGN",
+    "AAPL",
+    "BA",
+    "CAT",
+    "CVX",
+    "CSCO",
+    "KO",
+    "DIS",
+    "GS",
+    "HD",
+    "HON",
+    "IBM",
+    "JNJ",
+    "JPM",
+    "MCD",
+    "MRK",
+    "MSFT",
+    "NKE",
+    "PG",
+    "CRM",
+    "TRV",
+    "UNH",
+    "V",
+    "WMT"
+  ],
+  "frozen_universe_count": 26,
+  "excluded_names": [
+    {
+      "ticker": "GOOGL",
+      "company": "Alphabet (Class A)",
+      "endpoint": "/tiingo/fundamentals/GOOGL/daily",
+      "status_code": 400,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+    },
+    {
+      "ticker": "AMZN",
+      "company": "Amazon",
+      "endpoint": "/tiingo/fundamentals/AMZN/daily",
+      "status_code": 400,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+    },
+    {
+      "ticker": "NVDA",
+      "company": "Nvidia",
+      "endpoint": "/tiingo/fundamentals/NVDA/daily",
+      "status_code": 400,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+    },
+    {
+      "ticker": "SHW",
+      "company": "Sherwin-Williams",
+      "endpoint": "/tiingo/fundamentals/SHW/daily",
+      "status_code": 400,
+      "reason": "Error: Free and Power plans are limited to the DOW 30. If you would like access to all supported tickers, then please E-mail support@tiingo.com to get the Fundamental Data API added as an add-on service."
+    }
+  ],
+  "settings": "DEFAULT_SETTINGS (unmodified)",
+  "artifacts": {
+    "A": "RUN",
+    "B": "RUN",
+    "C": "RUN"
+  },
+  "trading_date_count": 252,
+  "non_nan_mkt_observations": 251,
+  "statistics": {
+    "n": 251,
+    "newey_west_lags": 6,
+    "minimum_observations": 20,
+    "lag_optimality_caveat": "lag is the frozen Phase 5A diagnostic convention inherited from existing machinery, not a claim of statistical optimality",
+    "status": "RUN",
+    "mean": 0.0005790911012229473,
+    "std": 0.008171742146400943,
+    "newey_west_tstat": 1.199857003702555
+  },
+  "not_demonstrated": "representative US market coverage, survivorship-safe historical membership, publication-grade CAPM replication, investment performance",
+  "next_task": {
+    "p5a_5": "NOT STARTED"
+  }
+}

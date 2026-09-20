@@ -1,0 +1,1566 @@
+{
+  "_provenance": {
+    "status": "NON_FINAL_STAGING",
+    "gate": "B",
+    "note": "Non-final staged Tiingo capture state. NOT certification evidence and NOT the canonical Gate B fixture set; it may only be promoted through the validated atomic promotion path.",
+    "candidate_universe": [
+      "MMM",
+      "GOOGL",
+      "AXP",
+      "AMGN",
+      "AMZN",
+      "AAPL",
+      "BA",
+      "CAT",
+      "CVX",
+      "CSCO",
+      "KO",
+      "DIS",
+      "GS",
+      "HD",
+      "HON",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "MCD",
+      "MRK",
+      "MSFT",
+      "NKE",
+      "NVDA",
+      "PG",
+      "CRM",
+      "SHW",
+      "TRV",
+      "UNH",
+      "V",
+      "WMT"
+    ],
+    "frozen_universe": [
+      "MMM",
+      "AXP",
+      "AMGN",
+      "AAPL",
+      "BA",
+      "CAT",
+      "CVX",
+      "CSCO",
+      "KO",
+      "DIS",
+      "GS",
+      "HD",
+      "HON",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "MCD",
+      "MRK",
+      "MSFT",
+      "NKE",
+      "PG",
+      "CRM",
+      "TRV",
+      "UNH",
+      "V",
+      "WMT"
+    ],
+    "gate_b_window": {
+      "start": "2025-09-15",
+      "end": "2026-09-15"
+    },
+    "eod_lookback_start": "2025-09-05",
+    "expected_identity_count": 78,
+    "valid_captured_count": 78,
+    "state": "COMPLETE_NOT_PROMOTED",
+    "updated_at_utc": "2026-09-19T23:37:46Z"
+  },
+  "expected_identities": [
+    {
+      "identity": "mmm_meta.json",
+      "ticker": "MMM",
+      "endpoint": "/tiingo/daily/MMM",
+      "params": {}
+    },
+    {
+      "identity": "mmm_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "MMM",
+      "endpoint": "/tiingo/daily/MMM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "mmm_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "MMM",
+      "endpoint": "/tiingo/fundamentals/MMM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "axp_meta.json",
+      "ticker": "AXP",
+      "endpoint": "/tiingo/daily/AXP",
+      "params": {}
+    },
+    {
+      "identity": "axp_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "AXP",
+      "endpoint": "/tiingo/daily/AXP/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "axp_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "AXP",
+      "endpoint": "/tiingo/fundamentals/AXP/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "amgn_meta.json",
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/daily/AMGN",
+      "params": {}
+    },
+    {
+      "identity": "amgn_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/daily/AMGN/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "amgn_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/fundamentals/AMGN/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "aapl_meta.json",
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/daily/AAPL",
+      "params": {}
+    },
+    {
+      "identity": "aapl_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/daily/AAPL/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "aapl_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/fundamentals/AAPL/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ba_meta.json",
+      "ticker": "BA",
+      "endpoint": "/tiingo/daily/BA",
+      "params": {}
+    },
+    {
+      "identity": "ba_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "BA",
+      "endpoint": "/tiingo/daily/BA/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ba_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "BA",
+      "endpoint": "/tiingo/fundamentals/BA/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "cat_meta.json",
+      "ticker": "CAT",
+      "endpoint": "/tiingo/daily/CAT",
+      "params": {}
+    },
+    {
+      "identity": "cat_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "CAT",
+      "endpoint": "/tiingo/daily/CAT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "cat_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "CAT",
+      "endpoint": "/tiingo/fundamentals/CAT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "cvx_meta.json",
+      "ticker": "CVX",
+      "endpoint": "/tiingo/daily/CVX",
+      "params": {}
+    },
+    {
+      "identity": "cvx_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "CVX",
+      "endpoint": "/tiingo/daily/CVX/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "cvx_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "CVX",
+      "endpoint": "/tiingo/fundamentals/CVX/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "csco_meta.json",
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/daily/CSCO",
+      "params": {}
+    },
+    {
+      "identity": "csco_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/daily/CSCO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "csco_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/fundamentals/CSCO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ko_meta.json",
+      "ticker": "KO",
+      "endpoint": "/tiingo/daily/KO",
+      "params": {}
+    },
+    {
+      "identity": "ko_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "KO",
+      "endpoint": "/tiingo/daily/KO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ko_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "KO",
+      "endpoint": "/tiingo/fundamentals/KO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "dis_meta.json",
+      "ticker": "DIS",
+      "endpoint": "/tiingo/daily/DIS",
+      "params": {}
+    },
+    {
+      "identity": "dis_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "DIS",
+      "endpoint": "/tiingo/daily/DIS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "dis_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "DIS",
+      "endpoint": "/tiingo/fundamentals/DIS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "gs_meta.json",
+      "ticker": "GS",
+      "endpoint": "/tiingo/daily/GS",
+      "params": {}
+    },
+    {
+      "identity": "gs_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "GS",
+      "endpoint": "/tiingo/daily/GS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "gs_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "GS",
+      "endpoint": "/tiingo/fundamentals/GS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "hd_meta.json",
+      "ticker": "HD",
+      "endpoint": "/tiingo/daily/HD",
+      "params": {}
+    },
+    {
+      "identity": "hd_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "HD",
+      "endpoint": "/tiingo/daily/HD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "hd_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "HD",
+      "endpoint": "/tiingo/fundamentals/HD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "hon_meta.json",
+      "ticker": "HON",
+      "endpoint": "/tiingo/daily/HON",
+      "params": {}
+    },
+    {
+      "identity": "hon_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "HON",
+      "endpoint": "/tiingo/daily/HON/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "hon_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "HON",
+      "endpoint": "/tiingo/fundamentals/HON/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ibm_meta.json",
+      "ticker": "IBM",
+      "endpoint": "/tiingo/daily/IBM",
+      "params": {}
+    },
+    {
+      "identity": "ibm_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "IBM",
+      "endpoint": "/tiingo/daily/IBM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "ibm_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "IBM",
+      "endpoint": "/tiingo/fundamentals/IBM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "jnj_meta.json",
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/daily/JNJ",
+      "params": {}
+    },
+    {
+      "identity": "jnj_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/daily/JNJ/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "jnj_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/fundamentals/JNJ/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "jpm_meta.json",
+      "ticker": "JPM",
+      "endpoint": "/tiingo/daily/JPM",
+      "params": {}
+    },
+    {
+      "identity": "jpm_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "JPM",
+      "endpoint": "/tiingo/daily/JPM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "jpm_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "JPM",
+      "endpoint": "/tiingo/fundamentals/JPM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "mcd_meta.json",
+      "ticker": "MCD",
+      "endpoint": "/tiingo/daily/MCD",
+      "params": {}
+    },
+    {
+      "identity": "mcd_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "MCD",
+      "endpoint": "/tiingo/daily/MCD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "mcd_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "MCD",
+      "endpoint": "/tiingo/fundamentals/MCD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "mrk_meta.json",
+      "ticker": "MRK",
+      "endpoint": "/tiingo/daily/MRK",
+      "params": {}
+    },
+    {
+      "identity": "mrk_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "MRK",
+      "endpoint": "/tiingo/daily/MRK/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "mrk_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "MRK",
+      "endpoint": "/tiingo/fundamentals/MRK/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "msft_meta.json",
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/daily/MSFT",
+      "params": {}
+    },
+    {
+      "identity": "msft_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/daily/MSFT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "msft_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/fundamentals/MSFT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "nke_meta.json",
+      "ticker": "NKE",
+      "endpoint": "/tiingo/daily/NKE",
+      "params": {}
+    },
+    {
+      "identity": "nke_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "NKE",
+      "endpoint": "/tiingo/daily/NKE/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "nke_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "NKE",
+      "endpoint": "/tiingo/fundamentals/NKE/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "pg_meta.json",
+      "ticker": "PG",
+      "endpoint": "/tiingo/daily/PG",
+      "params": {}
+    },
+    {
+      "identity": "pg_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "PG",
+      "endpoint": "/tiingo/daily/PG/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "pg_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "PG",
+      "endpoint": "/tiingo/fundamentals/PG/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "crm_meta.json",
+      "ticker": "CRM",
+      "endpoint": "/tiingo/daily/CRM",
+      "params": {}
+    },
+    {
+      "identity": "crm_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "CRM",
+      "endpoint": "/tiingo/daily/CRM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "crm_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "CRM",
+      "endpoint": "/tiingo/fundamentals/CRM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "trv_meta.json",
+      "ticker": "TRV",
+      "endpoint": "/tiingo/daily/TRV",
+      "params": {}
+    },
+    {
+      "identity": "trv_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "TRV",
+      "endpoint": "/tiingo/daily/TRV/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "trv_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "TRV",
+      "endpoint": "/tiingo/fundamentals/TRV/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "unh_meta.json",
+      "ticker": "UNH",
+      "endpoint": "/tiingo/daily/UNH",
+      "params": {}
+    },
+    {
+      "identity": "unh_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "UNH",
+      "endpoint": "/tiingo/daily/UNH/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "unh_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "UNH",
+      "endpoint": "/tiingo/fundamentals/UNH/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "v_meta.json",
+      "ticker": "V",
+      "endpoint": "/tiingo/daily/V",
+      "params": {}
+    },
+    {
+      "identity": "v_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "V",
+      "endpoint": "/tiingo/daily/V/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "v_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "V",
+      "endpoint": "/tiingo/fundamentals/V/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "wmt_meta.json",
+      "ticker": "WMT",
+      "endpoint": "/tiingo/daily/WMT",
+      "params": {}
+    },
+    {
+      "identity": "wmt_eod_prices_2025-09-05_2026-09-15.json",
+      "ticker": "WMT",
+      "endpoint": "/tiingo/daily/WMT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      }
+    },
+    {
+      "identity": "wmt_fundamentals_daily_2025-09-15_2026-09-15.json",
+      "ticker": "WMT",
+      "endpoint": "/tiingo/fundamentals/WMT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      }
+    }
+  ],
+  "valid_captured_identities": [
+    "mmm_meta.json",
+    "mmm_eod_prices_2025-09-05_2026-09-15.json",
+    "mmm_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "axp_meta.json",
+    "axp_eod_prices_2025-09-05_2026-09-15.json",
+    "axp_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "amgn_meta.json",
+    "amgn_eod_prices_2025-09-05_2026-09-15.json",
+    "amgn_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "aapl_meta.json",
+    "aapl_eod_prices_2025-09-05_2026-09-15.json",
+    "aapl_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "ba_meta.json",
+    "ba_eod_prices_2025-09-05_2026-09-15.json",
+    "ba_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "cat_meta.json",
+    "cat_eod_prices_2025-09-05_2026-09-15.json",
+    "cat_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "cvx_meta.json",
+    "cvx_eod_prices_2025-09-05_2026-09-15.json",
+    "cvx_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "csco_meta.json",
+    "csco_eod_prices_2025-09-05_2026-09-15.json",
+    "csco_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "ko_meta.json",
+    "ko_eod_prices_2025-09-05_2026-09-15.json",
+    "ko_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "dis_meta.json",
+    "dis_eod_prices_2025-09-05_2026-09-15.json",
+    "dis_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "gs_meta.json",
+    "gs_eod_prices_2025-09-05_2026-09-15.json",
+    "gs_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "hd_meta.json",
+    "hd_eod_prices_2025-09-05_2026-09-15.json",
+    "hd_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "hon_meta.json",
+    "hon_eod_prices_2025-09-05_2026-09-15.json",
+    "hon_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "ibm_meta.json",
+    "ibm_eod_prices_2025-09-05_2026-09-15.json",
+    "ibm_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "jnj_meta.json",
+    "jnj_eod_prices_2025-09-05_2026-09-15.json",
+    "jnj_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "jpm_meta.json",
+    "jpm_eod_prices_2025-09-05_2026-09-15.json",
+    "jpm_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "mcd_meta.json",
+    "mcd_eod_prices_2025-09-05_2026-09-15.json",
+    "mcd_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "mrk_meta.json",
+    "mrk_eod_prices_2025-09-05_2026-09-15.json",
+    "mrk_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "msft_meta.json",
+    "msft_eod_prices_2025-09-05_2026-09-15.json",
+    "msft_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "nke_meta.json",
+    "nke_eod_prices_2025-09-05_2026-09-15.json",
+    "nke_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "pg_meta.json",
+    "pg_eod_prices_2025-09-05_2026-09-15.json",
+    "pg_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "crm_meta.json",
+    "crm_eod_prices_2025-09-05_2026-09-15.json",
+    "crm_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "trv_meta.json",
+    "trv_eod_prices_2025-09-05_2026-09-15.json",
+    "trv_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "unh_meta.json",
+    "unh_eod_prices_2025-09-05_2026-09-15.json",
+    "unh_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "v_meta.json",
+    "v_eod_prices_2025-09-05_2026-09-15.json",
+    "v_fundamentals_daily_2025-09-15_2026-09-15.json",
+    "wmt_meta.json",
+    "wmt_eod_prices_2025-09-05_2026-09-15.json",
+    "wmt_fundamentals_daily_2025-09-15_2026-09-15.json"
+  ],
+  "remaining_identities": [],
+  "captures": {
+    "mmm_meta.json": {
+      "ticker": "MMM",
+      "endpoint": "/tiingo/daily/MMM",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:12Z",
+      "status_code": 200,
+      "content_sha256": "d466250ebb9d22a145b9c8984b1cec79f0b52ab2d80db4092c09b20d0d46dc2d"
+    },
+    "mmm_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "MMM",
+      "endpoint": "/tiingo/daily/MMM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:12Z",
+      "status_code": 200,
+      "content_sha256": "7c763f9c3f71c8c2ecf7d76fedc91c91cf29517758819d6fd309cdb210ec7a09"
+    },
+    "mmm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "MMM",
+      "endpoint": "/tiingo/fundamentals/MMM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:13Z",
+      "status_code": 200,
+      "content_sha256": "7fa276b5bf2cd51195c164e316caf1e08be4fba8f0bb51549af47629b7a39cd6"
+    },
+    "axp_meta.json": {
+      "ticker": "AXP",
+      "endpoint": "/tiingo/daily/AXP",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:13Z",
+      "status_code": 200,
+      "content_sha256": "cc14be9ce81ee76ca85b596a8672a7dc12ce5af882218c894329ce1bd6341c44"
+    },
+    "axp_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "AXP",
+      "endpoint": "/tiingo/daily/AXP/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:13Z",
+      "status_code": 200,
+      "content_sha256": "ac7b6f8cddec4f755dea475b19739d7d323b5dcf9cdf5f52d5d3045f24ac925c"
+    },
+    "axp_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "AXP",
+      "endpoint": "/tiingo/fundamentals/AXP/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:14Z",
+      "status_code": 200,
+      "content_sha256": "3630ea5772e980f0d112b3033aa7c2cf1e896e149bb8c7f4aca9b0b5ddbfdc3b"
+    },
+    "amgn_meta.json": {
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/daily/AMGN",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:14Z",
+      "status_code": 200,
+      "content_sha256": "8ac7aa40fe080828eefe8d95bb15153c4c866b5458e28b18d0e7c31a614c697a"
+    },
+    "amgn_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/daily/AMGN/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:14Z",
+      "status_code": 200,
+      "content_sha256": "1cc0e971fd8f482968cb903554ac8afdbfa74ecb97cf848c1a0fb5a3d92173bc"
+    },
+    "amgn_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "AMGN",
+      "endpoint": "/tiingo/fundamentals/AMGN/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:15Z",
+      "status_code": 200,
+      "content_sha256": "953265cc027bffc46cd71dfa056a8d652894398aafd907b3e03cdbe445f32e8b"
+    },
+    "aapl_meta.json": {
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/daily/AAPL",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:16Z",
+      "status_code": 200,
+      "content_sha256": "994ef69e599c2883180fb63f4b4246d6b377a21a3fb45e7dd6d8db7df055a912"
+    },
+    "aapl_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/daily/AAPL/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:17Z",
+      "status_code": 200,
+      "content_sha256": "21b0cc7a8ecf64b72f3cd0fb278e0598c54df151eab2e42929a6a980f2f07867"
+    },
+    "aapl_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "AAPL",
+      "endpoint": "/tiingo/fundamentals/AAPL/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:18Z",
+      "status_code": 200,
+      "content_sha256": "66a00d3ee5042c95c34d29259624c6e852b90c93f415d7651b57142eaa1473e2"
+    },
+    "ba_meta.json": {
+      "ticker": "BA",
+      "endpoint": "/tiingo/daily/BA",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:18Z",
+      "status_code": 200,
+      "content_sha256": "81d18377234311cee5e15c40ca5504ebb908c72b268a9f8240fcefb59fae3ac3"
+    },
+    "ba_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "BA",
+      "endpoint": "/tiingo/daily/BA/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:20Z",
+      "status_code": 200,
+      "content_sha256": "d05a8c80f1c9a6b1e5dad96b63f18815c60e2986f80771546c1a1f4c0d0984c1"
+    },
+    "ba_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "BA",
+      "endpoint": "/tiingo/fundamentals/BA/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:20Z",
+      "status_code": 200,
+      "content_sha256": "24d33925d8390b09d1e7dc6cb1e5a59cbce3194105159f01b6f0db2a528ad38f"
+    },
+    "cat_meta.json": {
+      "ticker": "CAT",
+      "endpoint": "/tiingo/daily/CAT",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:21Z",
+      "status_code": 200,
+      "content_sha256": "74db7ff1b1dc92efdd0741d3143a9fdb47de44097aea5a728712c217cbbd792d"
+    },
+    "cat_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "CAT",
+      "endpoint": "/tiingo/daily/CAT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:21Z",
+      "status_code": 200,
+      "content_sha256": "99621d5448019ad12eb1e6b03a0ba47651b23287d935fec2c3e76fc963e8f2ad"
+    },
+    "cat_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "CAT",
+      "endpoint": "/tiingo/fundamentals/CAT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:22Z",
+      "status_code": 200,
+      "content_sha256": "7599e72516ca4705563c54c1e7300a88030a83ecbbf73ba1707ef3ba36e9f7fb"
+    },
+    "cvx_meta.json": {
+      "ticker": "CVX",
+      "endpoint": "/tiingo/daily/CVX",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:22Z",
+      "status_code": 200,
+      "content_sha256": "eac49114872aed8828f1a6e3f1e0444c6592d0d4ff0acbf55e29c41bb806b031"
+    },
+    "cvx_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "CVX",
+      "endpoint": "/tiingo/daily/CVX/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:22Z",
+      "status_code": 200,
+      "content_sha256": "6dd82fe82d88c94af1c3ff5fada2acee052fa94b3c625d5a7c8c186546e09c7b"
+    },
+    "cvx_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "CVX",
+      "endpoint": "/tiingo/fundamentals/CVX/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:23Z",
+      "status_code": 200,
+      "content_sha256": "75f629dfdc7bb0997f4f3036cbc6361c5b1606b27ee53adb23b76b8f83d0841f"
+    },
+    "csco_meta.json": {
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/daily/CSCO",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:23Z",
+      "status_code": 200,
+      "content_sha256": "a5d8c35152a94e2667e718e1e7a8f836a2888c2cd8ca5b8662a4db8e88a19c4e"
+    },
+    "csco_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/daily/CSCO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:24Z",
+      "status_code": 200,
+      "content_sha256": "83b54de244c8b8e197d37ace8dba98ffdba0153b745f337ffbadf0cf5df3df5b"
+    },
+    "csco_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "CSCO",
+      "endpoint": "/tiingo/fundamentals/CSCO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:24Z",
+      "status_code": 200,
+      "content_sha256": "840ae1a4eb26d73f1e5b62ee75a98974bd8fc210005c8ef554027355a9155120"
+    },
+    "ko_meta.json": {
+      "ticker": "KO",
+      "endpoint": "/tiingo/daily/KO",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:25Z",
+      "status_code": 200,
+      "content_sha256": "bccd774a9227cc61fb451ce3992184c4450ba2b18303195f48082b74018ca723"
+    },
+    "ko_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "KO",
+      "endpoint": "/tiingo/daily/KO/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:25Z",
+      "status_code": 200,
+      "content_sha256": "ab530ca5081f472b4353a287646897d7758881c4ff9d4494fc9d18550171beda"
+    },
+    "ko_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "KO",
+      "endpoint": "/tiingo/fundamentals/KO/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:25Z",
+      "status_code": 200,
+      "content_sha256": "fd1d24abd78f9d13efc619fdd118e0b3a548c5081b8eee10bac12d2c93442a8c"
+    },
+    "dis_meta.json": {
+      "ticker": "DIS",
+      "endpoint": "/tiingo/daily/DIS",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:26Z",
+      "status_code": 200,
+      "content_sha256": "0588362d70ad28e587893838d5188ce3fcaeadc4795a465650689dd69bb90ae7"
+    },
+    "dis_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "DIS",
+      "endpoint": "/tiingo/daily/DIS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:26Z",
+      "status_code": 200,
+      "content_sha256": "3cf93b1dd4bf1cbe4d28b14f0c79b0572a76acb8b0620079db48925f13c59b6a"
+    },
+    "dis_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "DIS",
+      "endpoint": "/tiingo/fundamentals/DIS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:27Z",
+      "status_code": 200,
+      "content_sha256": "153f6c95e1faa2572bbe1dfd4237ddc2a3e2bdef31cb18ed2b9b081f19921d4c"
+    },
+    "gs_meta.json": {
+      "ticker": "GS",
+      "endpoint": "/tiingo/daily/GS",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:27Z",
+      "status_code": 200,
+      "content_sha256": "ddf635baffc78f58a2b00b9aa8381fc29273a573424bd68fb803239d18148d2a"
+    },
+    "gs_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "GS",
+      "endpoint": "/tiingo/daily/GS/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:27Z",
+      "status_code": 200,
+      "content_sha256": "e33fff4eac851dae9ca4c2294aa7711e4f8fe95532d956af1e8884e2c782b36e"
+    },
+    "gs_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "GS",
+      "endpoint": "/tiingo/fundamentals/GS/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:28Z",
+      "status_code": 200,
+      "content_sha256": "387bcd378ed25b9229f76b67cf54621069d1ff5a67b8bb7f9977054d23ad62f6"
+    },
+    "hd_meta.json": {
+      "ticker": "HD",
+      "endpoint": "/tiingo/daily/HD",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:28Z",
+      "status_code": 200,
+      "content_sha256": "e36293fe07046159876018d2aee69fdb4ce0e6e666f11ef1918ad3886de38163"
+    },
+    "hd_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "HD",
+      "endpoint": "/tiingo/daily/HD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:29Z",
+      "status_code": 200,
+      "content_sha256": "04850b7646ad5d3415ecadc7af9fc7fdbddba3213ecc899ceafca4c18cd643c9"
+    },
+    "hd_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "HD",
+      "endpoint": "/tiingo/fundamentals/HD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:29Z",
+      "status_code": 200,
+      "content_sha256": "00bcc7d5ce7c0a7ec48e25beb62604f6d901bd5f5e7ce384bfceca3053d4c2de"
+    },
+    "hon_meta.json": {
+      "ticker": "HON",
+      "endpoint": "/tiingo/daily/HON",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:29Z",
+      "status_code": 200,
+      "content_sha256": "580791428b8d58df71b95686d4a1dcf53cd5487d768a8230f90f3b80a6045b1d"
+    },
+    "hon_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "HON",
+      "endpoint": "/tiingo/daily/HON/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:30Z",
+      "status_code": 200,
+      "content_sha256": "340aa5a8577626e45b64a6c4d197abd9d40e1505236add682af7b706d633ddb1"
+    },
+    "hon_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "HON",
+      "endpoint": "/tiingo/fundamentals/HON/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:30Z",
+      "status_code": 200,
+      "content_sha256": "b2453d3c2b9e3f5e04b4277b77b1cf038874b2eede16a5c89f92eecbbbec8f23"
+    },
+    "ibm_meta.json": {
+      "ticker": "IBM",
+      "endpoint": "/tiingo/daily/IBM",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:31Z",
+      "status_code": 200,
+      "content_sha256": "6ba4994564e32dc42e9b53c4e5f4ad3a19049cb469208bdc8309cef105d0ab3c"
+    },
+    "ibm_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "IBM",
+      "endpoint": "/tiingo/daily/IBM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:31Z",
+      "status_code": 200,
+      "content_sha256": "07df7d708091625ccdbb3663de0759d3f352c0b4796b0ee518517c06622bd79b"
+    },
+    "ibm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "IBM",
+      "endpoint": "/tiingo/fundamentals/IBM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:32Z",
+      "status_code": 200,
+      "content_sha256": "684ab6119ab6d50685d45938cf268df495f001a4b675560e64518624495f3856"
+    },
+    "jnj_meta.json": {
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/daily/JNJ",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:32Z",
+      "status_code": 200,
+      "content_sha256": "a0310b08908fa73b6a34dcb69019c4a8a1a6415cd974a61cb68aea9899858612"
+    },
+    "jnj_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/daily/JNJ/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:32Z",
+      "status_code": 200,
+      "content_sha256": "816a5c74ba7378e6f4c3de9628ac8e48eecec59c5eded0a6ddc6c3048e28cb59"
+    },
+    "jnj_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "JNJ",
+      "endpoint": "/tiingo/fundamentals/JNJ/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:33Z",
+      "status_code": 200,
+      "content_sha256": "5bb56c494bf034f131701338f34cb9f27d13cc2f634dbd6a8b5a40aa9f311a40"
+    },
+    "jpm_meta.json": {
+      "ticker": "JPM",
+      "endpoint": "/tiingo/daily/JPM",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:33Z",
+      "status_code": 200,
+      "content_sha256": "a2dedc6a9e4884c3ea691123c2ce047ef177ae3a3ce29cb7ba7e5abf985f8524"
+    },
+    "jpm_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "JPM",
+      "endpoint": "/tiingo/daily/JPM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:34Z",
+      "status_code": 200,
+      "content_sha256": "ff80e8f44561424d16dd8b36417b9569ba43e33b414c656acacd391b114e1486"
+    },
+    "jpm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "JPM",
+      "endpoint": "/tiingo/fundamentals/JPM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:34Z",
+      "status_code": 200,
+      "content_sha256": "5b802e93803bb5c5a75f3910d857eddc01d06417676c9a5dc1006276f43c95d3"
+    },
+    "mcd_meta.json": {
+      "ticker": "MCD",
+      "endpoint": "/tiingo/daily/MCD",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:34Z",
+      "status_code": 200,
+      "content_sha256": "b88ba66dcae2ab8c88db264d6729ec10e4874087e7dd4c75bbfba119c4f13a42"
+    },
+    "mcd_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "MCD",
+      "endpoint": "/tiingo/daily/MCD/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:35Z",
+      "status_code": 200,
+      "content_sha256": "b4d1d852a9d0df545fb7b08f18d91bf1027c042e51c0832d7575de9d3d43f061"
+    },
+    "mcd_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "MCD",
+      "endpoint": "/tiingo/fundamentals/MCD/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:35Z",
+      "status_code": 200,
+      "content_sha256": "b5be90567883b14c4ef0a1137dca683b0602a4ae819df6464e23d1944eeb81b5"
+    },
+    "mrk_meta.json": {
+      "ticker": "MRK",
+      "endpoint": "/tiingo/daily/MRK",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:36Z",
+      "status_code": 200,
+      "content_sha256": "469f594a9e0168adaa08aad5314592ea77194a3ccf012d7c57f69550dc785676"
+    },
+    "mrk_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "MRK",
+      "endpoint": "/tiingo/daily/MRK/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:36Z",
+      "status_code": 200,
+      "content_sha256": "6b0d5c3d5d57de0dc9026bcabbb436fb3125e69690c3449250275fb1fa302a2b"
+    },
+    "mrk_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "MRK",
+      "endpoint": "/tiingo/fundamentals/MRK/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:36Z",
+      "status_code": 200,
+      "content_sha256": "0cc8548862608907ab0608286b5cb018e789e10758bd9cbfcf20e8f55b58196c"
+    },
+    "msft_meta.json": {
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/daily/MSFT",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:37Z",
+      "status_code": 200,
+      "content_sha256": "4cfc77905c8aba75763e21fd279dee159cbd5431119a6d2c1c9f3268f21a07bf"
+    },
+    "msft_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/daily/MSFT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:37Z",
+      "status_code": 200,
+      "content_sha256": "e86049b58032fca9cedd752e2a9525f7edddc1ba7ce00b03f327fa1936b2864c"
+    },
+    "msft_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "MSFT",
+      "endpoint": "/tiingo/fundamentals/MSFT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:38Z",
+      "status_code": 200,
+      "content_sha256": "873058599a6c268174779961b006cfda4f791613c8f6002fa5f0e813fe7aed9c"
+    },
+    "nke_meta.json": {
+      "ticker": "NKE",
+      "endpoint": "/tiingo/daily/NKE",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:38Z",
+      "status_code": 200,
+      "content_sha256": "c7adee026e3322fdb0decaf525ce7a06f531bcdf0bd20a5687a5a79227911a33"
+    },
+    "nke_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "NKE",
+      "endpoint": "/tiingo/daily/NKE/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:38Z",
+      "status_code": 200,
+      "content_sha256": "8760a9cc9a2f211478244d3cf7c1d5c28aba9aefdfa331aa081c28dd11aabc2b"
+    },
+    "nke_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "NKE",
+      "endpoint": "/tiingo/fundamentals/NKE/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:39Z",
+      "status_code": 200,
+      "content_sha256": "cec7217d3e27ae901d5476784577e4a0a96cf7620ed08d5d5475bab7ba7bb0ce"
+    },
+    "pg_meta.json": {
+      "ticker": "PG",
+      "endpoint": "/tiingo/daily/PG",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:39Z",
+      "status_code": 200,
+      "content_sha256": "8f9aeba20b95b8b266ff71022e44b429048352b436f2258daacfb76b808fc67b"
+    },
+    "pg_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "PG",
+      "endpoint": "/tiingo/daily/PG/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:40Z",
+      "status_code": 200,
+      "content_sha256": "5b915ac7ace71d3cb23cce5013d28b14fd86f818c678a09a17298652d08b3246"
+    },
+    "pg_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "PG",
+      "endpoint": "/tiingo/fundamentals/PG/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:40Z",
+      "status_code": 200,
+      "content_sha256": "bb9d43dfd149220278c9b4044fe29f449bce969d1408588a1ad6263494cde5c6"
+    },
+    "crm_meta.json": {
+      "ticker": "CRM",
+      "endpoint": "/tiingo/daily/CRM",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:40Z",
+      "status_code": 200,
+      "content_sha256": "a8919f3dcf5b1b800b07bde796f2960f4e609b17b26d4578929f0a3bf0cc9aaf"
+    },
+    "crm_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "CRM",
+      "endpoint": "/tiingo/daily/CRM/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:41Z",
+      "status_code": 200,
+      "content_sha256": "b701775328cb7bd6f456e4dfb08bb53859e2cff6051cee79412a8814c3679371"
+    },
+    "crm_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "CRM",
+      "endpoint": "/tiingo/fundamentals/CRM/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:41Z",
+      "status_code": 200,
+      "content_sha256": "3e035aefe366e01ea3ba843067790ef14889ed0741a64b2a6be80b15ec8ff981"
+    },
+    "trv_meta.json": {
+      "ticker": "TRV",
+      "endpoint": "/tiingo/daily/TRV",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:42Z",
+      "status_code": 200,
+      "content_sha256": "afe2cae0c5409f67ef59f1baf71312740c2f8409fd163c03df32bc832a324831"
+    },
+    "trv_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "TRV",
+      "endpoint": "/tiingo/daily/TRV/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:42Z",
+      "status_code": 200,
+      "content_sha256": "89fd3308f49d30867720b356ea5ed43a2ed58703625eaf9a7d8e0e1126d65d47"
+    },
+    "trv_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "TRV",
+      "endpoint": "/tiingo/fundamentals/TRV/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:43Z",
+      "status_code": 200,
+      "content_sha256": "215692968e461243e95341b6117f74d176fae66092e78dae8f373cbf662ebc34"
+    },
+    "unh_meta.json": {
+      "ticker": "UNH",
+      "endpoint": "/tiingo/daily/UNH",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:43Z",
+      "status_code": 200,
+      "content_sha256": "0c84387ea504aab5c36e9dedfbc27ed05b11e461d11a2f0d93c2d07b9084db57"
+    },
+    "unh_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "UNH",
+      "endpoint": "/tiingo/daily/UNH/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:44Z",
+      "status_code": 200,
+      "content_sha256": "7522e25664d7f1366b2a775425535b50200e8f6a07f3c2db73f0e80df51c2711"
+    },
+    "unh_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "UNH",
+      "endpoint": "/tiingo/fundamentals/UNH/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:44Z",
+      "status_code": 200,
+      "content_sha256": "8288769e803d703b4687699bccf4ed902a6c5d7dbb8a9f8191fd661ec52389d8"
+    },
+    "v_meta.json": {
+      "ticker": "V",
+      "endpoint": "/tiingo/daily/V",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:44Z",
+      "status_code": 200,
+      "content_sha256": "4373d2e76f30375d249105a52acccf6b3f308d90ad0270de2755e4c5a34a6d42"
+    },
+    "v_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "V",
+      "endpoint": "/tiingo/daily/V/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:45Z",
+      "status_code": 200,
+      "content_sha256": "9037a2b628188e3140b8fb640e1c6ff372a8be0907539f873bb3c68afa8a1a0f"
+    },
+    "v_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "V",
+      "endpoint": "/tiingo/fundamentals/V/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:45Z",
+      "status_code": 200,
+      "content_sha256": "b84904deb27267277f82d1000790a9719ebb9304a99bccb5a3fd30fb400cd0db"
+    },
+    "wmt_meta.json": {
+      "ticker": "WMT",
+      "endpoint": "/tiingo/daily/WMT",
+      "params": {},
+      "retrieved_at_utc": "2026-09-19T23:37:45Z",
+      "status_code": 200,
+      "content_sha256": "5571f04c4a9395aa4d95bb3ef8f8e77698e7f78340b200f05cb2dde01690a2ae"
+    },
+    "wmt_eod_prices_2025-09-05_2026-09-15.json": {
+      "ticker": "WMT",
+      "endpoint": "/tiingo/daily/WMT/prices",
+      "params": {
+        "startDate": "2025-09-05",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:46Z",
+      "status_code": 200,
+      "content_sha256": "e9a38ba24f537e9427cb6ab58cce9fac2ed2e0b9a18018491beb885f64dcd96f"
+    },
+    "wmt_fundamentals_daily_2025-09-15_2026-09-15.json": {
+      "ticker": "WMT",
+      "endpoint": "/tiingo/fundamentals/WMT/daily",
+      "params": {
+        "startDate": "2025-09-15",
+        "endDate": "2026-09-15"
+      },
+      "retrieved_at_utc": "2026-09-19T23:37:46Z",
+      "status_code": 200,
+      "content_sha256": "a038e115f2cf211b77cc3416b0580a3ba4ac5fdb453a6e9562ba508b4d540fd4"
+    }
+  },
+  "last_blocker": null
+}
