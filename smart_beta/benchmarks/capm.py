@@ -331,16 +331,28 @@ def _assign_groups(values: pd.Series, labels: Sequence[str]) -> pd.Series:
     return buckets.map(mapping)
 
 
-def _add_mcap_scope(panel: pd.DataFrame, exclude_bottom_pct: float) -> None:
+def _add_mcap_scope(
+    panel: pd.DataFrame,
+    exclude_bottom_pct: float,
+    *,
+    lag_col: str = _LAG_COL,
+    scope_col: str = _SCOPE_COL,
+) -> None:
     """Mark rows above the ``exclude_bottom_pct`` market-cap percentile.
 
     CH-3 excludes the smallest 30% of A-shares (shell stocks) from its factor
-    sorts; this adds the boolean ``_SCOPE_COL`` column implementing that
-    screen.  The percentile is computed cross-sectionally on *lagged* market
-    cap so no same-period information leaks into the sort breakpoint.
+    sorts; this adds the boolean ``scope_col`` column implementing that
+    screen.  The percentile is computed cross-sectionally on ``lag_col``
+    market cap so no same-period information leaks into the sort breakpoint.
+
+    ``lag_col``/``scope_col`` are additive parameters so the Phase 5B
+    PIT-native CH3/CH4 path can reuse this exact screen on its own
+    formation-fixed market-cap and scope column names.  Both default to the
+    legacy constants, so every pre-Phase-5B caller (``ch3``/``ch4`` and their
+    tests) is byte-for-byte unaffected.
     """
     if exclude_bottom_pct <= 0:
-        panel[_SCOPE_COL] = panel[_LAG_COL].notna()
+        panel[scope_col] = panel[lag_col].notna()
         return
 
     def _scope(values: pd.Series) -> pd.Series:
@@ -350,8 +362,8 @@ def _add_mcap_scope(panel: pd.DataFrame, exclude_bottom_pct: float) -> None:
         cutoff = valid.quantile(exclude_bottom_pct)
         return values > cutoff
 
-    panel[_SCOPE_COL] = panel.groupby(DATE_COL, group_keys=False)[
-        _LAG_COL
+    panel[scope_col] = panel.groupby(DATE_COL, group_keys=False)[
+        lag_col
     ].transform(_scope)
 
 
@@ -366,7 +378,9 @@ def _add_cross_sectional_groups(
     """Add a group-assignment column, optionally restricted to ``scope_col``.
 
     ``scope_col`` lets CH-3/CH-4 apply the shell screen (by market cap) to
-    *every* characteristic sort, not just to the size sort.
+    *every* characteristic sort, not just to the size sort.  The Phase 5B
+    PIT-native path passes its own scope-column name here; the default of
+    ``None`` (unscoped) is the legacy FF3/FF5 behavior and is unchanged.
     """
     values = panel[value_col]
     if scope_col is not None:

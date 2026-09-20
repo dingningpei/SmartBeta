@@ -52,17 +52,30 @@ _SIZE_LABELS = ("small", "big")
 _VALUE_LABELS = ("low", "neutral", "high")
 
 
-def _add_ch3_size_groups(panel: pd.DataFrame, exclude_bottom_pct: float) -> None:
+def _add_ch3_size_groups(
+    panel: pd.DataFrame,
+    exclude_bottom_pct: float,
+    *,
+    lag_col: str = _LAG_COL,
+    scope_col: str = _SCOPE_COL,
+) -> None:
     """Add the shell screen and CH-3 size legs to ``panel``.
 
-    The bottom ``exclude_bottom_pct`` of lagged market cap is marked out of
-    scope and then the remaining stocks are split at their median into
+    The bottom ``exclude_bottom_pct`` of ``lag_col`` market cap is marked out
+    of scope and then the remaining stocks are split at their median into
     ``small``/``big``.  Exposed (as a private helper) so the test suite can
     assert the smallest stocks never land in the small leg.
+
+    ``lag_col``/``scope_col`` are additive pass-throughs (Phase 5B P5B-3) so
+    the PIT-native path can drive this identical construction from its own
+    formation-fixed market-cap and scope column names.  The defaults are the
+    legacy constants, so legacy ``ch3``/``ch4`` behavior is unchanged.
     """
-    _add_mcap_scope(panel, exclude_bottom_pct)
+    _add_mcap_scope(
+        panel, exclude_bottom_pct, lag_col=lag_col, scope_col=scope_col
+    )
     _add_cross_sectional_groups(
-        panel, _LAG_COL, "size_grp", _SIZE_LABELS, scope_col=_SCOPE_COL
+        panel, lag_col, "size_grp", _SIZE_LABELS, scope_col=scope_col
     )
 
 
