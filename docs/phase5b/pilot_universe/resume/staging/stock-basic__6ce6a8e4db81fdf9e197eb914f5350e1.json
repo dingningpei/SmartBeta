@@ -1,0 +1,57 @@
+{
+  "identity": "stock-basic__6ce6a8e4db81fdf9e197eb914f5350e1",
+  "endpoint": "stock_basic",
+  "params": {
+    "ts_code": "000858.SZ",
+    "fields": "ts_code,name,list_date,delist_date,list_status"
+  },
+  "label": "000858.SZ::stock_basic",
+  "metadata": {
+    "ts_code": "000858.SZ",
+    "pilot_identity": "000858.SZ::stock_basic",
+    "task": "P5B-4"
+  },
+  "retrieved_at_utc": "2026-09-20T08:05:44Z",
+  "status_code": 200,
+  "body_format": "json-canonical",
+  "content_sha256": "eb4cc457a169c9e12dd04174ab6448c09e5513dea766cfc7fc7da37323845a6a",
+  "body": {
+    "request_id": "",
+    "code": 0,
+    "msg": "",
+    "data": {
+      "fields": [
+        "ts_code",
+        "name",
+        "list_date",
+        "delist_date",
+        "list_status"
+      ],
+      "items": [
+        [
+          "000858.SZ",
+          "五粮液",
+          "19980427",
+          null,
+          "L"
+        ],
+        [
+          "000858.SZ",
+          "五粮液",
+          "19980427",
+          null,
+          null
+        ],
+        [
+          "000858.SZ",
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    "api_name": "stock_basic",
+    "count": 3
+  }
+}

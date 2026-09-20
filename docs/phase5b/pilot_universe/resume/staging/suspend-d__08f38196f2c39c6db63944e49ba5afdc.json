@@ -1,0 +1,28 @@
+{
+  "identity": "suspend-d__08f38196f2c39c6db63944e49ba5afdc",
+  "endpoint": "suspend_d",
+  "params": {
+    "ts_code": "000858.SZ"
+  },
+  "label": "000858.SZ::suspend_d",
+  "metadata": {
+    "ts_code": "000858.SZ",
+    "pilot_identity": "000858.SZ::suspend_d",
+    "task": "P5B-4"
+  },
+  "retrieved_at_utc": "2026-09-20T08:22:51Z",
+  "status_code": 200,
+  "body_format": "json-canonical",
+  "content_sha256": "d6bb210aaf7b65a57b131542d07a9882a31a5c50b6ed1e5eca082cc1b9be88be",
+  "body": {
+    "request_id": "",
+    "code": 0,
+    "msg": "ok",
+    "data": {
+      "fields": [],
+      "items": []
+    },
+    "api_name": "suspend_d",
+    "count": 0
+  }
+}
