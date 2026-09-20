@@ -76,6 +76,38 @@ line P4DB-9 must carry forward verbatim is
 :data:`FLOAT_MARKET_CAP_CERTIFICATION_STATUS`:
 ``FLOAT MARKET CAP = DIAGNOSTIC ONLY, NOT INDEPENDENTLY CERTIFIED``.
 
+Blessed turnover extras: ``vol`` and ``total_share`` (Phase 5B / P5B-2)
+---------------------------------------------------------------------
+Phase 5B's CH4 abnormal-turnover characteristic is
+``daily_turnover_t = vol_t / total_share_t``. That needs two quantities,
+both of which this adapter already receives but neither of which was
+previously a *blessed* (documented, non-underscore, research-consumable)
+column. P5B-2 promotes exactly those two, and only those two:
+
+* :data:`RAW_TRADING_VOLUME_COL` (``vol``) on the raw-return panel -- the
+  vendor's own ``daily.vol`` exactly as reported, native units, **never
+  adjusted and never filled**. This is deliberately *not* a
+  ``PIT_RAW_RETURN_PANEL_SCHEMA`` required column, exactly like
+  ``total_mcap``/``float_mcap`` on ``PIT_MARKET_CAP_SCHEMA``: Tiingo's
+  implementation of the same ABC method is untouched and no existing
+  conformance test can break. A missing value is ``NaN`` -- never a
+  fabricated or forward-filled volume.
+* :data:`SHARES_OUTSTANDING_COL` (``total_share``) on the market-cap panel --
+  the vendor's own ``daily_basic.total_share`` exactly as reported. This is a
+  promotion of the already-present ``_total_share`` diagnostic; it is kept
+  **alongside**, never replacing, that diagnostic or the still-underscore
+  ``_close``/``_float_share``/``_total_mcap_sanity_ratio`` columns. Only this
+  one diagnostic is blessed because it is the one Phase 4D-B item 8 already
+  mechanically proved usable (``CH4 TURNOVER FEASIBILITY = PASS (mechanical
+  only)``), which keeps the blessing narrow and evidence-backed rather than a
+  blanket upgrade.
+
+Neither column is certified beyond mechanical availability.
+:data:`TURNOVER_DATA_CERTIFICATION_STATUS` records that plainly:
+``total_share`` is **not** PIT-immutable (Phase 4D-B item 8 observed it
+stepping mid-window), and ``vol / total_share`` is **not** a validated
+free-float turnover measure.
+
 Trading status: four flags, explicit undeterminable state
 ---------------------------------------------------------
 Unlike Tiingo (volume-derived ``is_zero_volume`` only), China A-shares have
@@ -158,6 +190,10 @@ __all__ = [
     "IS_LIMIT_UP_COL",
     "IS_LIMIT_DOWN_COL",
     "IS_ST_COL",
+    # blessed turnover extras (P5B-2)
+    "RAW_TRADING_VOLUME_COL",
+    "SHARES_OUTSTANDING_COL",
+    "TURNOVER_DATA_CERTIFICATION_STATUS",
     # mappers
     "map_daily_to_raw_returns",
     "map_daily_basic_to_market_cap",
@@ -180,6 +216,27 @@ TOTAL_MARKET_CAP_SANITY_FIELDS = ("total_share", "close")
 
 #: The vendor field emitted as ``float_mcap`` (diagnostic-only).
 FLOAT_MARKET_CAP_PRIMARY_FIELD = "circ_mv"
+
+#: Blessed (documented, non-underscore) extra column carrying the vendor's
+#: own raw ``daily.vol`` -- native units, never adjusted, never filled. Not a
+#: ``PIT_RAW_RETURN_PANEL_SCHEMA`` required column (see module docstring).
+RAW_TRADING_VOLUME_COL = "vol"
+
+#: Blessed (documented, non-underscore) extra column carrying the vendor's
+#: own ``daily_basic.total_share``. Kept alongside the still-underscore
+#: ``_total_share`` diagnostic. Not a ``PIT_MARKET_CAP_SCHEMA`` required
+#: column (see module docstring).
+SHARES_OUTSTANDING_COL = "total_share"
+
+#: Literal certification line Phase 5B's certification report (P5B-8) must
+#: carry for the CH4 turnover leg. Mechanical availability is the only claim;
+#: PIT-immutability and free-float semantics are explicitly NOT CERTIFIED.
+TURNOVER_DATA_CERTIFICATION_STATUS = (
+    "TURNOVER DATA = MECHANICAL AVAILABILITY ONLY; "
+    "total_share PIT-IMMUTABILITY NOT CERTIFIED "
+    "(Phase 4D-B item 8 observed it stepping mid-window); "
+    "vol/total_share as a validated free-float turnover measure NOT CERTIFIED"
+)
 
 #: Literal lines P4DB-9's certification report must carry. Do not reword.
 TOTAL_MARKET_CAP_CERTIFICATION_STATUS = (
@@ -262,6 +319,15 @@ def map_daily_to_raw_returns(
     zero is emitted in its place. Rows whose ``close`` is null are skipped
     and do not break the chain for later rows.
 
+    In addition to the required ``raw_ret`` column, the frame always carries
+    the blessed extra column :data:`RAW_TRADING_VOLUME_COL` (``vol``): the
+    vendor's own ``daily.vol`` for **that row's own date**, native units,
+    copied verbatim -- never adjusted, never scaled, never filled. A row
+    whose ``vol`` is missing/blank gets ``NaN`` (the return is still emitted;
+    only the volume is unknown). Because ``vol`` is an *extra* column, not a
+    ``PIT_RAW_RETURN_PANEL_SCHEMA`` required column, every other
+    ``PITDataSource`` implementation (e.g. Tiingo's) is unaffected.
+
     ``daily_rows`` is the payload for exactly one ``stock_id``. If any row
     carries a ``ts_code`` disagreeing with ``stock_id`` this fails closed
     rather than silently mapping another security's prices onto this one.
@@ -271,25 +337,37 @@ def map_daily_to_raw_returns(
     rows = _sorted_trade_rows(daily_rows)
     _reject_mismatched_codes(rows, stock_id)
 
-    valid: list[tuple[pd.Timestamp, float]] = []
+    valid: list[tuple[pd.Timestamp, float, float]] = []
     for row in rows:
         close = row.get("close")
         if close is None:
             continue
-        valid.append((_parse_trade_date(row["trade_date"]), float(close)))
+        vol = _optional_float(row.get(RAW_TRADING_VOLUME_COL))
+        valid.append(
+            (
+                _parse_trade_date(row["trade_date"]),
+                float(close),
+                vol if vol is not None else float("nan"),
+            )
+        )
 
     dates: list[pd.Timestamp] = []
     rets: list[float] = []
-    for (_, prev_close), (curr_date, curr_close) in zip(
+    volumes: list[float] = []
+    for (_, prev_close, _), (curr_date, curr_close, curr_vol) in zip(
         valid[:-1], valid[1:]
     ):
         dates.append(curr_date)
         rets.append(curr_close / prev_close - 1.0)
+        volumes.append(curr_vol)
 
     frame = _build_frame(
         dates=dates,
         stock_id=stock_id,
-        extra={RAW_RETURN_COL: pd.Series(rets, dtype="float64")},
+        extra={
+            RAW_RETURN_COL: pd.Series(rets, dtype="float64"),
+            RAW_TRADING_VOLUME_COL: pd.Series(volumes, dtype="float64"),
+        },
         source_endpoint=source_endpoint,
     )
     validate_panel(frame, PIT_RAW_RETURN_PANEL_SCHEMA, name="raw_returns")
@@ -315,6 +393,18 @@ def map_daily_basic_to_market_cap(
     distinct -- and is **DIAGNOSTIC ONLY, NOT INDEPENDENTLY CERTIFIED**:
     ``FLOAT MARKET CAP = DIAGNOSTIC ONLY, NOT INDEPENDENTLY CERTIFIED``.
     It is never interchangeable with ``total_mcap``.
+
+    The frame also carries the blessed extra column
+    :data:`SHARES_OUTSTANDING_COL` (``total_share``): the vendor's own
+    ``daily_basic.total_share`` for that row, verbatim. It duplicates the
+    value of the retained ``_total_share`` diagnostic (both are emitted; the
+    underscore column is not removed) so a research consumer has a
+    documented, non-underscore name for the CH4 turnover denominator
+    ``vol / total_share``. It is an *extra* column, not a
+    ``PIT_MARKET_CAP_SCHEMA`` required column, so it does not change any
+    conformance contract. A missing ``total_share`` is ``NaN``, never a
+    fabricated or forward-filled share count, and never silently substituted
+    with ``float_share``.
 
     A row whose ``total_mv`` is missing/null is excluded from the output --
     no fabricated, zero-filled, or forward-filled canonical value. If
@@ -368,6 +458,7 @@ def map_daily_basic_to_market_cap(
     extra = {
         TOTAL_MARKET_CAP_COL: pd.Series(totals, dtype="float64"),
         FLOAT_MARKET_CAP_COL: pd.Series(floats, dtype="float64"),
+        SHARES_OUTSTANDING_COL: pd.Series(total_share, dtype="float64"),
         "_close": pd.Series(closes, dtype="float64"),
         "_total_share": pd.Series(total_share, dtype="float64"),
         "_float_share": pd.Series(float_share, dtype="float64"),
