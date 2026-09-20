@@ -1,0 +1,39 @@
+{
+  "request_id": "",
+  "code": 0,
+  "msg": "",
+  "data": {
+    "fields": [
+      "ts_code",
+      "name",
+      "list_date",
+      "delist_date",
+      "list_status"
+    ],
+    "items": [
+      [
+        "000858.SZ",
+        "五粮液",
+        "19980427",
+        null,
+        "L"
+      ],
+      [
+        "000858.SZ",
+        "五粮液",
+        "19980427",
+        null,
+        null
+      ],
+      [
+        "000858.SZ",
+        null,
+        null,
+        null,
+        null
+      ]
+    ]
+  },
+  "api_name": "stock_basic",
+  "count": 3
+}
