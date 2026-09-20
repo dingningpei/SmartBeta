@@ -11,6 +11,12 @@ policy requirement end to end, against **both** fixture sources:
 * the real merged ``TiingoPITSource``, fed by verbatim Phase 4B Tiingo
   fixture copies under ``tests/fixtures/research_inputs/``.
 
+P5B-2 adds a third, narrower real source for the CH4 turnover inputs: the
+real ``TushareAShareSource`` fed by the proxy-observed Phase 4D-B
+``market_data`` fixtures, used to prove ``get_raw_trading_volume`` /
+``get_shares_outstanding`` carry the blessed ``vol`` / ``total_share``
+columns end to end (and fail closed when a source lacks them).
+
 Anti-tautology discipline: the realized-return and market-cap value checks
 compare against the already-frozen Phase 3 primitive's own output
 (``PointInTimeView.as_of(t).adjusted_returns`` / ``.market_cap``) called
@@ -60,9 +66,13 @@ from smart_beta.research_inputs.fundamentals_coverage import (
     FundamentalsRetrievalResult,
 )
 from smart_beta.research_inputs.inputs import (
+    RAW_TRADING_VOLUME_COL,
+    SHARES_OUTSTANDING_COL,
     get_capitalization_weights,
     get_fundamentals,
+    get_raw_trading_volume,
     get_realized_returns,
+    get_shares_outstanding,
     get_tradability,
 )
 from smart_beta.research_inputs.tradability import (
@@ -73,6 +83,7 @@ from smart_beta.research_inputs.tradability import (
 )
 from smart_beta.vendors.tiingo.client import TiingoClient, replay_transport
 from smart_beta.vendors.tiingo.source import TiingoPITSource
+from smart_beta.vendors.tushare.source import TushareAShareSource
 
 # ---------------------------------------------------------------------------
 # Fixture paths / constants
@@ -156,6 +167,105 @@ def _tiingo_source(
 
 def _synthetic_view() -> PointInTimeView:
     return PointInTimeView(SyntheticPITSource())
+
+
+# ---------------------------------------------------------------------------
+# Minimal real-Tushare harness for P5B-2's turnover inputs
+# ---------------------------------------------------------------------------
+_TUSHARE_MD_DIR = (
+    Path(__file__).resolve().parent / "fixtures" / "tushare" / "market_data"
+)
+_TUSHARE_PINGAN_ID = "000001.SZ"
+
+
+class _TushareMarketDataClient:
+    """Transport-neutral client over the recorded real Tushare market data.
+
+    Serves ``daily``/``daily_basic`` rows for ``000001.SZ`` filtered by the
+    requested compact date range. The fixtures are the same proxy-observed
+    specimens Phase 4D-B recorded (including item 8's real ``total_share``
+    step); no fixture is fabricated here.
+    """
+
+    def __init__(self) -> None:
+        self._rows = {
+            api: self._load(filename)
+            for api, filename in {
+                "daily": "daily_end_date-20131231_start_date-20130101_ts_code-000001.SZ.json",
+                "daily_basic": "daily_basic_end_date-20131231_start_date-20130101_ts_code-000001.SZ.json",
+            }.items()
+        }
+
+    @staticmethod
+    def _load(filename: str) -> list[dict]:
+        payload = json.loads(
+            (_TUSHARE_MD_DIR / filename).read_text(encoding="utf-8")
+        )["data"]
+        return [dict(zip(payload["fields"], row)) for row in payload["items"]]
+
+    def fetch(
+        self, api_name: str, *, retry_on_empty: bool = False, **params: str
+    ) -> dict:
+        rows = self._rows[api_name]
+        fields = list(rows[0].keys())
+        start = params.get("start_date")
+        end = params.get("end_date")
+        selected = [
+            row
+            for row in rows
+            if (start is None or str(row["trade_date"]) >= start)
+            and (end is None or str(row["trade_date"]) <= end)
+        ]
+        return {
+            "fields": fields,
+            "items": [[row.get(field) for field in fields] for row in selected],
+        }
+
+
+class _VolumeOnlySource:
+    """Test double carrying a blessed ``vol`` extra column."""
+
+    def get_raw_returns(self, start: object, end: object) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                DATE_COL: pd.to_datetime(["2013-06-18", "2013-06-20"]),
+                STOCK_COL: pd.Series(
+                    [_TUSHARE_PINGAN_ID, _TUSHARE_PINGAN_ID], dtype="string"
+                ),
+                RAW_RETURN_COL: [0.01, -0.4],
+                RAW_TRADING_VOLUME_COL: [357169.25, 826864.18],
+            }
+        )
+
+
+class _SharesSource:
+    """Test double carrying a blessed ``total_share`` extra column."""
+
+    def get_market_cap(self, start: object, end: object) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                DATE_COL: pd.to_datetime(["2013-06-18", "2013-06-20"]),
+                STOCK_COL: pd.Series(
+                    [_TUSHARE_PINGAN_ID, _TUSHARE_PINGAN_ID], dtype="string"
+                ),
+                TOTAL_MARKET_CAP_COL: [8_000_000.0, 10_000_000.0],
+                SHARES_OUTSTANDING_COL: [512335.0, 819736.0],
+            }
+        )
+
+
+class _FloatShareOnlySource:
+    """A source that carries ``float_share`` but not ``total_share``."""
+
+    def get_market_cap(self, start: object, end: object) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                DATE_COL: pd.to_datetime(["2013-06-18"]),
+                STOCK_COL: pd.Series([_TUSHARE_PINGAN_ID], dtype="string"),
+                FLOAT_MARKET_CAP_COL: [4_000_000.0],
+                "float_share": [557590.0],
+            }
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -293,6 +403,95 @@ def test_capitalization_weights_raises_when_total_is_absent() -> None:
     view = PointInTimeView(_FloatOnlySource())  # type: ignore[arg-type]
     with pytest.raises(ValueError, match=TOTAL_MARKET_CAP_COL):
         get_capitalization_weights(view, "2024-01-02", "2024-01-05")
+
+
+# ---------------------------------------------------------------------------
+# P5B-2: raw trading volume and shares outstanding
+# ---------------------------------------------------------------------------
+def test_raw_trading_volume_returns_only_the_blessed_vol_column() -> None:
+    view = PointInTimeView(_VolumeOnlySource())  # type: ignore[arg-type]
+    result = get_raw_trading_volume(view, "2013-06-18", "2013-06-20")
+
+    assert list(result.columns) == [DATE_COL, STOCK_COL, RAW_TRADING_VOLUME_COL]
+    assert RAW_RETURN_COL not in result.columns
+    assert result[RAW_TRADING_VOLUME_COL].tolist() == [357169.25, 826864.18]
+
+
+def test_raw_trading_volume_raises_when_vol_is_absent() -> None:
+    # SyntheticPITSource's raw-return panel is exactly the required schema
+    # (raw_ret only) -- no blessed vol column, so this must fail closed.
+    view = _synthetic_view()
+    with pytest.raises(ValueError, match=RAW_TRADING_VOLUME_COL):
+        get_raw_trading_volume(view, "2019-01-01", "2021-12-31")
+
+
+def test_shares_outstanding_returns_only_the_blessed_total_share() -> None:
+    view = PointInTimeView(_SharesSource())  # type: ignore[arg-type]
+    result = get_shares_outstanding(view, "2013-06-18", "2013-06-20")
+
+    assert list(result.columns) == [DATE_COL, STOCK_COL, SHARES_OUTSTANDING_COL]
+    assert TOTAL_MARKET_CAP_COL not in result.columns
+    assert FLOAT_MARKET_CAP_COL not in result.columns
+    assert result[SHARES_OUTSTANDING_COL].tolist() == [512335.0, 819736.0]
+
+
+def test_shares_outstanding_never_substitutes_float_share() -> None:
+    view = PointInTimeView(_FloatShareOnlySource())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=SHARES_OUTSTANDING_COL):
+        get_shares_outstanding(view, "2013-06-18", "2013-06-18")
+
+
+def test_shares_outstanding_raises_on_the_synthetic_source() -> None:
+    # The synthetic source emits both required mcap columns but no
+    # total_share extra; the fail-closed check must fire rather than
+    # silently returning an empty or float-derived frame.
+    view = _synthetic_view()
+    with pytest.raises(ValueError, match=SHARES_OUTSTANDING_COL):
+        get_shares_outstanding(view, "2019-01-01", "2021-12-31")
+
+
+def test_turnover_inputs_real_tushare_end_to_end() -> None:
+    """The blessed columns flow source -> view -> research-inputs function."""
+    source = TushareAShareSource(
+        [_TUSHARE_PINGAN_ID], _TushareMarketDataClient()
+    )
+    view = PointInTimeView(source)
+
+    volume = get_raw_trading_volume(view, "2013-01-01", "2013-12-31")
+    shares = get_shares_outstanding(view, "2013-01-01", "2013-12-31")
+
+    assert list(volume.columns) == [DATE_COL, STOCK_COL, RAW_TRADING_VOLUME_COL]
+    assert list(shares.columns) == [DATE_COL, STOCK_COL, SHARES_OUTSTANDING_COL]
+    assert not volume.empty and volume[RAW_TRADING_VOLUME_COL].notna().all()
+    assert not shares.empty
+
+    # Real vendor values, joined on (date, stock_id): the 2013-06-20
+    # total_share step (512,335 -> 819,736) is present, and turnover is
+    # finite and positive where shares are known -- the exact mechanical
+    # feasibility Phase 4D-B item 8 established, now reachable through the
+    # trusted research-inputs boundary.
+    joined = volume.merge(shares, on=[DATE_COL, STOCK_COL], how="inner")
+    assert len(joined) > 0
+    turnover = joined[RAW_TRADING_VOLUME_COL] / joined[SHARES_OUTSTANDING_COL]
+    finite = turnover.dropna()
+    assert len(finite) > 0
+    assert (finite > 0).all()
+
+    at_step = shares.loc[shares[DATE_COL] == pd.Timestamp("2013-06-20")]
+    assert float(at_step.iloc[0][SHARES_OUTSTANDING_COL]) == pytest.approx(819736.0)
+
+
+def test_blessed_turnover_column_names_agree_across_layers() -> None:
+    """The string contract must not drift between the vendor and the boundary.
+
+    ``research_inputs.inputs`` deliberately cannot import a vendor module
+    (AST-enforced), so the blessed column names are duplicated as literals;
+    this test pins the two copies together.
+    """
+    from smart_beta.vendors.tushare import market_data as tushare_market_data
+
+    assert RAW_TRADING_VOLUME_COL == tushare_market_data.RAW_TRADING_VOLUME_COL
+    assert SHARES_OUTSTANDING_COL == tushare_market_data.SHARES_OUTSTANDING_COL
 
 
 # ---------------------------------------------------------------------------

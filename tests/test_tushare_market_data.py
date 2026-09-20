@@ -24,6 +24,11 @@ Coverage map (required P4DB-4 tests):
   specimen per flag (``is_suspended``, ``is_limit_up``, ``is_limit_down``,
   ``is_st``); explicit ``pd.NA`` (not ``False``) where a signal is
   undeterminable
+
+P5B-2 extends this file with the two blessed turnover extras it promotes:
+``vol`` on the raw-return panel and ``total_share`` on the market-cap panel
+(both non-underscore, neither a required schema column, both propagated by
+the assembled ``TushareAShareSource``).
 """
 
 from __future__ import annotations
@@ -57,17 +62,21 @@ from smart_beta.vendors.tushare.market_data import (
     IS_SUSPENDED_COL,
     LIMIT_FLAG_CERTIFICATION_STATUS,
     NOT_CERTIFIED_LIMIT_BANDS,
+    RAW_TRADING_VOLUME_COL,
+    SHARES_OUTSTANDING_COL,
     ST_NAME_CERTIFICATION_STATUS,
     SUSPENSION_CERTIFICATION_STATUS,
     TOTAL_MARKET_CAP_CERTIFICATION_STATUS,
     TOTAL_MARKET_CAP_PRIMARY_FIELD,
     TRADING_STATUS_FLAG_COLUMNS,
+    TURNOVER_DATA_CERTIFICATION_STATUS,
     classify_limit,
     is_st_name,
     map_daily_basic_to_market_cap,
     map_daily_to_raw_returns,
     map_to_trading_status,
 )
+from smart_beta.vendors.tushare.source import TushareAShareSource
 from smart_beta.vendors.tushare.proxy_client import (
     ProxyTushareClient,
     fixture_key,
@@ -139,6 +148,40 @@ def _row_on(frame: pd.DataFrame, day: str) -> pd.Series:
     matched = frame[frame[DATE_COL] == target]
     assert len(matched) == 1, f"expected exactly one row on {day}, got {len(matched)}"
     return matched.iloc[0]
+
+
+class _MarketDataFixtureClient:
+    """A minimal transport-neutral client over the recorded market-data rows.
+
+    Serves the recorded ``daily``/``daily_basic`` rows for ``000001.SZ`` and
+    applies the requested compact ``start_date``/``end_date`` filter, exactly
+    as the proxy would. Used only to prove the assembled source propagates
+    P5B-2's blessed columns; it deliberately implements no other endpoint.
+    """
+
+    def __init__(self) -> None:
+        self._rows = {
+            "daily": _rows(_DAILY_2013),
+            "daily_basic": _rows(_BASIC_2013),
+        }
+
+    def fetch(
+        self, api_name: str, *, retry_on_empty: bool = False, **params: str
+    ) -> dict:
+        rows = self._rows[api_name]
+        fields = list(rows[0].keys())
+        start = params.get("start_date")
+        end = params.get("end_date")
+        selected = [
+            row
+            for row in rows
+            if (start is None or str(row["trade_date"]) >= start)
+            and (end is None or str(row["trade_date"]) <= end)
+        ]
+        return {
+            "fields": fields,
+            "items": [[row.get(field) for field in fields] for row in selected],
+        }
 
 
 @pytest.fixture(autouse=True)
@@ -215,6 +258,50 @@ def test_raw_returns_reject_a_mismatched_security() -> None:
     rows = _rows(_DAILY_2023)
     with pytest.raises(ValueError, match="refusing to map"):
         map_daily_to_raw_returns(rows, "600000.SH")
+
+
+def test_raw_returns_carries_blessed_raw_vol_column() -> None:
+    """P5B-2: ``vol`` is a blessed (non-underscore) extra column.
+
+    It must be the vendor's own ``daily.vol`` for each row's own date,
+    verbatim, and it must *not* be a required schema column (so Tiingo and
+    every other ``PITDataSource`` implementation are untouched).
+    """
+    rows = _rows(_DAILY_2013)
+    frame = map_daily_to_raw_returns(rows, _PINGAN_ID)
+
+    assert RAW_TRADING_VOLUME_COL in frame.columns
+    assert not RAW_TRADING_VOLUME_COL.startswith("_")
+    assert RAW_TRADING_VOLUME_COL not in PIT_RAW_RETURN_PANEL_SCHEMA.dtypes
+    validate_panel(frame, PIT_RAW_RETURN_PANEL_SCHEMA, name="raw_returns")
+
+    by_date = {str(row["trade_date"]): row for row in rows}
+    for _, out in frame.iterrows():
+        expected = by_date[out[DATE_COL].strftime("%Y%m%d")]["vol"]
+        assert float(out[RAW_TRADING_VOLUME_COL]) == pytest.approx(expected)
+    # The 2013-06-20 ex-date vol is likewise the raw vendor value, never an
+    # adjusted/filled substitute.
+    assert float(_row_on(frame, "2013-06-20")[RAW_TRADING_VOLUME_COL]) == pytest.approx(
+        float(by_date["20130620"]["vol"])
+    )
+
+
+def test_raw_returns_missing_vol_is_nan_never_filled() -> None:
+    rows = [
+        {"ts_code": _PINGAN_ID, "trade_date": "20130104", "close": 10.0, "vol": 100.0},
+        {"ts_code": _PINGAN_ID, "trade_date": "20130107", "close": 11.0, "vol": None},
+        {"ts_code": _PINGAN_ID, "trade_date": "20130108", "close": 12.0},
+    ]
+    frame = map_daily_to_raw_returns(rows, _PINGAN_ID)
+    vol_by_date = dict(zip(frame[DATE_COL], frame[RAW_TRADING_VOLUME_COL]))
+    # The return is still emitted on both later dates; only the volume is
+    # unknown, and it stays NaN rather than being forward-filled from 100.0.
+    assert set(frame[DATE_COL]) == {
+        pd.Timestamp("2013-01-07"),
+        pd.Timestamp("2013-01-08"),
+    }
+    assert pd.isna(vol_by_date[pd.Timestamp("2013-01-07")])
+    assert pd.isna(vol_by_date[pd.Timestamp("2013-01-08")])
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +433,66 @@ def test_daily_basic_1991_coverage_quirk_is_captured_not_laundered() -> None:
     assert len(_rows(_DAILY_1991)) == 167
     frame = map_daily_basic_to_market_cap(_rows(_BASIC_1991), _PINGAN_ID)
     assert len(frame) == 208
+
+
+# ---------------------------------------------------------------------------
+# Blessed turnover extras (P5B-2): total_share and vol
+# ---------------------------------------------------------------------------
+def test_market_cap_carries_blessed_total_share_alongside_diagnostic() -> None:
+    """P5B-2: ``total_share`` is blessed, additive, and not required.
+
+    It must duplicate the retained ``_total_share`` diagnostic exactly and
+    must not disturb any of the other still-underscore diagnostics.
+    """
+    rows = _rows(_BASIC_2013)
+    frame = map_daily_basic_to_market_cap(rows, _PINGAN_ID)
+
+    assert SHARES_OUTSTANDING_COL in frame.columns
+    assert not SHARES_OUTSTANDING_COL.startswith("_")
+    assert SHARES_OUTSTANDING_COL not in PIT_MARKET_CAP_SCHEMA.dtypes
+    # The narrow blessing kept every other diagnostic untouched.
+    for diagnostic in ("_close", "_total_share", "_float_share", "_total_mcap_sanity_ratio"):
+        assert diagnostic in frame.columns, diagnostic
+
+    pd.testing.assert_series_equal(
+        frame[SHARES_OUTSTANDING_COL],
+        frame["_total_share"],
+        check_names=False,
+    )
+    validate_panel(frame, PIT_MARKET_CAP_SCHEMA, name="market_cap")
+
+    by_date = {str(row["trade_date"]): row for row in rows}
+    for _, out in frame.iterrows():
+        expected = by_date[out[DATE_COL].strftime("%Y%m%d")].get("total_share")
+        if expected is None:
+            assert pd.isna(out[SHARES_OUTSTANDING_COL])
+        else:
+            assert float(out[SHARES_OUTSTANDING_COL]) == pytest.approx(float(expected))
+
+
+def test_total_share_blessed_column_preserves_2013_06_20_step() -> None:
+    frame = map_daily_basic_to_market_cap(_rows(_BASIC_2013), _PINGAN_ID)
+    before = _row_on(frame, "2013-06-18")
+    at = _row_on(frame, "2013-06-20")
+    assert float(before[SHARES_OUTSTANDING_COL]) == pytest.approx(512335.0)
+    assert float(at[SHARES_OUTSTANDING_COL]) == pytest.approx(819736.0)
+
+
+def test_assembled_source_propagates_blessed_vol_and_total_share() -> None:
+    """The blessed columns must survive ``TushareAShareSource`` assembly.
+
+    The Wave 2 mappers emit them; this proves the assembled source's
+    ``get_raw_returns``/``get_market_cap`` do not drop them (no source edit
+    was needed because the source delegates to these mappers).
+    """
+    source = TushareAShareSource([_PINGAN_ID], _MarketDataFixtureClient())
+    raw = source.get_raw_returns("2013-01-01", "2013-12-31")
+    market_cap = source.get_market_cap("2013-01-01", "2013-12-31")
+    assert RAW_TRADING_VOLUME_COL in raw.columns
+    assert raw[RAW_TRADING_VOLUME_COL].notna().all()
+    assert pd.api.types.is_float_dtype(raw[RAW_TRADING_VOLUME_COL])
+    assert SHARES_OUTSTANDING_COL in market_cap.columns
+    assert pd.api.types.is_float_dtype(market_cap[SHARES_OUTSTANDING_COL])
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +671,15 @@ def test_suspension_and_st_certification_statuses_are_explicit() -> None:
     assert "002680.SZ" in SUSPENSION_CERTIFICATION_STATUS
     assert "NOT CERTIFIED" in ST_NAME_CERTIFICATION_STATUS
     assert "2021-04-13" in ST_NAME_CERTIFICATION_STATUS
+
+
+def test_turnover_data_certification_status_is_explicit() -> None:
+    """P5B-2's turnover leg is mechanical availability only, nothing more."""
+    assert "MECHANICAL AVAILABILITY ONLY" in TURNOVER_DATA_CERTIFICATION_STATUS
+    assert "total_share PIT-IMMUTABILITY NOT CERTIFIED" in TURNOVER_DATA_CERTIFICATION_STATUS
+    assert "NOT CERTIFIED" in TURNOVER_DATA_CERTIFICATION_STATUS
+    assert RAW_TRADING_VOLUME_COL == "vol"
+    assert SHARES_OUTSTANDING_COL == "total_share"
 
 
 def test_module_uses_only_the_transport_neutral_client_contract() -> None:
