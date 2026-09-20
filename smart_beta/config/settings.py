@@ -43,8 +43,20 @@ class Settings:
     benchmark_size_legs: int = 2
     benchmark_char_legs: int = 3
     # Trailing window, in months, used to estimate "normal" turnover for the
-    # abnormal-turnover sentiment proxy (CH-4).
+    # abnormal-turnover sentiment proxy (CH-4).  Owned by the legacy,
+    # synthetic-only ``ch4.py`` placeholder and deliberately left untouched by
+    # Phase 5B's PIT-native CH4 path.
     turnover_abnormal_window_months: int = 6
+    # Phase 5B P5B-3: trailing trading-day windows for the PIT-native CH4
+    # abnormal-turnover RATIO
+    # ``mean(turnover, short window) / mean(turnover, long window)`` -- a
+    # genuine unit change from the legacy placeholder's month-based window.
+    # These are additive fields; ``turnover_abnormal_window_months`` above is
+    # unchanged.  The long window also doubles as the full-history
+    # sufficiency requirement (a stock without a full long window as of the
+    # formation date gets NaN).
+    ch4_turnover_short_window_days: int = 20
+    ch4_turnover_long_window_days: int = 250
 
     # --- Inference ---
     newey_west_lags: int = 6
