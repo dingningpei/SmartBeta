@@ -1,0 +1,903 @@
+{
+  "_provenance": {
+    "task": "P5B-4 Run-2",
+    "note": "Classification from ACTUAL captured status/body evidence (Run 1 + Run 2). A transport failure is never converted into an entitlement denial, or vice versa.",
+    "precedence": "SUCCESS/ACCESSIBLE > EXPLICIT ENTITLEMENT DENIAL > UPSTREAM/TRANSPORT FAILURE > OTHER UNRESOLVED",
+    "generated_at_utc": "2026-09-20T08:23:06Z",
+    "proxy_determinism": "NOT CERTIFIED",
+    "proxy_sufficient_for_production": "NO",
+    "proxy_observed_not_official": true
+  },
+  "counts": {
+    "SUCCESS/ACCESSIBLE": 27,
+    "EXPLICIT ENTITLEMENT DENIAL": 0,
+    "UPSTREAM/TRANSPORT FAILURE": 9,
+    "OTHER UNRESOLVED": 0
+  },
+  "n_identities": 36,
+  "n_success": 27,
+  "n_denial": 0,
+  "n_transport_failure": 9,
+  "n_other_unresolved": 0,
+  "remaining_unresolved": [
+    "000001.SZ::stk_limit",
+    "000001.SZ::stock_basic",
+    "600519.SH::income",
+    "601318.SH::stock_basic",
+    "601318.SH::fina_indicator",
+    "000858.SZ::daily",
+    "000858.SZ::daily_basic",
+    "000858.SZ::stk_limit",
+    "000858.SZ::dividend"
+  ],
+  "identities": [
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "daily",
+      "identity": "000001.SZ::daily",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000001.SZ__daily.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000001.SZ__daily.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "daily_basic",
+      "identity": "000001.SZ::daily_basic",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000001.SZ__daily_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000001.SZ__daily_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "stk_limit",
+      "identity": "000001.SZ::stk_limit",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000001.SZ__stk_limit.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000001.SZ__stk_limit.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "suspend_d",
+      "identity": "000001.SZ::suspend_d",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000001.SZ__suspend_d.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000001.SZ__suspend_d.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "dividend",
+      "identity": "000001.SZ::dividend",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000001.SZ__dividend.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "stock_basic",
+      "identity": "000001.SZ::stock_basic",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000001.SZ__stock_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000001.SZ__stock_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "income",
+      "identity": "000001.SZ::income",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000001.SZ__income.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "balancesheet",
+      "identity": "000001.SZ::balancesheet",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000001.SZ__balancesheet.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000001.SZ",
+      "endpoint": "fina_indicator",
+      "identity": "000001.SZ::fina_indicator",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000001.SZ__fina_indicator.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "daily",
+      "identity": "600519.SH::daily",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/600519.SH__daily.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "daily_basic",
+      "identity": "600519.SH::daily_basic",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/600519.SH__daily_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "stk_limit",
+      "identity": "600519.SH::stk_limit",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/600519.SH__stk_limit.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "suspend_d",
+      "identity": "600519.SH::suspend_d",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/600519.SH__suspend_d.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/600519.SH__suspend_d.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "dividend",
+      "identity": "600519.SH::dividend",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/600519.SH__dividend.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "stock_basic",
+      "identity": "600519.SH::stock_basic",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/600519.SH__stock_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/600519.SH__stock_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "income",
+      "identity": "600519.SH::income",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/600519.SH__income.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/600519.SH__income.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "balancesheet",
+      "identity": "600519.SH::balancesheet",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/600519.SH__balancesheet.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "600519.SH",
+      "endpoint": "fina_indicator",
+      "identity": "600519.SH::fina_indicator",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/600519.SH__fina_indicator.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/600519.SH__fina_indicator.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "daily",
+      "identity": "601318.SH::daily",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/601318.SH__daily.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "daily_basic",
+      "identity": "601318.SH::daily_basic",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__daily_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/601318.SH__daily_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "stk_limit",
+      "identity": "601318.SH::stk_limit",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__stk_limit.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/601318.SH__stk_limit.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "suspend_d",
+      "identity": "601318.SH::suspend_d",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__suspend_d.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/601318.SH__suspend_d.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "dividend",
+      "identity": "601318.SH::dividend",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/601318.SH__dividend.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "stock_basic",
+      "identity": "601318.SH::stock_basic",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__stock_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/601318.SH__stock_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "income",
+      "identity": "601318.SH::income",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__income.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/601318.SH__income.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "balancesheet",
+      "identity": "601318.SH::balancesheet",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__balancesheet.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/601318.SH__balancesheet.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "601318.SH",
+      "endpoint": "fina_indicator",
+      "identity": "601318.SH::fina_indicator",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/601318.SH__fina_indicator.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/601318.SH__fina_indicator.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "daily",
+      "identity": "000858.SZ::daily",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__daily.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000858.SZ__daily.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "daily_basic",
+      "identity": "000858.SZ::daily_basic",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__daily_basic.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000858.SZ__daily_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "stk_limit",
+      "identity": "000858.SZ::stk_limit",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__stk_limit.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000858.SZ__stk_limit.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "suspend_d",
+      "identity": "000858.SZ::suspend_d",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__suspend_d.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000858.SZ__suspend_d.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "dividend",
+      "identity": "000858.SZ::dividend",
+      "combined_bucket": "UPSTREAM/TRANSPORT FAILURE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "UPSTREAM/TRANSPORT FAILURE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__dividend.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "resume/raw_run2/000858.SZ__dividend.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "stock_basic",
+      "identity": "000858.SZ::stock_basic",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000858.SZ__stock_basic.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "income",
+      "identity": "000858.SZ::income",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__income.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000858.SZ__income.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "balancesheet",
+      "identity": "000858.SZ::balancesheet",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "UPSTREAM/TRANSPORT FAILURE",
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": true,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 503,
+          "error_code": "upstream_pool_exhausted",
+          "bucket": "UPSTREAM/TRANSPORT FAILURE",
+          "raw_file": "raw/000858.SZ__balancesheet.json"
+        },
+        {
+          "run": "run2",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "resume/raw_run2/000858.SZ__balancesheet.json"
+        }
+      ]
+    },
+    {
+      "ts_code": "000858.SZ",
+      "endpoint": "fina_indicator",
+      "identity": "000858.SZ::fina_indicator",
+      "combined_bucket": "SUCCESS/ACCESSIBLE",
+      "attempt_buckets": [
+        "SUCCESS/ACCESSIBLE"
+      ],
+      "attempted_in_run2": false,
+      "evidence": [
+        {
+          "run": "run1",
+          "http_status": 200,
+          "error_code": null,
+          "bucket": "SUCCESS/ACCESSIBLE",
+          "raw_file": "raw/000858.SZ__fina_indicator.json"
+        }
+      ]
+    }
+  ]
+}

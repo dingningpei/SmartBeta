@@ -8,13 +8,17 @@
 | Item | Disposition |
 | --- | --- |
 | Pilot universe selection (per the frozen Phase 5B procedure) | **COMPLETE** — 4 names, frozen below |
-| Bounded Tushare entitlement probe | **PROBE_BLOCKED** — 13/36 identities HTTP 200; 23/36 HTTP 503 `upstream_pool_exhausted` (transient proxy-pool contention) |
+| Run-1 bounded entitlement probe | **PROBE_BLOCKED** — 13/36 identities HTTP 200; 23/36 HTTP 503 `upstream_pool_exhausted` (transient proxy-pool contention) |
+| Run-2 authorized resume + re-probe | **BLOCKED** — 27/36 now SUCCESS/ACCESSIBLE; 9/36 still HTTP 503 `upstream_pool_exhausted`; 0 entitlement denials. See `RESUME_RUN2.md` for the full 36-identity 4-bucket table and Run-2 call accounting. |
 | Entitlement denial of any probed identity | **NONE OBSERVED** — zero HTTP 400/403, zero plan-tier/permission bodies |
-| Universe **entitlement-cleared** (Barrier 3 evidence) | **NO** — not cleared by this run |
+| Universe **entitlement-cleared** (Barrier 3 evidence) | **NO** — 9 identities remain unresolved |
 
 A blocked probe is not a cleared universe. Nothing below may be read as
 entitlement certification, as direct official-Tushare behavior, or as a
-freeze of Barrier 3.
+freeze of Barrier 3. `PROXY DETERMINISM = NOT CERTIFIED` and
+`PROXY SUFFICIENT FOR PRODUCTION = NO` are preserved verbatim and are not
+upgraded. The Run-2 resume, its migration verification, and the full
+combined classification live in `RESUME_RUN2.md`.
 
 Provenance classes used below are kept distinct: **proxy-observed live
 evidence** (this run, or the committed Phase 4D-B live fixtures, explicitly

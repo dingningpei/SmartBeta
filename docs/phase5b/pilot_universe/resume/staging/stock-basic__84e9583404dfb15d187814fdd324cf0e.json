@@ -1,0 +1,43 @@
+{
+  "identity": "stock-basic__84e9583404dfb15d187814fdd324cf0e",
+  "endpoint": "stock_basic",
+  "params": {
+    "ts_code": "600519.SH",
+    "fields": "ts_code,name,list_date,delist_date,list_status"
+  },
+  "label": "600519.SH::stock_basic",
+  "metadata": {
+    "ts_code": "600519.SH",
+    "pilot_identity": "600519.SH::stock_basic",
+    "task": "P5B-4"
+  },
+  "retrieved_at_utc": "2026-09-20T08:21:47Z",
+  "status_code": 200,
+  "body_format": "json-canonical",
+  "content_sha256": "83f6cdd2f6290588762562afec5e55d6351b4e3ddba614d149034d85040584b5",
+  "body": {
+    "request_id": "",
+    "code": 0,
+    "msg": "ok",
+    "data": {
+      "fields": [
+        "ts_code",
+        "name",
+        "list_date",
+        "delist_date",
+        "list_status"
+      ],
+      "items": [
+        [
+          "600519.SH",
+          "贵州茅台",
+          "20010827",
+          "",
+          "L"
+        ]
+      ]
+    },
+    "api_name": "stock_basic",
+    "count": 1
+  }
+}

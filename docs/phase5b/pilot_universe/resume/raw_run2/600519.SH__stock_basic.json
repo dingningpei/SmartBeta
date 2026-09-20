@@ -1,0 +1,25 @@
+{
+  "request_id": "",
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "fields": [
+      "ts_code",
+      "name",
+      "list_date",
+      "delist_date",
+      "list_status"
+    ],
+    "items": [
+      [
+        "600519.SH",
+        "贵州茅台",
+        "20010827",
+        "",
+        "L"
+      ]
+    ]
+  },
+  "api_name": "stock_basic",
+  "count": 1
+}

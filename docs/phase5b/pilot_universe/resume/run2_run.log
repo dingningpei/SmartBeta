@@ -1,0 +1,43 @@
+migration OK: staged-valid=13 (Run-1 successes), missing=23 (Run-1 unresolved). Zero live calls.
+staged-valid: 000001.SZ::balancesheet, 000001.SZ::dividend, 000001.SZ::fina_indicator, 000001.SZ::income, 000858.SZ::fina_indicator, 000858.SZ::stock_basic, 600519.SH::balancesheet, 600519.SH::daily, 600519.SH::daily_basic, 600519.SH::dividend, 600519.SH::stk_limit, 601318.SH::daily, 601318.SH::dividend
+RUN2 000001.SZ::daily             HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 000001.SZ::daily_basic       HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 000001.SZ::stk_limit         HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000001.SZ::suspend_d         HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 000001.SZ::stock_basic       HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 600519.SH::suspend_d         HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 600519.SH::stock_basic       HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 600519.SH::income            HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 600519.SH::fina_indicator    HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::daily_basic       HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::stk_limit         HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::suspend_d         HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::stock_basic       HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 601318.SH::income            HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::balancesheet      HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 601318.SH::fina_indicator    HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000858.SZ::daily             HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000858.SZ::daily_basic       HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000858.SZ::stk_limit         HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000858.SZ::suspend_d         HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 000858.SZ::dividend          HTTP 503   bucket=UPSTREAM/TRANSPORT FAILURE staged=False
+RUN2 000858.SZ::income            HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+RUN2 000858.SZ::balancesheet      HTTP 200   bucket=SUCCESS/ACCESSIBLE         staged=True
+
+=== combined classification ===
+{
+  "SUCCESS/ACCESSIBLE": 27,
+  "EXPLICIT ENTITLEMENT DENIAL": 0,
+  "UPSTREAM/TRANSPORT FAILURE": 9,
+  "OTHER UNRESOLVED": 0
+}
+remaining unresolved:
+  - 000001.SZ::stk_limit
+  - 000001.SZ::stock_basic
+  - 600519.SH::income
+  - 601318.SH::stock_basic
+  - 601318.SH::fina_indicator
+  - 000858.SZ::daily
+  - 000858.SZ::daily_basic
+  - 000858.SZ::stk_limit
+  - 000858.SZ::dividend

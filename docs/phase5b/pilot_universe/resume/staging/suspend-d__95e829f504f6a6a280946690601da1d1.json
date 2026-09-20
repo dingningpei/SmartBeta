@@ -1,0 +1,142 @@
+{
+  "identity": "suspend-d__95e829f504f6a6a280946690601da1d1",
+  "endpoint": "suspend_d",
+  "params": {
+    "ts_code": "601318.SH"
+  },
+  "label": "601318.SH::suspend_d",
+  "metadata": {
+    "ts_code": "601318.SH",
+    "pilot_identity": "601318.SH::suspend_d",
+    "task": "P5B-4"
+  },
+  "retrieved_at_utc": "2026-09-20T08:22:27Z",
+  "status_code": 200,
+  "body_format": "json-canonical",
+  "content_sha256": "5d729dc10c02c106edd77354e958fbb8e39c88f8ec451ea7a80e0f1c8d0d1cf8",
+  "body": {
+    "request_id": "",
+    "code": 0,
+    "msg": "",
+    "data": {
+      "fields": [
+        "ts_code",
+        "trade_date",
+        "suspend_type",
+        "suspend_timing"
+      ],
+      "items": [
+        [
+          "601318.SH",
+          "20141110",
+          "R",
+          null
+        ],
+        [
+          "601318.SH",
+          "20141107",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20120628",
+          "R",
+          null
+        ],
+        [
+          "601318.SH",
+          "20120627",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20120209",
+          "R",
+          null
+        ],
+        [
+          "601318.SH",
+          "20120208",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20110617",
+          "R",
+          null
+        ],
+        [
+          "601318.SH",
+          "20110616",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20110314",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20101101",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20100629",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20091218",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20090807",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20090612",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20090611",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20090610",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20090609",
+          "S",
+          null
+        ],
+        [
+          "601318.SH",
+          "20080717",
+          "S",
+          null
+        ]
+      ]
+    },
+    "api_name": "suspend_d",
+    "count": 18
+  }
+}
