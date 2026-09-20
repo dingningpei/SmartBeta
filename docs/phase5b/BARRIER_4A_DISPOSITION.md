@@ -169,3 +169,121 @@ authorized bounded capture attempt (a fresh Policy C budget, not an
 automatic continuation), a different empirical data source, or a
 plan amendment redefining Barrier 4a's completeness criterion -- none
 of which is decided by this document.
+
+---
+
+## Post-Barrier-4a work and final disposition (D4A-HOLD)
+
+This section records everything done **after** the terminal disposition
+above, none of which reopens P5B-6's own historical result (still
+exactly as recorded above: `80/84`, Policy C `3/3` exhausted, Stage 4
+not reached, Barrier 4a not passed -- **never rewritten**). Each item
+below lives on its own branch/commit; none is merged into P5B-6's own
+evidence branch, and none authorizes live capture, Resume-4, a new
+pilot, Stage 4, or P5B-7.
+
+### P5B-ST1 -- historical ST integration repair (B1)
+
+Merge commit `77b66726b909086507429391d00b10e9fd59b09d` (branch
+`phase5b/task-p5b-st1-historical-st-integration`, reviewed commit
+`23d29cbc336fe3a6ed09f4e2fd62701e42804431`). Wired the already-certified
+`bak_basic`/`is_st_name`/`map_to_trading_status(name_by_date=...)` path
+into the assembled `TushareAShareSource.get_trading_status()`, which had
+never supplied historical name evidence at all (a pre-existing,
+documented, deliberate omission -- not a P5B-6-specific gap). Zero live
+calls; Phase 5A and Phase 4D-B certifications unchanged (`market_data.py`
+and `tradability.py` byte-identical to pre-merge master).
+**B1: REPAIRED** (software only -- see ST3/B2R below for why this alone
+changes nothing about the real pilot's numbers).
+
+### P5B-ST2 -- `bak_basic` acquisition-capability probe
+
+Evidence branch `phase5b/task-p5b-st2-bak-basic-probe`, commit
+`32df213d160e05de98fe86f124651b13a39f6aed` (preserved, **not merged**).
+Exactly 2 authorized live calls, no retry: Shape D (`trade_date` only,
+`ts_code` omitted) returned a full cross-sectional snapshot (4,294
+distinct stocks for one date, including an exact match to the existing
+certified `002450.SZ` specimen) -- **D-CERTIFIED-FOR-PROBED-DATE**.
+Shape B (`ts_code` + `start_date`/`end_date` over ~1,461 days) was
+rejected with the same `date_range_too_large` cap already documented for
+`daily_basic` -- **B-NOT-CERTIFIED** for the probed range (a positive but
+inconclusive signal, not a certification).
+
+### P5B-ST3 -- historical ST snapshot acquisition design
+
+Pure offline design, no live calls, no code changed. Derived the exact
+real requirement for the pilot window: **221 trading dates**
+(`2025-09-30`..`2026-08-31`, matching `884 = 221 x 4` in Stage 3's own
+evidence exactly) -- correcting an earlier ~470-date planning estimate,
+which belonged to CH4's separate turnover lookback window, not to the ST
+requirement. Confirmed `scripts/staged_capture.py`'s existing
+`RequestSpec`/`StagedCaptureSet` architecture already supports a
+`(bak_basic, {trade_date})` identity with **zero framework changes**.
+**Classification: ST3-A.** No capture was executed.
+
+### P5B-B2R -- fundamentals blocker (B2) resolution investigation
+
+Pure offline investigation, no live calls, no code changed. Traced the
+four unresolved P5B-6 raw identities
+(`601318.SH::fina_indicator::20260630`,
+`000858.SZ::fina_indicator::20250930`, `000858.SZ::income::20251231`,
+`000858.SZ::fina_indicator::20260331`) through the real join logic in
+`smart_beta/vendors/tushare/fundamentals.py::_assemble_ch3_records`:
+`fina_indicator` is the sole source of the `ni_ex_nonrecurring` value and
+`income` is the sole source of its anchor vintage -- **no already-captured
+endpoint can substitute for either**. Also found that the actual
+production path (`retrieve_fundamentals`, `allow_partial=False`, 92-day
+sub-interval decomposition) fails the *entire* window for *all four*
+stocks, not just the four raw gaps in isolation, because every required
+fiscal period falls inside one of the three sub-intervals a gap touches.
+At the narrower per-observation level, `000858.SZ` alone loses 11 of 12
+formations because its three gaps land on three consecutive fiscal
+periods with no surviving interim report. **Classification: B2R-C** --
+genuinely load-bearing, no offline fix, no currently-actionable
+independent source; the only identified path is retrying the exact
+exhausted identities, which is explicitly **not authorized**.
+
+### CH3 / CH4 status after all of the above
+
+- **CH3:** software complete; empirically blocked (tradability
+  unresolved for the real window since no `bak_basic` evidence exists for
+  it; fundamentals load-bearing-blocked for `000858.SZ`).
+- **CH4:** software complete; turnover leg **data-ready** (coverage 1.0,
+  all 4 stocks, real evidence, unchanged); empirically blocked for the
+  *same* reasons as CH3 (CH4 reuses `ch3_pit`'s panel loader and the same
+  tradability policy, and needs the full CH3 factor set including E/P for
+  VMG) -- not an independent or additional blocker, and not a lesser one
+  either. **No CH3 or CH4 empirical certification is issued.**
+
+### Final disposition: D4A-HOLD
+
+Phase 5B empirical execution is **suspended pending a material exogenous
+change**. This is not a new barrier classification beyond the one
+recorded above -- it is this document's final, current answer to "what
+happens next," synthesizing P5B-ST1/ST2/ST3/B2R.
+
+**Qualifying material exogenous changes** (any one, independently
+verified *before* any new attempt, never inferred):
+a materially different data provider; an independently confirmed
+upgraded official Tushare entitlement; a newly available qualifying
+institutional/licensed source with explicit semantic equivalence
+established first (field, report period, vintage identity, knowledge
+date, PIT/revision behavior); an independently observable change to the
+proxy/provider's own infrastructure; a newly certified batch/range
+acquisition contract that changes the failed identity's request shape
+itself; an authoritative filing source with independently established
+PIT semantics.
+
+**Explicitly non-qualifying:** elapsed time; desire to continue; "try
+again"; the same proxy; the same endpoint; the same parameters; the same
+missing identity; simply resetting the Policy C invocation counter.
+
+**Safe offline maintenance** (may happen at any time without affecting
+this disposition, and does not by itself move Barrier 4a even
+partially): an ST2 recorder regression test; an offline Shape-D
+snapshot parser/validator built and tested against synthetic fixtures;
+a deterministic completeness checker for a future capture, never run
+against live data; documentation and diagnostics on already-existing
+evidence.
+
+**Barrier 4a: NOT PASSED. P5B-7: BLOCKED. Next wave: NOT AUTHORIZED.**
