@@ -833,11 +833,14 @@ def test_package_reexports_only_its_own_contract_surface():
     assert eval_pkg.EvaluationSpec is EvaluationSpec
     assert eval_pkg.EvaluationRecord is EvaluationRecord
     assert eval_pkg.MetricKey is MetricKey
-    # Sibling task modules must not be imported by this package init.
-    assert not hasattr(eval_pkg, "partition")
-    assert not hasattr(eval_pkg, "forward_returns")
-    assert not hasattr(eval_pkg, "metrics")
-    assert not hasattr(eval_pkg, "engine")
+    # Sibling task modules must not be re-exported by this package init.
+    # Checked via __all__ membership: once partition.py/forward_returns.py/etc.
+    # exist and are imported by their own test files, Python sets those names
+    # as attributes on the package, so hasattr would be a false positive.
+    assert "partition" not in eval_pkg.__all__
+    assert "forward_returns" not in eval_pkg.__all__
+    assert "metrics" not in eval_pkg.__all__
+    assert "engine" not in eval_pkg.__all__
     for name in eval_pkg.__all__:
         assert hasattr(eval_pkg, name)
 
