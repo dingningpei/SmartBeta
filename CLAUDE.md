@@ -58,38 +58,35 @@ automatically rather than asking the user to open Pi sessions by hand.
 "Pi" — but a real, separate Pi CLI runtime **is** installed on this machine
 at `/opt/homebrew/bin/pi` (npm package `@earendil-works/pi-coding-agent`,
 confirmed via `pi --help`/`pi --version` — a general-purpose coding agent
-with its own read/bash/edit/write tools, distinct from Claude Code). It
-supports a non-interactive mode suited to automatic launch from a script:
+with its own read/bash/edit/write tools, distinct from Claude Code).
 
-```
-cd <worktree_path> && pi --print --provider <provider> --model <model> \
-  --session-dir <phase-scoped dir> --name "<task-id>" \
-  -- "Execute <task-id> only. Follow the attached frozen plan/task spec \
-exactly: @worker_tasks/phaseN/phaseN-plan.md \
-@worker_tasks/phaseN/task-<task-id>-<slug>.md. Stop only when complete or \
-blocked. Report tests, evidence, and the exact completion commit SHA."
-```
+**Worker launch mandate (Herdr) — binding from Phase 6 Wave 2 onward:**
+Every Pi implementation worker must be launched **through Herdr** —
+installed at `/opt/homebrew/bin/herdr` (v0.8.0, "terminal workspace manager
+for AI coding agents", with a running local server at
+`~/.config/herdr/herdr.sock` and the relevant surfaces `herdr worktree
+create|open|list` and `herdr agent start|prompt|wait|read|list|get|attach`)
+— so that every worker stays **visible and manageable** in the Herdr
+workspace. **Direct hidden `pi -p`/`--print` child-process launches are
+FORBIDDEN** unless the user explicitly authorizes them for a specific run.
+(Phase 6 Wave 1 was executed with direct `pi --print` child launches; it is
+explicitly grandfathered and is not invalidated by this mandate.) The exact
+Herdr launch form for this project has not yet been exercised: confirm it
+read-only before the first Herdr-launched wave rather than guessing syntax.
 
-`pi -p/--print` processes one prompt and exits (suitable for
-`Bash`/`run_in_background`); the worktree is selected by `cd`, exactly like
-any other CLI tool operating on the current directory — there is no
-separate `--cwd` flag. Readiness (is a provider/model actually configured)
-can be checked without printing a secret via `pi auth check --provider
-<name> --model <pattern> --no-refresh` (omit `--credentials`); `--no-refresh`
-avoids the OAuth-refresh network call `pi auth check` otherwise performs by
-default.
+The underlying runtime remains that Pi CLI, which Herdr drives.
 
-**Remaining, narrow, execution-infrastructure gap (not a methodology
-blocker):** which `--provider`/`--model` this project's Pi workers should
-run under has never been specified in this repository and must not be
-guessed (it affects cost/billing and which model actually reasons about
-frozen specs) — get this from the user (or a project config, once one
-exists) before the first automatic launch, and confirm readiness with
-`pi auth check` at that time. Once that parameter is on record, update this
-note with the concrete value and the automatic hand-off in §3 becomes live.
-Until then, Planning Claude still **stops and reports** before an actual
-launch, but the blocker is now "provider/model unspecified," not "no Pi
-runtime exists."
+**Provider/model (resolved — do not guess a different pair):** this
+project's Pi workers run under `--provider deepseek --model
+deepseek-v4-flash`, also recorded as `defaultProvider`/`defaultModel` in
+`~/.pi/agent/settings.json` and verified `ready` via `pi auth check
+--provider deepseek --model deepseek-v4-flash --no-refresh`. Phase 6 Wave 1
+ran under exactly this pair (224 s / 368 s wall, exit 0/0). This value
+affects cost/billing and which model reasons about frozen specs, so it must
+not be changed silently. Readiness can always be re-checked without
+printing a secret via `pi auth check --provider <name> --model <pattern>
+--no-refresh` (omit `--credentials`); `--no-refresh` avoids the
+OAuth-refresh network call `pi auth check` otherwise performs by default.
 
 ## 3. Pi task instructions
 
