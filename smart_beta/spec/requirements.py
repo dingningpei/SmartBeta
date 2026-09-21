@@ -27,7 +27,7 @@ Design invariants (Phase 6 plan, sections 5 and 9):
   never by silent substitution.
 * **negative certification is representable** -- an unsatisfiable
   requirement produces a typed, recordable :class:`SatisfactionResult` and
-  a :class:`RequirementUnsatisfiableError`, never a silent empty result.
+  a :class:`DataRequirementUnsatisfiableError`, never a silent empty result.
 * **provider quirks stay outside the spec** -- this module never imports,
   names, or special-cases any concrete vendor or field; the mechanism is
   generic and is not specialised to ``profit_dedt`` or any single field.
@@ -54,7 +54,7 @@ __all__ = [
     "DataRequirement",
     "Frequency",
     "ObservationPeriod",
-    "RequirementUnsatisfiableError",
+    "DataRequirementUnsatisfiableError",
     "RequirementValidationError",
     "RevisionPolicy",
     "SatisfactionResult",
@@ -90,12 +90,20 @@ class VendorNameError(RequirementValidationError):
     """
 
 
-class RequirementUnsatisfiableError(Exception):
+class DataRequirementUnsatisfiableError(Exception):
     """A capability cannot satisfy a declared data requirement (fail-closed).
 
     Carries the full :class:`SatisfactionResult` so the typed, named reason
     and the requirement/capability provenance survive a failed evaluation
     (Phase 6 plan, section 9, items 5 and 7).
+
+    Naming (Wave 1 integration decision): the canonical spec-layer
+    ``RequirementUnsatisfiableError`` is the expression-stack error frozen in
+    Phase 6 plan section 7 and defined in :mod:`smart_beta.spec.expression`.
+    This requirement-contract error is deliberately named differently so the
+    two layers cannot be confused, or accidentally both re-exported by
+    ``smart_beta.spec``. It remains the fail-closed error of
+    :func:`require_satisfiable` and still carries the recordable result.
     """
 
     def __init__(self, result: "SatisfactionResult") -> None:
@@ -701,12 +709,12 @@ def require_satisfiable(
 ) -> SatisfactionResult:
     """Fail closed: return the result, or raise on any unsatisfied property.
 
-    The raised :class:`RequirementUnsatisfiableError` carries the full
+    The raised :class:`DataRequirementUnsatisfiableError` carries the full
     :class:`SatisfactionResult`, so the named reason and the
     requirement/capability provenance remain recordable.
     """
 
     result = check_satisfiable(requirement, capability)
     if not result.satisfied:
-        raise RequirementUnsatisfiableError(result)
+        raise DataRequirementUnsatisfiableError(result)
     return result

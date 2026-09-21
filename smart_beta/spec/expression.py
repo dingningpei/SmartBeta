@@ -58,8 +58,9 @@ Not expressible (section 6 exclusions, enforced structurally)
 * unbounded recursion or arbitrary loops -- there is no loop or recursion
   construct in the grammar, the text parser has a fixed depth budget
   (:data:`MAX_DEPTH`), and the validator walks the tree iteratively, so a
-  cyclic or over-deep structure is rejected
-  (:class:`AmbiguousExpressionError`) instead of hanging.
+  cyclic structure is rejected with :class:`AmbiguousExpressionError` and an
+  over-deep (but finite) structure with :class:`InvalidExpressionError`
+  -- both members of the frozen section 7 taxonomy -- instead of hanging.
 
 Two additional fail-closed rules are enforced here because section 8 makes
 them binding on the validator:
@@ -204,7 +205,12 @@ class AlignmentOrderError(InvalidExpressionError):
 
 
 class AmbiguousExpressionError(InvalidExpressionError):
-    """The structure is cyclic, over-deep, or otherwise not unambiguous."""
+    """The structure is cyclic, or otherwise not unambiguous.
+
+    Note that an over-deep (but finite) structure is rejected with the plain
+    :class:`InvalidExpressionError` raised by the :data:`MAX_DEPTH` budget;
+    only genuine ambiguity (e.g. a cycle) raises this more specific error.
+    """
 
 
 class LookaheadError(UnsupportedOperationError):

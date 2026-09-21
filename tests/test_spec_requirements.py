@@ -31,7 +31,7 @@ from smart_beta.spec.requirements import (
     DataRequirement,
     Frequency,
     ObservationPeriod,
-    RequirementUnsatisfiableError,
+    DataRequirementUnsatisfiableError,
     RequirementValidationError,
     RevisionPolicy,
     SatisfactionResult,
@@ -372,7 +372,7 @@ def test_unknown_history_never_assumed_sufficient() -> None:
 def test_require_satisfiable_raises_typed_error_with_provenance() -> None:
     req = _requirement()
     cap = _capability(semantic_id="turnover")
-    with pytest.raises(RequirementUnsatisfiableError) as excinfo:
+    with pytest.raises(DataRequirementUnsatisfiableError) as excinfo:
         require_satisfiable(req, cap)
     err = excinfo.value
     assert isinstance(err.result, SatisfactionResult)
