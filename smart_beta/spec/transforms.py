@@ -424,7 +424,18 @@ def _binary_operands(left: Any, right: Any) -> tuple[Any, Any]:
 def _combine(op: Any, left: Any, right: Any) -> Any:
     left, right = _binary_operands(left, right)
     if op is operator.truediv:
-        with np.errstate(divide="ignore", invalid="ignore"):
+        # Division is routed through NumPy floating-point semantics for BOTH
+        # scalar and frame operands. Raw Python float division (``1.0 / 0.0``)
+        # raises ``ZeroDivisionError`` before any NaN conversion could occur,
+        # which would abort evaluation; ``np.errstate`` only governs NumPy
+        # error handling, so the scalar operands must first be NumPy floats.
+        # A zero divisor then yields a non-finite quotient which the frozen
+        # section 7 policy maps to ``NaN`` via :func:`_finite_or_nan`.
+        if _is_scalar(left):
+            left = np.float64(left)
+        if _is_scalar(right):
+            right = np.float64(right)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             result = left / right
         return _finite_or_nan(result)
     return op(left, right)

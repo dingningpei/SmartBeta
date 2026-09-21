@@ -311,6 +311,67 @@ def test_division_by_nan_yields_nan():
     assert result["a"].iloc[1] == pytest.approx(1.0)
 
 
+def test_scalar_division_by_zero_yields_nan_never_zero_division_error():
+    # Regression (review defect): the scalar path used raw Python float
+    # division, which raises ZeroDivisionError instead of the frozen NaN.
+    assert pd.isna(tr.divide(1.0, 0.0))
+    assert pd.isna(tr.divide(0.0, 0.0))
+    assert pd.isna(tr.divide(-1.0, 0.0))
+    assert pd.isna(tr.divide(1.0, -0.0))
+
+
+def test_ordinary_scalar_division_still_works():
+    assert tr.divide(6.0, 3.0) == pytest.approx(2.0)
+    assert tr.divide(-6.0, 3.0) == pytest.approx(-2.0)
+    assert tr.divide(1.0, 4.0) == pytest.approx(0.25)
+
+
+def test_non_finite_scalar_quotients_are_mapped_to_nan():
+    # The frozen non-finite policy must hold for the scalar path too: an
+    # overflowing quotient is NaN, never a bare ``inf``.
+    for result in (tr.divide(1e308, 1e-10), tr.divide(-1e308, 1e-10)):
+        assert pd.isna(result)
+        assert not np.isinf(float(result))
+
+
+def test_scalar_division_through_apply_transform_never_leaks_zero_division():
+    # A Literal evaluates to a float scalar (the apply_transform contract), so
+    # this is the reachable expression path for the defect.
+    node = ex.ratio(ex.literal(1.0), ex.literal(0.0))
+    result = tr.apply_transform(node, (1.0, 0.0))
+    assert pd.isna(result)
+    # "1.0 / 0.0" is a legal frozen textual expression and must be equally safe.
+    parsed = ex.parse_expression("1.0 / 0.0")
+    assert pd.isna(tr.apply_transform(parsed, (1.0, 0.0)))
+    # ordinary scalar division through the dispatch still works
+    assert tr.apply_transform(
+        ex.ratio(ex.literal(6.0), ex.literal(3.0)), (6.0, 3.0)
+    ) == pytest.approx(2.0)
+
+
+def test_frame_division_by_zero_behaviour_is_unchanged():
+    frame = make_frame({"a": [1.0, -2.0, 0.0]}, dates=DATES[:3])
+    # frame / 0.0 -> all NaN
+    by_scalar = tr.divide(frame, 0.0)
+    assert by_scalar["a"].isna().all()
+    # frame / frame-with-zeros -> NaN at the zero cells, finite elsewhere
+    denominator = make_frame({"a": [0.0, 0.0, 2.0]}, dates=DATES[:3])
+    by_frame = tr.divide(frame, denominator)
+    assert pd.isna(by_frame["a"].iloc[0])
+    assert pd.isna(by_frame["a"].iloc[1])
+    assert by_frame["a"].iloc[2] == pytest.approx(0.0)
+    # 0.0 / frame unchanged: finite where the denominator is non-zero
+    reversed_div = tr.divide(0.0, denominator)
+    assert pd.isna(reversed_div["a"].iloc[0])
+    assert pd.isna(reversed_div["a"].iloc[1])
+    assert reversed_div["a"].iloc[2] == pytest.approx(0.0)
+    # mixed scalar / frame-with-zero -> NaN only at the zero cell
+    mixed = tr.divide(1.0, denominator)
+    assert pd.isna(mixed["a"].iloc[0])
+    assert pd.isna(mixed["a"].iloc[1])
+    assert mixed["a"].iloc[2] == pytest.approx(0.5)
+
+
 def test_arithmetic_propagates_nan():
     a = make_frame({"a": [1.0, np.nan, 3.0]}, dates=DATES[:3])
     b = make_frame({"a": [1.0, 2.0, np.nan]}, dates=DATES[:3])
