@@ -50,6 +50,11 @@ redundancy *measurement*; the acceptance decision and multiple-testing
 governance are deferred to execution Phase 8.** Phase 7 produces the
 complete, provenance-bearing records without which neither can exist.
 
+**Holdout wording clarification (frozen):** the roadmap's *"true untouched
+final holdout"* is split across two phases. Phase 7 provides the mechanical
+partition isolation and evaluation-local single-use (§8.2); persistent proof
+that a holdout was never consumed before belongs to Phase 8's registry.
+
 ## 2. Objective
 
 Build the evaluation/robustness layer of the generic, vendor-independent,
@@ -84,7 +89,7 @@ FactorSpec + its Phase 6 admission provenance (immutable, hash-frozen)
         ▼
 Phase 7 evaluation layer  (smart_beta/evaluation/)
    ├── partition.py        temporal partition (IS/OOS, walk-forward, holdout)
-   ├── forward_returns.py  future-return alignment (sole owner)
+   ├── forward_returns.py  future-return alignment (sole owner within this stack)
    ├── spec.py             EvaluationSpec + EvaluationRecord (contracts)
    ├── portfolio.py        formation + turnover + cost adjustment
    ├── metrics.py          bounded metric primitives
@@ -116,9 +121,10 @@ must not import `smart_beta/vendors/*`.
 | PIT selection (raw vintage/knowledge-date choice) | `smart_beta/pit/*` + vendor adapters | unchanged (Phase 3/4) |
 | PIT admission evidence | `smart_beta/spec/engine.py` (P6-F) | unchanged |
 | FactorSpec execution (factor value at t, t-observable) | `smart_beta/spec/evaluator.py` (P6-D) | unchanged |
-| **Future-return alignment** (factor at t → realized return over [t, t+h]) | `evaluation/forward_returns.py` (P7-B) | **NEW, sole owner** |
+| **Future-return alignment** (factor at t → realized return over [t, t+h]) | `evaluation/forward_returns.py` (P7-B) | **NEW; sole owner *within the new generic Phase-7 evaluation stack*** |
 | **Temporal partition** (IS/OOS split, walk-forward folds, final holdout) | `evaluation/partition.py` (P7-A) | **NEW, sole owner** |
-| Portfolio formation for evaluation + turnover + cost | `evaluation/portfolio.py` (P7-E), reusing `engines/portfolio_sort.py` | **NEW** |
+| Portfolio formation mechanics (sort/weighting) | `engines/portfolio_sort.py` | unchanged (reused, never reimplemented) |
+| Evaluation-time formation orchestration + turnover accounting + cost application | `evaluation/portfolio.py` (P7-E), delegating to `engines/portfolio_sort.py` | **NEW** |
 | Evaluation metric definitions | `evaluation/metrics.py` (P7-D) | **NEW** |
 | Robustness / sensitivity / redundancy measurement | `evaluation/robustness.py` (P7-F) | **NEW** |
 | Evaluation orchestration | `evaluation/engine.py` (P7-G) | **NEW** |
@@ -128,6 +134,14 @@ must not import `smart_beta/vendors/*`.
 | Multiple-testing-aware acceptance / search governance | registry + judge | **DEFERRED (Phase 8)** |
 | Provider qualification | `research_inputs/*` + vendors | unchanged; not Phase 7 |
 | Hypothesis generation / next-hypothesis | (least-defined piece) | **DEFERRED (Phase 8+)** |
+
+**Future-return ownership scope (frozen):** `evaluation/forward_returns.py`
+(P7-B) is the sole future-return-alignment authority **within the new
+generic Phase-7 evaluation stack**. The existing specialized/historical
+pipelines (`beta_portfolio`, `capm_pilot`, `fama_macbeth_premium`) that
+currently call `data/align.lag_panel` directly are **not** silently migrated
+and remain **outside** this ownership claim. Phase 7 does not migrate them
+unless a later, separately authorized task explicitly requires it.
 
 Boundary facts preserved from Phase 6 (never reversed): `FactorSpec` is not a
 temporal selector; evaluation is not provider certification; backtest success
@@ -168,7 +182,8 @@ Phase 6 admission provenance hash, and Phase 7 never re-selects or re-admits.
   engine content hash); `partition` (fold boundaries + holdout key); fold
   results (per-fold metrics); metric tables; cost-adjusted series;
   subperiod table; parameter-sensitivity table; universe-sensitivity table;
-  redundancy measurements; `holdout_consumed` marker + holdout key;
+  redundancy measurements; cross-boundary purge counts (per §8.1, with
+  boundary identity); `holdout_consumed` marker + holdout key;
   `content_hash` (canonical SHA-256 over all of the above).
 - **Forbidden fields:** any verdict (accept/reject/score threshold pass);
   any mutated factor values; any field not derivable from the spec + inputs.
@@ -178,16 +193,23 @@ Phase 6 admission provenance hash, and Phase 7 never re-selects or re-admits.
 ### 6.3 `Partition` / `FinalHoldout` (`evaluation/partition.py`, P7-A)
 
 - **Purpose:** a frozen temporal partition with a deterministic identity and
-  an in-process single-use holdout token.
+  an evaluation-local single-use holdout token.
 - **Required fields:** fold boundaries (explicit date ranges, calendar
   aligned); fold roles (`is`, `oos`, `walk_forward`, `holdout`); a holdout
   key (hash of split rule + date range); a consumed marker.
 - **Forbidden fields:** any return data; any metric; any factor content.
-- **Single-use semantics (in-process only):** the evaluation engine records
-  the holdout key and consumed marker in the `EvaluationRecord` and refuses a
-  second consumption of the same holdout key within one engine instance.
-  Cross-process/cross-experiment holdout governance requires the Phase 8
-  registry and is explicitly **not** claimed here (see §15).
+- **Single-use semantics (evaluation-local only):** the evaluation engine
+  records the holdout key and consumed marker in the `EvaluationRecord` and
+  refuses a second consumption of the same holdout key within one engine
+  instance. This is a **process/evaluation-local** guarantee; it is **not** a
+  cross-experiment freshness claim. Persistent proof that a holdout has never
+  previously been consumed belongs to Phase 8's experiment registry (§14).
+- **Cross-boundary label policy (joint with P7-B, see §8.1):** a factor
+  observation's partition membership is decided by the *formation timestamp
+  and the complete forward-return realization interval together*, under the
+  fail-closed exclusion/purge policy frozen in §8.1. This module exposes the
+  partition-boundary predicate P7-B applies; it never truncates, shortens,
+  or reassigns a horizon to retain an observation.
 
 ## 7. Statistical scope (bounded, exact, deterministic)
 
@@ -261,6 +283,50 @@ new hypotheses (this is registry provenance + the judge). Phase 7 provides
 the tokens, keys, and hashes those Phase 8 mechanisms require, and records
 this boundary honestly rather than overclaiming.
 
+### 8.1 Partition × forward-horizon joint contract (P7-A/P7-B, frozen at Barrier 1)
+
+This is the **joint** rule binding `partition.py` (P7-A) and
+`forward_returns.py` (P7-B). It is normative text in this frozen plan; it
+introduces **no** additional production module. Barrier 1 freezes each
+task's independently-owned interface **and** cross-checks this joint rule
+through the adversarial tests below.
+
+For a factor observation formed at `t` whose forward-return horizon ends at
+`t+h`:
+
+1. An observation may belong to partition `P` only when **both** the
+   formation timestamp `t` **and** the complete forward-return realization
+   interval `[t, t+h]` satisfy `P`'s frozen boundary semantics.
+2. A forward-return label must **never** borrow information from the next
+   partition: the realized return for an IS observation may use only
+   observations inside the IS interval; an OOS label may use only OOS
+   observations; a holdout label only holdout observations.
+3. **Cross-boundary labels follow one deterministic fail-closed policy:
+   exclusion/purge.** A label whose realization interval would cross a
+   partition boundary is dropped (purged) from both sides. There is **no**
+   truncating the horizon, **no** shortening it, **no** reassignment to
+   another partition merely to retain the observation, and **no** borrowing
+   OOS/holdout returns for an IS observation.
+4. The same rule applies identically to **walk-forward fold boundaries**: a
+   label that would cross a fold boundary is purged, never reassigned.
+
+Because the horizon and the partition are both frozen inputs, the set of
+purged labels is deterministic and is recorded in the `EvaluationRecord`
+(purge counts per boundary) so no observation vanishes without provenance.
+
+### 8.2 "True untouched final holdout" — what Phase 7 actually provides
+
+The recovered roadmap phrase *"a true untouched final holdout"* describes an
+end-state that spans two phases. Phase 7 provides the **mechanical** part:
+deterministic partition isolation and evaluation-local single-use (a holdout
+partition cannot be consumed twice within one evaluation, and its returns
+can never label an IS/OOS observation). **Persistent proof that a holdout has
+never previously been consumed across experiments belongs to Phase 8's
+experiment registry.** The certified claim's wording — *"a consumed holdout
+cannot be silently reused within one evaluation"* — is deliberately scoped to
+the evaluation-local guarantee and is **not** a cross-experiment freshness
+claim.
+
 ## 9. Accept / reject and multiple-testing (both deferred)
 
 - **Accept / reject: DEFERRED (Phase 8).** Phase 7 produces the
@@ -270,8 +336,12 @@ this boundary honestly rather than overclaiming.
 - **Multiple testing: DEFERRED (Phase 8).** Multiple-testing-aware
   acceptance requires the count of prior hypothesis tests, which lives in the
   registry (Phase 8). Phase 7's contribution is the *precondition*: complete,
-  deterministic, provenance-bearing records. This dependency is recorded, not
-  satisfied, here. Phase 7 must not claim autonomous-discovery credibility.
+  deterministic, provenance-bearing records. Phase 8's skeptical judgment and
+  multiple-testing-aware acceptance **require persistent `EvaluationRecord`s
+  / experiment history**, which the Phase 8 registry supplies; Phase 7
+  produces evidence *sufficient for later governance* but does **not**
+  perform that governance. This dependency is recorded, not satisfied, here.
+  Phase 7 must not claim autonomous-discovery credibility.
 
 ## 10. Task DAG and task table
 
@@ -304,11 +374,11 @@ Final Barrier
 
 | Task | Objective | Owned files | Depends on | Wave |
 |---|---|---|---|---|
-| P7-A | Temporal partition authority: IS/OOS split, walk-forward folds, single-use final holdout; deterministic serialization; no leakage | `evaluation/partition.py`, `tests/test_evaluation_partition.py` | none | 1 |
-| P7-B | Future-return alignment (sole owner): factor panel at `t` → realized forward return over `[t, t+h]`; mechanical no-look-ahead; consumes already-PIT-safe realized-return panels | `evaluation/forward_returns.py`, `tests/test_evaluation_forward_returns.py` | none | 1 |
+| P7-A | Temporal partition authority: IS/OOS split, walk-forward folds, single-use final holdout; deterministic serialization; no leakage; exposes the partition-boundary predicate for the §8.1 joint rule | `evaluation/partition.py`, `tests/test_evaluation_partition.py` | none | 1 |
+| P7-B | Future-return alignment (sole owner **within the new generic Phase-7 evaluation stack**; existing pipelines are not migrated and remain outside this claim): factor panel at `t` → realized forward return over `[t, t+h]`; mechanical no-look-ahead; applies the §8.1 cross-boundary purge; consumes already-PIT-safe realized-return panels | `evaluation/forward_returns.py`, `tests/test_evaluation_forward_returns.py` | none | 1 |
 | P7-C | `EvaluationSpec` + `EvaluationRecord` contracts + `evaluation/__init__.py`; deterministic serialization + content hash; fail-closed on missing factor provenance | `evaluation/spec.py`, `evaluation/__init__.py`, `tests/test_evaluation_spec.py` | none | 1 |
 | P7-D | Bounded metric primitives (§7 items 1-5): IC/rank-IC, long-short t-stat, Sharpe, max drawdown, benchmark-relative excess; exact definitions + missing-data semantics; pure functions over series/panels (reused by P7-F for stability/sensitivity) | `evaluation/metrics.py`, `tests/test_evaluation_metrics.py` | P7-B | 2 |
-| P7-E | Portfolio formation + turnover + cost adjustment (§7 item 6): reuse `engines/portfolio_sort`; group-membership turnover; single cost-application point | `evaluation/portfolio.py`, `tests/test_evaluation_portfolio.py` | P7-B | 2 |
+| P7-E | Evaluation-time formation orchestration + turnover accounting + cost application (§7 item 6): **delegates** sorting/weighting to `engines/portfolio_sort.py` (never a second independent implementation); fail-closed if the existing engine cannot express a requested formation rule; single cost-application point | `evaluation/portfolio.py`, `tests/test_evaluation_portfolio.py` | P7-B | 2 |
 | P7-F | Robustness/sensitivity (§7 items 7-10): subperiod stability, parameter sensitivity (evaluation params only), universe sensitivity, redundancy measurement vs caller-supplied accepted factors | `evaluation/robustness.py`, `tests/test_evaluation_robustness.py` | P7-A, P7-D, P7-E | 3 |
 | P7-G | Evaluation engine facade: `evaluate(factor_panel, spec, ...) -> EvaluationRecord`; wires A→B→E→D→F→C; fail-closed; enforces holdout single-use + spec-hash integrity | `evaluation/engine.py`, `tests/test_evaluation_engine.py` | P7-A, P7-B, P7-C, P7-D, P7-E, P7-F | 4 |
 
@@ -327,13 +397,19 @@ whether the downstream wave may begin. Barrier decisions are certified by
 the orchestrator, never by a worker's own summary.
 
 - **Barrier 1 (after Wave 1)** — partition, forward-return alignment, and
-  the two contracts are integrated and each is deterministic in isolation.
-  Certified: partition is leakage-free and calendar-aligned; forward-return
-  alignment is look-ahead-free; spec/record serialization is canonical and
-  hash-stable. NOT certified: any metric, any portfolio, any end-to-end
-  evaluation. Adversarial: partition boundary at a weekend/holiday; horizon
-  overlapping formation; missing-return rows not silently dropped; spec hash
-  changing under field reorder. Downstream Wave 2 begins only on PASS.
+  the two contracts are integrated, each deterministic in isolation, and the
+  **§8.1 joint P7-A/P7-B partition×horizon contract** is verified across
+  both independently-owned interfaces (no shared production module is
+  introduced). Certified: partition is leakage-free and calendar-aligned;
+  forward-return alignment is look-ahead-free; spec/record serialization is
+  canonical and hash-stable; cross-boundary labels are purged (never
+  truncated, shortened, or reassigned). NOT certified: any metric, any
+  portfolio, any end-to-end evaluation. Adversarial: partition boundary at a
+  weekend/holiday; horizon overlapping formation; missing-return rows not
+  silently dropped; spec hash changing under field reorder; **IS→OOS horizon
+  crossing purged on both sides; OOS→final-holdout horizon crossing purged;
+  walk-forward fold crossing purged (never reassigned)**. Downstream Wave 2
+  begins only on PASS.
 - **Barrier 2 (after Wave 2)** — metrics and portfolio/turnover/cost are
   integrated on the frozen P7-B output contract. Certified: each metric's
   exact definition, missing-data semantics, zero-vol/negative-vol → `NaN`,
@@ -371,12 +447,17 @@ the orchestrator, never by a worker's own summary.
 > the partition, a consumed holdout cannot be silently reused within one
 > evaluation, and the Phase 6 PIT boundary is never bypassed.
 
+The phrase *"a consumed holdout cannot be silently reused within one
+evaluation"* is an **evaluation-local** guarantee only. It is **not** a
+cross-experiment freshness claim; persistent holdout-history is Phase 8.
+
 ### Explicit non-claims (must never be upgraded by a clean test run)
 
 - economic validity / alpha of any factor;
 - accept/reject verdict (no judge in Phase 7);
 - multiple-testing-aware acceptance / search-governance credibility;
-- cross-experiment holdout governance (requires the Phase 8 registry);
+- cross-experiment holdout governance / holdout freshness (requires the
+  Phase 8 registry); the §12 claim covers evaluation-local single-use only;
 - qualitative "robustness" certification (only measurements are reported);
 - any single t-stat "validating" a factor;
 - autonomous hypothesis generation or discovery;
@@ -420,13 +501,22 @@ broken implementation whose test must fail — the Phase 3 "teeth" rule):
 14. **Subperiod calendar drift** — subperiod boundaries must be
     trading-calendar-aligned (weekend/holiday trap, mirroring Phase 3's
     calendar trap).
+15. **IS→OOS horizon crossing** — a formation date inside IS whose forward
+    return realizes in OOS must be purged (never truncated, shortened, or
+    reassigned); its OOS return must never label the IS observation.
+16. **OOS→final-holdout horizon crossing** — same rule at the OOS/holdout
+    boundary; the holdout return must never label an OOS observation.
+17. **Walk-forward fold crossing** — a label crossing any fold boundary is
+    purged on both sides, never reassigned to retain the observation.
 
 ## 14. Deferred Phase 8 scope (and beyond)
 
 Explicitly **not** built here (and not started without separate
 authorization):
 
-- experiment registry (full evidence packages, cross-experiment history);
+- experiment registry (full evidence packages, cross-experiment history) —
+  the persistent `EvaluationRecord` history on which Phase 8's skeptical
+  judgment and multiple-testing-aware acceptance depend (§9);
 - skeptical judge (accept/reject against registry history);
 - multiple-testing-aware acceptance / search governance;
 - the redundancy *acceptance threshold* (the measurement is in Phase 7; the
