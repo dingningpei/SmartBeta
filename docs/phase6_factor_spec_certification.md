@@ -186,6 +186,30 @@ together; until that integration run, P6-G's reference fixtures carry their
 own task-level evidence only, and this certification record makes no claim
 about them.
 
+### Integration update (Phase 6 Final Barrier)
+
+That concurrency boundary is now **discharged**. P6-G and P6-H are integrated
+together on master (`phase6/task-p6-g-reference-fixtures` merged first, then
+`phase6/task-p6-h-certification`), and the Final Barrier re-ran the evidence on
+the integrated master:
+
+* all nine reference fixtures reproduce their independently computed expected
+  values through the trusted `FactorSpec -> DataRequirement admission -> P6-F
+  -> P6-D -> P6-E` path (`tests/test_spec_reference.py`);
+* this certification suite was re-run unchanged on the integrated master:
+  `run_certification_suite(FrozenStack())` reports all 30 probes passing, and
+  all 30 deliberately-broken stacks still fail their probe (the teeth are
+  intact);
+* the full repository suite is green (1829 passed, 1 credential-gated skip).
+
+The suite itself remains deliberately self-contained
+(`test_certification_suite_is_self_contained_and_does_not_use_p6g` still
+passes) -- it still imports no P6-G artifact. This update discharges only the
+*coverage* boundary: the bounded claim in §2 and the NOT-CERTIFIED list in §6
+are unchanged, and whether P6-G's fixture behaviour is certified rests on the
+integrated-master evidence recorded here, not on the fixtures' own task-level
+suite.
+
 ---
 
 ## 5. The certified P6-F boundary (Wave-5 documentation note)
