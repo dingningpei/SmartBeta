@@ -101,8 +101,9 @@ enforces it **across experiments**.
 > fixed-family search-budget accounting, and produces a provenance-bearing
 > `DecisionRecord` whose judgment can be replayed from the same evidence,
 > policies, and registry state — without rewriting historical evidence, without
-> reusing a previously-consumed final holdout, and without silently changing the
-> search budget or a registered family identity after results.
+> reusing a previously-consumed exact final holdout, and without changing the
+> frozen family search procedure, alpha, budget, trial unit, or registered
+> family identity after that family's first statistical attempt.
 
 The claim is about **deterministic, auditable decision mechanics**, not about
 the statistical correctness of the outcome. It is deliberately **scoped to what
@@ -175,13 +176,22 @@ Four identities are deliberately **separate**; conflating them is a defect.
   content hash is treated as **evaluation mutation/conflict** and fails closed
   (no in-place rewrite; a new version, if ever allowed, is an explicit
   versioned record referencing its predecessor).
-- **Search attempt identity** — the unit of multiple-testing accounting. One
-  **new statistical search attempt** is consumed when a materially new
-  `hypothesis_id` or `experiment_id` is first judged in a family; a
-  deterministic replay or idempotent duplicate consumes **zero** additional
-  slots. Registry row count is **not** the trial count, and one hypothesis may
-  produce multiple evaluation artifacts without each artifact counting as a
-  new hypothesis test (§10, §12 cases 16-25).
+- **Search attempt identity** — the unit of multiple-testing accounting.
+  **Frozen rule:** a statistical search attempt is the **first admissible
+  judgment of a previously unseen `experiment_id` within its frozen search
+  family**, where `experiment_id = hypothesis_id + EvaluationSpec identity`.
+  Concretely:
+  - same `experiment_id` + same `EvaluationRecord` → deterministic replay →
+    consumes **0** additional slots;
+  - same `experiment_id` + different `EvaluationRecord` → mutation/conflict →
+    **fails closed** (no silently substituted slot);
+  - same `hypothesis_id` + materially different `EvaluationSpec` → a **new
+    `experiment_id`** → consumes **1** new slot when first admissibly judged;
+  - a new `hypothesis_id` → necessarily a new `experiment_id` → consumes
+    **1** new slot when first admissibly judged.
+  Registry row count is **never** the search-attempt count; multiple
+  `EvaluationRecord` artifacts do **not** count as multiple attempts unless
+  they correspond to distinct experiment identities under this rule.
 
 ### 7.2 Registry (`experiment/registry.py`, P8-A)
 
@@ -244,9 +254,20 @@ Frozen, hashable, predeclared **before** any candidate evidence. Fields:
   failure — never a silent continue);
 - `replay_rule` (deterministic replay / idempotent duplicate consumes no slot).
 
-The family budget **cannot** be increased after evidence has been observed
-without creating a new governance regime (a new frozen `SearchPolicy` identity)
-or failing closed per policy. Unused slots remain unused.
+**Family governance lock (frozen):** `family_id` owns the persistent
+search-governance history. Before the first statistical attempt for a family is
+registered, the `SearchPolicy` may be frozen with `procedure`, `family_alpha`,
+`family_budget_m`, and `trial_unit`. After the first statistical attempt for
+that family is registered, those family-wide statistical fields are **locked**.
+A later `SearchPolicy` artifact that changes `procedure`, `family_alpha`,
+`family_budget_m`, or `trial_unit` for the same registered family is a
+**governance conflict**: it fails closed / DEFERs, MUST NOT create additional
+search slots, and MUST NOT reset historical attempt accounting. **A new
+`SearchPolicy` hash does NOT create a new statistical family.** A genuinely new
+family requires a genuinely new predeclared family identity, and remains
+subject to the explicit limitation that automatic semantic-family inference is
+NOT CERTIFIED (the system cannot prove a caller did not dishonestly declare a
+semantically similar hypothesis as a new family). Unused slots remain unused.
 
 ### 7.6 `DecisionPolicy` (`experiment/policy.py`, P8-D)
 
@@ -332,12 +353,13 @@ returns + higher moments + trial variance), compatibility with the
 Bonferroni).** A frozen `SearchPolicy` predeclares `family_id`,
 `family_budget_m`, and `family_alpha` **before** candidate results. Every
 statistical attempt in that family is tested at the fixed threshold
-`alpha_per_test = family_alpha / family_budget_m`. The budget cannot be
-increased after evidence is observed (a new budget = a new frozen
-`SearchPolicy` identity, or fail closed); unused slots remain unused; a
-deterministic replay / idempotent duplicate does **not** consume a slot; a
-materially new statistical attempt consumes exactly one slot; attempts beyond
-the budget DEFER / fail governance per policy.
+`alpha_per_test = family_alpha / family_budget_m`. The family-wide statistical
+fields (`procedure`, `family_alpha`, `family_budget_m`, `trial_unit`) are
+**locked after the family's first statistical attempt** — a later change for
+the same registered family is a governance conflict and fails closed (§7.5);
+unused slots remain unused; a deterministic replay / idempotent duplicate does
+**not** consume a slot; a materially new statistical attempt consumes exactly
+one slot; attempts beyond the budget DEFER / fail governance per policy.
 
 Why **not** the sequential `alpha / (prior_attempts + 1)` rule: an *increasing*
 hurdle as more attempts accumulate does not, by itself, carry the fixed-family
@@ -413,9 +435,10 @@ layer on later without changing the identity/registry contracts.
     `experiment_id` with a different record content hash fails closed.
 20. **Family budget exhaustion** — an attempt beyond `family_budget_m` DEFERs /
     fails governance, never silently continues.
-21. **Budget cannot silently expand after results** — changing
-    `family_budget_m` after evidence is observed creates a new `SearchPolicy`
-    identity (or fails closed); the old decisions are keyed to the old policy.
+21. **Budget cannot change after the first attempt** — changing
+    `family_budget_m` after the family's first statistical attempt is a
+    governance conflict (fails closed); a new `SearchPolicy` hash does not
+    change the budget; the old decisions are keyed to the old locked policy.
 22. **Display-label change does not reset the family** — the family identity is
     independent of the cosmetic label.
 23. **Registered lineage cannot migrate to a new family** — an already-registered
@@ -428,6 +451,24 @@ layer on later without changing the identity/registry contracts.
     family-wide threshold applies regardless of when the candidate arrives;
     an early and a late candidate with the same p-value get the same
     pass/fail result (no sequential hurdle drift).
+26. **Same hypothesis + changed EvaluationSpec consumes exactly one new slot** —
+    a materially different `EvaluationSpec` under the same `FactorSpec` is a new
+    `experiment_id` and consumes exactly one search slot when first judged.
+27. **Replay same experiment consumes zero slots** — same `experiment_id` +
+    same `EvaluationRecord` re-judged → no slot consumed.
+28. **Same experiment + changed EvaluationRecord fails closed** — conflict, no
+    slot consumed, no silent substitution.
+29. **SearchPolicy rehash cannot increase budget** — a new `SearchPolicy` hash
+    for the same family does not change `family_budget_m`.
+30. **Budget mutation after attempt #1 fails closed** — family `m=20` then a
+    later policy `m=100` for the same family → governance conflict.
+31. **Alpha / procedure / trial_unit mutation after first attempt fails closed**
+    — any of these changing for the same family after its first attempt is a
+    governance conflict.
+32. **New SearchPolicy identity does not imply a new family** — rehashing the
+    policy for the same family is not a family reset.
+33. **Registry row duplication cannot alter attempt count** — extra rows (e.g.
+    multiple artifacts, re-registration) never change the search-attempt count.
 
 ## 13. Task DAG and task table
 
