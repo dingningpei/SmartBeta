@@ -218,6 +218,49 @@ def test_rank_ic_constant_input_is_nan() -> None:
     assert np.isnan(result.value)
 
 
+def test_constant_correlation_detection_is_representation_exact() -> None:
+    """Regression: a mathematically constant non-exactly-representable float -> NaN.
+
+    ``0.05`` is not exactly representable in binary float, so three copies of
+    it have a tiny nonzero ``std(ddof=0)`` (~6.9e-18) even though the series is
+    mathematically constant. The frozen contract is "constant correlation
+    input -> undefined (NaN)"; the detector must be exact (zero range), never
+    tolerance/std-based, so this never becomes a spurious finite correlation.
+    """
+    x_const = np.array([0.05, 0.05, 0.05])
+    y = np.array([0.01, 0.02, 0.03])
+    # A. exactly representable constant
+    assert np.isnan(metrics._pearson(np.array([5.0, 5.0, 5.0]), y))
+    # B. non-exactly-representable constant
+    assert np.isnan(metrics._pearson(x_const, y))
+    # C. constant on the return side
+    assert np.isnan(metrics._pearson(y, x_const))
+    # D. tiny-variance but genuinely NONCONSTANT input is NOT misclassified
+    tiny_nonconst = np.array([0.05, 0.05, 0.0501])
+    assert np.isfinite(metrics._pearson(tiny_nonconst, y))
+    # E. normal nonconstant correlation unchanged
+    assert metrics._pearson(y, np.array([0.02, 0.04, 0.06])) == pytest.approx(1.0)
+
+    # F. the IC surface skips a non-exactly-representable constant factor date
+    panel = _panel(
+        [
+            ("2020-01-01", "a", 0.05, 1.0),
+            ("2020-01-01", "b", 0.05, 2.0),
+            ("2020-01-01", "c", 0.05, 3.0),
+            ("2020-01-02", "a", 0.05, 1.0),
+            ("2020-01-02", "b", 0.05, 2.0),
+            ("2020-01-02", "c", 0.05, 3.0),
+        ]
+    )
+    ic = information_coefficient(panel)
+    assert ic.per_date.empty
+    assert ic.n_obs == 0
+    assert np.isnan(ic.value)
+    ric = rank_information_coefficient(panel)
+    assert ric.per_date.empty
+    assert np.isnan(ric.value)
+
+
 def test_rank_ic_tie_method_is_frozen_to_average() -> None:
     from smart_beta.evaluation.metrics import SPEARMAN_TIE_METHOD
 
@@ -316,6 +359,19 @@ def test_long_short_insufficient_observations_is_nan() -> None:
 def test_long_short_constant_series_tstat_is_nan_never_inf() -> None:
     result = long_short_mean_tstat([0.01] * 8)
     assert result.value == pytest.approx(0.01)
+    assert np.isnan(result.t_stat)
+    assert not np.isinf(result.t_stat)
+
+
+def test_long_short_non_exactly_representable_constant_tstat_is_nan() -> None:
+    """Regression: a constant non-exactly-representable series -> NaN t-stat.
+
+    ``0.05`` has a tiny nonzero ``std(ddof=0)`` (~6.9e-18) even though the
+    series is mathematically constant, so a std-based guard would emit a
+    spurious huge finite t-stat; the guard must be exact (zero range).
+    """
+    result = long_short_mean_tstat([0.05, 0.05, 0.05, 0.05])
+    assert result.value == pytest.approx(0.05)
     assert np.isnan(result.t_stat)
     assert not np.isinf(result.t_stat)
 

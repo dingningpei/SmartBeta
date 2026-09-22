@@ -318,6 +318,12 @@ def _pearson(x: np.ndarray, y: np.ndarray) -> float:
     """Pearson correlation of two equal-length finite arrays (``NaN`` if undefined)."""
     if x.size != y.size:
         raise ValueError("internal error: Pearson inputs must be the same length")
+    # A mathematically constant input (zero range) has undefined correlation.
+    # np.ptp (max - min) is exactly 0.0 for identical values even when the
+    # value itself is not exactly representable in binary float (e.g. 0.05),
+    # whereas std(ddof=0) can be a tiny nonzero epsilon for such constants.
+    if float(np.ptp(x)) == 0.0 or float(np.ptp(y)) == 0.0:
+        return float("nan")
     x_centered = x - x.mean()
     y_centered = y - y.mean()
     denominator = np.sqrt(np.dot(x_centered, x_centered)) * np.sqrt(
@@ -354,7 +360,10 @@ def _newey_west_aggregate(values: np.ndarray) -> tuple[float, float, int]:
     mean = float(arr.mean())
     if not np.isfinite(mean):
         return float("nan"), float("nan"), n
-    if float(arr.std(ddof=0)) == 0.0:
+    # A mathematically constant series (zero range) has an undefined t-stat.
+    # np.ptp is exact for identical values even when the value itself is not
+    # exactly representable (e.g. 0.05), unlike std(ddof=0).
+    if float(np.ptp(arr)) == 0.0:
         return mean, float("nan"), n
     regressor = np.ones((n, 1))
     try:
