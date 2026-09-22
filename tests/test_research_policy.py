@@ -34,6 +34,7 @@ import dataclasses
 import hashlib
 import inspect
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -844,13 +845,40 @@ def test_research_package_init_does_not_import_sibling_modules():
     # The package exposes the P9-C surface and is importable in isolation.
     assert research_pkg.ResearchPolicy is ResearchPolicy
     assert research_pkg.bind_family is bind_family
-    for module_name in (
-        "smart_beta.research.proposal",
-        "smart_beta.research.history",
-        "smart_beta.research.generator",
-        "smart_beta.research.loop",
-    ):
-        assert module_name not in sys.modules
+    # Isolation is verified in a *fresh* subprocess, never against this
+    # process's global ``sys.modules``: in a combined run another test module
+    # (e.g. P9-A's ``tests/test_research_proposal.py``) may already have
+    # imported a sibling module, which says nothing about ``__init__.py``.
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    program = "\n".join(
+        [
+            "import pathlib",
+            "import sys",
+            "import smart_beta.research",
+            "siblings = (",
+            "    'smart_beta.research.proposal',",
+            "    'smart_beta.research.history',",
+            "    'smart_beta.research.generator',",
+            "    'smart_beta.research.loop',",
+            ")",
+            "loaded = [name for name in siblings if name in sys.modules]",
+            "if loaded:",
+            "    raise SystemExit('sibling modules imported: ' + ', '.join(loaded))",
+            "package = pathlib.Path(smart_beta.research.__file__).resolve()",
+            "root = pathlib.Path.cwd().resolve()",
+            "if root not in package.parents:",
+            "    raise SystemExit('unexpected smart_beta.research: ' + str(package))",
+            "print('OK')",
+        ]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.stdout.strip() == "OK"
 
 
 def test_module_declares_the_semantic_equivalence_nonclaim():
