@@ -94,24 +94,32 @@ enforces it **across experiments**.
 
 ## 5. Proposed certification claim (bounded, software)
 
-> Given an immutable `EvaluationRecord`, a frozen `DecisionPolicy`, and a
-> deterministic registry snapshot containing all relevant prior experiment
-> history, the system deterministically records the experiment, enforces
-> persistent holdout and search/multiple-testing governance constraints, and
-> produces a provenance-bearing `DecisionRecord` whose judgment can be replayed
-> from the same evidence, policy, and registry state — without rewriting
-> historical evidence, without resetting search accounting by relabeling a
-> family, and without reusing a previously-consumed final holdout.
+> Given an immutable `EvaluationRecord`, a frozen `DecisionPolicy`, a frozen
+> `SearchPolicy`/governance metadata, and a deterministic registry snapshot
+> containing all registered experiment history, the system deterministically
+> records the experiment, enforces persistent holdout governance and the frozen
+> fixed-family search-budget accounting, and produces a provenance-bearing
+> `DecisionRecord` whose judgment can be replayed from the same evidence,
+> policies, and registry state — without rewriting historical evidence, without
+> reusing a previously-consumed final holdout, and without silently changing the
+> search budget or a registered family identity after results.
 
 The claim is about **deterministic, auditable decision mechanics**, not about
-the statistical correctness of the outcome.
+the statistical correctness of the outcome. It is deliberately **scoped to what
+software can enforce** and does **not** assert: automatic inference of the
+correct *semantic* search family from arbitrary hypotheses; complete adaptive
+multiple-testing validity; or general overlapping-holdout leakage detection.
 
 ### Explicit non-claims (must never be upgraded by a clean test run)
 
 - economic truth / guaranteed alpha / a factor "works";
 - a scientifically complete solution to adaptive multiple testing or search
-  governance (Phase 8 implements one bounded accounting mechanism with
-  stated limitations, §10);
+  governance (Phase 8 implements one bounded, fixed-budget accounting
+  procedure with stated limitations, §10);
+- automatic semantic search-family inference (the software trusts the
+  predeclared family metadata; it does not infer economic similarity);
+- general overlapping-holdout leakage detection (only exact persistent-holdout
+  identity reuse is governed, §7.3);
 - autonomous hypothesis generation or discovery;
 - causal inference or economic interpretation;
 - live capital allocation / broker execution;
@@ -126,8 +134,8 @@ the statistical correctness of the outcome.
 |---|---|---|
 | FactorSpec execution / PIT admission | Phase 6 (`smart_beta.spec`) | unchanged; consumed opaquely |
 | evidence production (partition/alignment/metrics/portfolio/robustness) | Phase 7 (`smart_beta.evaluation`) | unchanged; consumed opaquely |
-| **experiment identity + registry storage** | `experiment/registry.py` (P8-A) | **NEW** |
-| **DecisionPolicy + DecisionRecord contracts** | `experiment/policy.py` (P8-D) | **NEW** |
+| **hypothesis + experiment identities + registry storage** | `experiment/registry.py` (P8-A) | **NEW** |
+| **SearchPolicy + DecisionPolicy + DecisionRecord contracts** | `experiment/policy.py` (P8-D) | **NEW** |
 | **persistent holdout identity + cross-experiment governance** | `experiment/holdout.py` (P8-B) | **NEW** |
 | **search-family identity + multiple-testing accounting** | `experiment/search.py` (P8-C) | **NEW** |
 | **skeptical judgment** | `experiment/judge.py` (P8-E) | **NEW** |
@@ -148,18 +156,32 @@ evaluation path.
 
 ## 7. Contracts
 
-### 7.1 Experiment identity (`experiment/registry.py`, P8-A)
+### 7.1 Research identities (four distinct concepts, `experiment/registry.py`, P8-A)
 
-- **`experiment_id`** = deterministic SHA-256 of
-  `(factor_provenance_hash, spec_hash)` — the frozen hypothesis + its frozen
-  evaluation policy. A changed `FactorSpec` (different provenance hash) or a
-  changed `EvaluationSpec` (different spec hash) is a **new experiment**.
-- The registered `EvaluationRecord.content_hash` must match the registered
-  experiment's identity context: a resubmission with the same
-  `experiment_id` but a different record hash is an **evaluation mutation**
-  and fails closed. A resubmission with the identical record hash is an
-  **idempotent duplicate** (recorded once, not counted twice).
-- Cosmetic metadata (labels, notes) never changes `experiment_id`.
+Four identities are deliberately **separate**; conflating them is a defect.
+
+- **Hypothesis identity (`hypothesis_id`)** — the frozen research hypothesis /
+  `FactorSpec` lineage. Determined by the Phase-6 `FactorSpec` identity
+  (factor provenance hash) and, where present, its predeclared lineage. A
+  materially changed `FactorSpec` (different provenance hash) is a **new
+  hypothesis** and must not silently inherit the old `hypothesis_id`.
+- **Experiment identity (`experiment_id`)** — one frozen evaluation design
+  applied to a hypothesis. Determined by `hypothesis_id` + the
+  `EvaluationSpec` hash (the frozen evaluation policy). A materially different
+  `EvaluationSpec` is a **new experiment**; deterministic replay of the same
+  `(hypothesis_id, spec_hash)` is the **same experiment** (idempotent).
+- **Evaluation artifact identity** — the immutable Phase-7
+  `EvaluationRecord.content_hash`. Same `experiment_id` + a different record
+  content hash is treated as **evaluation mutation/conflict** and fails closed
+  (no in-place rewrite; a new version, if ever allowed, is an explicit
+  versioned record referencing its predecessor).
+- **Search attempt identity** — the unit of multiple-testing accounting. One
+  **new statistical search attempt** is consumed when a materially new
+  `hypothesis_id` or `experiment_id` is first judged in a family; a
+  deterministic replay or idempotent duplicate consumes **zero** additional
+  slots. Registry row count is **not** the trial count, and one hypothesis may
+  produce multiple evaluation artifacts without each artifact counting as a
+  new hypothesis test (§10, §12 cases 16-25).
 
 ### 7.2 Registry (`experiment/registry.py`, P8-A)
 
@@ -191,18 +213,42 @@ evaluation path.
 
 ### 7.4 Search-family identity (`experiment/search.py`, P8-C)
 
-- `family_id` is a **predeclared** field (an explicit identifier supplied by
-  the caller, recorded at registration). The judge never derives a new
-  `family_id` from results, and cannot "reset" a family by relabeling: a
-  family is identified by its recorded lineage and the frozen family identity
-  rule below.
-- Family identity is `(family_id, parent_experiment_id, generation_batch)`
-  where the batch is the predeclared search round; relabeling the same
-  research program with a new `family_id` must not reset the attempt count —
-  the registry records lineage, and the adversarial suite (§12 case 2) pins
-  this.
+- A **frozen family identity** is an immutable, predeclared identifier
+  (deterministic hash of the frozen `SearchPolicy` family declaration + its
+  recorded lineage). It is registered before results and never re-derived from
+  results.
+- The **display label** is cosmetic metadata, separate from the family
+  identity; changing a label never changes the family or its history.
+- **Lineage** (`parent_experiment_id`, generation) is recorded and is part of
+  the family identity. An already-registered lineage **cannot be reassigned**
+  to a new family to reset accounting (frozen; §12 cases 22-24).
+- **Explicit limitation:** the software **cannot infer** that two differently
+  declared economic hypotheses *semantically* belong to the same statistical
+  family. If a genuinely new hypothesis arrives under a newly declared family,
+  Phase 8 trusts the predeclared governance metadata. The certification claim
+  therefore does **not** assert "family relabeling can never reset search
+  accounting" in an unrestricted semantic sense — it is scoped to
+  **registered/frozen family identity and lineage**.
 
-### 7.5 `DecisionPolicy` (`experiment/policy.py`, P8-D)
+### 7.5 `SearchPolicy` (`experiment/policy.py`, P8-D)
+
+Frozen, hashable, predeclared **before** any candidate evidence. Fields:
+
+- `family_id` (the frozen family identity, §7.4);
+- `family_budget_m` (the predeclared number of statistical attempt slots) and
+  `family_alpha`;
+- `trial_unit` (what constitutes one search attempt, per §7.1);
+- `procedure` (the frozen correction; the Phase-8 baseline is fixed-budget
+  Bonferroni, §10);
+- `budget_exhaustion` (what happens past the budget: DEFER / governance
+  failure — never a silent continue);
+- `replay_rule` (deterministic replay / idempotent duplicate consumes no slot).
+
+The family budget **cannot** be increased after evidence has been observed
+without creating a new governance regime (a new frozen `SearchPolicy` identity)
+or failing closed per policy. Unused slots remain unused.
+
+### 7.6 `DecisionPolicy` (`experiment/policy.py`, P8-D)
 
 Frozen, hashable. Fields (each optional where the roadmap does not mandate it;
 no arbitrary thresholds are invented):
@@ -212,7 +258,8 @@ no arbitrary thresholds are invented):
 - `require_is_oos` (whether an OOS/IS partition must exist);
 - `require_holdout` (whether a final-holdout fold must exist and be consumed);
 - `holdout_reuse` (prohibited / defer — the frozen cross-experiment rule);
-- `multiple_testing` (procedure + nominal `alpha` + family scope, §10);
+- `required_search_policy` (the frozen `SearchPolicy` identity the judge must
+  use — multiple-testing authority lives in `SearchPolicy`, **not** here);
 - `redundancy_threshold` (optional; **no default is invented** — if unset,
   redundancy is recorded but not used as an accept/reject threshold);
 - `decision_outcomes` (subset of ACCEPT / REJECT / DEFER and the reason codes
@@ -223,21 +270,28 @@ no arbitrary thresholds are invented):
 `DecisionPolicy` is frozen **before** the judge sees candidate evidence; its
 hash is part of every `DecisionRecord`. There is no post-hoc policy mutation.
 
-### 7.6 `DecisionRecord` (`experiment/policy.py`, P8-D)
+**Authority separation:** `SearchPolicy` owns statistical search accounting;
+`DecisionPolicy` owns evidence/acceptance requirements. The judge consumes
+**both** frozen identities; neither duplicates the other's authority.
 
-Immutable, hashable. Required fields: `experiment_id`;`evaluation_record_hash`; `decision_policy_hash`; `registry_snapshot_hash`
-(or id); search-governance evidence (family id, attempt count, adjustment
-applied); holdout-governance evidence (holdout id, prior-consumption result);
-`decision` (one of the frozen outcomes); `reason_codes` (machine-readable,
-ordered, stable) and an optional `human_explanation`; `judge_version`;
-deterministic `content_hash`. A `DecisionRecord` stores the complete
-reasoning inputs, never just `accepted = true/false`.
+### 7.7 `DecisionRecord` (`experiment/policy.py`, P8-D)
 
-**Cross-task coupling note (Wave 1):** in the P8-D contracts,
-`experiment_id` is an **opaque validated SHA-256 string** (64-char lowercase
-hex), not a computed object. The computation/hash-of-`(factor_provenance_hash,
-spec_hash)` is owned by P8-A's registry; P8-D only validates the string format,
-so P8-A and P8-D remain independently implementable in parallel.
+Immutable, hashable. Required fields: `experiment_id`; `hypothesis_id`;
+`evaluation_record_hash`; `decision_policy_hash`; `search_policy_hash`;
+`registry_snapshot_hash` (or id); search-governance evidence (family id,
+`search_attempt_index` / slot, threshold applied, adjustment); holdout-governance
+evidence (holdout id, prior-consumption result); `decision` (one of the frozen
+outcomes); `reason_codes` (machine-readable, ordered, stable) and an optional
+`human_explanation`; `judge_version`; deterministic `content_hash`. A
+`DecisionRecord` stores the complete reasoning inputs — enough to replay the
+judgment from the same record, `DecisionPolicy`, `SearchPolicy`, and registry
+snapshot — never just `accepted = true/false`.
+
+**Cross-task coupling note (Wave 1):** in the P8-D contracts, `experiment_id`
+and `hypothesis_id` are **opaque validated SHA-256 strings** (64-char lowercase
+hex), not computed objects. Their computation is owned by P8-A's registry; P8-D
+only validates the string format, so P8-A and P8-D remain independently
+implementable in parallel.
 
 ## 8. Registry semantics
 
@@ -259,9 +313,10 @@ Outcomes: **ACCEPT**, **REJECT**, **DEFER**.
   incomplete; or a statistical procedure that cannot validly adjudicate.
 - `reason_codes` are a frozen, machine-readable enum (e.g.
   `INSUFFICIENT_EVIDENCE`, `PROVENANCE_MISSING`, `HOLDOUT_PREVIOUSLY_CONSUMED`,
-  `SEARCH_FAMILY_UNKNOWN`, `POLICY_UNSATISFIED`, `MULTIPLE_TESTING_HURDLE_NOT_MET`,
-  `REDUNDANCY_EXCEEDS_THRESHOLD`, …) mapped by the policy to outcomes; a
-  `human_explanation` is optional and never part of the decision hash.
+  `SEARCH_FAMILY_UNKNOWN`, `SEARCH_BUDGET_EXHAUSTED`, `POLICY_UNSATISFIED`,
+  `MULTIPLE_TESTING_HURDLE_NOT_MET`, `REDUNDANCY_EXCEEDS_THRESHOLD`, …) mapped
+  by the policy to outcomes; a `human_explanation` is optional and never part
+  of the decision hash.
 
 ## 10. Multiple-testing scope (bounded, deterministic)
 
@@ -269,28 +324,39 @@ Reviewed mechanisms (identified explicitly; none implemented here):
 Bonferroni/Holm (FWER), Benjamini–Hochberg (FDR), Deflated Sharpe Ratio and
 Haircut Sharpe Ratio (Bailey–López de Prado), White's Reality Check / Hansen
 SPA (bootstrap). These differ in assumptions, required inputs (only the
-candidate p-value + attempt count, vs the full distribution of all trial
+candidate p-value + a predeclared budget, vs the full distribution of all trial
 returns + higher moments + trial variance), compatibility with the
 `EvaluationRecord`, and risk of false confidence.
 
-**Selected Phase-8 mechanism — a frozen, deterministic search-count
-adjustment (Bonferroni-style):** the candidate's nominal p-value (from the
-frozen P7-D Newey-West t-stat, already in the `EvaluationRecord`) is compared
-against `alpha / N_effective`, where `N_effective` = the number of prior
-attempts recorded for the same predeclared search family (+1 for the
-candidate). This requires only the candidate p-value and the per-family
-attempt count already available from the registry snapshot, is fully
-deterministic, and cannot be gamed by a "one more test" loop without the
-hurdle rising.
+**Selected Phase-8 mechanism — predeclared fixed family budget (fixed-m
+Bonferroni).** A frozen `SearchPolicy` predeclares `family_id`,
+`family_budget_m`, and `family_alpha` **before** candidate results. Every
+statistical attempt in that family is tested at the fixed threshold
+`alpha_per_test = family_alpha / family_budget_m`. The budget cannot be
+increased after evidence is observed (a new budget = a new frozen
+`SearchPolicy` identity, or fail closed); unused slots remain unused; a
+deterministic replay / idempotent duplicate does **not** consume a slot; a
+materially new statistical attempt consumes exactly one slot; attempts beyond
+the budget DEFER / fail governance per policy.
 
-**Method limitations (stated, not hidden):** Bonferroni is conservative (loses
-power); it does not model non-normal trial return distributions, heterogeneous
-families, selection-within-family, or the full adaptive search strategy; it is
-not a Deflated Sharpe Ratio and is not claimed to be one. Phase 8 implements
-the **accounting** (exact per-family attempt count + one frozen adjustment),
-not a complete solution to adaptive scientific discovery. A richer mechanism
-(e.g. deflated Sharpe) may layer on later without changing the registry/identity
-contracts.
+Why **not** the sequential `alpha / (prior_attempts + 1)` rule: an *increasing*
+hurdle as more attempts accumulate does not, by itself, carry the fixed-family
+Bonferroni guarantee — the effective family size is unknown at each decision,
+earlier ACCEPT decisions are never reconsidered under a growing family, and
+optional stopping / adaptive search can invalidate the family-wise guarantee.
+The fixed-budget rule is the smallest mechanism whose guarantee is actually
+established: it is the textbook Bonferroni correction with a **predeclared**
+`m = family_budget_m`.
+
+**Method limitations (stated, not hidden):** fixed-m Bonferroni is conservative
+(loses power vs. adaptive FDR); it assumes the predeclared budget is an honest
+upper bound on the number of attempts in the family; it does not model
+non-normal trial returns, heterogeneous families, selection-within-family, or
+the full adaptive search strategy; it is not a Deflated Sharpe Ratio and is not
+claimed to be one. The Phase-8 claim certifies **the correct deterministic
+implementation of the frozen accounting procedure**, **not** a complete solution
+to adaptive multiple testing. A richer mechanism (e.g. deflated Sharpe) may
+layer on later without changing the identity/registry contracts.
 
 ## 11. Persistent holdout governance
 
@@ -336,6 +402,32 @@ contracts.
     manufacture evaluation evidence.
 15. **Search count off-by-one** — exact attempt count (prior vs candidate) is
     pinned by a hand-calculated test.
+16. **Replay does not consume a search slot** — deterministic replay / idempotent
+    duplicate must not increment the attempt count.
+17. **Same hypothesis + different evaluation design** — a materially different
+    `EvaluationSpec` under the same `FactorSpec` is a **new experiment**, not a
+    new hypothesis (and consumes exactly one new search attempt).
+18. **Changed factor -> new hypothesis identity** — a changed `FactorSpec` hash
+    must not reuse the old `hypothesis_id`.
+19. **Same experiment + changed EvaluationRecord -> conflict** — same
+    `experiment_id` with a different record content hash fails closed.
+20. **Family budget exhaustion** — an attempt beyond `family_budget_m` DEFERs /
+    fails governance, never silently continues.
+21. **Budget cannot silently expand after results** — changing
+    `family_budget_m` after evidence is observed creates a new `SearchPolicy`
+    identity (or fails closed); the old decisions are keyed to the old policy.
+22. **Display-label change does not reset the family** — the family identity is
+    independent of the cosmetic label.
+23. **Registered lineage cannot migrate to a new family** — an already-registered
+    lineage reassigned to a new family to reset the count must fail / preserve
+    accounting.
+24. **New caller-declared family, semantically similar hypothesis** — explicitly
+    **outside** the automatic semantic-family-inference guarantee (documented
+    as not-certified; the software trusts the predeclared metadata).
+25. **Early vs late candidate** — under fixed-m Bonferroni, the same frozen
+    family-wide threshold applies regardless of when the candidate arrives;
+    an early and a late candidate with the same p-value get the same
+    pass/fail result (no sequential hurdle drift).
 
 ## 13. Task DAG and task table
 
@@ -345,7 +437,7 @@ P8-D (the contracts task), mirroring `spec/__init__.py` (P6-A) and
 plus its own test file; no two tasks own the same production or test file.
 
 ```
-Wave 1 (parallel)   P8-A (registry + identity)      P8-D (policy/record contracts + __init__)
+Wave 1 (parallel)   P8-A (registry + identities)    P8-D (SearchPolicy/DecisionPolicy/DecisionRecord + __init__)
                               \                            /
 Barrier 1                      \                          /
                                \________________________/
@@ -368,10 +460,10 @@ Final Barrier
 
 | Task | Objective | Owned files | Depends on | Wave |
 |---|---|---|---|---|
-| P8-A | Experiment registry + experiment identity + append-only storage + deterministic snapshots + lineage | `experiment/registry.py`, `tests/test_experiment_registry.py` | none | 1 |
-| P8-D | `DecisionPolicy` + `DecisionRecord` contracts + `experiment/__init__.py`; deterministic serialization + content hash; frozen outcomes + reason codes | `experiment/policy.py`, `experiment/__init__.py`, `tests/test_experiment_policy.py` | none | 1 |
+| P8-A | Hypothesis + experiment identities + registry: append-only storage, deterministic snapshots, lineage, idempotent duplicate handling | `experiment/registry.py`, `tests/test_experiment_registry.py` | none | 1 |
+| P8-D | `SearchPolicy` + `DecisionPolicy` + `DecisionRecord` contracts + `experiment/__init__.py`; deterministic serialization + content hash; frozen outcomes + reason codes | `experiment/policy.py`, `experiment/__init__.py`, `tests/test_experiment_policy.py` | none | 1 |
 | P8-B | Persistent holdout identity + cross-experiment consumption governance (registry-backed) | `experiment/holdout.py`, `tests/test_experiment_holdout.py` | P8-A | 2 |
-| P8-C | Search-family identity + attempt counting + the frozen Bonferroni-style multiple-testing adjustment | `experiment/search.py`, `tests/test_experiment_search.py` | P8-A | 2 |
+| P8-C | Search-family identity + fixed-budget attempt accounting (the frozen fixed-m Bonferroni procedure) | `experiment/search.py`, `tests/test_experiment_search.py` | P8-A | 2 |
 | P8-E | Skeptical judge: record + policy + snapshot + governance -> `DecisionRecord`; no metric recompute; no variant selection | `experiment/judge.py`, `tests/test_experiment_judge.py` | P8-A, P8-B, P8-C, P8-D | 3 |
 | P8-F | Orchestration state machine (PROPOSED -> SPEC_FROZEN -> EVALUATED -> REGISTERED -> GOVERNANCE_CHECKED -> JUDGED -> ACCEPTED/REJECTED/DEFERRED); coordinates A–E | `experiment/orchestrator.py`, `tests/test_experiment_orchestrator.py` | P8-A, P8-B, P8-C, P8-D, P8-E | 4 |
 
@@ -383,27 +475,30 @@ modifies Phase-6/Phase-7 modules.
 
 ## 14. Barriers
 
-- **Barrier 1 (after Wave 1)** — registry + identity and the two decision
-  contracts are deterministic in isolation. Certified: experiment identity
-  (factor+spec hash), idempotent duplicate registration, append-only history,
-  deterministic snapshots, policy/record serialization + hash. NOT certified:
-  holdout, search, judge, orchestration. Adversarial: duplicate submission
-  counted once; evaluation-mutation mismatch fails; policy hash changes on
-  any field change. Wave 2 begins only on PASS.
+- **Barrier 1 (after Wave 1)** — registry + identities and the three decision
+  contracts (SearchPolicy, DecisionPolicy, DecisionRecord) are deterministic in
+  isolation. Certified: hypothesis/experiment identity, idempotent duplicate
+  registration, append-only history, deterministic snapshots, policy/record
+  serialization + hash. NOT certified: holdout, search, judge, orchestration.
+  Adversarial: duplicate submission counted once; evaluation-mutation mismatch
+  fails; a changed `FactorSpec`/`EvaluationSpec` changes identity; policy hash
+  changes on any field change. Wave 2 begins only on PASS.
 - **Barrier 2 (after Wave 2)** — holdout governance + search governance
   integrated on the frozen registry API. Certified: persistent `holdout_id`
-  exact-reuse detection; per-family attempt counting; the deterministic
-  Bonferroni-style adjustment. NOT certified: judgment, orchestration.
-  Adversarial: holdout reuse across experiments fails; label spoof detected;
-  family relabel does not reset count; count off-by-one pinned. Wave 3 begins
-  on PASS.
+  exact-reuse detection; per-family fixed-budget attempt accounting; the
+  deterministic fixed-m Bonferroni adjustment (fixed `alpha_per_test`). NOT
+  certified: judgment, orchestration. Adversarial: holdout reuse across
+  experiments fails; label spoof detected; registered lineage cannot migrate
+  to reset the count; replay consumes no slot; budget exhaustion DEFERs; count
+  off-by-one pinned. Wave 3 begins on PASS.
 - **Barrier 3 (after Wave 3)** — the judge produces a replayable
-  `DecisionRecord` from record+policy+snapshot+governance. Certified: outcomes
-  ACCEPT/REJECT/DEFER map per policy; reason codes machine-readable; no metric
-  recompute; no variant selection; replay determinism. NOT certified: the full
-  loop. Adversarial: history amnesia; best-variant attack; policy-after-results;
-  insufficient-data → DEFER/REJECT not ACCEPT; replay identity. Wave 4 begins
-  on PASS.
+  `DecisionRecord` from record + DecisionPolicy + SearchPolicy + snapshot +
+  governance. Certified: outcomes ACCEPT/REJECT/DEFER map per policy; reason
+  codes machine-readable; no metric recompute; no variant selection; replay
+  determinism (record/policy/search-policy/snapshot all hashed). NOT certified:
+  the full loop. Adversarial: history amnesia; best-variant attack;
+  policy-after-results; insufficient-data → DEFER/REJECT not ACCEPT; replay
+  identity. Wave 4 begins on PASS.
 - **Final Barrier (after Wave 4)** — the orchestrator advances state and the
   end-to-end loop is deterministic and replayable on synthetic fixtures, with
   the full regression suite green. This is the Phase-8 certification barrier
