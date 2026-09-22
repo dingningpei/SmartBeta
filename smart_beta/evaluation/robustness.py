@@ -1548,7 +1548,11 @@ def _series_correlation(
         )
     if candidate.size < 2:
         return float("nan")
-    if float(candidate.std(ddof=0)) == 0.0 or float(accepted.std(ddof=0)) == 0.0:
+    # Exact constant detection: identical values have a peak-to-peak range of
+    # exactly 0.0 regardless of binary float representation, whereas a
+    # `std(ddof=0)` of a constant non-representable series (e.g. 0.05) is a
+    # tiny non-zero rounding residual and would let noise through.
+    if float(np.ptp(candidate)) == 0.0 or float(np.ptp(accepted)) == 0.0:
         return float("nan")
     x = candidate - candidate.mean()
     y = accepted - accepted.mean()

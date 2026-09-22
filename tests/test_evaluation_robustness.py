@@ -857,6 +857,31 @@ def test_redundancy_constant_and_insufficient_overlap_are_nan() -> None:
     assert insufficient.measurements[0].n_obs == 1
 
 
+def test_redundancy_non_representable_constant_series_is_nan() -> None:
+    """A constant series with a non-binary-exact value (0.05) must be NaN.
+
+    ``std(ddof=0)`` of three identical 0.05 values is a ~7e-18 rounding
+    residual, not exactly 0.0, so a fragile std-based guard would return a
+    spurious floating-point-noise correlation. The exact peak-to-peak
+    constant detector must still yield the frozen ``NaN``.
+    """
+    index = pd.date_range("2021-01-01", periods=3)
+    candidate = pd.Series([0.01, -0.02, 0.03], index=index, dtype="float64")
+    flat = pd.Series([0.05, 0.05, 0.05], index=index, dtype="float64")
+    # Sanity: the value really is non-representable, so std is not exactly 0.
+    assert float(np.std(flat.to_numpy(dtype="float64"), ddof=0)) != 0.0
+
+    accepted_constant = rb.redundancy(candidate, {"const": flat})
+    (measurement,) = accepted_constant.measurements
+    assert measurement.value is None  # undefined, not ~7e-17 and not finite
+    assert measurement.n_obs == 3
+
+    candidate_constant = rb.redundancy(flat, {"other": candidate})
+    (measurement,) = candidate_constant.measurements
+    assert measurement.value is None  # NaN whichever side is constant
+    assert measurement.n_obs == 3
+
+
 def test_redundancy_paired_missingness_and_order_determinism() -> None:
     index = pd.date_range("2021-01-01", periods=4)
     candidate = pd.Series([0.01, np.nan, 0.03, 0.04], index=index)
