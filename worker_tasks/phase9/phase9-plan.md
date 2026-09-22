@@ -65,6 +65,42 @@ Concretely:
    must go through registration + governance + judgment, so it is visible to
    search-family accounting.
 
+## 3a. Three-layer model and budget semantics (frozen)
+
+Three distinct objects, three distinct budgets, one non-negotiable rule.
+
+| Layer | Object | Identity | Budget consumed | Empirical info available |
+|---|---|---|---|---|
+| Generation | `GenerationEvent` (raw untrusted output) | `event_id` (invocation provenance) | LLM/token/cost budget | NONE |
+| Proposal | `ResearchProposal` (normalized, persistent) | `proposal_id` | proposal budget | NONE (pre-evaluation) |
+| Experiment | Phase-8 `experiment_id` (hypothesis + EvaluationSpec) | `experiment_id` | statistical family budget | Phase-7 EvaluationRecord |
+
+Transition rules:
+
+- **raw candidate → proposal**: deterministic, non-empirical filtering only
+  (Phase-6 syntax/vocabulary validity, exact-syntactic-duplicate, novelty under
+  policy). A raw candidate that passes is persisted as a `ResearchProposal`
+  (consumes proposal budget). A raw candidate that fails is recorded in its
+  `GenerationEvent` with the deterministic filter reason — never silently
+  discarded.
+- **proposal → FactorSpec admission**: deterministic Phase-6 admission; invalid
+  → proposal recorded `INVALID`, no experiment, no statistical budget.
+- **FactorSpec → experiment**: Phase-8 registration; consumes statistical budget
+  only when first admissibly judged.
+
+**Hidden-selection rule (forbidden):** ranking or filtering raw candidates using
+returns, IC, Sharpe, correlations, prior unregistered backtests, or any hidden
+model evaluation against market outcomes is a hidden backtest loop and is
+forbidden. Non-empirical (schema/vocabulary/duplicate/novelty) filtering is
+admissible and must be recorded in the `GenerationEvent` provenance.
+
+**Budget non-substitution:** the proposal budget, the statistical family budget,
+and the LLM token/cost budget are distinct and cannot substitute for one
+another. 100 raw outputs → 5 admissible proposals consumes 5 proposal slots
+(and 100 generation events); 5 proposals → 2 evaluated consumes 2 statistical
+slots; a proposal rejected pre-evaluation for invalid syntax consumes NO
+statistical slot.
+
 ## 4. `ResearchProposal` contract (`research/proposal.py`, P9-A)
 
 One frozen, hashable proposal. `proposal_id` exists **before** evaluation.
@@ -106,24 +142,53 @@ derivation from the sealed Phase-8 registry (never a mutable transcript).
 Raw metrics are exposed only to the extent the generation policy authorizes
 (feedback channels, §10); the holdout is never exposed.
 
-## 7. Holdout firewall (dedicated decision)
+## 7. Holdout firewall (mechanical, two representations)
 
-The generator-visible history **EXCLUDES the final-holdout outcome and any
-holdout metric**. Feedback permitted for iteration is IS/OOS evidence,
-robustness/redundancy evidence, and reason codes — never the final holdout.
-This prevents indirect optimization against the reserved validation set.
-Phase 7/8 holdout semantics are not weakened; the firewall only constrains
-what the **generator** may consume.
+The generator-visible history **EXCLUDES the final-holdout outcome, any holdout
+metric, and the final Phase-8 DecisionRecord** (which may encode the holdout
+pass bit). This is a **contract**, not a convention: the generator API is
+structurally incapable of receiving reserved holdout evidence.
 
-## 8. Search-family binding (who owns family assignment)
+Two representations:
 
-The generator does **not** freely choose `family_id` to reset a budget.
-`ResearchPolicy` (§9) deterministically assigns the family from the predeclared
-research program + lineage (option B/C: policy-driven assignment, validated by
-a governance layer). A generator that "renames/rephrases" a failed program into
-a fresh family is blocked by Phase 8's family lock + Phase 9's lineage binding.
-Automatic semantic-equivalence detection remains **NOT CERTIFIED** (the policy
-trusts predeclared lineage, exactly as Phase 8 does).
+- `FullResearchHistory` — everything (holdout + final DecisionRecord); for
+  audit/human review only, **never** passed to the generator.
+- `GeneratorVisibleResearchHistory` — a holdout-firewalled projection: proposal/
+  hypothesis/experiment/family identities, FactorSpec, IS/OOS metrics,
+  robustness evidence, redundancy evidence, search-governance status, family
+  attempt index, family remaining budget. **Excluded:** final-holdout metrics,
+  final-holdout availability/consumption, the final `DecisionRecord` outcome
+  (ACCEPT/REJECT/DEFER), and any reason code that depends on holdout.
+
+### 7a. ACCEPT/REJECT leakage (resolved)
+
+Because Phase-8 ACCEPT can require a successful final holdout, exposing the
+final outcome to the generator would leak (at least) one bit of holdout
+information. Therefore **the generator never receives the final
+ACCEPT/REJECT/DEFER outcome.** The loop's continuation/stopping is decided by
+the frozen ResearchPolicy from the generator-visible evidence; the final
+judgment remains reserved for Phase-8 audit and human review.
+
+`ResearchFeedback` (the only generator-facing feedback) contains: sanitized
+IS/OOS measurements, robustness/redundancy evidence, search-governance status
+(admissible / replay / conflict / budget-exhausted), and sanitized reason
+classes that are **holdout-independent**. No pre-holdout "verdict" is fabricated
+— measurements are exposed, judgments are not.
+
+## 8. Search-family binding (resolved: policy-driven + validator)
+
+The generator has **NO** authority to freely choose or reset `family_id`.
+`ResearchPolicy` deterministically **binds** a proposal to a family scope from
+the predeclared research-program lineage (option B), and a governance
+**validator** checks the binding is legal relative to persistent lineage/history
+(option C). The validator enforces explicit/predeclared structural rules only;
+it does **not** claim semantic-equivalence inference (which remains NOT
+CERTIFIED).
+
+**Family escape invariant:** within one frozen `ResearchProgram`, proposal
+lineage must not migrate to a new family merely because prior results were
+unfavorable. A genuinely new family requires explicit human/predeclared
+governance. A superficially-new lineage cannot obtain a fresh family budget.
 
 ## 9. `ResearchPolicy` (generation policy, `research/policy.py`, P9-C)
 
@@ -146,6 +211,15 @@ not invented):
 Three budgets are **distinct**: statistical search budget (Phase 8 `family_budget_m`),
 proposal budget (this policy), and LLM token/cost budget (this policy).
 
+### 9a. ResearchPolicy lock (after first empirical attempt)
+
+Once a `ResearchProgram` has registered its first empirical attempt, these
+fields are **locked**: `objective`, `admissible_vocabulary`, `admissible_semantic_inputs`,
+`family_binding`, `feedback_visibility` (holdout firewall), `stopping`, and the
+`holdout_visibility` (`NONE`). A new policy hash does **not** erase history;
+a material policy change requires a new `ResearchProgram` (which references its
+predecessor's lineage, never silently resets governance).
+
 ## 10. Generator boundary + LLM nondeterminism (`research/generator.py`, P9-D)
 
 The generator is **untrusted**. Its output is recorded, never trusted.
@@ -157,6 +231,32 @@ The generator is **untrusted**. Its output is recorded, never trusted.
   deterministic and auditable; the raw generation is not claimed deterministic.
 - Phase 9 certifies **immutable recording + replayable provenance**, not
   deterministic external LLM regeneration.
+
+### 10a. `GenerationEvent` (persisted before anything else)
+
+A `GenerationEvent` records one generator invocation and is persisted **before**
+normalization/selection/evaluation: `event_id`; generator/model identity;
+policy version/hash; prompt/template hash; history snapshot hash; seed/settings;
+invocation ordinal; raw artifact hash/content reference; timestamp only as
+metadata (never part of the semantic hash).
+
+### 10b. Crash consistency (write-ahead)
+
+- Crash after raw generation, before proposal persistence → the `GenerationEvent`
+  already exists; restart reconciles deterministically (no hidden retry, no
+  extra candidate).
+- Crash after proposal persisted, after FactorSpec admitted, after evaluation,
+  or before feedback → restart reconstructs from the proposal registry + Phase-8
+  registry; no hidden retries/extra candidates.
+
+### 10c. Duplicates (frozen)
+
+- Same normalized proposal generated twice → same `proposal_id` (idempotent);
+  consumes proposal budget **once** (the first time it becomes a distinct
+  proposal), statistical budget unchanged for a pure duplicate.
+- Same `FactorSpec` from two different raw `GenerationEvent`s → two generation
+  events (recorded), one scientific proposal/experiment identity (deduplicated
+  by `factor_spec_hash`).
 
 ## 11. FactorSpec admission (never bypass Phase 6)
 
@@ -177,32 +277,53 @@ Python/code/provider access or provider-specific fields.
   `RedundancyMeasurement` evidence; Phase 9 never recomputes it and never builds
   a "best factor" ranking.
 
-## 13. Feedback policy (what the generator may learn)
+## 13. Feedback policy (resolved) + mutation table
 
-- **REJECT** — reason codes + robustness/redundancy failure reasons (holdout
-  excluded). A *specification repair* (fix an invalid expression/data
-  requirement) is the same hypothesis (re-recorded, no new search slot); an
-  *empirically motivated mutation* (change formula/constant) is a **new
-  hypothesis** = new proposal + new search slot.
-- **DEFER** — the defer reason. Repairing missing data = same hypothesis;
-  substituting a proxy field = **new hypothesis**.
-- **ACCEPT** — may generate orthogonal extensions **within the same family**
-  (still governed by the family budget).
+The generator receives only `ResearchFeedback` (§7a): holdout-independent
+measurements + search status. The final ACCEPT/REJECT/DEFER is **never** shown.
 
-## 14. Data-availability failure (Phase 5B lesson)
+- **REJECT/DEFER feedback:** sanitized IS/OOS/robustness/redundancy measurements
+  + holdout-independent reason classes. A *non-semantic repair* (retry artifact,
+  supply missing certified evidence, fix serialization) keeps the same
+  hypothesis/proposal semantics and consumes no fresh statistical family budget.
+- **Empirically motivated mutation** (change formula/constant/sign/lag/window/transform)
+  is a **new proposal + new hypothesis + new experiment** → one new statistical
+  slot, **same family** (governed by the family budget) — NOT a new family.
+- **Semantic data substitution** (proxy field, different measure) is a **new
+  hypothesis**, family assignment still governed by the frozen policy; it cannot
+  automatically obtain a fresh family budget.
+
+### Mutation table (frozen identity consequences)
+
+| change | FactorSpec identity | hypothesis | experiment | family | statistical budget |
+|---|---|---|---|---|---|
+| sign flip | new | new | new | same | +1 slot |
+| lag 1→2 | new | new | new | same | +1 slot |
+| rolling 20→60 | new | new | new | same | +1 slot |
+| winsorization / rank→z / ratio denominator | new | new | new | same | +1 slot |
+| field substitution (proxy) | new | new | new | policy-bound (not auto-new) | +1 slot |
+| EvaluationSpec horizon/universe/cost/partition | unchanged FactorSpec | same hypothesis | **new experiment** | same | +1 slot |
+| non-semantic repair | unchanged | same | same | same | 0 |
+| policy mutation | n/a | n/a | n/a | new policy identity (§9a) | no reset |
+
+## 14. Data-availability failure (Phase 5B lesson, resolved)
 
 A hypothesis that is meaningful but whose required data is not PIT-certified →
-DEFER. The generator must **not** silently substitute a convenient proxy and
-call it the same hypothesis. Proxy substitution is a new proposal/hypothesis
-with its own family accounting and rationale. Phase 5B remains closed.
+DEFER. **Non-semantic repair** (the same required PIT-certified semantic field
+later becomes available) is the same hypothesis/proposal, no fresh family
+budget. **Semantic substitution** (`profit_dedt` → `net_income`, official field
+→ proxy, quarterly → annual) is a **new materially-testable proposal/hypothesis**
+whose family is policy-bound — it cannot automatically obtain a fresh family
+budget. Phase 5B remains closed.
 
-## 15. Stopping policy
+## 15. Stopping policy (typed, first-class outcomes)
 
-The system may terminate with **NO NEXT HYPOTHESIS** (a valid result).
-Stopping conditions include: family budget exhausted; proposal budget
-exhausted; no admissible candidates; repeated redundancy; repeated DEFER for
-unavailable data; holdout unavailable; governance conflict; generator failure;
-insufficient novelty. Perpetual generation is not forced.
+The system may terminate with **NO NEXT HYPOTHESIS** (a valid result). Typed
+stop reasons: `PROPOSAL_BUDGET_EXHAUSTED`, `STATISTICAL_BUDGET_EXHAUSTED`,
+`LLM_COST_BUDGET_EXHAUSTED`, `NO_ADMISSIBLE_CANDIDATE`, `NO_NOVEL_CANDIDATE`,
+`DATA_NOT_PIT_CERTIFIED`, `GOVERNANCE_CONFLICT`, `GENERATOR_FAILURE`,
+`HOLDOUT_FIREWALL_VIOLATION`, `REPEATED_REDUNDANCY`, `REPEATED_DEFER`. A stop is
+an auditable outcome; there is no endless retry loop.
 
 ## 16. Human authority
 
@@ -224,21 +345,26 @@ Phase 8's `OrchestrationRun` remains the per-experiment machine
 the **research program** at a higher level and reuses Phase 8 for each
 experiment.
 
-## 18. Certification target (bounded)
+## 18. Certification target (bounded, holdout-safe)
 
-> Given a frozen research-generation policy and an authorized, holdout-excluded
-> research-history snapshot, the system records every materially testable
-> proposal before empirical feedback, binds each proposal to persistent
-> search-family governance, admits only Phase-6-valid `FactorSpec`s, and can
-> produce the next proposal or a deterministic stop/governance outcome —
-> without exposing reserved holdout evidence, without letting the generator
-> rewrite its own statistical governance, and without rewriting prior research
-> history.
+> Given a frozen research-generation policy and an authorized,
+> holdout-excluded, generator-visible research-history snapshot, the system
+> records every generation event and every materially testable proposal before
+> empirical feedback, binds each proposal to persistent search-family governance
+> through a policy-driven (validated) family assignment, admits only
+> Phase-6-valid `FactorSpec`s, and can produce the next proposal or a typed
+> deterministic stop outcome — without exposing reserved holdout evidence or the
+> final Phase-8 decision to the generator, without letting the generator rewrite
+> its own statistical governance or family assignment, and without rewriting
+> prior research history.
 
 **Nonclaims:** scientific creativity; guaranteed alpha; semantic-equivalence
 detection; optimal hypothesis generation; causal discovery; complete adaptive
 multiple-testing correction; deterministic external LLM generation; autonomous
-production trading.
+production trading; and any guarantee that the generator cannot indirectly infer
+holdout information beyond the mechanical holdout firewall (the firewall removes
+the final DecisionRecord and holdout evidence; it does not claim to scrub every
+conceivable indirect signal).
 
 ## 19. Adversarial design cases (frozen; binding on all waves)
 
@@ -276,6 +402,33 @@ production trading.
 28. human edits ResearchPolicy mid-family → new policy identity.
 29. generator ranks candidates via hidden empirical tests → forbidden (only registered/governed evidence).
 30. generator produces NO NEXT HYPOTHESIS → valid STOPPED outcome.
+31. 100 raw candidates ranked using hidden returns → forbidden (no empirical rank).
+32. 100 raw candidates filtered only by deterministic schema rules → admissible,
+    recorded in GenerationEvent provenance.
+33. crash after raw generation before proposal normalization → GenerationEvent
+    write-ahead reconciles.
+34. same FactorSpec from two different generation events → two events, one proposal.
+35. duplicate normalized proposal → idempotent, no double proposal/statistical slot.
+36. ACCEPT leaks final-holdout pass bit → generator never receives the final outcome.
+37. REJECT leaks final-holdout information → generator never receives the final outcome.
+38. reason code leaks holdout result → holdout-dependent reason codes are excluded.
+39. family budget exhausted then new policy hash → policy lock; no reset.
+40. family budget exhausted then new program label → family escape invariant; no reset.
+41-43. sign flip / lag change / window change after REJECT → new proposal, same family, +1 slot.
+44-45. EvaluationSpec horizon/universe change after REJECT → new experiment, same family, +1 slot.
+46. missing certified field later becomes available → non-semantic repair, same hypothesis.
+47. missing field replaced by proxy → new hypothesis (policy-bound family).
+48. human edits failed proposal → new immutable proposal identity.
+49. human approves genuinely new family → explicit governance, allowed.
+50. generator requests full DecisionRecord incl. holdout → structurally refused.
+51. proposal budget exhausted but statistical budget remains → STOPPED (PROPOSAL_BUDGET_EXHAUSTED).
+52. statistical budget exhausted but proposal budget remains → STOPPED (STATISTICAL_BUDGET_EXHAUSTED).
+53. LLM cost budget exhausted → STOPPED (LLM_COST_BUDGET_EXHAUSTED).
+54-56. restart after GenerationEvent / proposal / experiment before feedback → reconstruct, no hidden retries.
+57. policy rehash attempts history reset → lock; no reset.
+58. history snapshot changes during generation → snapshot-hash mismatch fails closed.
+59. raw generation artifact missing/corrupt → GenerationEvent provenance fails closed.
+60. NO NEXT HYPOTHESIS terminal replay → deterministic STOPPED.
 
 ## 20. Implementation decomposition (proposed, not authorized)
 
@@ -284,11 +437,15 @@ New subpackage `smart_beta/research/`. `research/__init__.py` owned by P9-C
 
 | Task | Objective | Owned files | Depends | Wave |
 |---|---|---|---|---|
-| P9-A | `ResearchProposal` contract + append-only proposal registry (identity before evaluation) | `research/proposal.py`, `tests/test_research_proposal.py` | none | 1 |
-| P9-C | `ResearchPolicy` (generation policy) + `research/__init__.py` | `research/policy.py`, `research/__init__.py`, `tests/test_research_policy.py` | none | 1 |
-| P9-B | `ResearchHistory` (deterministic, holdout-excluded snapshot) | `research/history.py`, `tests/test_research_history.py` | P9-A, Phase-8 | 2 |
-| P9-D | generator boundary (untrusted recording + deterministic normalization) | `research/generator.py`, `tests/test_research_generator.py` | P9-A, P9-C, Phase-6 | 2 |
-| P9-E | research-loop orchestration (state machine + feedback + stopping) | `research/loop.py`, `tests/test_research_loop.py` | P9-A–D, Phase-8 | 3 |
+| P9-A | `ResearchProposal` contract + append-only proposal registry (identity before evaluation; status lifecycle) | `research/proposal.py`, `tests/test_research_proposal.py` | none | 1 |
+| P9-C | `ResearchPolicy` (generation policy + family-binding **rule**) + `research/__init__.py` | `research/policy.py`, `research/__init__.py`, `tests/test_research_policy.py` | none | 1 |
+| P9-B | `ResearchHistory` (`Full` + `GeneratorVisible` projection + `ResearchFeedback`) | `research/history.py`, `tests/test_research_history.py` | P9-A, Phase-8 | 2 |
+| P9-D | generator boundary (`GenerationEvent` write-ahead + deterministic normalization; no decision authority) | `research/generator.py`, `tests/test_research_generator.py` | P9-A, P9-C, Phase-6 | 2 |
+| P9-E | research-loop orchestration (state machine + family-binding **validation** + feedback + stopping; consumes Phase-8 per-experiment orchestration) | `research/loop.py`, `tests/test_research_loop.py` | P9-A–D, Phase-8 | 3 |
+
+P9-E remains orchestration; it is **not** a god module — the family-binding
+validator is a thin deterministic function over the P9-C rule + P9-B history,
+and the loop delegates each experiment to Phase-8 `OrchestrationRun`.
 
 Waves: Wave 1 (P9-A, P9-C) → Barrier 1 → Wave 2 (P9-B, P9-D) → Barrier 2 →
 Wave 3 (P9-E) → Final Barrier. Barriers freeze the proposal/history/policy
