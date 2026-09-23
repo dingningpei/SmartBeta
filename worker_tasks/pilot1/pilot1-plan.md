@@ -25,6 +25,20 @@ Pilot 1A is an **OPERATIONAL VALIDATION, not a clean scientific discovery
 experiment.** It is not a phase, and it moves no trust boundary or
 scientific authority.
 
+**User freeze record (2026-09-23, harness authorization through H6):**
+1. Harness implementation is authorized through H6 only. No real-model run
+   is authorized.
+2. **No real model-provider SDK** may be added during P1A-C…H6. `ModelClient`
+   stays **provider-neutral** (a protocol). All implementation, task tests,
+   barriers, integration and H6 use a **deterministic stub model**. There is
+   no model credential, no real-model invocation and no external model
+   network access. G3 does **not** modify `pyproject.toml`. The concrete
+   provider adapter is deferred until after H6 and needs separate
+   authorization.
+3. Transaction cost **`C = 10` bps, `ONE_WAY`**. This is a declared
+   convention, not evidence, and applies to both the H6 dry-run and the
+   real-run EvaluationSpec template.
+
 ---
 
 ## 1. Purpose (frozen)
@@ -343,7 +357,20 @@ smart_beta/pilot/          (harness; composes, never redefines)
 ## 9. Task P1A-C — harness contracts (Wave 1)
 
 - **Owned files:** `smart_beta/pilot/__init__.py`,
-  `smart_beta/pilot/contracts.py`, `tests/test_pilot_contracts.py`.
+  `smart_beta/pilot/contracts.py`, `tests/test_pilot_contracts.py`,
+  `tests/pilot_support.py`.
+- `tests/pilot_support.py` is the shared offline guard (the protected
+  `tests/conftest.py` is **not** touched). It provides a pytest fixture
+  `offline_guard` that:
+  - replaces `urllib.request.urlopen`, `socket.socket.connect` and
+    `socket.create_connection` with a raiser;
+  - `monkeypatch.delenv`s `TIINGO_API_KEY`, `TUSHARE_PROXY_TOKEN`,
+    `TUSHARE_BASIC_PROXY_TOKEN`, `TUSHARE_API_TOKEN`, `ANTHROPIC_API_KEY`,
+    `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`.
+
+  Every `tests/test_pilot_*.py` module imports it (`from pilot_support import
+  offline_guard`) and applies it with
+  `pytestmark = pytest.mark.usefixtures("offline_guard")`.
 - **Content (types and protocols only; no behavior beyond validation and
   canonical hashing):**
   - `RunId`;
@@ -400,8 +427,11 @@ smart_beta/pilot/          (harness; composes, never redefines)
 
 - **Owned:** `smart_beta/pilot/model.py`, `smart_beta/pilot/prompt.py`,
   `smart_beta/pilot/firewall.py`, `tests/test_pilot_model.py`,
-  `tests/test_pilot_firewall.py`, and (only if the user approves the
-  provider, §25) one optional-extra line in `pyproject.toml`.
+  `tests/test_pilot_firewall.py`. There is **no** `pyproject.toml` change
+  and **no** provider SDK (user freeze 2). `model.py` holds the
+  provider-neutral adapter over the P1A-C `ModelClient` protocol plus a
+  deterministic `StubModelClient`. No concrete provider client exists
+  through H6.
 - **Purpose:** connect **one** frozen model configuration to the P9 generator
   callable protocol.
 - **Flow per invocation:**
@@ -629,7 +659,7 @@ smart_beta/pilot/          (harness; composes, never redefines)
   selected);
 - `periods_per_year=252`.
 
-`C` is a USER FREEZE (§25). Any executability fix discovered at Barrier H4
+`C = 10` bps `ONE_WAY` (user freeze 3). Any executability fix discovered at Barrier H4
 (constructed data) is applied **before** any real-data evaluation and
 recorded as a pre-freeze fix.
 
