@@ -70,9 +70,16 @@ create|open|list` and `herdr agent start|prompt|wait|read|list|get|attach`)
 workspace. **Direct hidden `pi -p`/`--print` child-process launches are
 FORBIDDEN** unless the user explicitly authorizes them for a specific run.
 (Phase 6 Wave 1 was executed with direct `pi --print` child launches; it is
-explicitly grandfathered and is not invalidated by this mandate.) The exact
-Herdr launch form for this project has not yet been exercised: confirm it
-read-only before the first Herdr-launched wave rather than guessing syntax.
+explicitly grandfathered and is not invalidated by this mandate.) The
+Herdr-managed Pi workflow **has been exercised successfully** in Phase 9: one
+Herdr workspace per task worktree (`w17`–`w1B`, each bound to
+`worktrees/task-p9-*`), one `pi`-kind agent per workspace, all five tasks
+merged, and the workspaces closed at the Phase-9 seal with `herdr workspace
+close <workspace_id>`. The exact launch commands the interim planner used are
+not recorded in the repository, so keep confirming the current syntax
+read-only (`herdr worktree create --help`, `herdr agent start --help`: `herdr
+agent start <NAME> --kind pi --pane <ID>`, then `herdr agent prompt <TARGET>
+<TEXT> --wait`) before each Herdr-launched wave rather than guessing.
 
 The underlying runtime remains that Pi CLI, which Herdr drives.
 

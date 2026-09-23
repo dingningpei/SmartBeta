@@ -1,768 +1,995 @@
-# Pilot 1 — Controlled Autonomous Research Pilot (DESIGN + READINESS REVIEW)
+# Pilot 1A — Operational End-to-End Harness Validation (FROZEN PLAN)
 
-**STATUS: DESIGN / READINESS REVIEW ONLY.** This document designs the first
-controlled end-to-end autonomous research pilot and records whether the
-repository can run it today. It does **not** authorize implementation, Pi
-workers, worktrees, provider/model calls, empirical research, holdout
-consumption, a push, or a tag. No production code or test is changed by it.
+**STATUS: FROZEN (freeze review complete).** This plan freezes Pilot 1A's
+claim, its Phase-8 ACCEPT semantics, its holdout behavior, its data domain,
+its harness boundary, the G1–G6 ownership, the task DAG, the barriers, the
+test strategy and the sealed-package protection rule.
 
-- Baseline: `master` = `origin/master` = `phase9-complete` →
-  `76691c8a88aed92e47ed33ea33fbbd35c61a5c71` (clean).
-- Readiness decision: **PILOT-1-REQUIRES-GLUE** (§20).
-- Execution: **NOT AUTHORIZED.** Every pre-run gate in §24 must pass first.
+It does **not** authorize any of the following:
+- harness implementation;
+- Pi workers or worktrees;
+- a real model invocation;
+- provider calls;
+- empirical research;
+- a push or a tag.
 
-Pilot 1 is **not** a phase. It changes no trust boundary and no scientific
-authority (§20). The harness it needs is integration glue over the sealed
-Phase 6–9 authorities.
+Each of those needs its own explicit authorization (§27).
 
----
+- Sealed baseline: `phase9-complete` →
+  `76691c8a88aed92e47ed33ea33fbbd35c61a5c71`.
+- Planning history: readiness review `4705965`
+  (`PILOT-1-REQUIRES-GLUE`); this freeze review supersedes it.
+- Decision: **PILOT-1A-FROZEN.**
 
-## 1. Primary question and answer
-
-> Can the sealed Phase-9 system, using capabilities and data contracts that
-> already exist today, execute a real controlled autonomous research loop
-> end-to-end without adding new core architecture or weakening PIT rules?
-
-**Answer: NO, not today. YES after a small harness, with no new core
-architecture and no weakened PIT rule.**
-
-This review separates two things:
-
-- **IMPLEMENTED ARCHITECTURE** is complete. Phases 6–9 implement every
-  authority in the chain, and all of them pass their own suites and the
-  2718-test regression.
-- **ACTUALLY RUNNABLE END-TO-END CONFIGURATION** does not exist. Nothing in
-  `smart_beta/` or `scripts/` does any of the following:
-  - connects a real data source to Phase-6 admission;
-  - connects Phase-6 output to Phase-7 evaluation inside the loop;
-  - calls a real model;
-  - persists any Phase-8/9 state to disk;
-  - provides a runner.
-
-  Each integration seam is a caller-supplied callable, a caller-supplied
-  object, or a test double (§5).
-
-Unit and integration tests prove the contracts. They do not prove a runnable
-configuration, and this plan never treats them as if they did.
+Pilot 1A is an **OPERATIONAL VALIDATION, not a clean scientific discovery
+experiment.** It is not a phase, and it moves no trust boundary or
+scientific authority.
 
 ---
 
-## 2. Recovered system state (repository evidence)
+## 1. Purpose (frozen)
 
-| Fact | Evidence |
-|---|---|
-| Phase-9 loop hands the generator only the firewalled projection + feedback | `smart_beta/research/loop.py:1054-1127` (`generate`) |
-| Loop's "Phase-6 admission" is **syntactic only** (`factor_spec_hash`) | `smart_beta/research/loop.py` `admit_factorspec` (calls `factor_spec_hash(spec)`; no data admission) |
-| Empirical path takes a **precomputed** `EvaluationRecord` from the caller | `smart_beta/research/loop.py:761-813` (`ExperimentDesign`: "None of these is produced by P9-E") |
-| `required_data_certified` is a caller-supplied bool, **default `True`** | `smart_beta/research/loop.py` `ExperimentDesign.required_data_certified: bool = True` |
-| Data admission (`TrustedInput` → `admit`) is built only by synthetic reference fixtures and tests | `grep TrustedInput(` → `smart_beta/spec/reference.py`, `tests/test_spec_*.py` only |
-| No vendor/PIT module emits `DataCapability` / `semantic_id` | `grep semantic_id\|DataCapability smart_beta` → `spec/*` and `research/generator.py` only |
-| Phase-7 `evaluate()` always consumes the holdout fold and records `holdout_consumed=True` | `smart_beta/evaluation/engine.py:893, 908` |
-| Phase-8 persistent holdout allows exactly **one** consuming experiment per exact `holdout_id` | `smart_beta/experiment/holdout.py` module docstring ("recording a second, *different* experiment … → `HoldoutConflictError`") |
-| Phase-8 judge applies **no efficacy/performance threshold** | `smart_beta/experiment/judge.py` "Scope decision" docstring; REJECT reasons are structural only (`_evaluate_minimum_n_obs`, `_evaluate_partitions`, `_evaluate_redundancy`, holdout reuse) |
-| **Zero** file I/O anywhere in Phases 7/8/9 | `grep open(\|Path(\|json.dump\|sqlite …` over `evaluation/ experiment/ research/` → no hits |
-| LLM token/cost counters are in-memory, not on `GenerationEvent`, not restorable | `smart_beta/research/loop.py:1684-1687`, `__init__` (no restore parameter); `generator.py` has no token/cost field |
-| `ExperimentRegistry()` / `ProposalRegistry()` take no restore argument | `smart_beta/experiment/registry.py` `ExperimentRegistry.__init__(self)`; `smart_beta/research/proposal.py` `ProposalRegistry.__init__(self)` |
-| `Orchestrator` has no serialization | `smart_beta/experiment/orchestrator.py:1142-1222` |
-| `max_empirical_experiment_budget` is validated but **never enforced** by the loop | `grep max_empirical_experiment_budget smart_beta/research/loop.py` → no hits |
-| `ResearchPolicy` has **no** lag/window bound fields | `smart_beta/research/policy.py:708-725`; `NoveltyConstraint` has only `require_distinct_factor_spec` |
-| Raw-artifact contract is closed JSON: `{"candidates":[{factor_spec, research_question, economic_rationale, …}]}` | `smart_beta/research/generator.py:202-213, 1344-1360` |
-| No LLM SDK dependency; no `[project.scripts]` entry point | `pyproject.toml` |
-| Largest real, live-recorded, offline-replayable dataset: Phase-5A Gate B | `tests/fixtures/tiingo/phase5a_gate_b/manifest.json` (`live_recorded: true`, 26 names, EOD 2025-09-05…2026-09-15) |
-| Offline PIT path over that dataset exists and is exercised | `tests/test_capm_pilot_gate_b.py:122-126` (`TiingoClient(transport=replay_transport(...))` → `TiingoPITSource` → `PointInTimeView`) |
+> Can the sealed Phase-6/7/8/9 research architecture be connected to real
+> offline empirical data and a real model through a thin harness, execute
+> the governed research loop end to end, preserve every PIT, search, holdout
+> and firewall invariant, and produce reconstructable artifacts?
+
+Finding alpha is **not** a success criterion.
+
+## 2. Readiness recap (from the readiness review, re-verified)
+
+Phases 6–9 are complete **as contracts**. What is missing is the
+integration: no real-data → Phase-6 admission adapter, no model adapter, no
+file persistence (Phases 7/8/9 do no file I/O), no runner and no artifact
+writer. The loop's empirical step consumes a caller-supplied
+`ExperimentDesign` holding a precomputed `EvaluationRecord`
+(`smart_beta/research/loop.py` `ExperimentDesign`, `delegate_experiment`).
+The full readiness matrix is preserved in git at `4705965`
+(`worker_tasks/pilot1/pilot1-plan.md` §5).
 
 ---
 
-## 3. Phase 5B stays closed
+## 3. Phase-8 ACCEPT semantics (verified from sealed code; frozen)
 
-Pilot 1 uses **no** China A-share data, no `profit_dedt`, no Tushare
-endpoint, and no CH3/CH4 path. Phase 5B remains *software implementation
-COMPLETE / empirical certification NOT CERTIFIED*, and its Barrier-4a
-structural PIT limitation (`000858.SZ` / `20250930` positive vintage
-identity) remains historical evidence. Nothing in this plan weakens positive
-vintage identity or treats stock+period, or latest-value data, as vintage
-identity.
+Traced path: `EvaluationRecord` → `Orchestrator.run` (`experiment/orchestrator.py`:
+`freeze_spec → record_evaluation → register_experiment → check_governance →
+judge → finalize`) → `judge_experiment` (`experiment/judge.py`) →
+`DecisionRecord`.
 
----
+**How the judge decides:**
+1. It collects *findings*, i.e. reason codes, from:
+   - (a) provenance: registry entry present, hypothesis/record/family hashes
+     match, `experiment_id == experiment_id_for(hypothesis_id, spec_hash)`,
+     `required_search_policy == SearchPolicy.content_hash`;
+   - (b) search governance: the decision is present and consistent, and the
+     verdict is `ADMISSIBLE` or `REPLAY` with `threshold_applied ==
+     family_alpha / family_budget_m`; otherwise `SEARCH_BUDGET_EXHAUSTED`,
+     `PROVENANCE_MISSING` or `SEARCH_FAMILY_UNKNOWN`;
+   - (c) holdout governance: required evidence present; a cited prior
+     consumer registered; not `PREVIOUSLY_CONSUMED`; `record.holdout_consumed`
+     true;
+   - (d) policy requirements: each `required_evidence` section non-empty;
+     the smallest per-fold metric `n_obs` ≥ `minimum_n_obs` (if set); IS and
+     OOS folds present (if `require_is_oos`); max |redundancy| ≤
+     `redundancy_threshold` (if set).
+2. It resolves each finding to an outcome. An explicit `decision_outcomes`
+   rule wins; a rule mapping a finding to ACCEPT is coerced to `fail_closed`.
+   Without a rule, `HOLDOUT_PREVIOUSLY_CONSUMED` resolves per
+   `holdout_reuse`, `SEARCH_BUDGET_EXHAUSTED` resolves per
+   `budget_exhaustion`, and everything else resolves to `fail_closed`.
+3. It combines outcomes with DEFER > REJECT > ACCEPT.
+4. ACCEPT is downgraded to `fail_closed` unless ACCEPT appears in
+   `policy.allowed_outcomes`, which is the set of outcomes named in
+   `decision_outcomes`.
 
-## 4. Objective
+**Therefore ACCEPT occurs iff there are zero findings AND the policy names
+ACCEPT.**
+- The only numeric evidence the judge reads is per-fold `n_obs` and (when a
+  threshold is set) redundancy magnitudes.
+- It reads **no** IC, rank-IC, return, Sharpe, t-stat, drawdown, turnover,
+  holdout metric value or p-value. The record carries no candidate p-value,
+  and the judge is forbidden to compute one (`judge.py` "Scope decision").
+- The `_Finding.unadjudicable` flag does not affect resolution.
 
-Pilot 1 is a **system-validation experiment**. It validates this real chain
-on real, PIT-safe, live-recorded evidence:
+**REJECT can arise only from:**
+- an explicit `decision_outcomes` rule mapping a finding to REJECT;
+- `holdout_reuse=PROHIBITED` (unmapped `HOLDOUT_PREVIOUSLY_CONSUMED`);
+- `budget_exhaustion=GOVERNANCE_FAILURE` (unmapped `SEARCH_BUDGET_EXHAUSTED`);
+- `fail_closed=REJECT`.
 
-```
-frozen ResearchProgram/ResearchPolicy -> authorized generator-visible history
- -> real model invocation -> durable GenerationEvent (write-ahead)
- -> deterministic normalization -> durable ResearchProposal
- -> governed family binding -> Phase-6 FactorSpec + data admission
- -> PIT-safe inputs -> Phase-7 EvaluationRecord -> Phase-8 governance/judgment
- -> holdout-safe ResearchFeedback -> next proposal OR typed STOP
-```
+**DEFER arises from** any finding resolved to DEFER, including the default
+`fail_closed=DEFER`.
 
-Finding alpha, producing ACCEPT, and beating a benchmark are **not** success
-criteria. A scientifically negative or null run can still be an operational
-PASS (§18).
+**Frozen Pilot-1A interpretation:**
 
----
+> Phase-8 ACCEPT is a structural/governance acceptance under the currently
+> sealed DecisionPolicy: the experiment's evidence package is complete,
+> provenance-consistent, search-admissible, holdout-governed and adequately
+> sized. It says nothing about the factor's performance.
 
-## 5. Readiness matrix
+ACCEPT must **never** be reported as: *factor has alpha*, *statistically
+significant factor*, *economically useful factor*, *scientifically validated
+factor*, or *production-worthy factor*. The pilot report prints the
+interpretation sentence above next to every DecisionRecord.
 
-Legend: **READY** = exists and is usable as-is. **PARTIAL** = the contract
-exists but configuration or glue is missing. **MISSING** = no implementation.
-**BLOCKED** = cannot be satisfied without changing a sealed authority.
+**Code changed:** none. **Scientific decision upgrade** (a substantive
+empirical acceptance criterion: candidate statistic, hurdle, OOS
+degradation rule) is a **deferred research-methodology question**. It is
+not harness glue and not Pilot 1A. No performance threshold (IC, Sharpe,
+return, t-stat, hit rate, drawdown, turnover, OOS degradation) is chosen
+here.
 
-| Layer | Status | Evidence / note |
-|---|---|---|
-| research program configuration | PARTIAL | `ResearchProgram(program_id, family_id, …)` exists (`research/policy.py:600-604`); no Pilot-1 instance or config file |
-| ResearchPolicy configuration | PARTIAL | full contract + `from_dict` (`research/policy.py:708-725, ~1021`); values not frozen; no lag/window bound fields |
-| SearchPolicy configuration | PARTIAL | contract + `from_dict` (`experiment/policy.py:425-463`); values not frozen |
-| DecisionPolicy configuration | PARTIAL | contract + `from_dict` (`experiment/policy.py:645-672`); values not frozen; **no efficacy criterion is expressible** |
-| generator implementation (boundary) | READY | `GeneratorBoundary`, write-ahead `GenerationEvent`, deterministic normalization (`research/generator.py`) |
-| actual external/model generator adapter | **MISSING** | no model client, no SDK dependency |
-| generator prompt/template | **MISSING** | only `prompt_template_hash` (a field) exists |
-| GenerationEvent persistence | PARTIAL | in-memory `GenerationEventRegistry` + `to_dict/from_dict`; no durable store |
-| raw artifact persistence | PARTIAL | `RawArtifact` is content-addressed and serializable; no durable store |
-| ResearchProposal persistence | PARTIAL | in-memory `ProposalRegistry` + `ProposalSnapshot.from_dict`; no restore constructor, no durable store |
-| proposal-budget accounting | READY (in-process) | `_proposal_budget_exhausted` counts registry length; replay-safe **if** the registry is rebuilt |
-| generation/LLM-cost accounting | PARTIAL | enforced in-process only; counters not persisted or restorable (§10) |
-| family binding | READY | `bind_family` (`research/policy.py:1200-`); lineage ignored, escape refused |
-| FactorSpec normalization | READY | `factor_spec_from_dict` via P9-D |
-| Phase-6 admission | PARTIAL | syntactic admission is wired into the loop; **data admission** (`spec/engine.admit` / `evaluate_factor` over `TrustedInput`) is not wired to any real source |
-| PIT data acquisition | READY (offline) | Gate B fixtures + `replay_transport` + `TiingoPITSource` + `PointInTimeView` |
-| PIT data certification | PARTIAL | Tiingo EOD raw returns / corporate actions / survivorship-through-view **PASS**; fundamentals vintages / restatement / float mcap / identifier continuity **NOT CERTIFIED** (`docs/phase4b_tiingo_certification.md`) |
-| semantic-role mapping | **MISSING** | no vendor field → `semantic_id` + `DataCapability` + `TrustedInput` adapter |
-| factor evaluation | READY | `spec/engine.evaluate_factor` → `EngineResult` (`content_hash` = factor provenance) |
-| forward returns | READY | `evaluation/forward_returns.py` (horizon = realized-return rows) |
-| portfolio construction | READY | `evaluation/portfolio.py` |
-| transaction costs | READY (contract) | `CostModel(transaction_cost_bps, mode)`; value not frozen |
-| robustness | READY (contract) | subperiod / parameter / universe sensitivity (`evaluation/robustness.py`) |
-| redundancy | PARTIAL | computable, but needs an accepted-factor comparison set; none exists for a first pilot |
-| EvaluationSpec | PARTIAL | contract exists; the per-proposal spec must carry that factor's `factor_provenance_hash` (glue); values not frozen |
-| experiment registry persistence | PARTIAL | in-memory; `RegistrySnapshot.to_dict/from_dict`; no restore constructor |
-| statistical search-budget persistence | PARTIAL | `SearchLedger.to_dict/from_dict` (restorable); no durable store |
-| final holdout persistence | PARTIAL | `HoldoutGovernance.from_snapshot/from_dict` (restorable); no durable store |
-| DecisionRecord persistence | PARTIAL | serializable; loop keeps an in-memory audit list |
-| ResearchFeedback construction | READY | `ResearchFeedback.from_visible`; `FullResearchHistory.from_authorities` |
-| loop orchestration | READY | `ResearchLoop` state machine + typed stops |
-| restart/replay | PARTIAL | in-process `reconcile`; cross-process resume impossible without a sealed-code change (§9) |
-| artifact/report output | **MISSING** | no writer, no manifest, no report generator |
-| CLI/script/entry point | **MISSING** | `scripts/` contains only Phase-5 fetchers |
-| configuration loading | PARTIAL | every frozen contract has `from_dict`; no file loader or config schema |
-| real filesystem persistence across processes | **MISSING** | zero file I/O in Phases 7/8/9 |
-
-No row is **BLOCKED** for an *operational* pilot. Two capability limits are
-recorded as design constraints rather than blockers: the judge has no efficacy
-criterion (§15), and cross-process resume is not supported (§9).
+**Correction to the readiness draft:** the `4705965` draft DecisionPolicy
+declared only DEFER rules, which would have made ACCEPT structurally
+unreachable (step 4). §16 fixes this with the canonical pattern used by the
+sealed tests (`tests/test_experiment_orchestrator.py` ~L675:
+`ACCEPT: ()`, `REJECT: (POLICY_UNSATISFIED,)`, `DEFER: (...)`).
 
 ---
 
-## 6. Selected data domain
+## 4. Holdout semantics (verified; OPTION B frozen)
 
-| Candidate | PIT quality | Vintage identity | Local evidence | Live calls | Verdict |
-|---|---|---|---|---|---|
-| **US equities: Phase-5A Gate B (Tiingo), daily returns only** | EOD raw facts, corporate actions, survivorship-through-view **PASS** (Phase 4B) | not required: market prices are not revised; adjusted return is computed by the trusted PIT layer from raw close + corporate actions | 26 names × 252 trading dates, LIVE-RECORDED, committed at `57cc411` | **none** | **SELECTED** |
-| US Gate B daily `marketCap` / `peRatio` / `pbRatio` | `marketCap` schema-only; float approximated; ratios depend on fundamentals whose restatement/vintage behavior is NOT CERTIFIED | not established | present in fixtures | none | **EXCLUDED**: would add uncertified semantics |
-| China A-share certified fields | Phase 4D-B certified subset only; fundamentals path is where 5B failed | the 5B structural limitation lives here | small fixtures | would need proxy/official live access | **EXCLUDED**: risk of reopening 5B questions; thin local sample |
-| synthetic / reference fixtures | constructed | constructed | yes | none | **EXCLUDED** as the pilot sample (not real). Used **only** for the harness dry run (§24, P1-D) |
+**Current sealed behavior (verified):**
+- Phase-7 `evaluate()` fails closed when the partition has no final-holdout
+  fold (`evaluation/engine.py` `MissingEvaluationEvidenceError`; test
+  `tests/test_evaluation_engine.py::test_partition_without_holdout_fails_closed`).
+  It always consumes the evaluation-local holdout token and records
+  `holdout_consumed=True` (`engine.py:893, 908`). So **every** experiment
+  computes holdout-fold evidence.
+- Phase-8 `check_governance` records a persistent consumption only for the
+  first experiment presenting an exact `holdout_id` (`orchestrator.py`
+  `check_governance`). A later, different experiment presenting the same
+  `holdout_id` gets `PREVIOUSLY_CONSUMED` →
+  `HOLDOUT_PREVIOUSLY_CONSUMED` → DEFER/REJECT per policy (tests
+  `test_experiment_orchestrator.py::test_case_28_…`,
+  `test_experiment_judge.py::test_consumed_exact_required_holdout_defers`,
+  `::test_holdout_reuse_prohibited_policy_rejects`).
+- An exact replay of the same experiment is not reuse (`_normalize_replay_holdout`;
+  `test_case_29`/`test_case_42`).
+- `holdout_id` = f(dataset provenance, universe, start/end, target, horizon,
+  optional partition id) (`experiment/holdout.py` `holdout_id_for`). It
+  contains **no run or program identity**.
 
-**Choice:** a fixed universe selected from a dated DJIA constituent snapshot
-(the Phase-5A wording, reused verbatim). Specifically: the 26-name Gate-B
-frozen universe, daily frequency, with a **single semantic input**: the daily
-total return produced by the trusted `PointInTimeView`/`AsOfSnapshot`
-adjusted-return path.
+**Can final-holdout consumption be deferred to the end of the family
+iteration without modifying sealed semantics? NO.** Each existing route
+fails a stated requirement:
+1. Evaluating intermediate proposals without a holdout fold is impossible:
+   Phase 7 refuses a partition without one.
+2. Passing `holdout_identity=None` / `require_holdout=False` for
+   intermediate experiments stops Phase 8 recording the consumption, but
+   Phase 7 **still computes** holdout metrics for each. That would be
+   holdout evidence computed repeatedly **outside** governance: weaker, not
+   reserved.
+3. Relabeling a development window as the `HOLDOUT` fold misrepresents
+   `FoldRole` semantics.
+4. A separate "final evaluation" of a chosen candidate has no stage in the
+   sealed P9-E loop, which maps one proposal to exactly one Phase-8
+   experiment. Choosing that candidate would be an **unregistered selection
+   stage**, and it would change the EvaluationSpec after evidence.
 
-**Why:** it is the only real, live-recorded, offline-replayable,
-already-certified-for-its-use dataset in the repository. It needs no
-credential and no live call, and it opens no unresolved provider question.
+**Selected Pilot-1A behavior (OPTION B, sealed behavior accepted):**
+- Experiment 1 may consume the one final holdout.
+- Later experiments' exact reuse is blocked. Under §16 they resolve to
+  DEFER via `HOLDOUT_PREVIOUSLY_CONSUMED`.
+- Pilot 1A explicitly tests this. Phase 8 is not reopened.
 
-**Fixture integrity anchor:** the manifest carries no per-file hashes. The
-anchor is therefore the git tree object
-`git rev-parse 57cc411:tests/fixtures/tiingo/phase5a_gate_b`. The harness
-must verify it is unchanged at run time, and must record per-file SHA-256
-values in the pilot manifest.
+**Cross-run consequence (frozen):** because `holdout_id` omits run and
+program identity, a fresh in-memory `HoldoutGovernance` in a new run would
+silently allow re-consumption of the same holdout. Pilot 1A therefore
+freezes the following:
+- **H6 dry run:** runs on real Gate-B data truncated so that **no row dated
+  ≥ 2026-07-01 is ever loaded** (a G1 date cap, audited). It uses a
+  dry-run-only partition and program identity, so the real final holdout is
+  never read by any governed evaluation before the real run.
+- **Retry policy:** see §17. A retry is allowed only if the predecessor
+  registered **no** experiment, so no holdout consumption or statistical
+  slot can exist.
 
-**Recorded limitations (never upgraded):**
-- The universe was selected with knowledge of end-of-window (2026-09)
-  membership, so it is **not** survivorship-safe historical membership.
-- 26 names is a very small cross-section.
-- 252 dates is a short sample.
-- US ≠ China. Pilot 1 says nothing about A-shares.
-
----
-
-## 7. Provider / live-data question
-
-Pilot 1's **empirical data** needs **no** live provider access. It runs
-entirely from committed LIVE-RECORDED fixtures through the existing replay
-transport. The run process must scrub `TIINGO_API_KEY`,
-`TUSHARE_PROXY_TOKEN` and `TUSHARE_BASIC_PROXY_TOKEN`, and must install a
-`urllib.request.urlopen` tripwire (the pattern used by the Phase-5A tests)
-so that any data-provider call fails loudly.
-
-The only live dependency is the **model provider** for generation (§8).
-Model output does not change the scientific sample. It is persisted verbatim,
-so every normalization, evaluation and judgment step can be replayed from
-the persisted raw artifacts without calling the model again.
-
----
-
-## 8. Generator readiness
-
-| Question | Answer |
-|---|---|
-| Actual callable generator today? | **No.** Only the `Callable[[GeneratorVisibleResearchHistory, ResearchFeedback], Any]` protocol and test doubles exist. |
-| Can it call Claude/another LLM through an existing interface? | **No.** No SDK dependency and no client code. |
-| Prompt/template? | **No.** |
-| Produces the P9-D raw format? | N/A until built. The target is the closed JSON schema in `generator.py:202-213`. |
-| GenerationEvents persisted across restarts? | **No** (in-memory registry). |
-| Raw model output persisted? | Only in memory, inside `RawArtifact`. |
-| Model/provider/version/settings recorded? | Partially: `generator_identity`, `generation_method`, `prompt_template_hash`, `seed` and free-form scalar `settings` are recorded in `GenerationEvent`; token usage is **not** recorded there. |
-| Receives only visible history + feedback mechanically? | **Yes** at the loop boundary (`loop.py:1082-1092`). The adapter must render **only** those two objects' `to_dict()` output. |
-| Executable driver connecting model → boundary? | **No.** |
-
-**Missing piece (exact):** a model-generator adapter (glue G3, §20). It is a
-callable that:
-
-- renders a frozen prompt template from `GeneratorVisibleResearchHistory.to_dict()`,
-  `ResearchFeedback.to_dict()`, the frozen vocabulary description and the raw
-  JSON schema, and nothing else;
-- calls the model through the official Anthropic Python SDK (a new
-  optional dependency);
-- requests JSON-schema-constrained output (`output_config.format`);
-- returns `GenerationOutput(raw_artifact=<final text>, tokens_used=<input+output from response.usage>, cost_used=<computed from a frozen per-model price table>)`;
-- maps `stop_reason == "refusal"` or a transport failure to `GeneratorFailureError`.
-
-**Model choice (human decision, frozen at P1-A):** the skill-default current
-model is `claude-opus-5`. The model ID, effort level and price table are
-billing-relevant and must not be chosen silently.
-
-**Determinism nonclaim:** current Claude models do not accept sampling
-parameters (`temperature`/`top_p`) or a seed. `ResearchPolicy.seed` is
-therefore recorded provenance only and is **not** honored by the model.
-Reproducibility comes from persisted raw output (§23), never from
-regeneration.
+**Status:**
+- **Mechanically governed and hidden from the generator:** YES
+  (positive-allowlist projection; `HoldoutVisibility.NONE`; no
+  DecisionRecord or final outcome reaches the generator).
+- **Scientifically untouched:** **NO.** Phase 5A computed and committed
+  market-factor and per-name adjusted-return artifacts over the whole
+  window, holdout included (`docs/phase5a/gate_b/artifact_a_*`,
+  `artifact_b_constituent_diagnostics*`).
+- **Model knowledge:** a pretrained model may know 2025–2026 market
+  outcomes. Model ignorance of the period is **not** claimed. The chosen
+  model's published training-data cutoff is recorded against the holdout
+  start (2026-07-01) before the real run (§25).
+- **Classification: OPERATIONAL PILOT, holdout mechanically governed, not a
+  clean discovery holdout.**
 
 ---
 
-## 9. Persistence readiness
+## 5. Data domain (frozen)
 
-| Authority | Today | Restore path | Pilot-1 design |
-|---|---|---|---|
-| `GenerationEventRegistry` | in-memory | `from_dict` exists | durable append-only journal; write-ahead **to disk** between `generate()` and `normalize_persisted()` |
-| `ProposalRegistry` | in-memory | snapshot only; rebuild = re-register each entry (idempotent) | durable journal + reconstruction by re-registration |
-| `FullResearchHistory` | derived | `from_authorities` / `from_dict` | derived on demand; persisted snapshot + `history_hash` per iteration |
-| Search/family (`SearchLedger`) | in-memory | `from_dict` exists | durable snapshot after every experiment |
-| holdout consumption (`HoldoutGovernance`) | in-memory | `from_snapshot` / `from_dict` | durable snapshot after every experiment |
-| experiment registry (`ExperimentRegistry`) | in-memory | snapshot only; no restore constructor | durable snapshot + reconstruction by re-registration (verified by `snapshot_hash`) |
-| DecisionRecord storage | in-memory audit list | serializable | durable journal |
-| stop ledger | in-memory | `StopLedger.from_dict`; loop constructor accepts it | durable journal |
-| lifecycle ledger | in-memory | `LifecycleLedger.from_dict`; loop constructor accepts it | durable journal |
-| LLM token/cost usage | in-memory counters on `ResearchLoop` | **none**: not on `GenerationEvent`, no constructor parameter | harness-owned durable usage journal (audit); see restart policy below |
-
-**Current state, plainly:** every Phase-8/9 registry and ledger is
-**in-memory only**. Crash/replay unit tests exercise in-process
-reconciliation. They are **not** cross-process persistence and are not
-treated as such.
-
-**Pilot-1 restart policy (frozen design choice):** **reconstruct, never
-resume.**
-
-- All state is journaled durably, write-ahead (glue G4).
-- A process crash **terminates** the run with operational disposition
-  `INTERRUPTED`. Nothing is silently lost; every journal is kept.
-- An offline **reconstruction verifier** rebuilds every registry from the
-  journals and checks that each rebuilt `snapshot_hash` / `history_hash`
-  matches the recorded value.
-- Resume is not supported in Pilot 1. The sealed `ResearchLoop` cannot
-  restore its LLM usage counters (no constructor parameter), so a resumed
-  loop would silently reset the LLM budget to zero. Supporting resume
-  requires a sealed-code change, which is out of scope (§25, future work).
-
-**Invocation-intent record:** the P9 `GenerationEvent` is created only
-*after* the model returns. A crash inside the model call would otherwise
-leave an incurred, unrecorded invocation. Before every model call, the
-harness therefore durably writes an `invocation_intent` record (ordinal,
-visible-history hash, policy hash, prompt-template hash, model settings). An
-intent with no matching event is a detectable interrupted invocation. It
-terminates the run and is never retried.
-
----
-
-## 10. Budget readiness
-
-| Budget | Represented | Persisted | Enforced | Replay-safe |
-|---|---|---|---|---|
-| A. LLM tokens/cost | yes (`max_llm_token_budget`, `max_llm_cost_budget`) | no (harness journal adds an audit copy) | yes, in-process, before generation (`loop.py:1684-1695`) | **no** across processes → mitigated by the no-resume policy (§9) |
-| A'. generation-invocation count | **no** field in P9 | harness journal | harness resource ceiling (D), not a P9 budget | yes (journal) |
-| B. proposal budget | yes (`max_proposal_budget`) | via proposal journal | yes, pre-generation and per slot | yes (registry rebuild) |
-| C. statistical family budget | yes (Phase-8 `family_budget_m`) | via `SearchLedger` snapshot | yes, Phase-8 authority | yes (`SearchLedger.from_dict`) |
-| C'. `max_empirical_experiment_budget` | yes | — | **not enforced by P9**; must be declared **equal** to `family_budget_m` so the declarations cannot disagree | n/a |
-| D. wall-clock/resource ceiling | no | harness manifest | harness only (terminates the run as `INTERRUPTED`, not as a research STOP) | yes |
-
-No counter substitutes for another. A' and D are harness operational
-ceilings. They are recorded as such and never presented as P9 research
-stops.
+- **Dataset:** Phase-5A Gate B, a fixed universe selected from a dated DJIA
+  constituent snapshot: 26 names, Tiingo, LIVE-RECORDED
+  (`tests/fixtures/tiingo/phase5a_gate_b/`, committed at `57cc411`).
+- **Re-inspected at this freeze:**
+  - EOD files: 26 × 258 rows (2025-09-05 … 2026-09-15).
+  - Every one of the 258 dates carries all 26 names.
+  - Zero zero-volume rows.
+  - The dataset is suitable; no substitution.
+- **Semantic input (exactly one):** `daily_total_return`, from the trusted
+  `PointInTimeView`/`AsOfSnapshot` adjusted-return path (raw close +
+  corporate actions, computed by the PIT layer).
+  - Knowledge date = the return's own trading date (end-of-day).
+  - Evidence class `LIVE_RECORDED`.
+  - PIT status: Tiingo EOD raw returns, corporate-action adjustment and
+    survivorship-through-view **PASS** (`docs/phase4b_tiingo_certification.md`).
+- **Excluded:**
+  - `marketCap` (schema-only; float approximated);
+  - `peRatio`, `pbRatio`, `enterpriseVal`, `trailingPEG1Y` (depend on
+    fundamentals whose vintage/restatement behavior is NOT CERTIFIED);
+  - volume (no PIT accessor);
+  - all fundamentals;
+  - `profit_dedt` and every Phase-5B field;
+  - any new provider field.
+- **Integrity mechanism (verified):**
+  - git tree object of the fixture directory =
+    `84c80f574d90d6cc4567eb5369eb22f450580936`, identical at `57cc411` and
+    at `HEAD`;
+  - no later commit touches the directory;
+  - 79 files.
+  - Because the manifest has no per-file hashes, the frozen config records
+    **(a)** that tree id and **(b)** a per-file SHA-256 list computed once at
+    config freeze from the committed blobs.
+  - At run time G1 verifies every file's SHA-256 against (b), with no git
+    needed. The runner additionally verifies (a) via
+    `git rev-parse HEAD:tests/fixtures/tiingo/phase5a_gate_b` and a clean
+    `git status` for that path.
+  - Any mismatch fails closed before any model call.
+- **Known limitations (frozen; carried into every claim):**
+  - the universe is **not** survivorship-safe (end-of-window membership);
+  - only 26 names;
+  - about 252 evaluation dates (258 EOD rows);
+  - the historical holdout was already observed (§4);
+  - the manifest lacks per-file hashes (mitigated above);
+  - US ≠ China;
+  - `DGS3MO`/risk-free is unused.
+- **Live market-data calls: ZERO.** The committed fixtures suffice; replay
+  runs through the existing `replay_transport`.
 
 ---
 
-## 11. Bounded hypothesis space
-
-- **Universe:** the 26 frozen Gate-B names, on each date intersected with
-  names that have a valid PIT realized return. There is no market-cap or
-  percentile screen: GATE-A-2 showed that screen is degenerate on small
-  universes.
-- **Semantic input (exactly one):** `daily_total_return`. Declared by the
-  harness as `DataRequirement(semantic_id="daily_total_return",
-  frequency=DAILY, observation_period=PERIOD, units=FRACTION,
-  revision_policy=POINT_IN_TIME, require_knowledge_date=True,
-  require_positive_vintage_identity=False)`. Knowledge date = the return's
-  own trading date (end-of-day close); evidence class `LIVE_RECORDED`.
-- **Operators:** the full frozen Phase-6 whitelist mirrored by
-  `ExpressionOperator` (`field, const, add, sub, mul, div, lag,
-  rolling_mean, rolling_sum, rolling_std, rolling_min, rolling_max, rank,
-  winsorize, standardize`), all Phase-6 certified.
-- **Lag range:** 0–5 trading days. **Rolling windows:** 2–20 trading days.
-  **Enforcement note:** `ResearchPolicy` has no bound fields. These bounds are
-  **prompt-declared**. They are enforced mechanically only by Phase-6
-  lookback / `insufficient_history` admission against the available warm-up
-  (§13). A candidate exceeding them is not silently dropped: it either fails
-  admission (a recorded, typed outcome) or is evaluated as proposed.
-- **Transforms:** `rank`, `standardize`, `winsorize` (cross-sectional,
-  Phase-6 semantics).
-- **Sign:** either sign, expressed inside the `FactorSpec` (e.g. `mul` by
-  `const(-1)`). Every sign choice is a distinct FactorSpec (mutation table).
-- **Frequency / formation schedule:** daily formation on every trading date
-  of the factor panel.
-- **Prohibited:**
-  - any other semantic input (`marketCap`, ratios, volume, fundamentals);
-  - new provider fields;
-  - uncertified PIT semantics;
-  - arbitrary Python;
-  - provider-specific names;
-  - new benchmark methodology;
-  - new portfolio engine;
-  - new expression operators;
-  - template references (`FactorTemplateRef`), since P9-E refuses unresolved
-    templates.
-
-Normalization mechanically rejects all of these (P9-D vocabulary and
-semantic-input checks; Phase-6 validator).
-
----
-
-## 12. Family design (frozen before evidence)
-
-- **One governed search family.**
-- `family_id` = SHA-256 (lowercase hex) of the canonical UTF-8 string
-  `smart_beta/pilot1/us-djia-snapshot-26/daily-total-return-transforms/v1`.
-  `program_id` = SHA-256 of `smart_beta/pilot1/program/v1`. Both are computed
-  once at config freeze and recorded.
-- **Scope/rationale:** cross-sectional daily signals that are deterministic
-  functions of the single `daily_total_return` input under the admissible
-  operators: short-horizon reversal, momentum, volatility and range-type
-  price signals.
-- **Inside the family:** every sign, lag, window, transform, winsorization or
-  arithmetic-composition variant. Each is a new FactorSpec, hypothesis and
-  experiment, costing **+1 statistical slot in the same family** (plan-9
-  mutation table).
-- **Genuinely different family:** anything needing a different semantic
-  input, universe or data domain. That requires a **new `ResearchProgram`
-  with explicit human approval and a new pilot identity**. It is not allowed
-  within Pilot 1.
-- **EvaluationSpec mutation:** forbidden within Pilot 1 (§13 is frozen).
-  Under Phase 8 it would be a new experiment in the same family, costing +1
-  slot.
-- No automatic semantic-equivalence claim is made. The only deduplication
-  is exact `factor_spec_hash` equality.
-
----
-
-## 13. EvaluationSpec (single template; proposed values)
-
-Dates are derived **only from coverage metadata** (the manifest window
-and EOD lookback start), never from returns:
-
-- EOD rows 2025-09-05 … 2026-09-15; first realized return 2025-09-08.
-- Warm-up (in no fold): 2025-09-08 … 2025-10-14. That is at least 25 return
-  rows, enough for lag 5 + window 20.
-- **IS:** 2025-10-15 … 2026-03-31.
-- **OOS:** 2026-04-01 … 2026-06-30.
-- **Final holdout:** 2026-07-01 … 2026-09-15.
-- Walk-forward folds: 0.
-
-| Field | Proposed value | Trace |
-|---|---|---|
-| `metrics` | `IC, RANK_IC, LONG_SHORT, SHARPE, MAX_DRAWDOWN, TURNOVER_COST_ADJUSTED, SUBPERIOD, PARAMETER_SENSITIVITY` | `MetricKey` vocabulary. `BENCHMARK_RELATIVE` is excluded (no new benchmark methodology). `UNIVERSE_SENSITIVITY` and `REDUNDANCY` are excluded (no variant set or accepted-factor set exists) |
-| `horizons` | `(1,)` (one realized-return row = next trading day) | `forward_returns.py` horizon semantics |
-| rebalance | daily (every factor-panel date) | formation = factor-panel dates |
-| `parameter_grid` | primary `(n_groups=3, horizon=1, cost_bps=<frozen cost>, winsorization=0.01)`; sensitivity point `(n_groups=5, …)` | `ParameterPoint`. The primary configuration is the first grid point (`engine.py` docstring) |
-| portfolio grouping | 3 groups primary (about 8–9 names per group over 26) | `portfolio.py` |
-| `subperiod_rule` | one calendar boundary 2026-01-02 (inside IS) | `SubperiodRule` |
-| `universe_variants` | `()` | — |
-| `cost_model` | `transaction_cost_bps = <HUMAN FREEZE>`, `mode = ONE_WAY` | `CostModel`. The value is a declared convention, not evidence; it must be frozen by a human before P1-E |
-| `benchmark` | an inert declared `BenchmarkRef`. No benchmark series is supplied because `BENCHMARK_RELATIVE` is not selected | the exact inert reference is to be confirmed by the P1-D dry run |
-| `periods_per_year` | 252 | Sharpe annualization input (`evaluate()` requires it explicitly) |
-| `factor_provenance_hash` | per proposal = that factor's `EngineResult.content_hash` | the only per-proposal field. Every other field is the frozen template |
-| minimum observations | see DecisionPolicy `minimum_n_obs` (§15) | — |
-| redundancy comparison set | none (first pilot; no accepted factors) | recorded as NOT RUN, not as passed |
-
-**Readiness dependency:** these values are proposed from contracts and
-coverage metadata. Executability, meaning the exact partition calendar
-alignment, the inert benchmark reference and fold minimums, must be proven by
-a harness dry run on **constructed** data (P1-D) before they are frozen.
-If the dry run forces a change, it happens **before** any real evaluation and
-is recorded as a pre-freeze configuration fix, never after results.
-
----
-
-## 14. Final holdout classification
-
-- **Source:** the final 2026-07-01 … 2026-09-15 segment of the same Gate-B
-  fixtures. It is local and committed.
-- **Mechanically hidden from the generator:** **YES.**
-  - `GeneratorVisibleResearchHistory` is a positive allowlist.
-  - `HoldoutVisibility` has the single member `NONE`.
-  - The generator never receives the DecisionRecord or ACCEPT/REJECT/DEFER.
-- **Scientifically untouched by humans/agents:** **NO.**
-  - Phase 5A computed and committed the market-factor series and per-name
-    adjusted-return diagnostics over the whole window, holdout included
-    (`docs/phase5a/gate_b/artifact_a_*`, `artifact_b_constituent_diagnostics*`).
-  - These artifacts sit in the repository that the planner, reviewers and
-    workers can read.
-  - Additional indirect channel: a pretrained model may carry knowledge of
-    2025–2026 market outcomes. The prompt never names tickers, and signals
-    are ticker-agnostic cross-sectional formulas, but this channel is not
-    eliminated. The holdout start (2026-07-01) must be checked against the
-    chosen model's published training-data cutoff at P1-F. If the holdout
-    predates the cutoff, that is recorded explicitly.
-- **Phase-8 mechanics:**
-  - Phase-7 computes holdout metrics for **every** experiment.
-  - Phase-8 lets only the **first** experiment consume the exact `holdout_id`.
-  - Experiments 2+ therefore receive `HOLDOUT_PREVIOUSLY_CONSUMED` → DEFER
-    (policy §15). This is expected, and it is itself one of the governance
-    behaviors Pilot 1 exercises.
-- **Classification:** **OPERATIONAL PILOT, not clean scientific discovery
-  certification.**
-- **Claim allowed:** the holdout-governance mechanism (firewall,
-  single-consumption, reuse refusal) operated correctly on real data. No
-  claim of out-of-sample validity of any factor is allowed.
-
----
-
-## 15. SearchPolicy + DecisionPolicy (proposed; every field traced)
-
-**SearchPolicy** (`experiment/policy.py:425-463`):
-
-| Field | Value | Trace |
-|---|---|---|
-| `family_id` | the §12 hash | required 64-hex |
-| `family_budget_m` | 3 | §16 budget |
-| `family_alpha` | 0.05 | recorded declaration; see the judge limitation below |
-| `trial_unit` | `EXPERIMENT_ID` | only member |
-| `procedure` | `FIXED_M_BONFERRONI` | only member |
-| `budget_exhaustion` | `DEFER` | member; unknown ≠ known failure |
-| `replay_rule` | `DETERMINISTIC_REPLAY` | only member |
-
-**DecisionPolicy** (`experiment/policy.py:645-672`):
-
-| Field | Value | Trace |
-|---|---|---|
-| `required_evidence` | `PARTITION, FOLD_RESULTS, METRIC_TABLES, COST_ADJUSTED_SERIES, SUBPERIOD_TABLE, PARAMETER_SENSITIVITY_TABLE, PURGE_COUNTS, HOLDOUT` | `EvidenceSection`; matches §13 metric selection |
-| `require_is_oos` | `True` | judge `_evaluate_partitions` |
-| `require_holdout` | `True` | holdout must be governed, not silently skipped |
-| `holdout_reuse` | `DEFER` | reuse is non-adjudication, not a known factor failure |
-| `required_search_policy` | SearchPolicy content hash | contract |
-| `decision_outcomes` | explicit: `HOLDOUT_PREVIOUSLY_CONSUMED → DEFER`, `SEARCH_BUDGET_EXHAUSTED → DEFER` | `OutcomeRule` |
-| `minimum_n_obs` | 20 | **repository convention**: the Phase-5A frozen ≥20-observation diagnostic minimum. A convention, not a statistical justification |
-| `redundancy_threshold` | `None` | no comparison set; recorded, never a verdict |
-| `fail_closed` | `DEFER` | default |
-
-**Judge limitation (binding disclosure):** the Phase-8 judge applies **no**
-performance or efficacy threshold. The EvaluationRecord carries no candidate
-p-value, and the judge is forbidden to compute one (`judge.py` "Scope
-decision"). Under this policy, **ACCEPT means "governance- and
-evidence-complete on an unconsumed holdout," not "the factor works."** Only
-experiment 1 can reach ACCEPT (§14), whatever its performance. The pilot
-report must print this sentence next to every DecisionRecord. Adding an
-efficacy criterion would change a sealed Phase-8 authority and is out of
-scope (§25).
-
----
-
-## 16. Pilot budget (proposed)
-
-| Budget | Value | Why |
-|---|---|---|
-| proposals (`max_proposal_budget`) | 3 | the smallest number that exercises: first proposal → feedback → a mutation/next proposal → a third proposal after two feedback rounds → the pre-generation `PROPOSAL_BUDGET_EXHAUSTED` stop |
-| statistical (`family_budget_m` = `max_empirical_experiment_budget`) | 3 | one slot per possible proposal; exercises single holdout consumption (exp 1) and reuse refusal (exps 2–3) |
-| generation invocations (harness ceiling A') | 5 | allows up to 2 invocations yielding no admissible or novel candidate without exhausting the run. Typed stops (`NO_ADMISSIBLE_CANDIDATE` / `NO_NOVEL_CANDIDATE`) still fire through the loop |
-| LLM tokens / cost | **HUMAN FREEZE** at P1-H (e.g. token and dollar caps sized from a measured single-call estimate) | billing-relevant; not chosen silently |
-| wall-clock ceiling D | **HUMAN FREEZE** | operational |
-
-**Expected terminal outcome** (not a success criterion): one of
-`PROPOSAL_BUDGET_EXHAUSTED`, `NO_ADMISSIBLE_CANDIDATE`,
-`NO_NOVEL_CANDIDATE`, `GENERATOR_FAILURE`, `DATA_NOT_PIT_CERTIFIED`,
-`GOVERNANCE_CONFLICT`. `STATISTICAL_BUDGET_EXHAUSTED` is **not** expected,
-because the proposal budget binds first at m = 3. That is accepted, and the
-stop is covered by existing tests. Pilot 1 does not need to exercise every
-typed stop.
-
----
-
-## 17. Human authority during Pilot 1
-
-**Allowed:** observe logs and journals; inspect infrastructure failures;
-stop the whole pilot; resolve a non-scientific infrastructure outage (the
-run is then terminated as `INTERRUPTED` and re-run under a new run identity);
-approve use of the already-frozen model credential.
-
-**Forbidden:**
-- improve a hypothesis after seeing results;
-- change sign, window or lag after evidence;
-- change the EvaluationSpec, SearchPolicy, DecisionPolicy, ResearchPolicy or
-  prompt template;
-- raise any budget;
-- create a new family;
-- expose holdout results or DecisionRecords to the generator;
-- substitute a proxy field;
-- delete, rewrite or hide any failed attempt, event, proposal or record;
-- resume a crashed run in place.
-
-Any scientific configuration change **terminates** Pilot 1. A revised run
-gets a new pilot/run identity and a new plan freeze.
-
----
-
-## 18. Success / failure criteria
-
-**OPERATIONAL PASS** requires every item:
-1. At least one **real** model invocation occurred, with a persisted
-   invocation intent and `GenerationEvent` (with raw artifact) on disk
-   **before** normalization.
-2. Every normalized candidate is either a durable `ResearchProposal`
-   recorded **before** any empirical evidence for it, or a recorded typed
-   rejection.
-3. Family binding was enforced (no escape; the experiment family equals the
-   governed family).
-4. Phase-6 syntactic **and** data admission ran through the real
-   `spec/engine` path over `TrustedInput`s built from the Gate-B PIT view.
-   `required_data_certified` was derived from the admission result and never
-   defaulted.
-5. PIT evidence came only from the integrity-verified Gate-B fixtures, with
-   zero data-provider network calls (tripwire intact).
-6. A Phase-7 `EvaluationRecord` was produced for every admitted proposal.
-7. Phase-8 registration, search governance, holdout governance and judgment
-   ran for every experiment, and the holdout was consumed at most once.
-8. The holdout firewall held: an automated audit of every rendered prompt
-   finds no holdout metric, holdout availability or consumption, DecisionRecord,
-   final outcome or holdout-dependent reason code.
-9. `ResearchFeedback` was produced from the visible projection only.
-10. The loop produced a next proposal or a **legal typed STOP**.
-11. The offline reconstruction verifier rebuilt every registry from the
-    journals, and all snapshot/history hashes matched.
-12. The pilot report states every nonclaim (§25), the judge limitation (§15)
-    and the holdout classification (§14).
-
-**OPERATIONAL FAIL** is any of:
-- a generator input contains firewalled content;
-- a candidate evaluated without a prior durable proposal;
-- an invocation without a durable intent or event;
-- a silently dropped candidate;
-- a data-provider network call;
-- a fixture integrity mismatch;
-- `required_data_certified` not derived from admission;
-- a second consumption of the same `holdout_id`;
-- a family escape that was accepted;
-- a reconstruction hash mismatch;
-- a human scientific intervention;
-- a budget overrun;
-- a missing artifact from §19.
-
-**INTERRUPTED** (neither PASS nor FAIL): a crash or infrastructure outage
-with journals intact and reconstruction verified. It is re-run under a new
-identity.
-
-Scientific outcomes (ACCEPT / REJECT / DEFER / no admissible / no novel /
-budget exhaustion) never determine the operational disposition by themselves.
-
----
-
-## 19. Artifact package
-
-Run directory: `pilot_runs/pilot1/<run_id>/`, outside `tests/` and outside
-the sealed packages. It is committed **docs-only after** independent review,
-never mid-run.
-
-| Artifact | Existing emitter | Missing (glue) |
-|---|---|---|
-| pilot manifest (git SHA, tag, fixture tree hash, per-file SHA-256, env/package versions, model id/settings, price table, run_id) | — | G5/G6 |
-| frozen policies (ResearchPolicy, SearchPolicy, DecisionPolicy, EvaluationSpec template) | `to_dict` on each | file writer |
-| prompt template (+ hash) and every rendered prompt | — | G3 |
-| invocation intents | — | G4 |
-| generation events + raw artifacts | `GenerationEventRegistry.to_dict` | durable journal |
-| normalization outcomes | `NormalizationOutcome.to_dict` | journal |
-| proposals | `ProposalSnapshot.to_dict` | journal |
-| FactorSpecs + admission results + EngineResult hashes | `FactorSpec` / `AdmissionResult` / `engine_hash` | G2 writer |
-| data provenance (TrustedInput capability, evidence class, knowledge-date rule) | — | G1 |
-| EvaluationSpecs + EvaluationRecords | `to_dict` | writer |
-| registry / search / holdout snapshots | `RegistrySnapshot`, `SearchLedger`, `HoldoutGovernance` `to_dict` | writer |
-| DecisionRecords | `to_dict` | journal |
-| visible-history snapshots + ResearchFeedback | `to_dict` | journal |
-| stop / lifecycle ledgers | `to_dict` | journal |
-| LLM usage journal | — | G4 |
-| reconstruction/replay manifest + verifier result | — | G4 |
-| prompt firewall audit | — | G6 |
-| final pilot report | — | G6 |
-
-Because Pilot 1's holdout is not scientifically untouched, full-history
-artifacts containing holdout metrics carry no extra confidentiality
-requirement. They must still never be fed back to the generator.
-
----
-
-## 20. System classification and minimal glue
-
-**Classification: C — REQUIRES SMALL PILOT HARNESS / PERSISTENCE GLUE.**
-The architecture is complete, the executable integration is missing, no core
-capability is missing for an operational pilot, and no trust boundary moves.
-
-Minimal glue. All of it lives in a new, non-sealed location, such as a new
-`smart_beta/pilots/pilot1/` package plus `scripts/run_pilot1.py`. No file
-under `smart_beta/{spec,evaluation,experiment,research,pit,vendors}` is
-modified.
-
-| ID | Glue | Note |
-|---|---|---|
-| G1 | **PIT input adapter:** Gate-B fixtures → `replay_transport` → `TiingoPITSource` → `PointInTimeView` → daily adjusted-return frame → `TrustedInput(values, DataCapability(semantic_id="daily_total_return", …, has_knowledge_date=True), evidence_class=LIVE_RECORDED)` + fixture integrity check | **Trust-sensitive:** declares a capability at the Phase-6 boundary. Its knowledge-date claim must cite the Phase-4B PASS evidence, and it needs its own adversarial tests (e.g. it must never claim positive vintage identity or a stronger evidence class) |
-| G2 | **Experiment design provider:** FactorSpec → `spec.engine.evaluate_factor` (data admission) → `EngineResult` → per-proposal EvaluationSpec (template + provenance hash) → frozen `Partition` → `evaluation.engine.evaluate` → `HoldoutIdentity` → `ExperimentDesign(required_data_certified=<from admission>)` | must never default `required_data_certified` |
-| G3 | **Model generator adapter + frozen prompt template** | the only live-network component; renders visible history + feedback only |
-| G4 | **Durable write-ahead journal + invocation intents + LLM usage journal + offline reconstruction verifier** | append-only, fsync'd, canonical JSON |
-| G5 | **Frozen config file + loader + runner CLI** | uses the existing `from_dict` constructors |
-| G6 | **Artifact writer, prompt-firewall audit, pilot report** | — |
-
-Pyproject change: an optional extra (e.g. `pilot = ["anthropic>=1"]`) only.
-Core dependencies are unchanged.
-
----
-
-## 21. Documentation debt
-
-- **A. Phase-9 certification artifact** (`docs/phase9_*_certification.md`)
-  is missing. **Timing: before the Pilot-1 harness wave**, as a docs-only
-  commit, so the pilot has a written, bounded Phase-9 claim to cite.
-- **B. `CLAUDE.md` §2** still says the Herdr launch form "has not yet been
-  exercised", although Phase 9 ran Pi workers under Herdr. **Timing: before
-  the harness wave** launches any Pi worker, in the same docs-only commit as
-  A.
-- Neither item was edited during this review.
-
----
-
-## 22. Security / credential boundaries
-
-| Process | Credentials it may hold |
-|---|---|
-| Planning Claude | none needed for Pilot 1; never inspects or prints values |
-| Pi implementation workers (harness wave) | **none.** Launched with `TIINGO_API_KEY`, `TUSHARE_PROXY_TOKEN`, `TUSHARE_BASIC_PROXY_TOKEN` and the model credential scrubbed. All harness tests are offline, using a stubbed model client and constructed data |
-| test processes | none; same scrub; urllib tripwire; the model client is always a stub |
-| pilot runtime | **only** the model credential (`ANTHROPIC_API_KEY` or an `ant auth` profile), provisioned by the human at P1-H. Data credentials scrubbed; urllib tripwire for data providers; `RawArtifact` secret-marker rejection stays active |
-
-The model credential is never written to any journal, manifest, prompt or
-artifact. The G6 artifact sweep reuses the Phase-5A credential regex.
-
----
-
-## 23. Reproducibility (bounded)
-
-Pilot-1 reproducibility means:
-- raw model output persisted verbatim;
-- model, provider, settings and price-table provenance persisted;
-- every authorized visible-history snapshot persisted with its hash;
-- normalization deterministic from the persisted raw artifacts;
-- evaluation deterministic from the integrity-verified fixtures and frozen
-  specs;
-- judgment deterministic from the frozen evidence and policies.
-
-**Not claimed:** that the external model regenerates identical text, or
-honors a seed.
-
----
-
-## 24. Pre-run gates (current status)
-
-| Gate | Requirement | Status now |
-|---|---|---|
-| **P1-A** runnable generator | G3 built and reviewed; model ID/effort/price table frozen by a human; stubbed-client tests pass | **FAIL** (adapter missing) |
-| **P1-B** persistence survives restart | G4 built; a kill-and-reconstruct dry run on constructed data rebuilds every registry with matching hashes | **FAIL** (in-memory only) |
-| **P1-C** PIT dataset certified + available | Gate-B fixtures integrity-verified; G1 built with adversarial tests; returns path cites Phase-4B PASS | **PARTIAL** (data present and certified for this use; adapter missing) |
-| **P1-D** EvaluationSpec executable | full G2 path runs end to end on **constructed** data with the §13 template; any pre-freeze fix recorded | **NOT RUN** |
-| **P1-E** policies executable | Search/Decision/Research policies constructed from the frozen config; human freezes `transaction_cost_bps`; judge limitation acknowledged in writing | **PARTIAL** |
-| **P1-F** holdout honestly classified | §14 classification accepted; model training-cutoff vs holdout start recorded | **PARTIAL** (classified here; model cutoff pending model choice) |
-| **P1-G** artifact destination ready | run directory layout, writer and report template built; commit-after-review policy agreed | **FAIL** |
-| **P1-H** credential boundary ready | human provisions the model credential for the runtime only; LLM token/cost/wall-clock caps frozen; worker/test scrub verified | **FAIL** (not provisioned; caps not frozen) |
-
-**Pilot execution is NOT authorized** while any gate is not PASS.
-
----
-
-## 25. Nonclaims and boundaries
-
-Pilot 1 may establish **end-to-end operational evidence** for the bounded
-chain in §4 on one small, real, live-recorded US dataset. It does **not**
-establish:
-- alpha or economic validity;
+## 6. Pilot-1A certification claim (frozen text)
+
+> Given the sealed Phase 6–9 architecture at `phase9-complete`, a frozen
+> Pilot-1A configuration, the integrity-verified offline Gate-B fixtures
+> replayed through the trusted Tiingo PIT path as the single admitted
+> `LIVE_RECORDED` input `daily_total_return`, and real invocations of one
+> frozen external model through the Pilot-1A harness, the system executed a
+> governed research loop end to end. Every model invocation was durably
+> recorded (intent before the call, raw response after). Every
+> `GenerationEvent` was durably recorded before normalization, and every
+> materially testable `ResearchProposal` before any empirical evidence for
+> it. Each proposal was bound to the single governed search family.
+> Phase-6 specification validation and data admission, Phase-7 evaluation,
+> and Phase-8 registration, search governance, holdout governance and
+> judgment all ran through their sealed authorities, and holdout-independent
+> `ResearchFeedback` was returned to the generator. The loop ended in a
+> legal next proposal or a typed stop. Throughout, the final holdout was
+> consumed at most once, no reserved holdout evidence or final Phase-8
+> decision reached the generator, no sealed authority was bypassed or
+> modified, and every authority was reconstructed offline from the
+> persisted artifacts with matching content hashes.
+
+Phase-8 ACCEPT inside this run carries only the §3 meaning.
+
+## 7. Nonclaims (frozen)
+
+Pilot 1A does **not** establish:
+- clean scientific discovery;
+- an untouched holdout;
 - out-of-sample or holdout validity of any factor;
-- clean untouched-holdout discovery (§14);
+- alpha validity;
+- statistical significance (no significance statistic is certified);
+- economic usefulness;
+- a substantive empirical acceptance criterion (§3);
 - production or trading readiness;
-- provider universality;
-- China A-share applicability;
-- semantic family inference;
+- autonomous scientific creativity or optimal hypothesis generation;
 - causal discovery;
-- fully autonomous scientific discovery;
-- optimal or creative hypothesis generation;
-- deterministic external LLM generation;
+- deterministic LLM regeneration (no seed or sampling control);
+- model ignorance of the sample period;
+- semantic-equivalence detection;
 - complete adaptive multiple-testing correction;
 - survivorship-safe membership;
-- total side-channel elimination (including pretrained-model market
-  knowledge).
-
-**Future work recorded, not authorized** (each would change a sealed
-authority and needs its own phase):
-1. a DecisionPolicy/EvaluationRecord efficacy criterion (candidate statistic
-   + hurdle), without which ACCEPT is governance-only;
-2. restorable LLM usage counters / cross-process loop resume;
-3. native restore constructors for `ExperimentRegistry`/`ProposalRegistry`;
-4. persisted token/cost on `GenerationEvent`;
-5. policy-level lag/window bounds;
-6. a per-experiment holdout design that is not limited to one consumer.
+- provider universality or China A-share applicability;
+- total side-channel elimination;
+- cross-process resume of any sealed authority.
 
 ---
 
-## 26. Execution sequence (after authorization only)
+## 8. Harness boundary (frozen)
 
-1. Docs-only: Phase-9 certification record + `CLAUDE.md` §2 update (§21).
-2. Freeze the harness wave: task specs for G1–G6 with file ownership in the
-   new non-sealed location (a separate authorization).
-3. Harness wave via Herdr-launched Pi workers; exact-SHA independent review;
-   merge.
-4. Gates P1-A … P1-H evaluated with evidence. Human freezes the model,
-   budgets, cost convention and credential.
-5. Configuration freeze commit (docs/config only) with the computed
-   `program_id`/`family_id`/policy hashes, **before** the run.
-6. Single-process run → reconstruction verifier → firewall audit → report.
-7. Independent review of the run package; docs-only commit of the package.
-   STOP at the pilot-certification barrier.
+- **Namespace:** `smart_beta/pilot/` (new, non-sealed) plus the runner entry
+  `scripts/run_pilot1a.py` and config files under `pilot_configs/`. Run
+  outputs go to `pilot_runs/pilot1a/<run_id>/`. `pilot_runs/` is git-ignored
+  until a reviewed package is deliberately committed.
+- The harness **composes** public sealed APIs and never redefines their
+  authority.
+
+```
+smart_beta/pilot/          (harness; composes, never redefines)
+ ├─ contracts.py  P1A-C   shared frozen types/protocols
+ ├─ data.py       P1A-G1  Gate-B → TrustedInput     ──> sealed pit/, vendors/tiingo, spec (Phase 6)
+ ├─ design.py     P1A-G2  FactorSpec → ExperimentDesign ─> spec engine (6), evaluation (7), experiment.holdout (8)
+ ├─ model.py, prompt.py, firewall.py  P1A-G3  model adapter ─> research.generator/loop (9)
+ ├─ journal.py, reconstruct.py        P1A-G4  durable journal + verifier ─> sealed to_dict/from_dict
+ ├─ artifacts.py, report.py           P1A-G6  package, audits, report
+ └─ config.py, runner.py  P1A-G5  + scripts/run_pilot1a.py ─> research.loop.ResearchLoop (9)
+```
+
+- **Extension points used (all existing and public):**
+  - `ResearchLoop(policy, proposal_registry, generation_boundary,
+    orchestrator, stop_ledger, lifecycle_ledger)`;
+  - the generator callable protocol and `GenerationOutput`;
+  - `ExperimentDesign`;
+  - `Orchestrator(registry, search_ledger, holdout_governance)`;
+  - `spec.engine.admit`/`evaluate_factor` with `TrustedInput`,
+    `DataCapability`, `DataRequirement`;
+  - `evaluation.engine.evaluate` and `evaluation.partition.Partition`;
+  - `HoldoutIdentity`;
+  - `FullResearchHistory.from_authorities`;
+  - `to_dict`/`from_dict`/`snapshot` on every sealed contract;
+  - `TiingoClient(transport=replay_transport(...))`, `TiingoPITSource`,
+    `PointInTimeView`.
+- **Sealed packages modified: NONE** (§20).
 
 ---
 
-## 27. Blockers and next actions
+## 9. Task P1A-C — harness contracts (Wave 1)
 
-**Blocking execution (all resolvable by glue + human freezes, none by
-changing sealed code):**
-- G1–G6 missing;
-- model choice, credential and budgets not frozen;
-- cost convention not frozen;
-- P1-D dry run not run.
+- **Owned files:** `smart_beta/pilot/__init__.py`,
+  `smart_beta/pilot/contracts.py`, `tests/test_pilot_contracts.py`.
+- **Content (types and protocols only; no behavior beyond validation and
+  canonical hashing):**
+  - `RunId`;
+  - `RunStatus {RUNNING, COMPLETED_STOP, INTERRUPTED, FAILED_PREFLIGHT}`;
+  - `JournalRecord` envelope `{seq, run_id, kind, payload, payload_sha256,
+    prev_sha256}` and the closed `JournalKind` vocabulary;
+  - `InvocationIntent` and `InvocationResult` records (fields in §11);
+  - the `JournalSink` protocol (append, flush-durable);
+  - the `ModelClient` protocol (`complete(request) -> ModelResponse`, where
+    `ModelResponse` carries text, model id, stop reason, token usage and an
+    error state);
+  - the `PilotConfig` schema (§14 fields);
+  - `ArtifactLayout` (the directory contract).
+- Canonical JSON uses the sealed conventions (sorted keys, ASCII, no NaN).
+- **Depends:** sealed baseline only.
 
-**Next action:** STOP. Await review of this design and a separate
-authorization for step 1 (docs debt) and step 2 (harness wave freeze).
+## 10. Task P1A-G1 — PIT input adapter (Wave 2)
+
+- **Owned:** `smart_beta/pilot/data.py`, `tests/test_pilot_data.py`.
+- **Inputs:** fixture dir; frozen per-file SHA-256 list; frozen universe
+  (26 tickers); date range; optional date cap (dry run); frozen
+  `DataRequirement` for `daily_total_return`.
+- **Outputs:**
+  - a `TrustedInput` (values = date × stock frame of daily total returns
+    from `PointInTimeView`; `DataCapability(semantic_id="daily_total_return",
+    frequency=DAILY, observation_period=PERIOD, units=FRACTION, history=<rows
+    actually available>, has_knowledge_date=True,
+    has_positive_vintage_identity=False, revision_policies={POINT_IN_TIME})`;
+    `evidence_class=LIVE_RECORDED`; `vintage_evidence=None`);
+  - the realized-return panel `(date, stock_id, adj_ret)` for Phase 7;
+  - a `DataProvenance` record: fixture tree id, per-file hashes, universe,
+    date range, cap, and the knowledge-date rule citing Phase 4B.
+- **Must:**
+  - use only committed offline fixtures through `replay_transport`;
+  - verify every file hash before parsing;
+  - fail closed on a missing, extra or modified file, a missing (date, stock)
+    observation, a duplicate row, a non-finite value, or a date outside
+    coverage;
+  - enforce the date cap by never loading rows at or after it;
+  - leave certification to be decided by the sealed `admit`, never itself.
+- **Must NOT:**
+  - make network calls;
+  - declare `has_positive_vintage_identity=True` or any evidence class
+    above `LIVE_RECORDED`;
+  - default any certification flag;
+  - forward/back-fill;
+  - expose vendor names inside any `FactorSpec`/requirement/alias;
+  - read `marketCap` or any fundamentals field.
+- **Adversarial boundary:** G1 is the only harness code that makes a claim
+  at the Phase-6 trust boundary. Its tests must attack that claim (§21).
+- **Depends:** P1A-C.
+
+## 11. Task P1A-G3 — model adapter + prompt + pre-call firewall (Wave 2)
+
+- **Owned:** `smart_beta/pilot/model.py`, `smart_beta/pilot/prompt.py`,
+  `smart_beta/pilot/firewall.py`, `tests/test_pilot_model.py`,
+  `tests/test_pilot_firewall.py`, and (only if the user approves the
+  provider, §25) one optional-extra line in `pyproject.toml`.
+- **Purpose:** connect **one** frozen model configuration to the P9 generator
+  callable protocol.
+- **Flow per invocation:**
+  1. Render the frozen template from
+     `GeneratorVisibleResearchHistory.to_dict()` +
+     `ResearchFeedback.to_dict()` + the frozen vocabulary text + the raw JSON
+     schema (`generator.py` closed candidate schema) → a request artifact.
+  2. The **firewall audit** (`firewall.py`) checks the structured render
+     inputs against the generator-visible schema *before* the call:
+     - only allowlisted top-level objects are present;
+     - their dicts round-trip through
+       `GeneratorVisibleResearchHistory.from_dict` /
+       `ResearchFeedback.from_dict` with matching content hashes;
+     - a recursive key scan finds no `holdout`, `decision`, `accept`,
+       `reject`, `defer`, `evaluation_record_hash`, `holdout_consumed`, or
+       `DecisionRecord`/`FullResearchHistory` type markers;
+     - the rendered text contains no substring of those forbidden keys
+       outside the fixed template.
+
+     Failure → no call, and the harness raises the typed
+     `HOLDOUT_FIREWALL_VIOLATION` path.
+  3. Append `InvocationIntent` to the injected `JournalSink` and flush
+     durably **before** the external call. The intent carries: run_id,
+     ordinal, invocation id = SHA-256(run_id, ordinal, request hash), model
+     provider, model id, settings, prompt-template hash,
+     visible-history hash, `ResearchFeedback` content hash, ResearchPolicy
+     hash, request-artifact hash, and timestamp metadata.
+  4. Call `ModelClient.complete`.
+  5. Append `InvocationResult` (raw response text, SHA-256, model id
+     echoed by the provider, stop reason, input/output tokens, computed cost
+     from the frozen price table, error state) and flush durably.
+  6. Return `GenerationOutput(raw_artifact=RawArtifact.from_content(text),
+     tokens_used, cost_used)`, or raise `GeneratorFailureError` on refusal,
+     empty output or transport error. Transport errors are **not** retried
+     inside the adapter unless the frozen config allows N provider-level
+     retries, each journaled.
+- **Model request constraints:** single turn; **no tools, no web search, no
+  file inputs, no server-side tools**; JSON-constrained output.
+- **Must NOT:**
+  - read any data credential;
+  - log the model credential;
+  - pass anything except the two allowlisted objects and fixed template
+    text;
+  - claim determinism.
+- **Tests** use a deterministic stub `ModelClient` only.
+- **Depends:** P1A-C.
+
+## 12. Task P1A-G4 — durable journal + reconstruction verifier (Wave 2)
+
+- **Owned:** `smart_beta/pilot/journal.py`, `smart_beta/pilot/reconstruct.py`,
+  `tests/test_pilot_journal.py`, `tests/test_pilot_reconstruct.py`.
+- **Journal:**
+  - one append-only JSONL file per run;
+  - each record is a hash-chained `JournalRecord` (`prev_sha256`) written
+    then `fsync`'d;
+  - payloads are the sealed contracts' canonical `to_dict()`;
+  - the file is opened append-only, and existing bytes are never rewritten;
+  - a partial final line is reported as a **truncated tail** and is never
+    repaired in place.
+- **Records written by the runner at each step:**
+  - `run_started` (config hash);
+  - `invocation_intent` / `invocation_result`;
+  - `generation_event` (full event incl. raw artifact);
+  - `normalization_outcome`;
+  - `proposal_registered`;
+  - `admission_result`;
+  - `evaluation_spec`, `evaluation_record`;
+  - `orchestration_outcome` (DecisionRecord + search decision + holdout
+    evidence);
+  - authority snapshots after each experiment (`ProposalSnapshot`,
+    `GenerationEventRegistry`, `RegistrySnapshot`, `SearchLedger`,
+    `HoldoutGovernance`, `StopLedger`, `LifecycleLedger`,
+    `FullResearchHistory`, visible history, `ResearchFeedback`);
+  - `llm_usage`;
+  - `stop` or `interrupted`;
+  - `run_closed`.
+- **Reconstruction verifier (offline; no model; no network):**
+  1. Verify the hash chain.
+  2. Rebuild each authority: `from_dict` where it exists; re-registration
+     where only a snapshot exists (`ExperimentRegistry`, `ProposalRegistry`).
+  3. Compare every rebuilt `snapshot_hash`/`history_hash`/`content_hash` to
+     the journaled value.
+  4. Deterministically **re-derive**:
+     - normalization from each journaled raw artifact (`GeneratorBoundary.normalize`);
+     - `EngineResult`/`EvaluationRecord` from the integrity-verified fixtures
+       + FactorSpec + frozen spec;
+     - DecisionRecords via a fresh `Orchestrator` replay;
+
+     then compare hashes.
+  5. Report `RECONSTRUCTION_EXACT` or a list of mismatches.
+
+  It works on COMPLETED and INTERRUPTED runs alike. Reconstruction is never
+  called "resume".
+- The verifier imports G1/G2 only through their public functions. This is
+  the one Wave-2 → Wave-3 coupling: the re-derivation hook is written
+  against P1A-C protocols and wired at G5 integration.
+- **Depends:** P1A-C.
+
+## 13. Task P1A-G2 — experiment design provider (Wave 3)
+
+- **Owned:** `smart_beta/pilot/design.py`, `tests/test_pilot_design.py`.
+- **Input:** an admitted `ResearchProposal`/`FactorSpec`, the G1 outputs,
+  and the frozen config.
+- **Output:** `(ExperimentDesign, AdmissionResult, EngineResult,
+  EvaluationSpec, Partition, HoldoutIdentity)`.
+- **Steps:**
+  1. Data admission and factor evaluation through
+     `spec.engine.evaluate_factor` / `admit` over the G1 `TrustedInput`.
+     On `AdmissionError`, return a design with
+     `required_data_certified=False` and the admission reasons.
+  2. The per-proposal EvaluationSpec is the frozen template with
+     `factor_provenance_hash = EngineResult.content_hash`. That is the only
+     varying field, and G2 asserts every other field equals the template.
+  3. Build the frozen `Partition` from the configured dates.
+  4. Run `evaluation.engine.evaluate(...)` with `periods_per_year=252`.
+  5. Build `HoldoutIdentity` from the frozen dataset provenance, universe
+     id, holdout interval, target `daily_total_return`, horizon 1 and
+     partition id.
+  6. Build `ExperimentDesign(evaluation_spec, decision_policy,
+     search_policy, record, holdout_identity,
+     required_data_certified=<derived from step 1>)`.
+- **Must NOT:**
+  - judge;
+  - count attempts;
+  - touch `HoldoutGovernance` or `SearchLedger`;
+  - vary any spec field by result;
+  - default `required_data_certified`;
+  - call the Orchestrator itself (the loop does that).
+- **Depends:** P1A-C, P1A-G1.
+
+## 14. Task P1A-G6 — artifact package, audits, report (Wave 3)
+
+- **Owned:** `smart_beta/pilot/artifacts.py`, `smart_beta/pilot/report.py`,
+  `tests/test_pilot_artifacts.py`.
+- **Assembles `pilot_runs/pilot1a/<run_id>/`:**
+  - `manifest.json`: run_id, status, git HEAD + `phase9-complete` target,
+    fixture tree id + per-file hashes, config hash, Python/package versions,
+    model provider/id/settings/price table, prompt-template hash;
+  - frozen config;
+  - prompt template;
+  - the journal;
+  - extracted per-kind JSON files (every §12 record kind);
+  - the reconstruction report;
+  - the post-hoc firewall audit (re-runs G3's audit over every journaled
+    request);
+  - a secret sweep (the Phase-5A credential regex plus the live-credential
+    value check, never printing the value);
+  - `report.md`.
+- The report states:
+  - operational disposition;
+  - scientific outcomes;
+  - the §3 ACCEPT sentence beside every DecisionRecord;
+  - §4 holdout status;
+  - §5 limitations;
+  - §6 claim;
+  - §7 nonclaims.
+- A missing required artifact fails the package closed.
+- **Depends:** P1A-C, P1A-G3 (firewall audit), P1A-G4 (journal reader,
+  verifier).
+
+## 15. Task P1A-G5 — config, runner, integration (Wave 4)
+
+- **Owned:** `smart_beta/pilot/config.py`, `smart_beta/pilot/runner.py`,
+  `scripts/run_pilot1a.py`, `pilot_configs/pilot1a-dryrun.json`,
+  `pilot_configs/pilot1a.template.json`, `tests/test_pilot_runner.py`,
+  `tests/test_pilot_integration.py`, and the `.gitignore` line for
+  `pilot_runs/`.
+- **Config** (single file, hashed, containing or referencing):
+  - run identity;
+  - git baseline;
+  - dataset identity + fixture tree id + per-file hashes;
+  - `ResearchProgram`, `ResearchPolicy`, `SearchPolicy`, `DecisionPolicy`
+    (as sealed `to_dict` payloads);
+  - family id;
+  - budgets: proposal; statistical; LLM tokens/cost; invocation ceiling;
+    wall-clock;
+  - EvaluationSpec template + partition dates;
+  - model configuration + price table;
+  - prompt template path + hash;
+  - artifact destination;
+  - security/network policy.
+- **Runner preflight** (all before any model call):
+  1. load and validate the config through the sealed `from_dict`
+     constructors;
+  2. refuse unless HEAD descends from `phase9-complete`, the tree is clean,
+     and the config hash equals the approved hash;
+  3. verify the fixture tree id + per-file hashes;
+  4. scrub data-provider credentials;
+  5. install the `urllib` network tripwire;
+  6. create the run dir and journal and write `run_started`.
+
+  Failure → `FAILED_PREFLIGHT` with zero model calls.
+- **Loop:** construct `ResearchLoop` over fresh sealed authorities, then
+  drive `snapshot_history(FullResearchHistory.from_authorities(...)) →
+  generate(G3 callable) → [journal event] → normalize_persisted →
+  register_proposals → admit_factorspec → delegate_experiment(G2 design) →
+  record_feedback` until a typed STOP.
+- Enforce the harness ceilings (invocation count, wall-clock, cumulative
+  LLM usage) **before** each generate. Hitting a ceiling marks the run
+  INTERRUPTED (resource), not a research STOP.
+- On any uncaught exception or signal: write `interrupted` if possible and
+  exit with INTERRUPTED. No retry inside the run.
+- Finally run the G4 verifier and the G6 package.
+- **Depends:** P1A-G2, P1A-G3, P1A-G4, P1A-G6.
+
+## 16. Frozen evaluation / policy configuration
+
+**EvaluationSpec template** (dates derived from coverage metadata only):
+- warm-up 2025-09-08 … 2025-10-14 (in no fold);
+- **IS** 2025-10-15 … 2026-03-31;
+- **OOS** 2026-04-01 … 2026-06-30;
+- **final holdout** 2026-07-01 … 2026-09-15;
+- walk-forward folds 0;
+- `horizons=(1,)` (one realized-return row);
+- daily formation/rebalance;
+- `metrics = IC, RANK_IC, LONG_SHORT, SHARPE, MAX_DRAWDOWN,
+  TURNOVER_COST_ADJUSTED, SUBPERIOD, PARAMETER_SENSITIVITY`;
+- `parameter_grid = [(n_groups=3, horizon=1, cost_bps=C, winsorization=0.01),
+  (n_groups=5, horizon=1, cost_bps=C, winsorization=0.01)]` (primary =
+  first point);
+- `subperiod_rule.boundaries=(2026-01-02,)`;
+- `universe_variants=()`;
+- `cost_model=(transaction_cost_bps=C, ONE_WAY)`;
+- `benchmark` = an inert declared reference (`BENCHMARK_RELATIVE` not
+  selected);
+- `periods_per_year=252`.
+
+`C` is a USER FREEZE (§25). Any executability fix discovered at Barrier H4
+(constructed data) is applied **before** any real-data evaluation and
+recorded as a pre-freeze fix.
+
+**Dry-run variant (H6 only; separate program/family identity):**
+- same template;
+- data capped at < 2026-07-01;
+- IS 2025-10-15 … 2026-02-27, OOS 2026-03-02 … 2026-04-30, dry-run holdout
+  2026-05-01 … 2026-06-30.
+
+It never touches the real final-holdout rows.
+
+**ResearchPolicy:**
+- `program_id` = SHA-256(`smart_beta/pilot1a/program/v1`);
+- `family_id` = SHA-256(`smart_beta/pilot1a/us-djia-snapshot-26/daily-total-return-transforms/v1`);
+- `family_binding=PROGRAM_DECLARED`;
+- `admissible_vocabulary` = all 15 `ExpressionOperator` members;
+- `admissible_semantic_inputs=("daily_total_return",)`;
+- `generation_method=LLM`;
+- `generator_identity` = the model id (USER FREEZE);
+- `prompt_template_hash` = the template SHA-256;
+- `seed=0` (recorded; **not honored** by the model);
+- `max_proposal_budget=3`;
+- `max_empirical_experiment_budget=3` (must equal `family_budget_m`; not
+  enforced by P9);
+- `feedback_channels = IS_METRICS, OOS_METRICS, ROBUSTNESS_EVIDENCE,
+  SEARCH_GOVERNANCE_STATUS, HOLDOUT_INDEPENDENT_REASON_CLASSES`;
+- `novelty.require_distinct_factor_spec=True`;
+- `redundancy.max_redundancy=None`;
+- `stopping` = all stop reasons;
+- `holdout_visibility=NONE`;
+- `max_llm_token_budget` / `max_llm_cost_budget` = USER FREEZE.
+
+Lag 0–5 and windows 2–20 are **prompt-declared** bounds. They are enforced
+mechanically only via Phase-6 lookback/insufficient-history admission.
+`ResearchPolicy` has no bound fields.
+
+**SearchPolicy:**
+- `family_id` as above;
+- `family_budget_m=3`;
+- `family_alpha=0.05` (recorded; no significance test is performed by the
+  judge);
+- `trial_unit=EXPERIMENT_ID`;
+- `procedure=FIXED_M_BONFERRONI`;
+- `budget_exhaustion=DEFER`;
+- `replay_rule=DETERMINISTIC_REPLAY`.
+
+**DecisionPolicy (corrected):**
+- `required_evidence = PARTITION, FOLD_RESULTS, METRIC_TABLES,
+  COST_ADJUSTED_SERIES, SUBPERIOD_TABLE, PARAMETER_SENSITIVITY_TABLE,
+  PURGE_COUNTS, HOLDOUT`;
+- `require_is_oos=True`;
+- `require_holdout=True`;
+- `holdout_reuse=DEFER`;
+- `required_search_policy` = SearchPolicy hash;
+- `decision_outcomes`:
+  - `ACCEPT: ()`;
+  - `REJECT: (POLICY_UNSATISFIED,)`;
+  - `DEFER: (INSUFFICIENT_EVIDENCE, PROVENANCE_MISSING,
+    HOLDOUT_PREVIOUSLY_CONSUMED, SEARCH_FAMILY_UNKNOWN,
+    SEARCH_BUDGET_EXHAUSTED)`;
+- `minimum_n_obs=20` (the Phase-5A ≥20-observation convention; not a
+  statistical justification);
+- `redundancy_threshold=None`;
+- `fail_closed=DEFER`.
+
+**Budgets:**
+- proposals 3;
+- statistical m = 3;
+- invocation ceiling 5 (harness);
+- LLM tokens, dollars and wall-clock: USER FREEZE.
+
+---
+
+## 17. Crash policy (frozen)
+
+- **Same-run resume: never.** The sealed `ResearchLoop` cannot restore its
+  LLM usage counters, and the registries have no restore constructors, so
+  in-place continuation would silently reset state.
+- **Crash, process death or ceiling hit → `INTERRUPTED`.** The run's
+  journal is immutable and remains auditable. The G4 verifier must still
+  reconstruct it (from records up to any truncated tail).
+- **Retry** = a new `run_id` that records `predecessor_run_id`. It is
+  permitted **only if** the predecessor journal contains **no**
+  `orchestration_outcome` (no experiment registered, so no holdout
+  consumption or statistical slot).
+  - At most **one** retry.
+  - The report discloses the predecessor's invocations and proposals.
+- **Otherwise Pilot 1A terminates as INTERRUPTED.** A further attempt needs
+  a new freeze (Pilot 1B), which must declare how prior governance state is
+  carried forward.
+- Reconstruction is never called "resume".
+
+## 18. Task DAG, merge order, barriers (frozen)
+
+| Wave | Task(s) | Parallel | Depends | Branch / worktree |
+|---|---|---|---|---|
+| 0 | docs (this commit) | — | — | master (docs-only) |
+| 1 | P1A-C | single | baseline | `pilot1a/task-p1a-c-contracts` / `worktrees/task-p1a-c-contracts` |
+| 2 | P1A-G1, P1A-G3, P1A-G4 | 3 in parallel (disjoint files) | P1A-C | `pilot1a/task-p1a-g1-data`, `…-g3-model`, `…-g4-journal` |
+| 3 | P1A-G2, P1A-G6 | 2 in parallel | G2: C+G1; G6: C+G3+G4 | `pilot1a/task-p1a-g2-design`, `…-g6-artifacts` |
+| 4 | P1A-G5 | single | G2, G3, G4, G6 | `pilot1a/task-p1a-g5-runner` |
+
+- **Merge order:** C → {G1, G3, G4 in that order} → {G2, G6} → G5.
+- Only one task touches `pyproject.toml` (G3, conditional) and only one
+  touches `.gitignore` (G5), so conflicts are impossible by ownership.
+
+**Barriers:**
+- **H1 (after Wave 1):** frozen interfaces. P1A-C merged; `sealed files
+  modified: NONE`; full suite green, offline.
+- **H2 + H3 (after Wave 2):**
+  - G1 adversarial PIT tests pass offline.
+  - G3 pre-call intent is proven durable before the stub call; the
+    firewall rejects every forbidden input; no data credential is read; the
+    urllib tripwire holds; stub model only.
+  - G4 journal and chain tests pass.
+- **H4 (after Wave 3 + G5):** full harness integration with the
+  deterministic stub generator on **constructed** data. It runs the full
+  Phase 6 → 7 → 8 → 9 path, confirms EvaluationSpec executability, and
+  records the pre-freeze fixes. Zero provider calls, zero model calls.
+- **H5:** kill-at-each-step interruption tests. Reconstruction must be
+  exact for COMPLETED and INTERRUPTED runs. The artifact package, post-hoc
+  firewall audit and secret sweep must be green.
+- **H6 (final dry run):** real Gate-B offline data with the < 2026-07-01
+  cap, the dry-run program identity and the deterministic stub generator.
+  - **ZERO external model calls** and zero provider calls.
+  - Reconstruction exact.
+  - Audit proves no row ≥ 2026-07-01 was loaded.
+  - H6 is executed and reviewed by Planning Claude as barrier evidence.
+- Only after H1–H6 PASS, and the §25 real-run freezes, may a **separate
+  authorization** permit one real-model Pilot-1A run.
+
+Per CLAUDE.md §3, each Pi worker receives this plan by reference plus the
+instruction *"Execute P1A-<X> only, as specified in pilot1-plan.md §<n>"*.
+The task's section here **is** its frozen task spec.
+
+## 19. Test strategy (frozen before implementation)
+
+Every harness test is offline. An autouse fixture blocks
+`urllib.request.urlopen` and socket connect, scrubs `TIINGO_API_KEY`,
+`TUSHARE_PROXY_TOKEN`, `TUSHARE_BASIC_PROXY_TOKEN` and the model
+credential, and uses the stub `ModelClient`.
+
+**G1:**
+- provenance record complete;
+- `semantic_id` exactly `daily_total_return`;
+- knowledge date = trading date for every cell;
+- capability never claims positive vintage and evidence never exceeds
+  `LIVE_RECORDED` (asserted against a deliberately over-claiming double
+  that must fail);
+- a missing (date, stock) fails closed;
+- a corrupted, extra or missing fixture file fails closed before parse;
+- requesting `marketCap` or any non-frozen field fails;
+- the date cap is never exceeded;
+- no network;
+- the adjusted return equals an independently computed value for one
+  corporate-action-free and one dividend specimen, derived from raw fixture
+  JSON with plain arithmetic.
+
+**G2:**
+- data admission runs before evaluation;
+- `required_data_certified` equals the admission result (a failing
+  admission yields `False`; a double that defaults `True` must fail);
+- EvaluationSpec equals the template except `factor_provenance_hash`;
+- G2 never imports or calls `judge`/`SearchLedger`/`HoldoutGovernance`
+  mutators (AST check);
+- the holdout identity is stable across proposals;
+- `evaluate` is called with the frozen partition only.
+
+**G3:**
+- the durable intent exists before the stub call (the stub asserts it can
+  read the flushed intent);
+- the raw response and hash are persisted;
+- refusal, empty output and transport errors map to
+  `GeneratorFailureError` with a journaled result;
+- a crash mid-call (the stub raises `SystemExit`) leaves an intent without
+  a result, detected as interrupted;
+- the credential is absent from every journal/log;
+- the firewall rejects injected holdout/decision keys and a
+  `FullResearchHistory` payload;
+- no data-provider credential is read;
+- the stub path is deterministic;
+- the request declares no tools.
+
+**G4:**
+- append-only (an existing byte change is detected);
+- hash-chain corruption is detected;
+- an incomplete tail is reported, never repaired;
+- reconstruction hashes match for a synthetic run;
+- an interrupted run reconstructs;
+- no API continues a closed/interrupted run;
+- a prior run's files are never modified by a new run.
+
+**G5:**
+- an invalid config fails before any model call (the stub is never
+  invoked);
+- a dirty tree, wrong baseline or config-hash mismatch refuses;
+- budget and harness ceilings stop at the frozen values;
+- a typed STOP terminates the loop;
+- an injected infrastructure exception yields INTERRUPTED;
+- no hidden retry (invocation count equals journaled intents);
+- the retry rule of §17 is enforced.
+
+**G6:**
+- the manifest is complete;
+- the secret sweep is clean and detects a planted fake token;
+- the post-hoc firewall audit is green and detects a planted violation;
+- the reconstruction report is included;
+- a missing artifact fails closed;
+- the report contains the §3 sentence and the §7 nonclaims.
+
+**Integration (`tests/test_pilot_integration.py`):**
+- stub generator emitting fixed candidates, including one invalid, one
+  duplicate and one family-escape attempt;
+- constructed data for the mandatory case, plus a Gate-B offline case with
+  the dry-run cap;
+- full Phase 6 → 7 → 8 → 9 path;
+- experiment 1 consumes the holdout, experiments 2+ DEFER with
+  `HOLDOUT_PREVIOUSLY_CONSUMED`;
+- zero provider calls, zero real model calls;
+- reconstruction exact.
+
+## 20. Sealed-package protection (frozen)
+
+**Protected paths:** workers may read them and must not modify them.
+- `smart_beta/spec/` (Phase 6);
+- `smart_beta/evaluation/` (Phase 7);
+- `smart_beta/experiment/` (Phase 8);
+- `smart_beta/research/` (Phase 9);
+- the upstream trust core `smart_beta/pit/`, `smart_beta/vendors/`,
+  `smart_beta/data/`, `smart_beta/config/`;
+- every existing file under `tests/` (new `tests/test_pilot_*.py` files
+  only);
+- `tests/fixtures/` (read-only);
+- sealed-phase `docs/` and `worker_tasks/phase*/`.
+
+**Review rule:** every task review computes
+`git diff --name-only <base>..<task-sha>`. It must report `sealed files
+modified: NONE` and show every changed file inside that task's ownership
+list.
+
+**Worker stop condition:** if a worker finds that a sealed change is
+genuinely required (a missing extension point), it **stops that task** and
+reports the missing extension point. It never patches sealed code, and
+review never absorbs such a patch.
+
+## 21. Credential boundaries (frozen)
+
+| Process | Credentials |
+|---|---|
+| Planning Claude | none; never inspects or prints values |
+| Pi workers (all waves) | none; data and model credentials scrubbed at launch |
+| test processes / H4–H6 | none; stub model; tripwire |
+| real Pilot-1A run | **only** the frozen model credential; data credentials scrubbed; tripwire on data providers |
+
+## 22. Operational PASS / FAIL (frozen)
+
+**PASS** requires all of:
+1. At least one real invocation, with a durable intent before and result
+   after.
+2. `GenerationEvent` durable before normalization.
+3. Proposals durable before evidence.
+4. Family binding enforced.
+5. Phase-6 specification validation and data admission on G1 inputs, with
+   `required_data_certified` derived.
+6. Fixture integrity verified, zero data-provider calls.
+7. An `EvaluationRecord` for each admitted proposal.
+8. Phase-8 governance per experiment, with the holdout consumed at most
+   once.
+9. Firewall audits green, pre-call and post-hoc.
+10. `ResearchFeedback` from the visible projection only.
+11. A legal next proposal or typed STOP.
+12. `RECONSTRUCTION_EXACT`.
+13. The report carries §3, §4, §5, §6 and §7.
+
+**FAIL** is any of:
+- a firewall violation;
+- evaluation without a prior durable proposal;
+- an invocation without an intent;
+- a silently dropped candidate;
+- a data-provider call;
+- an integrity mismatch;
+- a defaulted certification flag;
+- a second consumption of the same `holdout_id`;
+- an accepted family escape;
+- a reconstruction mismatch;
+- a human scientific intervention;
+- a budget overrun;
+- a missing artifact;
+- a sealed file modified.
+
+**INTERRUPTED** is neither PASS nor FAIL (§17). Scientific outcomes never
+decide the disposition by themselves.
+
+## 23. Human authority during the real run
+
+**Allowed:** observe; stop the run; resolve an infrastructure outage under
+§17; approve the frozen credential.
+
+**Forbidden:**
+- any scientific change after evidence: hypothesis, sign, lag, window,
+  EvaluationSpec, any policy, prompt, budget, family;
+- exposing holdout or decisions to the generator;
+- proxy substitution;
+- deleting or rewriting any attempt;
+- in-place resume.
+
+## 24. Documentation debt (resolved in this commit)
+
+- `docs/phase9_research_loop_certification.md` has been created.
+- `CLAUDE.md` §2 now records that the Herdr-managed Pi workflow was
+  exercised in Phase 9.
+
+Phases 7 and 8 also lack `docs/phaseN_*_certification.md` records. That is
+recorded here only; it is not in scope.
+
+## 25. User freezes
+
+**Required before harness implementation (Wave 1 authorization):**
+1. Authorization of the harness wave itself (§27).
+2. **Model provider family** for the G3 concrete client (recommended:
+   Anthropic, via the official Python SDK), and approval to add it as an
+   **optional** dependency extra in `pyproject.toml`. The stub-based tests
+   do not need the real model id.
+3. Whether reviewed run packages under `pilot_runs/` may later be committed
+   to the repository (default proposed: git-ignored; commit only a reviewed
+   package, docs-only).
+
+**Required before H6** (the dry run needs a concrete value; recommended to
+freeze early): transaction cost `C` bps, ONE_WAY. This is a declared
+convention, not evidence.
+
+**Required only before the real run:**
+- model id and version;
+- effort/config settings;
+- the provider retry count;
+- the price table used for cost accounting;
+- LLM token cap;
+- dollar cap;
+- wall-clock cap;
+- credential source (env var vs. provider CLI profile) and its
+  runtime-only provisioning;
+- the model's published training-data cutoff, recorded against the holdout
+  start;
+- final approval of the frozen config hash;
+- the authorization for exactly one real-model run.
+
+## 26. Deferred work (recorded, not authorized)
+
+Each item would change a sealed authority and needs its own phase:
+1. A substantive empirical acceptance criterion (the scientific-decision
+   upgrade, §3).
+2. A deferred/final-stage holdout design (§4).
+3. Restorable loop LLM counters and cross-process resume.
+4. Restore constructors for `ExperimentRegistry`/`ProposalRegistry`.
+5. Token/cost on `GenerationEvent`.
+6. Policy-level lag/window bounds.
+7. Run/program identity in holdout governance, or a persistent cross-run
+   holdout ledger.
+
+## 27. Next action
+
+STOP. Await review and a separate authorization for the Pilot-1A harness
+implementation (Wave 1: P1A-C).
