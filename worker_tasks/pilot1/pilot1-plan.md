@@ -1019,6 +1019,64 @@ Each item would change a sealed authority and needs its own phase:
 7. Run/program identity in holdout governance, or a persistent cross-run
    holdout ledger.
 
+## 26a. Integration record (planner review of Waves 1–3; binding on P1A-G5)
+
+Merged task commits:
+- P1A-C `3889c6e`
+- G1 `980f1e4`
+- G3 `8d1a9e4`
+- G4 `d6c4958`
+- G2 `cf730dd`
+- G6 `a37d349`
+
+**Accepted clarifications:**
+1. **§13 admission failure.** A sealed `ExperimentDesign` requires a real
+   `EvaluationRecord`, so none is fabricated on admission failure.
+   `make_design_provider` raises the typed `DataNotCertifiedError`, carrying
+   `required_data_certified=False` and the admission reasons. The runner
+   journals the `admission_result` and calls the public
+   `loop.stop(StopReason.DATA_NOT_PIT_CERTIFIED, detail=...)`, which is legal
+   from `FACTORSPEC_ADMITTED` (`loop.py` `LEGAL_TRANSITIONS`).
+2. **§16 pre-freeze executability fixes** (sealed-contract driven, calendar
+   only, applied before any real run):
+   - `SubperiodRule.boundaries = (2025-10-15, 2026-01-02, 2026-07-01)`
+     (≥2 boundaries required; subperiods cover IS+OOS only);
+   - `universe_variants=("all",)` (non-empty required; inert because
+     `UNIVERSE_SENSITIVITY` is not selected);
+   - `walk_forward_fold_length=1` (unused, `folds=0`);
+   - `holdout_length` = inclusive holdout days;
+   - `benchmark=NAMED "zero"` (inert).
+3. G3 reads the sealed private constants `_CANDIDATE_REQUIRED_KEYS` /
+   `_CANDIDATE_OPTIONAL_KEYS` read-only (no public accessor exists), with a
+   cross-check test. This is recorded coupling, not a sealed modification.
+
+**P1A-G5 integration requirements (binding):**
+- (a) One shared G3 `JournalChain`, seeded from G4 `Journal.next_seq` /
+  `prev_sha256`. Every runner and adapter append goes through it. (G4
+  enforces continuity and fails closed on divergence.)
+- (b) Before **each** `generate`, journal an `authority_snapshot` whose slots
+  include `visible_history` and `research_feedback` (exact
+  `AUTHORITY_SNAPSHOT_NAMES`). The G6 post-hoc audit re-derives each request
+  from them and checks it against `request_artifact_hash`.
+- (c) A G3 `FirewallViolation` escaping `generate` → the runner calls
+  `loop.stop(StopReason.HOLDOUT_FIREWALL_VIOLATION)`.
+- (d) Wire G4 `ReconstructionHooks(evaluation=..., decision=...)`:
+  evaluation re-derivation uses G1+G2 over the journaled FactorSpecs;
+  decision re-derivation replays a fresh sealed `Orchestrator`.
+  Reconstruction must reach `RECONSTRUCTION_EXACT` with **no unwired hooks**
+  at H4–H6.
+- (e) H4 "constructed data" means synthetic fixture directories in the
+  Tiingo recording format, with a manifest and computed hashes, built in
+  `tmp_path` and loaded through the **same** G1 path. Real Gate-B with the
+  cap is used for H6.
+- (f) The deterministic `StubModelClient` script for H6 emits valid
+  candidates that exercise the full path (≥1 evaluated experiment; the
+  second experiment exercises holdout-reuse DEFER). The integration tests
+  additionally cover invalid, duplicate and family-escape candidates.
+- (g) The H6 dry-run config uses the §16 dry-run variant (cap `2026-07-01`,
+  dry-run partition, dry-run program/family ids). The runner CLI takes
+  `--config` and `--approved-config-hash`.
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
