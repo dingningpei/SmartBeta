@@ -14,6 +14,7 @@ they are loaded through the same P1A-G1 path as the frozen Gate-B fixtures.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import datetime as dt
 import hashlib
 import json
@@ -27,6 +28,7 @@ from pilot_support import offline_guard
 
 from smart_beta.pilot import config as config_mod
 from smart_beta.pilot.config import (
+    ConfigError,
     ConfigNotApprovedError,
     ConfigPlaceholderError,
     ConfigValidationError,
@@ -66,8 +68,21 @@ pytestmark = pytest.mark.usefixtures("offline_guard")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-DRY_RUN_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a-dryrun.json"
-TEMPLATE_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a.template.json"
+DRY_RUN_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a-dryrun-v2.json"
+TEMPLATE_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a-v2.template.json"
+#: The superseded v1 config files. They are preserved byte-for-byte and are
+#: refused by the corrected preflight (section 26b).
+LEGACY_DRY_RUN_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a-dryrun.json"
+LEGACY_TEMPLATE_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a.template.json"
+
+#: The byte-for-byte frozen SHA-256 of the superseded v1 config files. If either
+#: changes, the H6-v1 failure record is no longer preserved.
+LEGACY_DRY_RUN_SHA256 = (
+    "34f434c6a2a63462db93f0ea6c8886e9744c49af2e7ccc5ba4238cb6c87a94b4"
+)
+LEGACY_TEMPLATE_SHA256 = (
+    "1c6b37cd3f1b86ba4ae6dfcecc07a7976182f9836a4a9c2f1571663e2b7da180"
+)
 
 CONSTRUCTED_TICKERS = ("AAA", "BBB", "CCC")
 CONSTRUCTED_START = "2025-09-05"
@@ -321,6 +336,7 @@ def test_committed_template_matches_the_builder():
 def test_dry_run_config_resolves_to_the_frozen_variant():
     config = load_config(DRY_RUN_CONFIG)
     resolved = resolve_config(config)
+    assert resolved.run_id == "pilot1a-dryrun-v2"
     assert resolved.run_mode == "dry_run"
     assert resolved.model.provider == config_mod.STUB_PROVIDER
     assert resolved.model.model_id == "pilot1a-stub-v1"
@@ -330,6 +346,21 @@ def test_dry_run_config_resolves_to_the_frozen_variant():
     assert resolved.evaluation_spec_template.cost_model.transaction_cost_bps == 10.0
     assert resolved.prompt_template_hash == config.prompt_template_hash
     assert resolved.budgets.invocation_ceiling == 5
+    # Section-26b correction 1/2/3: no parameter sensitivity, a single primary
+    # parameter point and the config's own subperiod boundaries.
+    from smart_beta.evaluation.spec import MetricKey
+
+    assert MetricKey.PARAMETER_SENSITIVITY not in (
+        resolved.evaluation_spec_template.metrics
+    )
+    assert len(resolved.evaluation_spec_template.parameter_grid) == 1
+    boundaries = resolved.evaluation_spec_template.subperiod_rule.boundaries
+    assert boundaries[-1] == resolved.partition_dates.holdout_start
+    from smart_beta.experiment.policy import EvidenceSection
+
+    assert EvidenceSection.PARAMETER_SENSITIVITY_TABLE not in (
+        resolved.decision_policy.required_evidence
+    )
 
 
 def test_real_run_template_is_refused_by_placeholders():
@@ -378,7 +409,71 @@ def test_evaluation_template_tampering_is_refused():
     with pytest.raises(ConfigValidationError):
         resolve_config(config)
     # The frozen template is untouched.
-    assert build_frozen_evaluation_spec_template().cost_model.transaction_cost_bps == 10.0
+    assert (
+        build_frozen_evaluation_spec_template(
+            config_mod.DRY_RUN_PARTITION
+        ).cost_model.transaction_cost_bps
+        == 10.0
+    )
+
+
+def test_legacy_v1_configs_are_byte_for_byte_unchanged():
+    """The H6-v1 failure record is preserved: the v1 files never change."""
+    assert hashlib.sha256(LEGACY_DRY_RUN_CONFIG.read_bytes()).hexdigest() == (
+        LEGACY_DRY_RUN_SHA256
+    )
+    assert hashlib.sha256(LEGACY_TEMPLATE_CONFIG.read_bytes()).hexdigest() == (
+        LEGACY_TEMPLATE_SHA256
+    )
+
+
+def test_legacy_v1_dry_run_is_refused_for_the_superseded_template():
+    """The corrected preflight refuses the v1 dry run, not silently upgrades it."""
+    config = load_config(LEGACY_DRY_RUN_CONFIG)
+    payload = config.to_dict()
+    # The v1 file genuinely carries the section-26b defects.
+    assert "parameter_sensitivity" in payload["evaluation_spec_template"]["metrics"]
+    assert (
+        payload["evaluation_spec_template"]["subperiod_rule"]["boundaries"][-1]
+        == "2026-07-01"
+    )
+    with pytest.raises(ConfigValidationError) as excinfo:
+        resolve_config(config)
+    assert "parameter_sensitivity" in str(excinfo.value)
+
+
+def test_legacy_v1_template_is_refused():
+    config = load_config(LEGACY_TEMPLATE_CONFIG)
+    with pytest.raises(ConfigError):
+        resolve_config(config)
+
+
+def test_legacy_v1_configs_fail_preflight_with_zero_model_calls(tmp_path):
+    client = StubModelClient(ModelResponse("{}", "m", "end_turn", 1, 1))
+    for path in (LEGACY_DRY_RUN_CONFIG, LEGACY_TEMPLATE_CONFIG):
+        config = load_config(path)
+        outcome = run_pilot(
+            config,
+            approved_config_hash=config.config_hash(),
+            repo=tmp_path,
+            git=FakeGit(),
+            client=client,
+        )
+        assert outcome.status is RunStatus.FAILED_PREFLIGHT
+        assert outcome.journal_path is None
+    assert client.calls == ()
+
+
+def test_parameter_sensitivity_required_evidence_is_refused():
+    payload = config_mod.build_dry_run_config_dict()
+    payload["decision_policy"]["required_evidence"].append(
+        "parameter_sensitivity_table"
+    )
+    payload["decision_policy"].pop("content_hash", None)
+    config = load_config_dict(payload)
+    with pytest.raises(ConfigValidationError) as excinfo:
+        resolve_config(config)
+    assert "parameter_sensitivity" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +524,33 @@ def test_placeholder_config_refuses_before_any_model_call(tmp_path):
         client=client,
     )
     assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert client.calls == ()
+
+
+def test_existing_artifact_directory_is_refused_untouched(tmp_path):
+    """A run_id/artifact directory that already exists is never reused."""
+    config_dict = _constructed_config(tmp_path, run_id="existing-run")
+    first = _run(config_dict, tmp_path)
+    assert first.status is RunStatus.COMPLETED_STOP
+    journal_before = read_journal(first.journal_path).records
+    client = StubModelClient(ModelResponse("{}", "m", "end_turn", 1, 1))
+    second = _run(config_dict, tmp_path, client=client)
+    assert second.status is RunStatus.FAILED_PREFLIGHT
+    assert "already exists" in second.detail
+    assert client.calls == ()
+    assert read_journal(first.journal_path).records == journal_before
+
+
+def test_existing_canonical_run_id_directory_is_refused(tmp_path):
+    """The canonical ``pilot_runs/pilot1a/<run_id>`` is reserved even off-path."""
+    config_dict = _constructed_config(tmp_path, run_id="canonical-existing")
+    (
+        tmp_path / "pilot_runs" / "pilot1a" / "canonical-existing"
+    ).mkdir(parents=True)
+    client = StubModelClient(ModelResponse("{}", "m", "end_turn", 1, 1))
+    outcome = _run(config_dict, tmp_path, client=client)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "already exists" in outcome.detail
     assert client.calls == ()
 
 
@@ -599,6 +721,191 @@ def test_firewall_violation_escaping_generate_is_a_typed_stop(tmp_path, monkeypa
     assert outcome.status is RunStatus.COMPLETED_STOP
     assert outcome.stop_reason == StopReason.HOLDOUT_FIREWALL_VIOLATION.value
     assert outcome.invocation_count == 0
+
+
+def _constructed_requirement() -> DataRequirement:
+    return DataRequirement(
+        semantic_id="daily_total_return",
+        frequency=Frequency.DAILY,
+        observation_period=ObservationPeriod.PERIOD,
+        units=Unit.FRACTION,
+        lookback=0,
+        revision_policy=RevisionPolicy.POINT_IN_TIME,
+        require_knowledge_date=True,
+        require_positive_vintage_identity=False,
+    )
+
+
+def _holdout_overlapping_record(tmp_path: Path):
+    """A real sealed ``EvaluationRecord`` whose subperiod crosses the holdout.
+
+    The subperiod rule is extended one calendar day past the dry-run holdout
+    start, so the first subperiod row ``[2026-01-02, 2026-05-02)`` overlaps the
+    reserved holdout fold ``[2026-05-01, ...)``. This is exactly the class of
+    leak the section-26b temporal firewall must refuse.
+    """
+    from smart_beta.evaluation.engine import evaluate
+    from smart_beta.evaluation.spec import SubperiodRule
+    from smart_beta.pilot.data import (
+        DAILY_TOTAL_RETURN_REQUIREMENT,
+        load_pit_inputs,
+    )
+    from smart_beta.pilot.design import (
+        PILOT_PERIODS_PER_YEAR,
+        build_frozen_evaluation_spec_template,
+        build_partition,
+    )
+    from smart_beta.spec.engine import evaluate_factor
+
+    fixture_dir = tmp_path / "tf-overlap-fixture"
+    if not fixture_dir.exists():
+        _write_synthetic_fixture(
+            fixture_dir, CONSTRUCTED_TICKERS, CONSTRUCTED_START, CONSTRUCTED_END
+        )
+    pilot_data = load_pit_inputs(
+        fixture_dir=fixture_dir,
+        expected_fixture_hashes=compute_fixture_hashes(fixture_dir),
+        universe=CONSTRUCTED_TICKERS,
+        start=CONSTRUCTED_START,
+        end=CONSTRUCTED_END,
+        requirement=DAILY_TOTAL_RETURN_REQUIREMENT,
+        fixture_tree_id=CONSTRUCTED_TREE_ID,
+        date_cap=config_mod.DRY_RUN_DATE_CAP,
+    )
+    dates = config_mod.DRY_RUN_PARTITION
+    template = build_frozen_evaluation_spec_template(dates)
+    overlap = dates.holdout_start + dt.timedelta(days=1)
+    spec_template = dataclasses.replace(
+        template,
+        subperiod_rule=SubperiodRule(
+            boundaries=(dates.is_start, dt.date(2026, 1, 2), overlap)
+        ),
+    )
+    factor_spec = FactorSpec(
+        id="tf_overlap_identity",
+        description="identity of the admitted daily total return",
+        expression="ret",
+        inputs=(FactorInput(alias="ret", requirement=_constructed_requirement()),),
+        frequency=Frequency.DAILY,
+        missing_policy=MissingPolicy.PROPAGATE,
+    )
+    inputs = {
+        alias: pilot_data.trusted_input for alias in factor_spec.referenced_roles
+    }
+    engine_result = evaluate_factor(factor_spec, inputs)
+    spec = dataclasses.replace(
+        spec_template, factor_provenance_hash=engine_result.content_hash
+    )
+    return evaluate(
+        engine_result.evaluation.panel,
+        spec,
+        pilot_data.realized_returns,
+        build_partition(dates),
+        periods_per_year=PILOT_PERIODS_PER_YEAR,
+    )
+
+
+def _visible_from_record(record) -> object:
+    from smart_beta.research.history import (
+        DevelopmentEvidenceRecord,
+        GeneratorVisibleResearchHistory,
+        VisibleExperiment,
+        VisibleFamily,
+    )
+
+    evidence = DevelopmentEvidenceRecord.from_evaluation_record(
+        record, experiment_id="e" * 64
+    )
+    experiment = VisibleExperiment(
+        experiment_id="e" * 64,
+        hypothesis_id="b" * 64,
+        family_id=config_mod.DRY_RUN_FAMILY_ID,
+        factor_provenance_hash=record.factor_provenance_hash,
+        evaluation_spec_hash=record.spec_hash,
+        fold_evidence=evidence.fold_evidence,
+        redundancy=evidence.redundancy,
+        robustness_tables=evidence.robustness_tables,
+    )
+    return GeneratorVisibleResearchHistory(
+        experiments=(experiment,),
+        families=(
+            VisibleFamily(
+                family_id=config_mod.DRY_RUN_FAMILY_ID, consumed_slots=1
+            ),
+        ),
+    )
+
+
+def test_pre_call_temporal_firewall_stops_on_holdout_overlap(tmp_path, monkeypatch):
+    """A holdout-overlapping subperiod in the pre-call history is a typed stop.
+
+    The real G6R firewall is exercised: the test poisons the exact pre-call
+    projection with a subperiod backed by a real sealed ``EvaluationRecord``
+    that crosses the dry-run holdout start, and injects that record as the
+    temporal-coverage authority. The runner must map the violation to the typed
+    ``HOLDOUT_FIREWALL_VIOLATION`` stop with zero model calls.
+    """
+    from smart_beta.pilot import runner as runner_mod
+    from smart_beta.pilot import temporal as temporal_mod
+    from smart_beta.research.history import ResearchFeedback
+    from smart_beta.research.loop import ResearchLoop
+
+    record = _holdout_overlapping_record(tmp_path)
+    poisoned_visible = _visible_from_record(record)
+    poisoned_feedback = ResearchFeedback()
+
+    original_snapshot = ResearchLoop.snapshot_history
+
+    def poisoned_snapshot(self, full_history, **kwargs):
+        original_snapshot(self, full_history, **kwargs)
+        self._visible = poisoned_visible
+        self._feedback = poisoned_feedback
+        return poisoned_visible
+
+    monkeypatch.setattr(ResearchLoop, "snapshot_history", poisoned_snapshot)
+
+    captured: list = []
+    real_enforce = temporal_mod.enforce_temporal_firewall
+
+    def injecting(visible, feedback, records, *, is_start, holdout_start):
+        try:
+            return real_enforce(
+                visible,
+                feedback,
+                [record],
+                is_start=is_start,
+                holdout_start=holdout_start,
+            )
+        except temporal_mod.TemporalFirewallViolation as exc:
+            captured.append(exc)
+            raise
+
+    monkeypatch.setattr(runner_mod, "enforce_temporal_firewall", injecting)
+
+    config_dict = _constructed_config(tmp_path, run_id="tf-overlap")
+    client = StubModelClient(ModelResponse("{}", "m", "end_turn", 1, 1))
+    outcome = _run(config_dict, tmp_path, client=client)
+
+    assert outcome.status is RunStatus.COMPLETED_STOP
+    assert outcome.stop_reason == StopReason.HOLDOUT_FIREWALL_VIOLATION.value
+    assert outcome.invocation_count == 0
+    assert client.calls == ()
+    # The real firewall raised with a subperiod row crossing the holdout start.
+    assert captured, "the real temporal firewall must have raised"
+    audit = captured[0].audit
+    assert audit is not None
+    holdout_iso = config_mod.DRY_RUN_PARTITION.holdout_start.isoformat()
+    overlap_rows = [
+        row
+        for row in audit.rows
+        if row.category == "subperiod"
+        and row.source_end_exclusive is not None
+        and row.source_end_exclusive > holdout_iso
+    ]
+    assert overlap_rows, [row.to_dict() for row in audit.rows]
+    # The poisoned snapshot is journaled, so the post-hoc audit also refuses it.
+    assert outcome.package_error is not None
+    assert "temporal" in outcome.package_error.lower()
 
 
 def test_no_hidden_retry(completed_run):

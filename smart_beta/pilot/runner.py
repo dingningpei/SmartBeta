@@ -24,6 +24,15 @@ Frozen properties
   check it against the write-ahead ``request_artifact_hash``.
 * **Firewall stop (requirement c).** A G3 ``FirewallViolation`` escaping
   ``generate`` is mapped to the typed ``HOLDOUT_FIREWALL_VIOLATION`` stop.
+* **Pre-call temporal firewall (section 26b TF-6).** Before **every** generate
+  the runner runs the G6R ``enforce_temporal_firewall`` over the exact
+  ``GeneratorVisibleResearchHistory`` / ``ResearchFeedback`` projection about to
+  be handed to the generator and all evaluation records so far; a
+  ``TemporalFirewallViolation`` becomes a typed
+  ``HOLDOUT_FIREWALL_VIOLATION`` stop with no model call.
+* **Immutable runs.** A run whose ``run_id`` or artifact directory already
+  exists is refused before any model call, so a prior run (for example the
+  preserved ``pilot1a-dryrun-v1`` package) can never be reused or overwritten.
 * **Wired reconstruction (requirement d).** The G4
   :class:`~smart_beta.pilot.reconstruct.ReconstructionHooks` are both wired:
   evaluation is re-derived through G1+G2 over the journaled FactorSpecs and the
@@ -98,6 +107,10 @@ from smart_beta.pilot.reconstruct import (
     ReconstructionReport,
     ReconstructionStatus,
     reconstruct,
+)
+from smart_beta.pilot.temporal import (
+    TemporalFirewallViolation,
+    enforce_temporal_firewall,
 )
 from smart_beta.research.generator import GenerationEvent, NormalizationOutcome
 from smart_beta.research.history import FullResearchHistory
@@ -284,6 +297,7 @@ class RunOutcome:
     invocation_count: int = 0
     reconstruction_status: str | None = None
     firewall_audit_status: str | None = None
+    temporal_firewall_status: str | None = None
     secret_sweep_status: str | None = None
     package_error: str | None = None
     package: ArtifactPackage | None = field(default=None, repr=False)
@@ -305,6 +319,7 @@ class RunOutcome:
             "invocation_count": self.invocation_count,
             "reconstruction_status": self.reconstruction_status,
             "firewall_audit_status": self.firewall_audit_status,
+            "temporal_firewall_status": self.temporal_firewall_status,
             "secret_sweep_status": self.secret_sweep_status,
             "package_error": self.package_error,
         }
@@ -688,6 +703,17 @@ def _preflight(
         raise PreflightError(f"fixture / PIT load failed: {exc}") from exc
 
     artifact_directory = repo / resolved.artifact_destination
+    canonical_run_directory = repo / "pilot_runs" / "pilot1a" / resolved.run_id
+    existing = sorted(
+        {path for path in (artifact_directory, canonical_run_directory) if path.exists()},
+        key=str,
+    )
+    if existing:
+        raise PreflightError(
+            "the run_id or artifact directory already exists; runs are immutable "
+            "and are never reused or overwritten: "
+            + ", ".join(str(path) for path in existing)
+        )
     journal_path = artifact_directory / ArtifactLayout().journal
     if journal_path.exists():
         raise PreflightError(
@@ -834,6 +860,26 @@ def _drive(
         loop.snapshot_history(full_history)
         # Requirement (b): the pre-call authority snapshots.
         _journal_snapshots(context, loop, full_history, all_slots=False)
+
+        # Section-26b TF-6: before *every* generate, audit the exact
+        # generator-visible projection against the config's authorized
+        # development interval D = [is_start, holdout_start). A violation means
+        # no model call is made and the loop stops with the typed
+        # HOLDOUT_FIREWALL_VIOLATION reason.
+        try:
+            enforce_temporal_firewall(
+                loop.visible_history,
+                loop.feedback,
+                evaluation_records,
+                is_start=resolved.partition_dates.is_start,
+                holdout_start=resolved.partition_dates.holdout_start,
+            )
+        except TemporalFirewallViolation as exc:
+            stop = loop.stop(StopReason.HOLDOUT_FIREWALL_VIOLATION, detail=str(exc))
+            status, _ = _close_typed_stop(
+                context, stop, "temporal holdout firewall violation"
+            )
+            return status, stop.reason.value, evaluation_records
 
         try:
             generated = loop.generate(adapter)
@@ -1005,6 +1051,7 @@ def _finalize(
             stop_reason=stop,
             invocation_count=intents,
             reconstruction_status=report.status.value,
+            temporal_firewall_status=None,
         )
 
     report_markdown = None
@@ -1050,6 +1097,9 @@ def _finalize(
         reconstruction_status=report.status.value,
         firewall_audit_status=(
             None if package is None else package.firewall_audit.status.value
+        ),
+        temporal_firewall_status=(
+            None if package is None else package.temporal_firewall.status.value
         ),
         secret_sweep_status=(
             None if package is None else package.secret_sweep.status.value
