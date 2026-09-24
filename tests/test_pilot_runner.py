@@ -18,8 +18,11 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import os
+import socket
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -39,14 +42,19 @@ from smart_beta.pilot.config import (
 from smart_beta.pilot.contracts import (
     JournalKind,
     RunStatus,
+    canonical_json,
 )
 from smart_beta.pilot.data import compute_fixture_hashes
-from smart_beta.pilot.journal import read_journal
+from smart_beta.pilot.journal import Journal, read_journal
 from smart_beta.pilot.model import ModelResponse, StubModelClient
 from smart_beta.pilot.reconstruct import reconstruct
 from smart_beta.pilot.runner import (
     GitProbe,
+    RunnerError,
     build_reconstruction_hooks,
+    count_raw_candidates,
+    install_network_tripwire,
+    restore_network_tripwire,
     run_pilot,
 )
 from smart_beta.research.policy import StopReason
@@ -261,14 +269,20 @@ class FakeGit(GitProbe):
         ancestor: bool = True,
         clean: bool = True,
         tree_id: str = CONSTRUCTED_TREE_ID,
+        porcelain: str = "",
+        recorder: dict | None = None,
     ) -> None:
         super().__init__(".")
         self._head = head
         self._ancestor = ancestor
         self._clean = clean
         self._tree = tree_id
+        self._porcelain = porcelain
+        self._recorder = recorder
 
     def head_commit(self) -> str:
+        if self._recorder is not None:
+            self._recorder["head_env"] = os.environ.get("ANTHROPIC_API_KEY")
         return self._head
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
@@ -276,6 +290,11 @@ class FakeGit(GitProbe):
 
     def is_clean(self) -> bool:
         return self._clean
+
+    def status_porcelain(self) -> str:
+        if self._recorder is not None:
+            self._recorder["status_env"] = os.environ.get("ANTHROPIC_API_KEY")
+        return self._porcelain
 
     def tree_id(self, path: str) -> str:
         return self._tree
@@ -1021,3 +1040,482 @@ def test_cli_refuses_the_unfilled_template(tmp_path):
     )
     assert result.returncode != 0
     assert "placeholder" in result.stdout.lower() or "placeholder" in result.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# P1A-PA real-mode preflight, credential, allowlist and ceilings (section 26e)
+# ---------------------------------------------------------------------------
+
+
+_REAL_BOUND = "f" * 40
+_REAL_FIXTURE_TREE = "a" * 40
+_REAL_CREDENTIAL = "sk-ant-planted-test-value-never-print"
+_REAL_END = "2026-09-15"
+
+
+def _set_real_credential(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _REAL_CREDENTIAL)
+    for name in (
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _resolver(host, port):
+    return ("1.2.3.4",)
+
+
+def _real_preflight_config(tmp_path: Path, run_id: str, *, bound: str = _REAL_BOUND):
+    """A real config with a dummy dataset, for preflight-only assertions."""
+    payload = config_mod.build_real_run_config_dict(bound_git_commit=bound)
+    payload["run_id"] = run_id
+    payload["artifact_destination"] = str(tmp_path / f"run-{run_id}")
+    payload["dataset"] = {
+        "fixture_dir": str(tmp_path / "dummy-fixture"),
+        "fixture_tree_id": _REAL_FIXTURE_TREE,
+        "file_hashes": [{"path": "dummy", "sha256": "a" * 64}],
+        "universe": ["AAA"],
+        "start": CONSTRUCTED_START,
+        "end": _REAL_END,
+        "date_cap": None,
+    }
+    return payload
+
+
+def _real_constructed_config(
+    tmp_path: Path, run_id: str, *, end: str = _REAL_END
+) -> dict:
+    payload = _real_preflight_config(tmp_path, run_id)
+    fixture_dir = tmp_path / "real-fixture"
+    if not fixture_dir.exists():
+        _write_synthetic_fixture(
+            fixture_dir, CONSTRUCTED_TICKERS, CONSTRUCTED_START, end
+        )
+    hashes = compute_fixture_hashes(fixture_dir)
+    payload["dataset"] = {
+        "fixture_dir": str(fixture_dir),
+        "fixture_tree_id": _REAL_FIXTURE_TREE,
+        "file_hashes": [digest.to_dict() for digest in hashes],
+        "universe": list(CONSTRUCTED_TICKERS),
+        "start": CONSTRUCTED_START,
+        "end": end,
+        "date_cap": None,
+    }
+    return payload
+
+
+def _real_git(**kwargs) -> FakeGit:
+    kwargs.setdefault("head", _REAL_BOUND)
+    kwargs.setdefault("tree_id", _REAL_FIXTURE_TREE)
+    return FakeGit(**kwargs)
+
+
+def _stub_response(candidates: list[dict]) -> ModelResponse:
+    return ModelResponse(
+        text=canonical_json({"candidates": candidates}),
+        model_id=config_mod.REAL_MODEL_ID,
+        stop_reason="end_turn",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+
+def _one_candidate() -> dict:
+    return _candidate(factor_id="real_identity", expression="ret", lookback=0)
+
+
+def _write_prior_run(
+    root: Path,
+    run_id: str,
+    *,
+    run_mode: str = "real",
+    orchestration: bool = False,
+    predecessor_run_id: str | None = None,
+    config_payload: dict | None = None,
+    config_hash: str | None = None,
+) -> Path:
+    run_dir = root / "pilot_runs" / "pilot1a" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    journal = Journal(run_dir / "journal.jsonl", run_id=run_id, fsync=False)
+    journal.append_payload(
+        JournalKind.RUN_STARTED,
+        {
+            "run_id": run_id,
+            "run_mode": run_mode,
+            "config_hash": config_hash,
+            "predecessor_run_id": predecessor_run_id,
+        },
+    )
+    if orchestration:
+        journal.append_payload(JournalKind.ORCHESTRATION_OUTCOME, {"marker": "x"})
+    journal.close()
+    if config_payload is not None:
+        (run_dir / "config.json").write_text(
+            canonical_json(config_payload) + "\n", encoding="utf-8"
+        )
+    return run_dir
+
+
+# -- exact-commit binding ---------------------------------------------------
+
+
+def test_real_commit_mismatch_refuses_before_any_model_call(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    config_dict = _real_preflight_config(tmp_path, "real-commit")
+    client = StubModelClient(_stub_response([_one_candidate()]))
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(head="0" * 40),
+        endpoint_resolver=_resolver,
+        client=client,
+        config_path=tmp_path / "pilot_configs" / "pilot1a-real-v2.json",
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "bound commit" in outcome.detail
+    assert client.calls == ()
+    assert outcome.journal_path is None
+
+
+def test_real_tracked_modification_refuses(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    config_dict = _real_preflight_config(tmp_path, "real-tracked")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(porcelain=" M smart_beta/pilot/runner.py"),
+        endpoint_resolver=_resolver,
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "tracked modifications" in outcome.detail
+
+
+def test_real_only_the_config_path_may_be_untracked(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    config_dict = _real_preflight_config(tmp_path, "real-untracked")
+    config_path = tmp_path / "pilot_configs" / "pilot1a-real-v2.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(canonical_json(config_dict) + "\n", encoding="utf-8")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(porcelain="?? pilot_configs/pilot1a-real-v2.json"),
+        endpoint_resolver=_resolver,
+        config_path=config_path,
+    )
+    # The config path is permitted; the run proceeds to the (dummy) fixture load.
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "untracked" not in outcome.detail
+    assert "fixture / PIT load failed" in outcome.detail
+
+
+def test_real_unexpected_untracked_path_refuses(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    config_dict = _real_preflight_config(tmp_path, "real-untracked-bad")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(porcelain="?? some_other_file.txt"),
+        endpoint_resolver=_resolver,
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "untracked" in outcome.detail
+
+
+# -- single-run guard -------------------------------------------------------
+
+
+def test_real_prior_experiment_blocks_permanently(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "prior-real", orchestration=True)
+    config_dict = _real_preflight_config(tmp_path, "real-after-experiment")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "registered an experiment" in outcome.detail
+
+
+def test_real_corrupt_prior_history_fails_closed(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    run_dir = tmp_path / "pilot_runs" / "pilot1a" / "corrupt-prior"
+    run_dir.mkdir(parents=True)
+    (run_dir / "journal.jsonl").write_text("{not json}\n", encoding="utf-8")
+    config_dict = _real_preflight_config(tmp_path, "real-after-corrupt")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "not readable/authentic" in outcome.detail
+
+
+def test_real_ambiguous_prior_history_fails_closed(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "ambiguous-prior", run_mode="weird")
+    config_dict = _real_preflight_config(tmp_path, "real-after-ambiguous")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "ambiguous" in outcome.detail
+
+
+def test_real_non_directory_entry_fails_closed(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    root = tmp_path / "pilot_runs" / "pilot1a"
+    root.mkdir(parents=True)
+    (root / "stray-file").write_text("x", encoding="utf-8")
+    config_dict = _real_preflight_config(tmp_path, "real-after-stray")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "non-directory" in outcome.detail
+
+
+def test_real_prior_config_hash_mismatch_fails_closed(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    wrong = config_mod.build_dry_run_config_dict()
+    _write_prior_run(tmp_path, "prior-config", config_payload=wrong, config_hash="b" * 64)
+    config_dict = _real_preflight_config(tmp_path, "real-after-config")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "config" in outcome.detail
+
+
+def test_real_two_experiment_free_attempts_refuse(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "attempt-a")
+    _write_prior_run(tmp_path, "attempt-b")
+    config_dict = _real_preflight_config(tmp_path, "attempt-c")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        predecessor_run_id="attempt-a",
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "more than one" in outcome.detail
+
+
+def test_real_undeclared_prior_attempt_refuses(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "attempt-only")
+    config_dict = _real_preflight_config(tmp_path, "attempt-next")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "must declare" in outcome.detail
+
+
+def test_real_retry_of_a_retry_is_refused(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "retry-a", predecessor_run_id="earlier-run")
+    config_dict = _real_preflight_config(tmp_path, "retry-b")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        predecessor_run_id="retry-a",
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "retry" in outcome.detail.lower()
+
+
+def test_real_experiment_free_predecessor_is_allowed(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    _write_prior_run(tmp_path, "allowed-prior")
+    config_dict = _real_preflight_config(tmp_path, "allowed-next")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        predecessor_run_id="allowed-prior",
+    )
+    # The guard allows the single experiment-free predecessor; the dummy
+    # fixture then fails to load.
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "fixture / PIT load failed" in outcome.detail
+
+
+# -- credential handling ----------------------------------------------------
+
+
+def test_real_missing_credential_refuses(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config_dict = _real_preflight_config(tmp_path, "real-no-cred")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "ANTHROPIC_API_KEY" in outcome.detail
+
+
+def test_real_base_url_override_refuses(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
+    config_dict = _real_preflight_config(tmp_path, "real-base-url")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "override" in outcome.detail
+
+
+def test_real_proxy_override_refuses(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.com")
+    config_dict = _real_preflight_config(tmp_path, "real-proxy")
+    outcome = _run(config_dict, tmp_path, git=_real_git(), endpoint_resolver=_resolver)
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "proxy" in outcome.detail.lower()
+
+
+def test_real_credential_is_deleted_before_any_subprocess(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    recorder: dict = {}
+    config_dict = _real_preflight_config(tmp_path, "real-env")
+    _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(recorder=recorder),
+        endpoint_resolver=_resolver,
+    )
+    # The git probe ran only after the credential was deleted from os.environ.
+    assert recorder["head_env"] is None
+    assert "ANTHROPIC_API_KEY" not in os.environ
+
+
+def test_real_credential_is_never_journaled_or_packaged(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    # A single two-candidate response stops the run before evaluation, so the
+    # package assembles quickly without empirical work.
+    response = _stub_response([_one_candidate(), _one_candidate()])
+    config_dict = _real_constructed_config(
+        tmp_path, "real-cred", end=CONSTRUCTED_END
+    )
+    client = StubModelClient(response)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(recorder={}),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    assert outcome.status is RunStatus.COMPLETED_STOP
+    assert outcome.stop_reason == StopReason.GENERATOR_FAILURE.value
+    journal_bytes = outcome.journal_path.read_bytes()
+    assert _REAL_CREDENTIAL.encode("utf-8") not in journal_bytes
+    for path in outcome.artifact_directory.rglob("*"):
+        if path.is_file():
+            assert _REAL_CREDENTIAL.encode("utf-8") not in path.read_bytes()
+    assert outcome.secret_sweep_status == "PASS"
+
+
+# -- network allowlist ------------------------------------------------------
+
+
+def test_real_network_allowlist_permits_only_the_pinned_endpoint():
+    install_network_tripwire(
+        allowed_endpoint=("api.anthropic.com", 443),
+        resolved_addresses=("1.2.3.4",),
+    )
+    try:
+        for address in (
+            ("evil.example.com", 443),
+            ("api.anthropic.com", 80),
+            ("api.tiingo.com", 443),
+            ("1.2.3.5", 443),
+        ):
+            with pytest.raises(RunnerError):
+                socket.socket().connect(address)
+            with pytest.raises(RunnerError):
+                socket.create_connection(address)
+        with pytest.raises(RunnerError):
+            urllib.request.urlopen("https://api.anthropic.com/v1/messages")
+        # The pinned endpoint delegates to the saved underlying connect (which
+        # the shared offline guard replaces with a raiser), proving it was
+        # *permitted* rather than refused by the allowlist.
+        with pytest.raises(RuntimeError) as excinfo:
+            socket.socket().connect(("1.2.3.4", 443))
+        assert "offline_guard" in str(excinfo.value)
+        with pytest.raises(RuntimeError) as excinfo:
+            socket.create_connection(("api.anthropic.com", 443))
+        assert "offline_guard" in str(excinfo.value)
+    finally:
+        restore_network_tripwire()
+
+
+def test_dry_run_mode_keeps_the_total_tripwire():
+    install_network_tripwire()
+    try:
+        with pytest.raises(RunnerError):
+            socket.socket().connect(("api.anthropic.com", 443))
+        with pytest.raises(RunnerError):
+            socket.create_connection(("api.anthropic.com", 443))
+        with pytest.raises(RunnerError):
+            urllib.request.urlopen("https://api.anthropic.com")
+    finally:
+        restore_network_tripwire()
+
+
+# -- one-candidate guard + conservative budget rule ------------------------
+
+
+def test_count_raw_candidates_is_deterministic():
+    assert count_raw_candidates('{"candidates": [{}]}') == 1
+    assert count_raw_candidates('{"candidates": [{}, {}]}') == 2
+    assert count_raw_candidates("[{}, {}]") == 2
+    assert count_raw_candidates('{"candidates": "nope"}') is None
+    assert count_raw_candidates("not-json") is None
+
+
+def test_real_multi_candidate_invocation_stops_before_normalization(tmp_path, monkeypatch):
+    _set_real_credential(monkeypatch)
+    response = _stub_response([_one_candidate(), _one_candidate()])
+    config_dict = _real_constructed_config(
+        tmp_path, "real-multi", end=CONSTRUCTED_END
+    )
+    client = StubModelClient(response)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    assert outcome.status is RunStatus.COMPLETED_STOP
+    assert outcome.stop_reason == StopReason.GENERATOR_FAILURE.value
+    assert outcome.invocation_count == 1
+    read = read_journal(outcome.journal_path)
+    assert not any(
+        record.kind is JournalKind.NORMALIZATION_OUTCOME for record in read.records
+    )
+    assert not any(
+        record.kind is JournalKind.PROPOSAL_REGISTERED for record in read.records
+    )
+
+
+def test_real_conservative_output_ceiling_stops_before_the_second_call(
+    tmp_path, monkeypatch
+):
+    _set_real_credential(monkeypatch)
+    responses = [
+        _stub_response([_candidate(factor_id=f"real_ceiling_{i}", expression="ret", lookback=0)])
+        for i in range(3)
+    ]
+    config_dict = _real_constructed_config(tmp_path, "real-ceiling")
+    config_dict["budgets"]["llm_output_tokens"] = 12_000
+    client = StubModelClient(responses)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    assert outcome.status is RunStatus.INTERRUPTED
+    assert "output-token ceiling" in outcome.detail
+    assert outcome.invocation_count == 1
+    read = read_journal(outcome.journal_path)
+    intents = [
+        record for record in read.records if record.kind is JournalKind.INVOCATION_INTENT
+    ]
+    assert len(intents) == 1
