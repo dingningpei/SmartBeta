@@ -1,0 +1,101 @@
+You generate exactly one factor hypothesis for the SmartBeta Pilot-1A
+operational harness validation.
+
+This is a single-turn call with JSON-constrained output. Do not use tools,
+browsing, file access, server-side facilities or any external facility.
+Return exactly one JSON document and nothing else.
+
+Operational objective
+---------------------
+Propose one Phase-6 factor specification that transforms the single admitted
+semantic input into a daily cross-sectional signal. The specification must be
+well formed under the frozen grammar below. This is a neutral operational
+statement: it asserts no performance objective, prefers no factor family and
+provides no economic example.
+
+Admitted semantic input
+-----------------------
+The only admissible semantic input is "daily_total_return". Every input
+binding must use exactly this semantic_id and the fixed requirement block:
+
+{"frequency":"daily","lookback":0,"observation_period":"period","require_knowledge_date":true,"require_positive_vintage_identity":false,"revision_policy":"point_in_time","semantic_id":"daily_total_return","units":"fraction"}
+
+Set "lookback" to the number of historical observations the expression
+requires (0 for an expression that uses only the current observation). The
+"frequency", "observation_period", "units", "revision_policy",
+"require_knowledge_date" and "require_positive_vintage_identity" values are
+fixed exactly as shown.
+
+Input binding
+-------------
+"inputs" is a non-empty ordered list of {"alias", "requirement"} objects.
+Each alias is a lowercase snake_case role token (for example "ret"). Every
+field role referenced by the expression must be declared as an input alias,
+and every declared alias must be bound to exactly one requirement. Bind each
+alias to the requirement block above, adjusting only "lookback".
+
+Expression grammar
+------------------
+The expression is a JSON tree. Every node is an object with an "op" key. The
+frozen node forms are:
+
+- {"op": "field", "role": "<declared-alias>"}
+- {"op": "const", "value": <finite number>}
+- {"op": "add", "left": <node>, "right": <node>}
+- {"op": "sub", "left": <node>, "right": <node>}
+- {"op": "mul", "left": <node>, "right": <node>}
+- {"op": "div", "left": <node>, "right": <node>}
+- {"op": "lag", "operand": <node>, "periods": <integer>}
+- {"op": "rolling", "fn": "<mean|sum|std|min|max>", "operand": <node>, "window": <integer>}
+- {"op": "cross_section", "fn": "rank|standardize", "operand": <node>}
+- {"op": "cross_section", "fn": "winsorize", "operand": <node>, "lower": <finite number>, "upper": <finite number>}
+
+The 15 allowed operators are: field, const, add, sub, mul, div, lag, rolling_mean, rolling_sum, rolling_std, rolling_min, rolling_max, rank, winsorize, standardize.
+
+Bounds:
+- the expression tree depth is at most 6;
+- "periods" is an integer in 0..5 (a value below 0 is a look-ahead reference
+  and is not expressible);
+- "window" is an integer in 2..20;
+- winsorize "lower" and "upper" are quantiles with 0 <= lower < upper <= 1.
+
+Cross-sectional transforms
+--------------------------
+"rank", "standardize" and "winsorize" are per-date transforms applied to the
+aligned cross-section. "winsorize" requires the explicit "lower" and "upper"
+bounds; the other two take no bounds.
+
+Sign handling
+-------------
+"sign" is optional and is exactly 1 or -1. It is an interpretation direction
+only and changes no computation.
+
+missing_policy
+--------------
+"missing_policy" is required and is exactly one of "propagate" or "drop".
+"propagate" leaves a missing value missing; "drop" removes a row with any
+missing required input.
+
+Other constraints
+-----------------
+- "id" and "description" are required non-empty strings with no surrounding
+  whitespace.
+- "hypothesis" is optional non-empty text.
+- "frequency" is exactly "daily".
+- Never name a data provider or a vendor column anywhere.
+- Never reference a role that is not one of the declared input aliases.
+- Return exactly one candidate inside the "candidates" array.
+
+Output schema
+-------------
+Return exactly one JSON object matching this JSON Schema:
+
+{"$defs":{"candidate":{"additionalProperties":false,"properties":{"economic_rationale":{"type":"string"},"expected_sign":{"type":"integer"},"factor_spec":{"$ref":"#/$defs/factor_spec"},"generation_reason":{"type":"string"},"intended_family_id":{"type":"string"},"parent_hypothesis_id":{"type":"string"},"parent_proposal_id":{"type":"string"},"research_question":{"type":"string"}},"required":["factor_spec","research_question","economic_rationale"],"type":"object"},"expr_1":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_leaf"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_leaf"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_leaf"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_leaf"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_leaf"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_leaf"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_leaf"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_leaf"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_leaf"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_leaf"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_leaf"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_leaf"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_2":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_1"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_1"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_1"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_1"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_1"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_1"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_1"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_1"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_1"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_1"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_1"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_1"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_3":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_2"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_2"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_2"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_2"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_2"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_2"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_2"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_2"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_2"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_2"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_2"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_2"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_4":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_3"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_3"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_3"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_3"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_3"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_3"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_3"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_3"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_3"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_3"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_3"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_3"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_5":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_4"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_4"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_4"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_4"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_4"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_4"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_4"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_4"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_4"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_4"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_4"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_4"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_6":{"anyOf":[{"$ref":"#/$defs/expr_leaf"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_5"},"op":{"enum":["add"]},"right":{"$ref":"#/$defs/expr_5"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_5"},"op":{"enum":["sub"]},"right":{"$ref":"#/$defs/expr_5"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_5"},"op":{"enum":["mul"]},"right":{"$ref":"#/$defs/expr_5"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"left":{"$ref":"#/$defs/expr_5"},"op":{"enum":["div"]},"right":{"$ref":"#/$defs/expr_5"}},"required":["op","left","right"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["lag"]},"operand":{"$ref":"#/$defs/expr_5"},"periods":{"type":"integer"}},"required":["op","operand","periods"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["mean","sum","std","min","max"]},"op":{"enum":["rolling"]},"operand":{"$ref":"#/$defs/expr_5"},"window":{"type":"integer"}},"required":["op","fn","operand","window"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["rank","standardize"]},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_5"}},"required":["op","fn","operand"],"type":"object"},{"additionalProperties":false,"properties":{"fn":{"enum":["winsorize"]},"lower":{"type":"number"},"op":{"enum":["cross_section"]},"operand":{"$ref":"#/$defs/expr_5"},"upper":{"type":"number"}},"required":["op","fn","operand","lower","upper"],"type":"object"}]},"expr_leaf":{"anyOf":[{"additionalProperties":false,"properties":{"op":{"enum":["field"]},"role":{"type":"string"}},"required":["op","role"],"type":"object"},{"additionalProperties":false,"properties":{"op":{"enum":["const"]},"value":{"type":"number"}},"required":["op","value"],"type":"object"}]},"factor_input":{"additionalProperties":false,"properties":{"alias":{"type":"string"},"requirement":{"$ref":"#/$defs/requirement"}},"required":["alias","requirement"],"type":"object"},"factor_spec":{"additionalProperties":false,"properties":{"description":{"type":"string"},"expression":{"$ref":"#/$defs/expr_6"},"frequency":{"enum":["daily","weekly","monthly","quarterly","annual"]},"hypothesis":{"type":"string"},"id":{"type":"string"},"inputs":{"items":{"$ref":"#/$defs/factor_input"},"minItems":1,"type":"array"},"missing_policy":{"enum":["propagate","drop"]},"sign":{"enum":[1,-1]}},"required":["id","description","expression","inputs","frequency","missing_policy"],"type":"object"},"requirement":{"additionalProperties":false,"properties":{"frequency":{"enum":["daily","weekly","monthly","quarterly","annual"]},"lookback":{"type":"integer"},"observation_period":{"enum":["instant","period"]},"require_knowledge_date":{"type":"boolean"},"require_positive_vintage_identity":{"type":"boolean"},"revision_policy":{"enum":["point_in_time","as_first_reported"]},"semantic_id":{"type":"string"},"units":{"enum":["fraction","ratio","currency","count","shares"]}},"required":["semantic_id","frequency","observation_period"],"type":"object"}},"additionalProperties":false,"properties":{"candidates":{"items":{"$ref":"#/$defs/candidate"},"minItems":1,"type":"array"},"schema_version":{"type":"string"}},"required":["candidates"],"type":"object"}
+
+Generator-visible development history follows (JSON):
+<<VISIBLE_HISTORY>>
+
+Development feedback follows (JSON):
+<<RESEARCH_FEEDBACK>>
+
+Return the JSON document described above.

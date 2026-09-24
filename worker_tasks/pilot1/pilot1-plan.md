@@ -1651,6 +1651,43 @@ pricing never admits an invocation.
 code stay untouched. Anthropic tests, H4/H6-v2 and the dry-run configs must
 stay green and byte-identical.
 
+## 26g. Pilot-1A real-run result and follow-ups (2026-09-24)
+
+The single authorized real run `pilot1a-real-deepseek-v1` completed with
+`completed_stop` / `proposal_budget_exhausted`. The user's review classifies
+it:
+- operational validation **PASS**;
+- scientific alpha **NOT ESTABLISHED**;
+- production readiness **NOT CERTIFIED**;
+- comprehensive actual-secret-value exclusion **NOT CERTIFIED**.
+
+Pilot 1A is **terminal**. The certification record and git-tracked evidence
+are in `pilot_evidence/pilot1a-real-deepseek-v1/` (README + `SHA256SUMS`).
+
+**Proposed future-run security fix P1A-SV (NOT launched; not applicable to the
+historical run):** the secret-value sweep must cover every packaged artifact.
+- **Owned files:** `smart_beta/pilot/runner.py` (sweep timing/scope) and
+  `smart_beta/pilot/artifacts.py` (value check driven by the captured
+  provider credential name, not only the fixed `CREDENTIAL_ENV_VARS`),
+  plus tests.
+- **Requirements:**
+  - The value sweep runs **after** the final package is fully assembled
+    (journal, `records/*`, config, manifest, report, every audit file).
+  - It covers every file recursively; the file count asserted equals the
+    package's file count.
+  - It fails closed on an unreadable file or a count mismatch, and on any
+    occurrence of the value — raw bytes and also the common encodings of it
+    that a serializer could emit (JSON-escaped, URL-encoded, base64).
+  - The result carries only the variable name, the file count and a boolean.
+- **Tests:** synthetic sentinel secrets only (never the real DeepSeek key), a
+  sentinel planted in each artifact class → fail closed, the clean package →
+  pass, and the value is never printed or written.
+- **Rules:** the historical evidence is not modified and Pilot 1A is not
+  rerun after the fix.
+
+Semantic-equivalence handling is recorded as a separate future design
+issue. Its implementation is **not** started.
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
