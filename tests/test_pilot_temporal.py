@@ -216,7 +216,7 @@ def _real_record(
     boundaries: tuple[dt.date, ...] = (_IS_START, dt.date(2026, 1, 2), _HOLDOUT_START),
 ):
     """Produce a real sealed ``EvaluationRecord`` through the sealed engine."""
-    template = build_frozen_evaluation_spec_template()
+    template = build_frozen_evaluation_spec_template(_PARTITION_DATES)
     spec_template = dataclasses.replace(
         template,
         metrics=tuple(metrics),
@@ -653,7 +653,7 @@ def test_authorized_interval_cross_check_rejects_partition_mismatch(pilot_data):
         warmup_start="2025-09-08",
         warmup_end="2025-10-14",
     )
-    template = build_frozen_evaluation_spec_template()
+    template = build_frozen_evaluation_spec_template(real_run_dates)
     spec_template = dataclasses.replace(
         template,
         metrics=_DEVELOPMENT_METRICS,
