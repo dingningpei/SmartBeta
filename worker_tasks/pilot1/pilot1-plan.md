@@ -1372,6 +1372,174 @@ freezes.
   - the H4/H6 stub paths remain green.
 - **Sealed files modified: NONE.**
 
+## 26e. P1A-PA frozen specification (user freezes 2026-09-24; binding)
+
+**User freezes:**
+- provider Anthropic; model `claude-opus-5-5`; effort `high`;
+- the official Anthropic Python SDK as an **optional** dependency only;
+- credential `ANTHROPIC_API_KEY`, runtime-only (never persisted, printed, or
+  inherited by workers, tests or subprocesses);
+- C = 10 bps ONE_WAY;
+- ceilings:
+  - invocations 5;
+  - cumulative input 100,000 tokens;
+  - cumulative output 40,000 tokens;
+  - max output per invocation 12,000;
+  - USD 5.00 hard;
+  - wall clock 1,800 s;
+  - request timeout 600 s;
+  - retries 0.
+
+**Official provenance** (retrieved 2026-09-24):
+- From `https://platform.claude.com/docs/en/about-claude/models/overview`:
+  API ID `claude-opus-5-5`; training-data cutoff **Jun 2026**; reliable
+  knowledge cutoff **Jun 2026**; default effort `medium` (so `high` must be
+  sent explicitly); thinking adaptive and always on (billed as output); max
+  output 128K.
+- From `https://platform.claude.com/docs/en/about-claude/pricing`: base input
+  **$4 / MTok**, output **$20 / MTok** (global routing; no cache, batch or
+  fast-mode modifiers apply).
+- From `https://platform.claude.com/docs/en/build-with-claude/structured-outputs`:
+  `claude-opus-5-5` supports `output_config.format` JSON schema. Recursive
+  schemas, numeric/string constraints, and array constraints beyond
+  `minItems` 0/1 are unsupported.
+
+The cutoff is provenance only. It predates the real holdout (from
+2026-07-01) but covers IS/OOS. It does not make anything scientifically
+untouched.
+
+**Request contract (provider client, `ModelClient.complete`):**
+- The client is built with `anthropic.Anthropic(api_key=<captured value>,
+  base_url="https://api.anthropic.com", max_retries=0, timeout=600)`.
+- One `messages.create` with: `model="claude-opus-5-5"`,
+  `max_tokens=12000`, a single user message = the rendered prompt, and
+  `output_config={"effort": "high", "format": {"type": "json_schema",
+  "schema": S}}`.
+- It **never** sends `tools`, `tool_choice`, `mcp_servers`, `container`,
+  `temperature`, `top_p`, `top_k`, `seed`, `thinking`, `inference_geo`,
+  `speed`, `betas`, or server-side refusal `fallbacks`. (Fallbacks would
+  silently substitute a different model, violating the frozen model
+  identity, so they are deliberately **not** enabled.)
+- The SDK is imported lazily inside the provider module, so the harness and
+  tests import without it.
+- Mapping:
+  - text of the first text block → raw artifact;
+  - `response.model` → provider model id;
+  - `usage.input_tokens` / `usage.output_tokens` → usage;
+  - `stop_reason` `end_turn` → OK; `refusal` → refusal; `max_tokens` →
+    max-tokens; anything else → provider error;
+  - `APITimeoutError` → timeout; `APIConnectionError` → transport;
+  - `APIStatusError` → provider error with status code;
+
+  all → `GeneratorFailureError` with a journaled result.
+- Cost = `input × 4e-6 + output × 20e-6` USD. The price-table identity
+  (`anthropic-api/claude-opus-5-5/2026-09-24`, source URL, rates) is
+  recorded in config provenance and in every intent's settings.
+
+**Output schema S:**
+- JSON schema for `{"candidates": [candidate]}` (`minItems` 1), matching the
+  P9-D closed candidate schema and the Phase-6 `factor_spec_from_dict`
+  grammar exactly, with `additionalProperties: false` on every object.
+- The recursive expression tree is **unrolled to a fixed maximum depth
+  (6)** through non-recursive `$defs`.
+- No unsupported keywords are used.
+
+**Prompt repair (`prompt.py`):** the new template must state:
+- the Pilot-1A research objective, as a neutral operational statement;
+- the exact semantic input `daily_total_return` and its full requirement
+  block;
+- the exact Phase-6 expression grammar and node representation, derived
+  from the sealed parser;
+- the input/requirement binding;
+- the 15 allowed operators;
+- lag 0..5 and rolling windows 2..20;
+- the cross-sectional transforms, sign handling and `missing_policy`
+  vocabulary;
+- all other §11 constraints;
+- the output schema;
+- that **each invocation returns EXACTLY ONE candidate**.
+
+Syntax illustrations use placeholders only. There are **no**
+empirical-performance hints, favored factor families, or economic examples.
+The prompt renders only the fixed text plus
+`GeneratorVisibleResearchHistory` + `ResearchFeedback`, and must pass the
+structural and temporal firewalls.
+
+**One invocation → at most one candidate → at most one proposal:**
+- After `generate()` persists the event and the runner journals it, and
+  before normalization, the runner deterministically counts the raw
+  artifact's candidates.
+- A count ≠ 1 → `loop.stop(GENERATOR_FAILURE)` (legal from
+  `PROPOSAL_GENERATED`). No proposal is registered.
+- An invalid single candidate follows sealed normalization. Duplicates follow
+  sealed idempotency. No hidden retries.
+
+**Conservative pre-call budget rule** (runner, before every invocation):
+- `projected_input = ceil(utf8_bytes(rendered prompt + schema JSON) / 2)`;
+  `projected_output = 12000`;
+  `projected_cost = projected_input × 4e-6 + 12000 × 20e-6`.
+- The call proceeds only if `invocations + 1 ≤ 5`, `cum_input +
+  projected_input ≤ 100000`, `cum_output + 12000 ≤ 40000`, `cum_cost +
+  projected_cost ≤ 5.00`, and the wall clock is within budget.
+- Otherwise → INTERRUPTED (resource ceiling), with no call.
+- Effect: at most **3** invocations can pass the output ceiling.
+- These are operational ceilings, never Phase-8 statistical budgets.
+
+**Exact-commit binding:**
+- The real config carries `git_baseline.bound_git_commit`. Real-mode
+  preflight requires `HEAD == bound_git_commit` exactly.
+- Tracked modifications are refused. The **only** permitted untracked path
+  is the config file being run: the real config is generated untracked
+  after the P1A-PA merge, so committing it cannot move HEAD.
+- Any later code change invalidates the approval.
+
+**Single-run guard** (real mode, before credential use or network):
+- Every entry of `pilot_runs/pilot1a/` must be a run directory whose
+  `journal.jsonl` reads with a valid hash chain (a reported truncated tail
+  is allowed) and starts with `run_started`.
+- Classification comes from the authenticated `run_started.run_mode`
+  ∈ {`dry_run`, `real`}. When `config.json` exists, its canonical hash must
+  equal `run_started.config_hash` and its `run_mode` must match.
+- Any missing, corrupt, ambiguous or non-directory entry → FAIL CLOSED.
+- Any `real` journal containing an `orchestration_outcome` → refuse
+  permanently.
+- Every experiment-free prior real attempt must be the declared predecessor
+  of the new run (≤1 linked retry; a retry of a retry is refused).
+
+**Credential:**
+- In real mode, `ANTHROPIC_API_KEY` must be present and non-empty, else
+  refuse before any call.
+- It is captured into memory and **deleted from `os.environ` immediately**
+  (before any subprocess, e.g. git).
+- `ANTHROPIC_AUTH_TOKEN` is removed. The presence of `ANTHROPIC_BASE_URL` or
+  `HTTP(S)_PROXY`/`ALL_PROXY` → refuse.
+- The value is never logged or journaled. The runner passes
+  `environ={"ANTHROPIC_API_KEY": <captured>}` to the G6 `assemble_package`
+  value sweep.
+
+**Network (real mode only):**
+- `socket.socket.connect` and `socket.create_connection` are allowed only
+  to the addresses `socket.getaddrinfo("api.anthropic.com", 443)` returns at
+  preflight, and only on port 443.
+- Everything else, including redirects to other hosts, proxies and the
+  Tiingo/Tushare hosts, raises.
+- `urllib.request.urlopen` stays blocked.
+- Dry-run/stub mode keeps the existing total tripwire unchanged.
+
+**Owned files (P1A-PA):**
+- new `smart_beta/pilot/provider_anthropic.py`;
+- `smart_beta/pilot/prompt.py`, `smart_beta/pilot/config.py`,
+  `smart_beta/pilot/runner.py`;
+- `pyproject.toml` (optional extra `pilot-anthropic = ["anthropic>=1,<2"]`
+  only);
+- new `tests/test_pilot_provider.py`;
+- bounded updates to existing `tests/test_pilot_*.py`.
+
+`pilot_configs/pilot1a-real-v2.json` is generated by the planner at
+Barrier PA (untracked). The dry-run v2 config file and its hash stay
+byte-identical (H6-v2 must remain reproducible). Any other production file
+needed → STOP and report. Sealed files: NONE.
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
