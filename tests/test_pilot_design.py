@@ -26,6 +26,7 @@ requirements. No fixture under ``tests/fixtures`` is modified.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -65,6 +66,7 @@ from smart_beta.pilot.design import (
     DesignInputError,
     PilotPartitionDates,
     ProposalDesign,
+    SubperiodBoundaryError,
     build_design,
     build_evaluation_spec,
     build_frozen_evaluation_spec_template,
@@ -73,6 +75,7 @@ from smart_beta.pilot.design import (
     frozen_partition_dates,
     make_design_provider,
     resolve_factor_spec,
+    subperiod_boundaries,
 )
 from smart_beta.pilot import design as design_module
 from smart_beta.spec.engine import (
@@ -228,7 +231,8 @@ def pilot_data() -> PilotData:
 
 @pytest.fixture(scope="module")
 def template():
-    return build_frozen_evaluation_spec_template()
+    """The corrected section-26b template for the dry-run development window."""
+    return build_frozen_evaluation_spec_template(_DRY_RUN_DATES)
 
 
 @pytest.fixture(scope="module")
@@ -265,31 +269,96 @@ def _build(pilot_data, template, policies, *, spec=None, dates=None, **kwargs):
 # ---------------------------------------------------------------------------
 # section-16 frozen template + configured dates
 # ---------------------------------------------------------------------------
-def test_frozen_template_matches_section_16(template):
+def test_frozen_template_derives_dry_run_split_and_boundaries(template):
+    """Section 26b correction 3: the dry-run window drives the boundaries."""
     assert template.horizons == (1,)
     assert template.cost_model.transaction_cost_bps == PILOT_TRANSACTION_COST_BPS
     assert template.cost_model.mode is CostMode.ONE_WAY
     assert template.split_rule.is_start == date(2025, 10, 15)
-    assert template.split_rule.is_end == date(2026, 3, 31)
-    assert template.split_rule.oos_start == date(2026, 4, 1)
-    assert template.split_rule.oos_end == date(2026, 6, 30)
+    assert template.split_rule.is_end == date(2026, 2, 27)
+    assert template.split_rule.oos_start == date(2026, 3, 2)
+    assert template.split_rule.oos_end == date(2026, 4, 30)
     assert template.split_rule.walk_forward_folds == 0
-    assert [point.n_groups for point in template.parameter_grid] == [3, 5]
-    assert all(
-        point.cost_bps == PILOT_TRANSACTION_COST_BPS
-        for point in template.parameter_grid
+    assert template.subperiod_rule.boundaries == (
+        date(2025, 10, 15),
+        date(2026, 1, 2),
+        date(2026, 5, 1),
     )
-    assert all(point.horizon == 1 for point in template.parameter_grid)
-    # Executability fix 1: the single frozen cut is embedded between the
-    # evaluation-window endpoints (SubperiodRule requires >= 2 boundaries).
-    assert date(2026, 1, 2) in template.subperiod_rule.boundaries
-    assert len(template.subperiod_rule.boundaries) >= 2
-    # Executability fix 2: the inert universe variant is declared (non-empty).
+    # No hardcoded real holdout start may remain in the dry-run template.
+    assert date(2026, 7, 1) not in template.subperiod_rule.boundaries
+    assert "2026-07-01" not in json.dumps(template.to_dict())
+    # Executability fix: the inert universe variant is declared (non-empty).
     assert template.universe_variants == ("all",)
     # BENCHMARK_RELATIVE is not selected, so the benchmark is inert.
     assert MetricKey.BENCHMARK_RELATIVE not in template.metrics
     assert MetricKey.REDUNDANCY not in template.metrics
     assert MetricKey.UNIVERSE_SENSITIVITY not in template.metrics
+
+
+def test_frozen_template_derives_real_split_and_boundaries():
+    """Section 26b: the real window yields the real-run boundaries."""
+    real = build_frozen_evaluation_spec_template(frozen_partition_dates())
+    assert real.split_rule.is_start == date(2025, 10, 15)
+    assert real.split_rule.is_end == date(2026, 3, 31)
+    assert real.split_rule.oos_start == date(2026, 4, 1)
+    assert real.split_rule.oos_end == date(2026, 6, 30)
+    assert real.subperiod_rule.boundaries == (
+        date(2025, 10, 15),
+        date(2026, 1, 2),
+        date(2026, 7, 1),
+    )
+
+
+def test_frozen_template_has_no_parameter_sensitivity(template):
+    """Section 26b correction 1: metric removed; single primary grid point."""
+    assert MetricKey.PARAMETER_SENSITIVITY not in template.metrics
+    assert [point.n_groups for point in template.parameter_grid] == [3]
+    (point,) = template.parameter_grid
+    assert point.horizon == 1
+    assert point.cost_bps == PILOT_TRANSACTION_COST_BPS
+    assert point.winsorization == 0.01
+
+
+def test_subperiod_boundaries_helper_uses_the_supplied_window():
+    assert subperiod_boundaries(_DRY_RUN_DATES) == (
+        date(2025, 10, 15),
+        date(2026, 1, 2),
+        date(2026, 5, 1),
+    )
+    assert subperiod_boundaries(frozen_partition_dates()) == (
+        date(2025, 10, 15),
+        date(2026, 1, 2),
+        date(2026, 7, 1),
+    )
+
+
+def test_frozen_template_refuses_cut_outside_the_development_window():
+    """Section 26b correction 3: an unusable window is refused, typed."""
+    # The frozen cut equals is_start, so it is no longer strictly inside.
+    with pytest.raises(SubperiodBoundaryError):
+        build_frozen_evaluation_spec_template(
+            PilotPartitionDates(
+                is_start="2026-01-02",
+                is_end="2026-02-27",
+                oos_start="2026-03-02",
+                oos_end="2026-04-30",
+                holdout_start="2026-05-01",
+                holdout_end="2026-06-30",
+            )
+        )
+    # The frozen cut equals holdout_start, so it is no longer strictly inside.
+    with pytest.raises(SubperiodBoundaryError):
+        build_frozen_evaluation_spec_template(
+            PilotPartitionDates(
+                is_start="2025-10-15",
+                is_end="2025-12-31",
+                oos_start="2026-01-01",
+                oos_end="2026-01-01",
+                holdout_start="2026-01-02",
+                holdout_end="2026-01-10",
+            )
+        )
+    assert issubclass(SubperiodBoundaryError, DesignInputError)
 
 
 def test_frozen_partition_dates_round_trip():
@@ -534,6 +603,27 @@ def test_evaluate_receives_the_g1_realized_panel(sample_design):
     # The sealed record carries the partition reference (folds + holdout key).
     assert record.partition.holdout_key == sample_design.partition.holdout_key
     assert record.holdout_consumed is True
+
+
+def test_record_is_holdout_free_and_has_no_parameter_sensitivity(sample_design):
+    """Section 26b: the capped Gate-B record carries no leaky aggregate.
+
+    ``PARAMETER_SENSITIVITY`` is absent from the corrected spec, so the sealed
+    engine emits an empty ``parameter_sensitivity_table``. Every subperiod row
+    ends at or before the dry-run partition's holdout start, so the subperiod
+    aggregate covers only the authorized development window.
+    """
+    record = sample_design.experiment_design.record
+    assert record.parameter_sensitivity_table.name == "parameter_sensitivity"
+    assert record.parameter_sensitivity_table.rows == ()
+    assert MetricKey.PARAMETER_SENSITIVITY not in sample_design.evaluation_spec.metrics
+
+    holdout_start = sample_design.partition.holdout_fold.start.date()
+    assert holdout_start == _DRY_RUN_DATES.holdout_start
+    end_index = record.subperiod_table.columns.index("subperiod_end")
+    assert record.subperiod_table.rows, "subperiod rows are expected"
+    for row in record.subperiod_table.rows:
+        assert date.fromisoformat(row[end_index]) <= holdout_start
 
 
 # ---------------------------------------------------------------------------
