@@ -69,6 +69,8 @@ from smart_beta.pilot.artifacts import (
     ArtifactPackage,
     CREDENTIAL_ENV_VARS,
     assemble_package,
+    credential_value_encodings,
+    expected_package_file_count,
 )
 from smart_beta.pilot.config import (
     ANTHROPIC_PROVIDER,
@@ -2282,6 +2284,7 @@ def credential_value_sweep(
     *,
     env_var: str,
     value: str,
+    expected_file_count: int | None = None,
 ) -> CredentialValueSweepResult:
     """Search every file under ``directory`` for the captured credential value.
 
@@ -2289,22 +2292,37 @@ def credential_value_sweep(
     the names in :data:`~smart_beta.pilot.artifacts.CREDENTIAL_ENV_VARS`, which
     does not include ``DEEPSEEK_API_KEY``. This runner-side sweep closes that
     gap: it reads every file in the run's artifact directory (the journal, the
-    ``records/*`` extracts, the config, the manifest, ...) as raw bytes and
-    reports whether the captured value occurs anywhere.
+    ``records/*`` extracts, the config, the manifest, every audit file, ...)
+    and reports whether the captured value occurs anywhere, raw or in its
+    common serializer encodings (JSON-escaped, URL-encoded, base64).
 
     Only the checked file count, the variable name and a boolean are returned;
     the value (and any substring/hash of it) is never returned, stored,
-    logged or included in an error message. A file that cannot be read fails
-    the sweep closed.
+    logged or included in an error message. The sweep fails closed on a file
+    that cannot be read, and on a count mismatch when ``expected_file_count``
+    is supplied (so a missing or extra package file cannot go unchecked).
     """
     root = Path(directory)
-    needle = value.encode("utf-8") if isinstance(value, str) else b""
+    candidates = tuple(
+        candidate.encode("utf-8")
+        for candidate in (
+            credential_value_encodings(value)
+            if isinstance(value, str) and value
+            else ()
+        )
+    )
     checked = 0
     found = False
     read_error = False
+    count_mismatch = False
     if root.is_dir():
-        for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
-            checked += 1
+        files = sorted(
+            candidate for candidate in root.rglob("*") if candidate.is_file()
+        )
+        checked = len(files)
+        if expected_file_count is not None and checked != expected_file_count:
+            count_mismatch = True
+        for path in files:
             if found or read_error:
                 continue
             try:
@@ -2312,9 +2330,9 @@ def credential_value_sweep(
             except OSError:
                 read_error = True
                 continue
-            if needle and needle in data:
+            if any(candidate and candidate in data for candidate in candidates):
                 found = True
-    passed = not found and not read_error
+    passed = not found and not read_error and not count_mismatch
     return CredentialValueSweepResult(
         env_var=env_var, passed=passed, files_checked=checked
     )
@@ -2322,6 +2340,8 @@ def credential_value_sweep(
 
 def _runner_credential_value_sweep(
     context: "_RunContext",
+    *,
+    expected_file_count: int | None = None,
 ) -> CredentialValueSweepResult | None:
     """Sweep the run directory for the captured provider credential value.
 
@@ -2334,7 +2354,10 @@ def _runner_credential_value_sweep(
     env_var = provider_credential_env(context.resolved.model.provider)
     try:
         return credential_value_sweep(
-            context.artifact_directory, env_var=env_var, value=context.credential
+            context.artifact_directory,
+            env_var=env_var,
+            value=context.credential,
+            expected_file_count=expected_file_count,
         )
     except Exception:  # noqa: BLE001 - a sweep failure fails closed
         return CredentialValueSweepResult(
@@ -2350,10 +2373,6 @@ def _finalize(
     *,
     assemble: bool,
 ) -> RunOutcome:
-    # The runner-side credential value sweep runs on every finalize path
-    # (normal, INTERRUPTED/partial and no-assemble), so a leak is caught even
-    # when the G6 package cannot be assembled.
-    credential_sweep = _runner_credential_value_sweep(context)
     read = _read_or_none(context.journal_path)
     if read is None:
         return RunOutcome(
@@ -2363,7 +2382,7 @@ def _finalize(
             journal_path=context.journal_path,
             artifact_directory=context.artifact_directory,
             reconstruction_status=report.status.value,
-            credential_value_sweep=credential_sweep,
+            credential_value_sweep=_runner_credential_value_sweep(context),
         )
     intents = sum(
         1 for record in read.records if record.kind is JournalKind.INVOCATION_INTENT
@@ -2387,7 +2406,7 @@ def _finalize(
             invocation_count=intents,
             reconstruction_status=report.status.value,
             temporal_firewall_status=None,
-            credential_value_sweep=credential_sweep,
+            credential_value_sweep=_runner_credential_value_sweep(context),
         )
 
     report_markdown = None
@@ -2404,16 +2423,16 @@ def _finalize(
             + _predecessor_report_section(context)
         )
 
+    captured_credentials = (
+        None
+        if context.credential is None
+        else {
+            provider_credential_env(
+                context.resolved.model.provider
+            ): context.credential
+        }
+    )
     try:
-        sweep_environ = (
-            None
-            if context.credential is None
-            else {
-                provider_credential_env(
-                    context.resolved.model.provider
-                ): context.credential
-            }
-        )
         package = assemble_package(
             context.artifact_directory,
             config=context.resolved.config,
@@ -2425,22 +2444,34 @@ def _finalize(
                 context.resolved.git_baseline.get("phase9_complete", "")
             ),
             report_markdown=report_markdown,
-            environ=sweep_environ,
+            environ=captured_credentials,
+            credentials=captured_credentials,
         )
         package_error = None
     except Exception as exc:  # noqa: BLE001 - reported, never hidden
         package = None
         package_error = f"{type(exc).__name__}: {exc}"
 
-    # Fail the package closed when the captured credential value occurs
-    # anywhere in the run artifacts, even though the G6 sweep may not
-    # value-check that provider's variable name. The detail names only the
-    # variable, the file count and the result; never the value.
+    # P1A-SV (pilot1-plan.md section 26g): the credential value sweep runs
+    # only after the final package is fully assembled, over every file in the
+    # run directory, and asserts the frozen package file count so a missing
+    # or extra package file fails closed. It covers a leak even when assembly
+    # itself failed (INTERRUPTED / partial package).
+    credential_sweep = _runner_credential_value_sweep(
+        context,
+        expected_file_count=expected_package_file_count(),
+    )
+
+    # Fail the package closed when the sweep does not pass (a leaked value,
+    # an unreadable file or a package file-count mismatch). The detail names
+    # only the variable, the file count and the result; never the value.
     if credential_sweep is not None and not credential_sweep.passed:
         leak_error = CredentialValueLeakError(
-            "credential value sweep failed for "
-            f"{credential_sweep.env_var}: the captured value occurs in the run "
-            f"artifact directory ({credential_sweep.files_checked} files checked)"
+            "credential value sweep did not pass for "
+            f"{credential_sweep.env_var}: the run artifact directory "
+            f"({credential_sweep.files_checked} files checked) contains a "
+            "leaked value, an unreadable file, or a package file-count "
+            "mismatch"
         )
         leak_detail = f"{type(leak_error).__name__}: {leak_error}"
         package = None

@@ -46,11 +46,14 @@ live-credential value comparison, which never records or prints the value.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
 import platform
 import re
 import sys
+import urllib.parse
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -121,9 +124,11 @@ __all__ = [
     "SecretSweepFinding",
     "SecretSweepReport",
     "secret_sweep",
+    "credential_value_encodings",
     # manifest / package
     "build_manifest",
     "verify_package",
+    "expected_package_file_count",
     "ArtifactPackage",
     "assemble_package",
 ]
@@ -625,10 +630,39 @@ def _line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def credential_value_encodings(value: str) -> tuple[str, ...]:
+    """The raw credential value plus its common serializer encodings.
+
+    A live credential can reach a packaged artifact raw, JSON-escaped,
+    URL-encoded or base64-encoded (any of which a serializer could emit), so
+    every sweep compares all of these candidates. The candidates are compared
+    against file contents verbatim and are never recorded or printed by the
+    sweep.
+    """
+    raw = value.encode("utf-8")
+    candidates = (
+        value,
+        json.dumps(value)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+        urllib.parse.quote(value, safe=""),
+        urllib.parse.quote_plus(value, safe=""),
+        base64.b64encode(raw).decode("ascii"),
+        base64.urlsafe_b64encode(raw).decode("ascii"),
+    )
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
 def secret_sweep(
     paths: str | os.PathLike[str] | Iterable[str | os.PathLike[str]],
     *,
     environ: Mapping[str, str] | None = None,
+    credentials: Mapping[str, str] | None = None,
 ) -> SecretSweepReport:
     """Sweep files for credential patterns and live credential values.
 
@@ -638,8 +672,12 @@ def secret_sweep(
        ``(?i)(api[_-]?key|token)\\s*[:=]\\s*[A-Za-z0-9]{16,}`` over the file
        text;
     2. a live-credential value check: for each present, non-empty
-       :data:`CREDENTIAL_ENV_VARS` value, the value is searched for but is
-       **never** recorded or printed. Absent (and empty) variables are skipped.
+       :data:`CREDENTIAL_ENV_VARS` value, and for every explicit
+       ``credentials`` entry (which lets the caller value-check a captured
+       provider credential whose name is outside the fixed list), the value
+       is searched for raw and in its common encodings (JSON-escaped,
+       URL-encoded, base64) but is **never** recorded or printed. Absent (and
+       empty) variables are skipped.
 
     Any finding fails the sweep closed. ``environ`` is injectable so a caller
     can audit a frozen environment snapshot; it defaults to ``os.environ``.
@@ -652,6 +690,10 @@ def secret_sweep(
         value = resolved_environ.get(name)
         if isinstance(value, str) and value:
             live_values[name] = value
+    if credentials is not None:
+        for name, value in credentials.items():
+            if isinstance(name, str) and name and isinstance(value, str) and value:
+                live_values[name] = value
 
     findings: list[SecretSweepFinding] = []
     scanned: list[str] = []
@@ -672,16 +714,18 @@ def secret_sweep(
                 )
             )
         for name, value in live_values.items():
-            offset = text.find(value)
-            if offset >= 0:
-                findings.append(
-                    SecretSweepFinding(
-                        path=str(path),
-                        line=_line_number(text, offset),
-                        kind="live_credential_value",
-                        env_var=name,
+            for candidate in credential_value_encodings(value):
+                offset = text.find(candidate)
+                if offset >= 0:
+                    findings.append(
+                        SecretSweepFinding(
+                            path=str(path),
+                            line=_line_number(text, offset),
+                            kind="live_credential_value",
+                            env_var=name,
+                        )
                     )
-                )
+                    break
 
     status = AuditStatus.FAIL if findings else AuditStatus.PASS
     return SecretSweepReport(
@@ -825,6 +869,19 @@ def verify_package(
     return root
 
 
+def expected_package_file_count(layout: ArtifactLayout | None = None) -> int:
+    """The number of files a complete frozen package contains.
+
+    The frozen :class:`~smart_beta.pilot.contracts.ArtifactLayout` file
+    artifacts plus one ``records/<kind>.jsonl`` per ``JournalKind``;
+    :func:`assemble_package` writes exactly these files. The P1A-SV value
+    sweep asserts its checked count equals this value so a missing or extra
+    file fails the package closed.
+    """
+    resolved = layout if layout is not None else ArtifactLayout()
+    return len(resolved.required_artifacts) + len(JournalKind)
+
+
 def _validate_report_text(report_markdown: str) -> None:
     """Fail closed unless the report carries the frozen sections."""
     required = (
@@ -894,6 +951,7 @@ def assemble_package(
     package_versions: Mapping[str, str] | None = None,
     layout: ArtifactLayout | None = None,
     environ: Mapping[str, str] | None = None,
+    credentials: Mapping[str, str] | None = None,
 ) -> ArtifactPackage:
     """Assemble the frozen artifact package for one run, or fail closed.
 
@@ -985,7 +1043,7 @@ def assemble_package(
     )
     _write_json(dest / resolved_layout.manifest, manifest)
 
-    sweep = secret_sweep([dest], environ=environ)
+    sweep = secret_sweep([dest], environ=environ, credentials=credentials)
     _write_json(dest / resolved_layout.secret_sweep, sweep.to_dict())
 
     verify_package(dest, layout=resolved_layout)
