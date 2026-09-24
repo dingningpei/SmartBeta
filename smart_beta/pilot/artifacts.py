@@ -14,16 +14,20 @@ two post-hoc audits and the run report:
 * the G4 reconstruction report;
 * a **post-hoc firewall audit** that re-runs the G3 audit over every
   journaled request;
+* a **post-hoc temporal firewall audit** (P1A-G6R, plan section 26b) that
+  re-derives every generator-visible item's coverage from the journaled
+  ``evaluation_record`` payloads and the ``visible_history`` /
+  ``research_feedback`` snapshots;
 * a **secret sweep** using the frozen Phase-5A credential regex plus a
   live-credential value check that never prints a credential value;
 * ``report.md``.
 
-Fail-closed rules (frozen plan sections 14 and 22):
+Fail-closed rules (frozen plan sections 14, 22 and 26b):
 
 * a missing required artifact raises :class:`MissingArtifactError`;
-* a firewall violation or a secret-sweep finding raises
-  :class:`PackageNotCertifiedError` (after the evidence is written, so the
-  failure stays auditable);
+* a firewall violation, a temporal-firewall violation or a secret-sweep
+  finding raises :class:`PackageNotCertifiedError` (after the evidence is
+  written, so the failure stays auditable);
 * a prompt template whose hash does not match the frozen config raises;
 * a journal that cannot be read/verified raises (never silently ignored).
 
@@ -75,9 +79,17 @@ from smart_beta.pilot.reconstruct import ReconstructionReport
 from smart_beta.pilot.report import (
     ACCEPT_INTERPRETATION_SENTENCE,
     CERTIFICATION_CLAIM,
+    FIX_B_NOT_CERTIFIED,
     NONCLAIMS,
+    TEMPORAL_FIREWALL_HEADING,
     render_report,
 )
+from smart_beta.pilot.temporal import (
+    TemporalFirewallReport,
+    TemporalVerdict,
+    audit_temporal_firewall,
+)
+from smart_beta.evaluation.spec import EvaluationRecord
 from smart_beta.research.history import (
     GeneratorVisibleResearchHistory,
     ResearchFeedback,
@@ -102,6 +114,9 @@ __all__ = [
     "InvocationAudit",
     "FirewallAuditReport",
     "post_hoc_firewall_audit",
+    # post-hoc temporal firewall audit
+    "TemporalFirewallReport",
+    "post_hoc_temporal_audit",
     # secret sweep
     "SecretSweepFinding",
     "SecretSweepReport",
@@ -427,6 +442,119 @@ def post_hoc_firewall_audit(
 
 
 # ---------------------------------------------------------------------------
+# post-hoc temporal information-flow firewall audit
+# ---------------------------------------------------------------------------
+
+
+def _journaled_evaluation_records(
+    records: Sequence[JournalRecord],
+) -> tuple[list[EvaluationRecord], list[str]]:
+    """Parse every journaled ``evaluation_record`` payload, fail-soft."""
+    parsed: list[EvaluationRecord] = []
+    findings: list[str] = []
+    for record in records:
+        if record.kind is not JournalKind.EVALUATION_RECORD:
+            continue
+        payload = record.to_dict()["payload"]
+        try:
+            parsed.append(EvaluationRecord.from_dict(payload))
+        except Exception as exc:  # noqa: BLE001 - reported as a finding
+            findings.append(
+                f"seq {record.seq}: journaled evaluation_record is not "
+                f"rebuildable: {type(exc).__name__}: {exc}"
+            )
+    return parsed, findings
+
+
+def post_hoc_temporal_audit(
+    journal: (
+        str | os.PathLike[str] | JournalReadResult | Sequence[JournalRecord]
+    ),
+    *,
+    is_start: Any = None,
+    holdout_start: Any = None,
+    partition_dates: Mapping[str, Any] | None = None,
+) -> TemporalFirewallReport:
+    """Re-run the section-26b temporal firewall over every journaled snapshot.
+
+    The audit re-derives coverage from the **journaled** ``evaluation_record``
+    payloads and re-checks the journaled ``visible_history`` /
+    ``research_feedback`` authority snapshots against the config's authorized
+    interval ``[is_start, holdout_start)``. A journal that cannot be read, a
+    missing authorized interval, an unparseable evaluation record or any
+    failing item yields a ``FAIL`` report; the assembler refuses the package.
+    """
+    if partition_dates is not None:
+        if is_start is None:
+            is_start = partition_dates.get("is_start")
+        if holdout_start is None:
+            holdout_start = partition_dates.get("holdout_start")
+
+    try:
+        read = _as_read_result(journal)
+    except (JournalError, OSError, ArtifactError) as exc:
+        return TemporalFirewallReport(
+            status=TemporalVerdict.FAIL,
+            authorized_start=None if is_start is None else str(is_start),
+            authorized_end_exclusive=(
+                None if holdout_start is None else str(holdout_start)
+            ),
+            audits=(),
+            findings=(f"journal could not be read: {type(exc).__name__}: {exc}",),
+        )
+
+    records, findings = _journaled_evaluation_records(read.records)
+    visible_snapshots = _collect_snapshots(read.records, "visible_history")
+    feedback_snapshots = _collect_snapshots(read.records, "research_feedback")
+
+    empty_visible = GeneratorVisibleResearchHistory()
+    empty_feedback = ResearchFeedback()
+
+    def _audit(visible: Any, feedback: Any) -> Any:
+        return audit_temporal_firewall(
+            visible,
+            feedback,
+            records,
+            is_start=is_start,
+            holdout_start=holdout_start,
+        )
+
+    audits: list[Any] = []
+    for snapshot in visible_snapshots.values():
+        audits.append(_audit(snapshot, empty_feedback))
+    for snapshot in feedback_snapshots.values():
+        audits.append(_audit(empty_visible, snapshot))
+    if not visible_snapshots and not feedback_snapshots:
+        audits.append(_audit(empty_visible, empty_feedback))
+
+    all_findings = list(findings)
+    for audit in audits:
+        all_findings.extend(audit.findings)
+    status = (
+        TemporalVerdict.PASS
+        if audits and all(audit.ok for audit in audits) and not findings
+        else TemporalVerdict.FAIL
+    )
+    authorized_start = audits[0].authorized_start if audits else None
+    authorized_end = audits[0].authorized_end_exclusive if audits else None
+    return TemporalFirewallReport(
+        status=status,
+        authorized_start=(
+            authorized_start if authorized_start is not None else (
+                None if is_start is None else str(is_start)
+            )
+        ),
+        authorized_end_exclusive=(
+            authorized_end
+            if authorized_end is not None
+            else (None if holdout_start is None else str(holdout_start))
+        ),
+        audits=tuple(audits),
+        findings=tuple(all_findings),
+    )
+
+
+# ---------------------------------------------------------------------------
 # secret sweep
 # ---------------------------------------------------------------------------
 
@@ -613,6 +741,7 @@ def build_manifest(
     journal: JournalReadResult,
     reconstruction_report: ReconstructionReport,
     firewall_audit: FirewallAuditReport,
+    temporal_firewall_audit: TemporalFirewallReport,
     git_head: str,
     phase9_target: str,
     package_versions: Mapping[str, str] | None = None,
@@ -667,6 +796,7 @@ def build_manifest(
         "prompt_template_hash": config.prompt_template_hash,
         "reconstruction_status": reconstruction_report.status.value,
         "firewall_audit_status": firewall_audit.status.value,
+        "temporal_firewall_status": temporal_firewall_audit.status.value,
         "journal": {
             "run_id": journal.run_id,
             "record_count": journal.record_count,
@@ -697,7 +827,12 @@ def verify_package(
 
 def _validate_report_text(report_markdown: str) -> None:
     """Fail closed unless the report carries the frozen sections."""
-    required = (ACCEPT_INTERPRETATION_SENTENCE, CERTIFICATION_CLAIM) + NONCLAIMS
+    required = (
+        ACCEPT_INTERPRETATION_SENTENCE,
+        CERTIFICATION_CLAIM,
+        TEMPORAL_FIREWALL_HEADING,
+        FIX_B_NOT_CERTIFIED,
+    ) + NONCLAIMS
     missing = [text for text in required if text not in report_markdown]
     if missing:
         raise ArtifactError(
@@ -723,6 +858,7 @@ class ArtifactPackage:
     layout: ArtifactLayout
     manifest: Mapping[str, Any]
     firewall_audit: FirewallAuditReport
+    temporal_firewall: TemporalFirewallReport
     secret_sweep: SecretSweepReport
     reconstruction_report: ReconstructionReport
     record_counts: Mapping[JournalKind, int]
@@ -733,6 +869,7 @@ class ArtifactPackage:
             "run_id": self.manifest.get("run_id"),
             "status": self.manifest.get("status"),
             "firewall_audit": self.firewall_audit.status.value,
+            "temporal_firewall": self.temporal_firewall.status.value,
             "secret_sweep": self.secret_sweep.status.value,
             "reconstruction_status": self.reconstruction_report.status.value,
             "record_counts": {
@@ -761,9 +898,11 @@ def assemble_package(
     """Assemble the frozen artifact package for one run, or fail closed.
 
     Writes the layout's files, extracts one JSONL file per journal record kind,
-    writes the manifest, then runs the post-hoc firewall audit and the secret
-    sweep. A missing artifact, a firewall violation or a secret finding raises
-    after the written evidence is on disk, so the failure remains auditable.
+    writes the manifest, then runs the post-hoc firewall audit, the post-hoc
+    temporal firewall audit and the secret sweep. A missing artifact, a
+    firewall violation, a temporal-firewall violation or a secret finding
+    raises after the written evidence is on disk, so the failure remains
+    auditable.
     """
     resolved_layout = layout if layout is not None else ArtifactLayout()
     dest = Path(destination)
@@ -813,6 +952,14 @@ def assemble_package(
     firewall_audit = post_hoc_firewall_audit(read, template=prompt_template)
     _write_json(dest / resolved_layout.firewall_audit, firewall_audit.to_dict())
 
+    temporal_firewall = post_hoc_temporal_audit(
+        read, partition_dates=config.partition_dates
+    )
+    _write_json(
+        dest / resolved_layout.temporal_firewall_audit,
+        temporal_firewall.to_dict(),
+    )
+
     if report_markdown is None:
         report_markdown = render_report(
             records,
@@ -820,6 +967,7 @@ def assemble_package(
             status=status,
             reconstruction_status=reconstruction_report.status.value,
             firewall_audit_status=firewall_audit.status.value,
+            temporal_firewall_status=temporal_firewall.status.value,
         )
     _validate_report_text(report_markdown)
     _write_text(dest / resolved_layout.report, report_markdown)
@@ -830,6 +978,7 @@ def assemble_package(
         journal=read,
         reconstruction_report=reconstruction_report,
         firewall_audit=firewall_audit,
+        temporal_firewall_audit=temporal_firewall,
         git_head=git_head,
         phase9_target=phase9_target,
         package_versions=package_versions,
@@ -846,6 +995,11 @@ def assemble_package(
             "post-hoc firewall audit is not green: "
             f"{firewall_audit.status.value}"
         )
+    if temporal_firewall.status is not TemporalVerdict.PASS:
+        raise PackageNotCertifiedError(
+            "temporal information-flow firewall audit is not green: "
+            f"{temporal_firewall.status.value}"
+        )
     if sweep.status is not AuditStatus.PASS:
         raise PackageNotCertifiedError(
             f"secret sweep is not clean: {len(sweep.findings)} finding(s)"
@@ -856,6 +1010,7 @@ def assemble_package(
         layout=resolved_layout,
         manifest=manifest,
         firewall_audit=firewall_audit,
+        temporal_firewall=temporal_firewall,
         secret_sweep=sweep,
         reconstruction_report=reconstruction_report,
         record_counts=record_counts,

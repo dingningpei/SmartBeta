@@ -37,6 +37,8 @@ __all__ = [
     "LIMITATIONS",
     "CERTIFICATION_CLAIM",
     "NONCLAIMS",
+    "TEMPORAL_FIREWALL_HEADING",
+    "FIX_B_NOT_CERTIFIED",
     "extract_decision_records",
     "render_report",
 ]
@@ -134,6 +136,23 @@ NONCLAIMS: tuple[str, ...] = (
 )
 
 
+#: The frozen section-26b temporal-firewall report heading.
+TEMPORAL_FIREWALL_HEADING = "## Temporal information-flow firewall (section 26b)"
+
+#: The frozen FIX-B NOT-CERTIFIED boundary text (plan section 26c). Printed
+#: verbatim so no reader can mistake the harness control for a Phase-9 repair.
+FIX_B_NOT_CERTIFIED = (
+    "FIX B NOT CERTIFIED: the end-to-end temporal information-flow property "
+    "('no reserved holdout information reaches the generator') is not "
+    "guaranteed by the sealed Phase 7 + Phase 9 composition. The Pilot-1A "
+    "harness temporal firewall (plan section 26b TF-1..TF-6) is a compensating "
+    "control, not a repair of Phase 9. Until FIX B lands (plan section 26c), "
+    "any use of the Phase 7 + 9 composition outside a TF-enforcing harness "
+    "must treat generator-visible robustness aggregates as potentially "
+    "holdout-dependent."
+)
+
+
 def _decision_record_from_payload(payload: Any) -> DecisionRecord | None:
     """Extract a ``DecisionRecord`` from an ``orchestration_outcome`` payload.
 
@@ -177,6 +196,7 @@ def _operational_disposition(
     status: str,
     reconstruction_status: str | None,
     firewall_audit_status: str | None,
+    temporal_firewall_status: str | None,
     secret_sweep_status: str | None,
 ) -> list[str]:
     lines = [
@@ -187,6 +207,11 @@ def _operational_disposition(
         lines.append(f"- offline reconstruction: {reconstruction_status}")
     if firewall_audit_status is not None:
         lines.append(f"- post-hoc firewall audit: {firewall_audit_status}")
+    if temporal_firewall_status is not None:
+        lines.append(
+            f"- temporal information-flow firewall (section 26b): "
+            f"{temporal_firewall_status}"
+        )
     if secret_sweep_status is not None:
         lines.append(f"- secret sweep: {secret_sweep_status}")
     return lines
@@ -199,6 +224,7 @@ def render_report(
     status: str,
     reconstruction_status: str | None = None,
     firewall_audit_status: str | None = None,
+    temporal_firewall_status: str | None = None,
     secret_sweep_status: str | None = None,
 ) -> str:
     """Render the frozen ``report.md`` for one run package.
@@ -226,6 +252,7 @@ def render_report(
             status=status,
             reconstruction_status=reconstruction_status,
             firewall_audit_status=firewall_audit_status,
+            temporal_firewall_status=temporal_firewall_status,
             secret_sweep_status=secret_sweep_status,
         )
     )
@@ -287,6 +314,24 @@ def render_report(
     parts.append("Pilot 1A does not establish:")
     for line in NONCLAIMS:
         parts.append(f"- {line}")
+    parts.append("")
+
+    parts.append(TEMPORAL_FIREWALL_HEADING)
+    parts.append("")
+    parts.append(
+        "The harness temporal information-flow firewall (plan section 26b "
+        "TF-1..TF-6) derives every generator-visible empirical item's "
+        "coverage from sealed EvaluationRecord content and requires it to lie "
+        "inside the config's authorized development interval "
+        "[is_start, holdout_start)."
+    )
+    parts.append("")
+    parts.append(
+        "- temporal firewall status: "
+        f"{temporal_firewall_status if temporal_firewall_status is not None else 'NOT RUN'}"
+    )
+    parts.append("")
+    parts.append(FIX_B_NOT_CERTIFIED)
     parts.append("")
 
     return "\n".join(parts)

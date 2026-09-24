@@ -1308,6 +1308,7 @@ class ArtifactLayout:
     records_dir: str = "records"
     reconstruction_report: str = "reconstruction_report.json"
     firewall_audit: str = "firewall_audit.json"
+    temporal_firewall_audit: str = "temporal_firewall_audit.json"
     secret_sweep: str = "secret_sweep.json"
     report: str = "report.md"
 
@@ -1320,6 +1321,7 @@ class ArtifactLayout:
             "records_dir",
             "reconstruction_report",
             "firewall_audit",
+            "temporal_firewall_audit",
             "secret_sweep",
             "report",
         ):
@@ -1337,6 +1339,7 @@ class ArtifactLayout:
             self.journal,
             self.reconstruction_report,
             self.firewall_audit,
+            self.temporal_firewall_audit,
             self.secret_sweep,
             self.report,
         )

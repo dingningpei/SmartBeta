@@ -42,6 +42,7 @@ from smart_beta.pilot.artifacts import (
     assemble_package,
     build_manifest,
     post_hoc_firewall_audit,
+    post_hoc_temporal_audit,
     secret_sweep,
     verify_package,
 )
@@ -60,15 +61,20 @@ from smart_beta.pilot.reconstruct import reconstruct
 from smart_beta.pilot.report import (
     ACCEPT_INTERPRETATION_SENTENCE,
     CERTIFICATION_CLAIM,
+    FIX_B_NOT_CERTIFIED,
     HOLDOUT_STATUS,
     LIMITATIONS,
     NONCLAIMS,
+    TEMPORAL_FIREWALL_HEADING,
     extract_decision_records,
     render_report,
 )
+from smart_beta.pilot.temporal import TemporalVerdict
 from smart_beta.research.history import (
+    EvidenceTable,
     GeneratorVisibleResearchHistory,
     ResearchFeedback,
+    VisibleExperiment,
     VisibleFamily,
     VisibleProposal,
 )
@@ -87,6 +93,7 @@ GIT_HEAD = "1" * 40
 PHASE9_TARGET = "2" * 40
 TREE = "84c80f574d90d6cc4567eb5369eb22f450580936"
 CREATED_AT = "2026-01-01T00:00:00+00:00"
+_PARTITION_DATES = {"is_start": "2025-10-15", "holdout_start": "2026-05-01"}
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +265,10 @@ def _config(**overrides):
         "family_id": FAMILY,
         "budgets": {"proposals": 3},
         "evaluation_spec_template": {"horizons": [1]},
-        "partition_dates": {"is_start": "2025-10-15"},
+        "partition_dates": {
+            "is_start": "2025-10-15",
+            "holdout_start": "2026-05-01",
+        },
         "model": {
             "provider": "deepseek",
             "id": "deepseek-v4-flash",
@@ -334,6 +344,7 @@ def test_build_manifest_carries_callers_package_versions(tmp_path):
         journal=journal,
         reconstruction_report=reconstruction,
         firewall_audit=post_hoc_firewall_audit(journal),
+        temporal_firewall_audit=post_hoc_temporal_audit(journal),
         git_head=GIT_HEAD,
         phase9_target=PHASE9_TARGET,
         package_versions={"smart-beta": "0.0.0"},
@@ -425,6 +436,105 @@ def test_post_hoc_firewall_audit_flags_a_missing_snapshot(tmp_path):
     assert audit.status is AuditStatus.FAIL
     assert audit.invocations[0].status is InvocationAuditStatus.VIOLATION
     assert any("snapshot" in finding for finding in audit.invocations[0].findings)
+
+
+# ---------------------------------------------------------------------------
+# temporal information-flow firewall audit
+# ---------------------------------------------------------------------------
+
+
+def _leaking_visible() -> GeneratorVisibleResearchHistory:
+    """A generator-visible experiment with an undeclared empirical table."""
+    table = EvidenceTable(
+        name="regime_stability",
+        columns=("date", "value", "n_obs"),
+        rows=(("2026-01-01", 0.1, 5),),
+    )
+    experiment = VisibleExperiment(
+        experiment_id=SHA_A,
+        hypothesis_id=SHA_B,
+        family_id=FAMILY,
+        evaluation_spec_hash=SHA_C,
+        factor_provenance_hash=SHA_D,
+        robustness_tables=(table,),
+    )
+    return GeneratorVisibleResearchHistory(
+        experiments=(experiment,),
+        families=(VisibleFamily(family_id=FAMILY, consumed_slots=1),),
+    )
+
+
+def _temporal_violation_run(tmp_path):
+    """A run whose journaled visible evidence carries an undeclared table."""
+    builder = _RunBuilder()
+    builder.payload(JournalKind.RUN_STARTED, {"config_hash": SHA_A})
+    visible = _leaking_visible()
+    feedback = _feedback()
+    builder.payload(
+        JournalKind.AUTHORITY_SNAPSHOT,
+        authority_snapshot_payload("visible_history", visible.to_dict()),
+    )
+    builder.payload(
+        JournalKind.AUTHORITY_SNAPSHOT,
+        authority_snapshot_payload("research_feedback", feedback.to_dict()),
+    )
+    intent, _ = _intent(visible, feedback)
+    builder.payload(JournalKind.INVOCATION_INTENT, intent.to_dict())
+    builder.payload(
+        JournalKind.ORCHESTRATION_OUTCOME,
+        {"decision_record": _decision_record().to_dict(), "search_decision": {},
+         "holdout_evidence": {}},
+    )
+    builder.payload(JournalKind.STOP, {"reason": "done"})
+    builder.payload(JournalKind.RUN_CLOSED, {"status": "completed_stop"})
+    return builder.write(tmp_path / "journal.jsonl")
+
+
+def test_post_hoc_temporal_audit_is_green(tmp_path):
+    journal = _clean_run(tmp_path)
+    report = post_hoc_temporal_audit(journal, partition_dates=_PARTITION_DATES)
+    assert report.status is TemporalVerdict.PASS
+
+    package = _assemble(tmp_path, journal)
+    assert package.temporal_firewall.status is TemporalVerdict.PASS
+    layout = ArtifactLayout()
+    written = json.loads(
+        (package.directory / layout.temporal_firewall_audit).read_text("utf-8")
+    )
+    assert written["status"] == "PASS"
+    assert written["authorized_start"] == "2025-10-15"
+    assert written["authorized_end_exclusive"] == "2026-05-01"
+    manifest = json.loads(
+        (package.directory / layout.manifest).read_text("utf-8")
+    )
+    assert manifest["temporal_firewall_status"] == "PASS"
+
+
+def test_post_hoc_temporal_audit_detects_undeclared_table(tmp_path):
+    journal = _temporal_violation_run(tmp_path)
+    # The key/substring firewall is green; only the temporal audit fails.
+    assert post_hoc_firewall_audit(journal).status is AuditStatus.PASS
+    report = post_hoc_temporal_audit(journal, partition_dates=_PARTITION_DATES)
+    assert report.status is TemporalVerdict.FAIL
+    assert report.failures
+
+
+def test_temporal_firewall_failure_fails_package_closed(tmp_path):
+    journal = _temporal_violation_run(tmp_path)
+    with pytest.raises(PackageNotCertifiedError):
+        _assemble(tmp_path, journal)
+    layout = ArtifactLayout()
+    written = json.loads(
+        (tmp_path / "package" / layout.temporal_firewall_audit).read_text("utf-8")
+    )
+    assert written["status"] == "FAIL"
+    assert written["failure_count"] >= 1
+
+
+def test_temporal_audit_missing_authorized_interval_fails_closed(tmp_path):
+    journal = _clean_run(tmp_path)
+    report = post_hoc_temporal_audit(journal, partition_dates={"is_start": "2025-10-15"})
+    assert report.status is TemporalVerdict.FAIL
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +663,8 @@ def test_report_contains_frozen_sections(tmp_path):
     text = (package.directory / layout.report).read_text("utf-8")
     assert ACCEPT_INTERPRETATION_SENTENCE in text
     assert CERTIFICATION_CLAIM in text
+    assert TEMPORAL_FIREWALL_HEADING in text
+    assert FIX_B_NOT_CERTIFIED in text
     for line in HOLDOUT_STATUS:
         assert line in text
     for line in LIMITATIONS:
