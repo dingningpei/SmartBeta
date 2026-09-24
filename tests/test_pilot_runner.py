@@ -50,10 +50,12 @@ from smart_beta.pilot.model import ModelResponse, StubModelClient
 from smart_beta.pilot.reconstruct import reconstruct
 from smart_beta.pilot.runner import (
     GitProbe,
+    PreflightError,
     RunnerError,
     build_reconstruction_hooks,
     count_raw_candidates,
     install_network_tripwire,
+    preflight_check,
     restore_network_tripwire,
     run_pilot,
 )
@@ -1368,19 +1370,32 @@ def test_real_proxy_override_refuses(tmp_path, monkeypatch):
     assert "proxy" in outcome.detail.lower()
 
 
-def test_real_credential_is_deleted_before_any_subprocess(tmp_path, monkeypatch):
+def test_real_credential_is_deleted_from_the_runner_environment(tmp_path, monkeypatch):
     _set_real_credential(monkeypatch)
-    recorder: dict = {}
-    config_dict = _real_preflight_config(tmp_path, "real-env")
+    config_dict = _real_constructed_config(tmp_path, "real-env", end=CONSTRUCTED_END)
     _run(
         config_dict,
         tmp_path,
-        git=_real_git(recorder=recorder),
+        git=_real_git(),
         endpoint_resolver=_resolver,
+        client=StubModelClient(_stub_response([_one_candidate(), _one_candidate()])),
     )
-    # The git probe ran only after the credential was deleted from os.environ.
-    assert recorder["head_env"] is None
+    # The side-effecting capture-then-delete removes the credential from the
+    # runner process environment once preflight has passed.
     assert "ANTHROPIC_API_KEY" not in os.environ
+
+
+def test_git_probe_strips_credentials_from_its_subprocess_environment(monkeypatch):
+    # Preflight runs before the side-effecting capture, so the runner still
+    # holds the credential; the git probe must never let a subprocess inherit
+    # it (or any data credential).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _REAL_CREDENTIAL)
+    monkeypatch.setenv("TIINGO_API_KEY", "tiingo-planted-value")
+    env = GitProbe(".")._subprocess_env()
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "TIINGO_API_KEY" not in env
+    # The rest of the environment is preserved for git.
+    assert "PATH" in env
 
 
 def test_real_credential_is_never_journaled_or_packaged(tmp_path, monkeypatch):
@@ -1519,3 +1534,240 @@ def test_real_conservative_output_ceiling_stops_before_the_second_call(
         record for record in read.records if record.kind is JournalKind.INVOCATION_INTENT
     ]
     assert len(intents) == 1
+
+
+# ---------------------------------------------------------------------------
+# side-effect-free preflight_check barrier (planner PA barrier)
+# ---------------------------------------------------------------------------
+
+
+def _listing(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return sorted(child.name for child in path.iterdir())
+
+
+def test_preflight_check_is_side_effect_free_and_offline(tmp_path, monkeypatch):
+    from smart_beta.pilot import runner as runner_mod
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config_dict = _real_constructed_config(tmp_path, "pf-ok", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    approved = config.config_hash()
+
+    # Any DNS lookup, socket connect, or model-client construction fails loudly.
+    getaddrinfo_calls: list = []
+
+    def _counting_getaddrinfo(*args, **kwargs):
+        getaddrinfo_calls.append(args)
+        raise AssertionError("preflight_check must not resolve DNS")
+
+    connect_calls: list = []
+
+    def _counting_connect(self, address):  # noqa: ANN001
+        connect_calls.append(address)
+        raise AssertionError("preflight_check must not connect")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _counting_getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", _counting_connect)
+    monkeypatch.setattr(
+        socket, "create_connection", lambda *a, **k: connect_calls.append(a)
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "build_anthropic_client",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("no real provider client during preflight")
+        ),
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "build_stub_client",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("no stub client during preflight")
+        ),
+    )
+
+    pilot_runs = tmp_path / "pilot_runs" / "pilot1a"
+    before = _listing(pilot_runs)
+    artifact_dir = tmp_path / "run-pf-ok"
+    assert not artifact_dir.exists()
+
+    report = preflight_check(
+        config,
+        approved_config_hash=approved,
+        repo=tmp_path,
+        git=_real_git(),
+        require_credential=False,
+    )
+
+    assert report.passed
+    assert getaddrinfo_calls == []
+    assert connect_calls == []
+    assert _listing(pilot_runs) == before == []
+    assert not artifact_dir.exists()
+    assert not (pilot_runs / "pf-ok").exists()
+
+    # The report carries the frozen identities and budgets.
+    assert report.git_head == _REAL_BOUND
+    assert report.bound_git_commit == _REAL_BOUND
+    assert report.config_hash == approved
+    assert report.run_id == "pf-ok" and report.run_mode == "real"
+    assert report.prompt_template_hash == config.prompt_template_hash
+    assert report.fixture_tree_id == _REAL_FIXTURE_TREE
+    assert len(report.holdout_identity) == 64
+    assert report.family_id == config.family_id
+    assert report.model_id == config_mod.REAL_MODEL_ID
+    assert report.price_table_id == config_mod.REAL_PRICE_TABLE_ID
+    assert report.budgets["llm_input_tokens"] == 100_000
+    assert report.budgets["llm_output_tokens"] == 40_000
+    assert report.budgets["llm_cost"] == 5.0
+    assert report.budgets["max_output_tokens"] == 12_000
+    assert {check.name for check in report.checks} >= {
+        "config_resolution",
+        "approved_config_hash",
+        "provider_freeze",
+        "base_url_proxy",
+        "exact_commit_binding",
+        "fixture_tree_id",
+        "fixture_integrity",
+        "single_run_guard",
+        "endpoint_parse",
+        "artifact_directory_available",
+        "holdout_identity",
+    }
+
+
+def test_preflight_check_credential_presence_only_when_requested(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config_dict = _real_constructed_config(tmp_path, "pf-cred", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    approved = config.config_hash()
+
+    # Present-only when required: absent is fine when the barrier does not need it.
+    report = preflight_check(
+        config,
+        approved_config_hash=approved,
+        repo=tmp_path,
+        git=_real_git(),
+        require_credential=False,
+    )
+    assert report.passed
+    assert report.check("credential_presence").detail == "not-required"
+
+    # Required and absent -> fail closed, with a structured report.
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=approved,
+            repo=tmp_path,
+            git=_real_git(),
+            require_credential=True,
+        )
+    failure = excinfo.value
+    assert failure.report is not None
+    presence = failure.report.check("credential_presence")
+    assert presence is not None and presence.passed is False
+    assert "ANTHROPIC_API_KEY" in presence.detail
+
+    # Required and present -> pass; the value is never returned in the report.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "present-but-never-returned")
+    report = preflight_check(
+        config,
+        approved_config_hash=approved,
+        repo=tmp_path,
+        git=_real_git(),
+        require_credential=True,
+    )
+    assert report.passed
+    assert "present-but-never-returned" not in json.dumps(report.to_dict())
+
+
+def test_preflight_check_fails_closed_on_hash_mismatch(tmp_path):
+    config_dict = _real_constructed_config(tmp_path, "pf-hash", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash="0" * 64,
+            repo=tmp_path,
+            git=_real_git(),
+            require_credential=False,
+        )
+    assert excinfo.value.report is not None
+    assert excinfo.value.report.check("approved_config_hash").passed is False
+
+
+def test_preflight_check_fails_closed_on_commit_mismatch(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config_dict = _real_constructed_config(tmp_path, "pf-commit", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=config.config_hash(),
+            repo=tmp_path,
+            git=_real_git(head="0" * 40),
+            require_credential=False,
+        )
+    assert excinfo.value.report is not None
+    assert excinfo.value.report.check("exact_commit_binding").passed is False
+
+
+def test_preflight_check_fails_closed_on_base_url_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
+    config_dict = _real_constructed_config(tmp_path, "pf-baseurl", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=config.config_hash(),
+            repo=tmp_path,
+            git=_real_git(),
+            require_credential=False,
+        )
+    assert excinfo.value.report is not None
+    assert excinfo.value.report.check("base_url_proxy").passed is False
+
+
+def test_preflight_check_fails_closed_on_prior_real_experiment(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _write_prior_run(tmp_path, "pf-prior", orchestration=True)
+    config_dict = _real_constructed_config(tmp_path, "pf-prior-next", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=config.config_hash(),
+            repo=tmp_path,
+            git=_real_git(),
+            require_credential=False,
+        )
+    assert excinfo.value.report is not None
+    assert excinfo.value.report.check("single_run_guard").passed is False
+
+
+def test_run_pilot_calls_preflight_check_with_credential_required(tmp_path, monkeypatch):
+    from smart_beta.pilot import runner as runner_mod
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    recorded: dict = {}
+    original = runner_mod.preflight_check
+
+    def _spy(config, **kwargs):
+        recorded.update(kwargs)
+        return original(config, **kwargs)
+
+    monkeypatch.setattr(runner_mod, "preflight_check", _spy)
+    config_dict = _real_constructed_config(tmp_path, "pf-spy", end=CONSTRUCTED_END)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_real_git(),
+        endpoint_resolver=_resolver,
+        client=StubModelClient(_stub_response([_one_candidate(), _one_candidate()])),
+    )
+    # The run fails at the credential check (no credential), and run_pilot
+    # passed require_credential=True through the single source of truth.
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert recorded.get("require_credential") is True

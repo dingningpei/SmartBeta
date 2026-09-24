@@ -93,6 +93,8 @@ from smart_beta.pilot.data import PilotData
 from smart_beta.pilot.design import (
     ProposalDesign,
     build_design,
+    build_holdout_identity,
+    build_partition,
     resolve_factor_spec,
 )
 from smart_beta.pilot.firewall import FirewallViolation
@@ -130,6 +132,9 @@ from smart_beta.research.proposal import ProposalEntry, ResearchProposal
 __all__ = [
     "RunnerError",
     "PreflightError",
+    "PreflightCheck",
+    "PreflightReport",
+    "preflight_check",
     "GitProbe",
     "RunOutcome",
     "run_pilot",
@@ -153,7 +158,16 @@ class RunnerError(ValueError):
 
 
 class PreflightError(RunnerError):
-    """A preflight check failed closed before any model call."""
+    """A preflight check failed closed before any model call.
+
+    ``report`` carries the partial :class:`PreflightReport` (every check that
+    ran plus its pass/fail detail) when the failure happened after config
+    resolution; it is ``None`` when the config itself could not be resolved.
+    """
+
+    def __init__(self, message: str, *, report: "PreflightReport | None" = None) -> None:
+        super().__init__(message)
+        self.report = report
 
 
 # ---------------------------------------------------------------------------
@@ -371,11 +385,28 @@ class GitProbe:
     def __init__(self, repo_root: str | Path) -> None:
         self._root = Path(repo_root)
 
+    def _subprocess_env(self) -> dict[str, str]:
+        """The environment for a git subprocess, with every credential removed.
+
+        Defense in depth: even when the runner still holds the model credential
+        in its own process environment (preflight runs before the side-effecting
+        capture), no ``git`` subprocess can ever inherit it.
+        """
+        env = dict(os.environ)
+        for name in (
+            MODEL_CREDENTIAL_ENV,
+            MODEL_AUTH_TOKEN_ENV,
+            *DATA_CREDENTIAL_ENV_VARS,
+        ):
+            env.pop(name, None)
+        return env
+
     def _git(self, *args: str) -> str:
         result = subprocess.run(
             ["git", "-C", str(self._root), *args],
             capture_output=True,
             text=True,
+            env=self._subprocess_env(),
         )
         if result.returncode != 0:
             raise PreflightError(
@@ -402,6 +433,7 @@ class GitProbe:
             ],
             capture_output=True,
             text=True,
+            env=self._subprocess_env(),
         )
         return result.returncode == 0
 
@@ -1017,6 +1049,411 @@ def _check_exact_commit(
     return head
 
 
+# ---------------------------------------------------------------------------
+# side-effect-free preflight barrier
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PreflightCheck:
+    """One named preflight check and its pass/fail disposition."""
+
+    name: str
+    passed: bool
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "passed": self.passed, "detail": self.detail}
+
+
+@dataclass(frozen=True)
+class PreflightReport:
+    """The side-effect-free result of :func:`preflight_check`.
+
+    Carries every check (name + pass/fail + detail) plus the frozen identities
+    and budgets a planner records at the preflight barrier. The live
+    ``resolved`` config and ``pilot_data`` are attached so :func:`run_pilot`
+    can reuse the exact validated objects (one source of truth); they are
+    deliberately excluded from :meth:`to_dict` because they are not evidence.
+    """
+
+    checks: tuple[PreflightCheck, ...]
+    approved_config_hash: str
+    config_hash: str
+    run_id: str
+    run_mode: str
+    git_head: str
+    phase9_commit: str
+    bound_git_commit: str | None
+    prompt_template_hash: str
+    prompt_template_path: str
+    fixture_tree_id: str
+    holdout_identity: str
+    family_id: str
+    model_id: str
+    price_table_id: str | None
+    budgets: Mapping[str, Any]
+    resolved: ResolvedConfig = field(repr=False, compare=False)
+    pilot_data: PilotData | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def passed(self) -> bool:
+        return all(check.passed for check in self.checks)
+
+    def check(self, name: str) -> PreflightCheck | None:
+        """Return the named check result, or ``None`` if it never ran."""
+        for item in self.checks:
+            if item.name == name:
+                return item
+        return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "checks": [check.to_dict() for check in self.checks],
+            "approved_config_hash": self.approved_config_hash,
+            "config_hash": self.config_hash,
+            "run_id": self.run_id,
+            "run_mode": self.run_mode,
+            "git_head": self.git_head,
+            "phase9_commit": self.phase9_commit,
+            "bound_git_commit": self.bound_git_commit,
+            "prompt_template_hash": self.prompt_template_hash,
+            "prompt_template_path": self.prompt_template_path,
+            "fixture_tree_id": self.fixture_tree_id,
+            "holdout_identity": self.holdout_identity,
+            "family_id": self.family_id,
+            "model_id": self.model_id,
+            "price_table_id": self.price_table_id,
+            "budgets": dict(self.budgets),
+        }
+
+
+class _PreflightFailure(Exception):
+    """Internal short-circuit carrier for one failed named check."""
+
+    def __init__(self, name: str, detail: str) -> None:
+        super().__init__(detail)
+        self.name = name
+        self.detail = detail
+
+
+def _budget_identities(resolved: ResolvedConfig) -> dict[str, Any]:
+    budgets = resolved.budgets
+    return {
+        "proposals": budgets.proposals,
+        "statistical_m": budgets.statistical_m,
+        "invocation_ceiling": budgets.invocation_ceiling,
+        "llm_tokens": budgets.llm_tokens,
+        "llm_input_tokens": budgets.llm_input_tokens,
+        "llm_output_tokens": budgets.llm_output_tokens,
+        "llm_cost": budgets.llm_cost,
+        "wall_clock_seconds": budgets.wall_clock_seconds,
+        "max_provider_retries": budgets.max_provider_retries,
+        "max_output_tokens": resolved.model.max_output_tokens,
+        "timeout_seconds": resolved.model.timeout_seconds,
+    }
+
+
+def _build_preflight_report(
+    resolved: ResolvedConfig,
+    pilot_data: PilotData | None,
+    *,
+    approved_config_hash: str,
+    git_head: str,
+    phase9_commit: str,
+    holdout_identity: str,
+    checks: Sequence[PreflightCheck],
+) -> PreflightReport:
+    bound = resolved.git_baseline.get("bound_git_commit")
+    price_table_id = resolved.model.settings.get("price_table_id")
+    return PreflightReport(
+        checks=tuple(checks),
+        approved_config_hash=approved_config_hash,
+        config_hash=resolved.config_hash,
+        run_id=resolved.run_id,
+        run_mode=resolved.run_mode,
+        git_head=git_head,
+        phase9_commit=phase9_commit,
+        bound_git_commit=None if bound is None else str(bound),
+        prompt_template_hash=resolved.prompt_template_hash,
+        prompt_template_path=resolved.prompt_template_path,
+        fixture_tree_id=resolved.dataset.fixture_tree_id,
+        holdout_identity=holdout_identity,
+        family_id=resolved.config.family_id,
+        model_id=resolved.model.model_id,
+        price_table_id=None if price_table_id is None else str(price_table_id),
+        budgets=_budget_identities(resolved),
+        resolved=resolved,
+        pilot_data=pilot_data,
+    )
+
+
+def preflight_check(
+    config: PilotConfig,
+    *,
+    approved_config_hash: str,
+    repo: Path | str,
+    config_path: Path | str | None = None,
+    git: GitProbe | None = None,
+    predecessor_run_id: str | None = None,
+    predecessor_journal_path: Path | str | None = None,
+    require_credential: bool = False,
+) -> PreflightReport:
+    """Run every Pilot-1A preflight check with **no** side effects.
+
+    This is the single source of truth for preflight: :func:`run_pilot` calls
+    it (with ``require_credential=True`` in real mode) before doing any
+    side-effecting step. It resolves and validates the config, checks the
+    approved hash, the sealed baseline, the real-mode exact-commit binding and
+    the single permitted untracked config path, the fixture tree id and
+    per-file hashes (through the offline G1 loader with the frozen cap), the
+    section-17 retry rule and the section-26d single-run guard, the base-URL /
+    proxy refusal, the provider/model/effort/price/ceiling/endpoint freeze, the
+    endpoint parse (**without** DNS) and, only when ``require_credential`` is
+    true, that the model credential is *present* (its value is never read back,
+    returned, stored or logged).
+
+    It runs under the total network tripwire. It creates no file or directory,
+    writes no journal, performs no DNS lookup and makes no model call. On
+    failure it raises :class:`PreflightError` (fail closed) whose ``report``
+    carries the checks that ran.
+    """
+    resolved_repo = Path(repo)
+    probe = git if git is not None else GitProbe(resolved_repo)
+    resolved_path = None if config_path is None else Path(config_path)
+    predecessor_path = (
+        None
+        if predecessor_journal_path is None
+        else Path(predecessor_journal_path)
+    )
+
+    from smart_beta.pilot.config import load_pilot_data
+
+    checks: list[PreflightCheck] = []
+    resolved: ResolvedConfig | None = None
+    pilot_data: PilotData | None = None
+    head = ""
+    phase9_commit = ""
+    holdout_identity = ""
+
+    install_network_tripwire()
+    try:
+        try:
+            resolved = resolve_config(config)
+        except ConfigError as exc:
+            raise _PreflightFailure("config_resolution", str(exc)) from exc
+        checks.append(PreflightCheck("config_resolution", True, ""))
+
+        if not isinstance(approved_config_hash, str) or not approved_config_hash:
+            raise _PreflightFailure(
+                "approved_config_hash", "an approved config hash is required"
+            )
+        if resolved.config_hash != approved_config_hash:
+            raise _PreflightFailure(
+                "approved_config_hash",
+                "the config hash does not match the approved hash "
+                f"(computed {resolved.config_hash}, approved {approved_config_hash})",
+            )
+        checks.append(
+            PreflightCheck("approved_config_hash", True, resolved.config_hash)
+        )
+
+        real_mode = resolved.run_mode == "real"
+
+        for name in BASE_URL_OR_PROXY_ENV_VARS:
+            if os.environ.get(name):
+                raise _PreflightFailure(
+                    "base_url_proxy",
+                    f"{name} is set; a base-URL or proxy override would change "
+                    "the frozen provider endpoint and is refused",
+                )
+        checks.append(PreflightCheck("base_url_proxy", True, ""))
+
+        if require_credential:
+            if MODEL_CREDENTIAL_ENV not in os.environ or not os.environ.get(
+                MODEL_CREDENTIAL_ENV
+            ):
+                raise _PreflightFailure(
+                    "credential_presence",
+                    f"real mode requires a non-empty {MODEL_CREDENTIAL_ENV} in "
+                    "the environment; refusing before any call",
+                )
+            checks.append(PreflightCheck("credential_presence", True, "present"))
+        else:
+            checks.append(
+                PreflightCheck("credential_presence", True, "not-required")
+            )
+
+        checks.append(
+            PreflightCheck("provider_freeze", True, resolved.model.provider)
+        )
+
+        head = probe.head_commit()
+        phase9_commit = str(resolved.git_baseline.get("phase9_complete", ""))
+        if not phase9_commit:
+            raise _PreflightFailure(
+                "sealed_baseline", "config.git_baseline.phase9_complete is missing"
+            )
+        if not probe.is_ancestor(phase9_commit, head):
+            raise _PreflightFailure(
+                "sealed_baseline",
+                f"HEAD {head} does not descend from the sealed baseline "
+                f"{phase9_commit}",
+            )
+        checks.append(PreflightCheck("sealed_baseline", True, phase9_commit))
+
+        if real_mode:
+            try:
+                head = _check_exact_commit(
+                    probe, resolved, repo=resolved_repo, config_path=resolved_path
+                )
+            except PreflightError as exc:
+                raise _PreflightFailure("exact_commit_binding", str(exc)) from exc
+            checks.append(PreflightCheck("exact_commit_binding", True, head))
+        else:
+            if not probe.is_clean():
+                raise _PreflightFailure(
+                    "working_tree", "the working tree is dirty; refusing to run"
+                )
+            checks.append(PreflightCheck("working_tree", True, ""))
+
+        tree_id = probe.tree_id(resolved.dataset.fixture_dir)
+        if tree_id != resolved.dataset.fixture_tree_id:
+            raise _PreflightFailure(
+                "fixture_tree_id",
+                "the fixture directory git tree id does not match the frozen "
+                f"config (got {tree_id}, expected {resolved.dataset.fixture_tree_id})",
+            )
+        checks.append(PreflightCheck("fixture_tree_id", True, tree_id))
+
+        try:
+            _check_retry_rule(
+                resolved_repo,
+                resolved.run_id,
+                predecessor_run_id,
+                predecessor_path,
+            )
+        except PreflightError as exc:
+            raise _PreflightFailure("retry_rule", str(exc)) from exc
+        checks.append(PreflightCheck("retry_rule", True, ""))
+
+        if real_mode:
+            try:
+                _single_run_guard(
+                    resolved_repo / "pilot_runs" / "pilot1a",
+                    run_id=resolved.run_id,
+                    predecessor_run_id=predecessor_run_id,
+                )
+            except PreflightError as exc:
+                raise _PreflightFailure("single_run_guard", str(exc)) from exc
+            checks.append(PreflightCheck("single_run_guard", True, ""))
+        else:
+            checks.append(
+                PreflightCheck("single_run_guard", True, "not-real-mode")
+            )
+
+        endpoint = parse_endpoint(resolved.model.endpoint)
+        checks.append(
+            PreflightCheck("endpoint_parse", True, f"{endpoint[0]}:{endpoint[1]}")
+        )
+
+        try:
+            pilot_data = load_pilot_data(resolved, repo=resolved_repo)
+        except Exception as exc:  # noqa: BLE001 - the G1 boundary fails closed
+            raise _PreflightFailure(
+                "fixture_integrity", f"fixture / PIT load failed: {exc}"
+            ) from exc
+        checks.append(PreflightCheck("fixture_integrity", True, ""))
+
+        artifact_directory = resolved_repo / resolved.artifact_destination
+        canonical_run_directory = (
+            resolved_repo / "pilot_runs" / "pilot1a" / resolved.run_id
+        )
+        existing = sorted(
+            {
+                path
+                for path in (artifact_directory, canonical_run_directory)
+                if path.exists()
+            },
+            key=str,
+        )
+        if existing:
+            raise _PreflightFailure(
+                "artifact_directory_available",
+                "the run_id or artifact directory already exists; runs are "
+                "immutable and are never reused or overwritten: "
+                + ", ".join(str(path) for path in existing),
+            )
+        journal_path = artifact_directory / ArtifactLayout().journal
+        if journal_path.exists():
+            raise _PreflightFailure(
+                "artifact_directory_available",
+                f"the run journal {journal_path} already exists; runs are "
+                "immutable and are never continued in place",
+            )
+        checks.append(
+            PreflightCheck(
+                "artifact_directory_available", True, str(artifact_directory)
+            )
+        )
+
+        try:
+            holdout_identity = build_holdout_identity(
+                partition=build_partition(resolved.partition_dates),
+                pilot_data=pilot_data,
+            ).holdout_id
+        except Exception as exc:  # noqa: BLE001 - the pure identity fails closed
+            raise _PreflightFailure("holdout_identity", str(exc)) from exc
+        checks.append(
+            PreflightCheck("holdout_identity", True, holdout_identity)
+        )
+
+        return _build_preflight_report(
+            resolved,
+            pilot_data,
+            approved_config_hash=approved_config_hash,
+            git_head=head,
+            phase9_commit=phase9_commit,
+            holdout_identity=holdout_identity,
+            checks=checks,
+        )
+    except _PreflightFailure as failure:
+        checks.append(PreflightCheck(failure.name, False, failure.detail))
+        report = None
+        if resolved is not None:
+            report = _build_preflight_report(
+                resolved,
+                pilot_data,
+                approved_config_hash=approved_config_hash,
+                git_head=head,
+                phase9_commit=phase9_commit,
+                holdout_identity=holdout_identity,
+                checks=checks,
+            )
+        raise PreflightError(
+            f"preflight check {failure.name!r} failed: {failure.detail}",
+            report=report,
+        ) from failure
+    except PreflightError as exc:
+        # A helper raised a bare PreflightError; attach the checks that ran.
+        if exc.report is None and resolved is not None:
+            checks.append(PreflightCheck("preflight", False, str(exc)))
+            report = _build_preflight_report(
+                resolved,
+                pilot_data,
+                approved_config_hash=approved_config_hash,
+                git_head=head,
+                phase9_commit=phase9_commit,
+                holdout_identity=holdout_identity,
+                checks=checks,
+            )
+            raise PreflightError(str(exc), report=report) from exc
+        raise
+    finally:
+        restore_network_tripwire()
+
+
 def _preflight(
     config: PilotConfig,
     *,
@@ -1028,31 +1465,46 @@ def _preflight(
     config_path: Path | None = None,
     endpoint_resolver: Callable[[str, int], Sequence[str]] | None = None,
 ) -> _RunContext:
-    """Run every preflight check, failing closed before any model call."""
-    if not isinstance(approved_config_hash, str) or not approved_config_hash:
-        raise PreflightError("an approved config hash is required")
+    """Validate through :func:`preflight_check`, then do the side effects.
+
+    All checks live in :func:`preflight_check` (one source of truth); this
+    wrapper calls it with ``require_credential=True`` in real mode, then
+    performs the only side-effecting steps: capture-then-delete the model
+    credential, install the real endpoint allowlist (or the total tripwire in
+    dry-run mode) and create the run directory and ``run_started`` journal.
+    """
     try:
-        resolved = resolve_config(config)
+        probe_resolved = resolve_config(config)
     except ConfigError as exc:
         raise PreflightError(f"config resolution failed: {exc}") from exc
+    real_mode = probe_resolved.run_mode == "real"
 
-    if resolved.config_hash != approved_config_hash:
-        raise PreflightError(
-            "the config hash does not match the approved hash "
-            f"(computed {resolved.config_hash}, approved {approved_config_hash})"
-        )
+    report = preflight_check(
+        config,
+        approved_config_hash=approved_config_hash,
+        repo=repo,
+        config_path=config_path,
+        git=git,
+        predecessor_run_id=predecessor_run_id,
+        predecessor_journal_path=predecessor_journal_path,
+        require_credential=real_mode,
+    )
+    resolved = report.resolved
+    assert report.pilot_data is not None  # a passing report always loaded it
+    pilot_data = report.pilot_data
+    head = report.git_head
 
-    real_mode = resolved.run_mode == "real"
     credential: str | None = None
     if real_mode:
-        # Capture-then-delete before any subprocess (e.g. git) can inherit it.
+        # Capture-then-delete before any later subprocess can inherit it. The
+        # git probe additionally strips credentials from every subprocess env.
         credential = capture_model_credential()
     else:
         scrub_credentials(model_credentials=True)
 
-    # Install the network guard before any adapter or data work: a total
-    # tripwire in dry-run/stub mode, or the pinned-endpoint allowlist in real
-    # mode. ``urllib`` stays blocked in both.
+    # Install the network guard before any adapter work: a total tripwire in
+    # dry-run/stub mode, or the pinned-endpoint allowlist in real mode.
+    # ``urllib`` stays blocked in both.
     if real_mode:
         endpoint = parse_endpoint(resolved.model.endpoint)
         resolver = (
@@ -1070,43 +1522,11 @@ def _preflight(
     else:
         install_network_tripwire()
 
-    head = git.head_commit()
-    phase9_commit = str(resolved.git_baseline.get("phase9_complete", ""))
-    if not phase9_commit:
-        raise PreflightError("config.git_baseline.phase9_complete is missing")
-    if not git.is_ancestor(phase9_commit, head):
-        raise PreflightError(
-            f"HEAD {head} does not descend from the sealed baseline {phase9_commit}"
-        )
-    if real_mode:
-        # Real mode re-checks the working tree itself so that the one permitted
-        # untracked path (the config being run) is not mistaken for dirtiness.
-        head = _check_exact_commit(git, resolved, repo=repo, config_path=config_path)
-    elif not git.is_clean():
-        raise PreflightError("the working tree is dirty; refusing to run")
-    tree_id = git.tree_id(resolved.dataset.fixture_dir)
-    if tree_id != resolved.dataset.fixture_tree_id:
-        raise PreflightError(
-            "the fixture directory git tree id does not match the frozen config "
-            f"(got {tree_id}, expected {resolved.dataset.fixture_tree_id})"
-        )
-
-    predecessor_path = _check_retry_rule(
-        repo, resolved.run_id, predecessor_run_id, predecessor_journal_path
+    predecessor_path = (
+        None
+        if predecessor_run_id is None
+        else _resolve_predecessor(repo, predecessor_run_id, predecessor_journal_path)
     )
-    if real_mode:
-        _single_run_guard(
-            repo / "pilot_runs" / "pilot1a",
-            run_id=resolved.run_id,
-            predecessor_run_id=predecessor_run_id,
-        )
-
-    from smart_beta.pilot.config import load_pilot_data
-
-    try:
-        pilot_data = load_pilot_data(resolved, repo=repo)
-    except Exception as exc:  # noqa: BLE001 - the G1 boundary fails closed
-        raise PreflightError(f"fixture / PIT load failed: {exc}") from exc
 
     artifact_directory = repo / resolved.artifact_destination
     canonical_run_directory = repo / "pilot_runs" / "pilot1a" / resolved.run_id
