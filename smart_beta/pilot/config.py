@@ -66,6 +66,7 @@ from smart_beta.pilot.data import (
 )
 from smart_beta.pilot.design import (
     PILOT_TRANSACTION_COST_BPS,
+    DesignInputError,
     PilotPartitionDates,
     build_frozen_evaluation_spec_template,
     frozen_partition_dates,
@@ -118,6 +119,9 @@ __all__ = [
     "REAL_FAMILY_ID",
     "PROMPT_TEMPLATE_REFERENCE",
     "DRY_RUN_DATE_CAP",
+    "DRY_RUN_CONFIG_RELATIVE",
+    "REAL_CONFIG_RELATIVE",
+    "LEGACY_V1_CONFIG_RELATIVES",
     # resolved view
     "BudgetRules",
     "ModelSpec",
@@ -168,6 +172,16 @@ DRY_RUN_FAMILY_SOURCE = (
 #: P1A-G3 (``smart_beta/pilot/prompt.py``); a ``module:attr`` reference avoids
 #: duplicating the frozen text in a second file while still binding its hash.
 PROMPT_TEMPLATE_REFERENCE = "smart_beta.pilot.prompt:PROMPT_TEMPLATE_TEXT"
+
+#: The frozen committed Pilot-1A configuration files (section 26b, v2).
+DRY_RUN_CONFIG_RELATIVE = "pilot_configs/pilot1a-dryrun-v2.json"
+REAL_CONFIG_RELATIVE = "pilot_configs/pilot1a-v2.template.json"
+#: The superseded v1 configuration files. They are preserved byte-for-byte
+#: and are refused by the corrected preflight.
+LEGACY_V1_CONFIG_RELATIVES = (
+    "pilot_configs/pilot1a-dryrun.json",
+    "pilot_configs/pilot1a.template.json",
+)
 
 #: The frozen Gate-B fixture directory, relative to the repository root.
 GATE_B_FIXTURE_DIR = "tests/fixtures/tiingo/phase5a_gate_b"
@@ -470,7 +484,13 @@ def build_search_policy(*, family_id: str) -> SearchPolicy:
 
 
 def build_decision_policy(*, search_policy: SearchPolicy) -> DecisionPolicy:
-    """The corrected §16 decision policy (ACCEPT structurally reachable)."""
+    """The corrected §16/§26b decision policy (ACCEPT structurally reachable).
+
+    Section-26b correction 2 removes ``PARAMETER_SENSITIVITY_TABLE`` from
+    ``required_evidence``. No empty table is fabricated or required: the
+    corrected EvaluationSpec no longer selects the ``PARAMETER_SENSITIVITY``
+    metric at all.
+    """
     return DecisionPolicy(
         required_evidence=(
             EvidenceSection.PARTITION,
@@ -478,7 +498,6 @@ def build_decision_policy(*, search_policy: SearchPolicy) -> DecisionPolicy:
             EvidenceSection.METRIC_TABLES,
             EvidenceSection.COST_ADJUSTED_SERIES,
             EvidenceSection.SUBPERIOD_TABLE,
-            EvidenceSection.PARAMETER_SENSITIVITY_TABLE,
             EvidenceSection.PURGE_COUNTS,
             EvidenceSection.HOLDOUT,
         ),
@@ -671,8 +690,11 @@ def build_dry_run_config_dict(*, repo: Path | None = None) -> dict[str, Any]:
     )
     search_policy = build_search_policy(family_id=DRY_RUN_FAMILY_ID)
     decision_policy = build_decision_policy(search_policy=search_policy)
-    template = build_frozen_evaluation_spec_template()
-    run_id = "pilot1a-dryrun-v1"
+    # Section-26b correction 3: the template (and therefore its subperiod
+    # boundaries) is derived from *this* config's authorized development
+    # window, not from the real holdout start.
+    template = build_frozen_evaluation_spec_template(DRY_RUN_PARTITION)
+    run_id = "pilot1a-dryrun-v2"
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -753,8 +775,8 @@ def build_real_run_template_dict(*, repo: Path | None = None) -> dict[str, Any]:
     )
     search_policy = build_search_policy(family_id=REAL_FAMILY_ID)
     decision_policy = build_decision_policy(search_policy=search_policy)
-    template = build_frozen_evaluation_spec_template()
-    run_id = "pilot1a-real-v1"
+    template = build_frozen_evaluation_spec_template(frozen_partition_dates())
+    run_id = "pilot1a-real-v2"
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -1138,12 +1160,32 @@ def resolve_config(config: PilotConfig) -> ResolvedConfig:
             "config.prompt_template_hash"
         )
 
-    # -- frozen §16 equality / consistency ------------------------------
-    frozen_template = build_frozen_evaluation_spec_template()
+    # -- frozen §26b equality / consistency -----------------------------
+    # The expected template is derived from *this* config's partition dates, so
+    # a config carrying the section-16 hardcoded boundary (for example a v1
+    # config whose last subperiod boundary is the real holdout start) is
+    # refused fail-closed.
+    if EvidenceSection.PARAMETER_SENSITIVITY_TABLE in decision_policy.required_evidence:
+        raise ConfigValidationError(
+            "config.decision_policy.required_evidence must not carry "
+            "parameter_sensitivity_table (section-26b correction 2); the "
+            "corrected EvaluationSpec does not select PARAMETER_SENSITIVITY"
+        )
+    try:
+        frozen_template = build_frozen_evaluation_spec_template(partition_dates)
+    except DesignInputError as exc:
+        raise ConfigValidationError(
+            "config.partition_dates cannot carry the frozen section-26b "
+            f"EvaluationSpec template: {exc}"
+        ) from exc
     if evaluation_template.to_dict() != frozen_template.to_dict():
         raise ConfigValidationError(
-            "config.evaluation_spec_template must equal the frozen section-16 "
-            "template (C = 10 bps ONE_WAY, the frozen windows and grid)"
+            "config.evaluation_spec_template must equal the frozen section-26b "
+            "template derived from config.partition_dates (C = 10 bps ONE_WAY, "
+            "the frozen windows, the single primary parameter point and the "
+            "config's own subperiod boundaries); a template with "
+            "PARAMETER_SENSITIVITY or the real holdout start hardcoded is "
+            "refused"
         )
     if evaluation_template.cost_model.transaction_cost_bps != PILOT_TRANSACTION_COST_BPS:
         raise ConfigValidationError(

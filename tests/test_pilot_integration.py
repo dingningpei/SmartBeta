@@ -134,6 +134,7 @@ def test_constructed_adversarial_run_full_path(adversarial_run):
     assert outcome.invocation_count == 3
     assert outcome.reconstruction_status == "RECONSTRUCTION_EXACT"
     assert outcome.firewall_audit_status == "PASS"
+    assert outcome.temporal_firewall_status == "PASS"
     assert outcome.secret_sweep_status == "PASS"
 
     read = read_journal(outcome.journal_path)
@@ -219,6 +220,7 @@ def test_gate_b_offline_run_with_dry_run_cap(gate_b_run):
     assert outcome.invocation_count == 3
     assert outcome.reconstruction_status == "RECONSTRUCTION_EXACT"
     assert outcome.firewall_audit_status == "PASS"
+    assert outcome.temporal_firewall_status == "PASS"
     assert outcome.secret_sweep_status == "PASS"
 
     config = load_config_dict(config_dict)
@@ -228,6 +230,53 @@ def test_gate_b_offline_run_with_dry_run_cap(gate_b_run):
     assert pilot_data.provenance.max_observation_date < _DRY_RUN_CAP
     assert pilot_data.provenance.date_cap == _DRY_RUN_CAP
     assert resolved.partition_dates.holdout_end.isoformat() < _DRY_RUN_CAP
+
+
+def test_gate_b_visible_evidence_ends_before_the_dry_run_holdout(gate_b_run):
+    """Section-26b G5R: every generator-visible source date is inside D.
+
+    The post-hoc ``temporal_firewall_audit.json`` (the same evidence the
+    package ships) must be green and must show that the maximum source end of
+    every generator-visible empirical item is at or before the dry-run holdout
+    start, i.e. the last visible source date is strictly before the holdout.
+    """
+    from smart_beta.pilot.contracts import ArtifactLayout
+
+    _, config_dict, outcome = gate_b_run
+    resolved = resolve_config(load_config_dict(config_dict))
+    is_start = resolved.partition_dates.is_start.isoformat()
+    holdout_start = resolved.partition_dates.holdout_start.isoformat()
+    audit_path = (
+        outcome.artifact_directory / ArtifactLayout().temporal_firewall_audit
+    )
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["status"] == "PASS", audit["findings"]
+    assert audit["authorized_start"] == is_start
+    assert audit["authorized_end_exclusive"] == holdout_start
+
+    rows = audit["rows"]
+    categories = {row["category"] for row in rows}
+    # The check is non-vacuous: real fold and subperiod coverage was audited.
+    assert "fold" in categories
+    assert "subperiod" in categories
+    assert all(row["verdict"] == "PASS" for row in rows)
+    # The partition cross-check rows (TF-1) are not generator-visible items;
+    # the generator-visible empirical items are the fold and subperiod rows.
+    visible_categories = {"fold", "subperiod"}
+    empirical = [
+        row
+        for row in rows
+        if row["category"] in visible_categories
+        and row["source_end_exclusive"] is not None
+    ]
+    assert empirical
+    assert all(row["source_start"] is not None for row in empirical)
+    assert all(row["source_start"] >= is_start for row in empirical)
+    assert all(row["source_end_exclusive"] <= holdout_start for row in empirical)
+    maximum = max(row["source_end_exclusive"] for row in empirical)
+    assert maximum <= holdout_start
+    # PARAMETER_SENSITIVITY is removed, so no forbidden coverage table exists.
+    assert "parameter_sensitivity" not in categories
 
 
 def test_gate_b_holdout_is_consumed_at_most_once(gate_b_run):
