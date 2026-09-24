@@ -58,6 +58,7 @@ from smart_beta.pilot.runner import (
     build_provider_client,
     build_reconstruction_hooks,
     count_raw_candidates,
+    credential_value_sweep,
     install_network_tripwire,
     preflight_check,
     restore_network_tripwire,
@@ -2332,3 +2333,167 @@ def test_anthropic_precall_projection_still_includes_the_schema(tmp_path):
         / 2
     )
     assert _projected_input_tokens(resolved, prompt) == expected
+
+
+# ---------------------------------------------------------------------------
+# runner-side credential VALUE sweep (provider credential names the G6 sweep
+# does not value-check, e.g. DEEPSEEK_API_KEY)
+# ---------------------------------------------------------------------------
+
+
+def test_credential_value_sweep_detects_and_reports_without_the_value(tmp_path):
+    value = "sk-unit-test-planted-value-never-print"
+    (tmp_path / "clean.txt").write_text("nothing here", encoding="utf-8")
+    (tmp_path / "records").mkdir()
+    (tmp_path / "records" / "raw.jsonl").write_text(
+        json.dumps({"x": value}) + "\n", encoding="utf-8"
+    )
+    result = credential_value_sweep(
+        tmp_path, env_var="DEEPSEEK_API_KEY", value=value
+    )
+    assert result.passed is False
+    assert result.files_checked == 2
+    assert result.env_var == "DEEPSEEK_API_KEY"
+    # The summary and its textual form never carry the value.
+    assert value not in repr(result)
+    assert value not in json.dumps(result.to_dict())
+
+
+def test_credential_value_sweep_passes_on_a_clean_directory(tmp_path):
+    (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "b.jsonl").write_text("{}\n", encoding="utf-8")
+    result = credential_value_sweep(
+        tmp_path, env_var="ANTHROPIC_API_KEY", value="sk-not-present-anywhere"
+    )
+    assert result.passed is True
+    assert result.files_checked == 2
+    assert result.to_dict() == {
+        "env_var": "ANTHROPIC_API_KEY",
+        "passed": True,
+        "files_checked": 2,
+    }
+
+
+def test_credential_value_sweep_handles_a_missing_directory(tmp_path):
+    result = credential_value_sweep(
+        tmp_path / "does-not-exist",
+        env_var="DEEPSEEK_API_KEY",
+        value="sk-whatever",
+    )
+    assert result.passed is True
+    assert result.files_checked == 0
+
+
+def _leak_stub_response(value: str) -> ModelResponse:
+    """A raw artifact that carries the credential value into the journal.
+
+    It has zero candidates, so the real-mode one-candidate guard stops the run
+    after the generation event is journaled.
+    """
+    return ModelResponse(
+        text=canonical_json({"candidates": [], "provenance_note": value}),
+        model_id=config_mod.DEEPSEEK_MODEL_ID,
+        stop_reason="end_turn",
+        input_tokens=5,
+        output_tokens=5,
+    )
+
+
+def test_deepseek_credential_value_leak_fails_the_package_closed(
+    tmp_path, monkeypatch, capsys
+):
+    _set_deepseek_credential(monkeypatch)
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-leak")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=StubModelClient(_leak_stub_response(_DEEPSEEK_CREDENTIAL)),
+    )
+    captured = capsys.readouterr()
+    # The value is neither printed nor present in any outcome text.
+    assert _DEEPSEEK_CREDENTIAL not in captured.out
+    assert _DEEPSEEK_CREDENTIAL not in captured.err
+    assert _DEEPSEEK_CREDENTIAL not in json.dumps(outcome.to_dict())
+    assert _DEEPSEEK_CREDENTIAL not in outcome.detail
+    assert outcome.package is None
+    assert outcome.package_error is not None
+    assert "CredentialValueLeakError" in outcome.package_error
+    assert _DEEPSEEK_CREDENTIAL not in outcome.package_error
+    sweep = outcome.credential_value_sweep
+    assert sweep is not None
+    assert sweep.passed is False
+    assert sweep.env_var == "DEEPSEEK_API_KEY"
+    assert sweep.files_checked >= 1
+
+
+def test_deepseek_clean_run_passes_the_credential_value_sweep(
+    tmp_path, monkeypatch, capsys
+):
+    _set_deepseek_credential(monkeypatch)
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-clean-sweep")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=StubModelClient(_stub_response([_one_candidate(), _one_candidate()])),
+    )
+    captured = capsys.readouterr()
+    assert _DEEPSEEK_CREDENTIAL not in captured.out
+    assert _DEEPSEEK_CREDENTIAL not in captured.err
+    sweep = outcome.credential_value_sweep
+    assert sweep is not None
+    assert sweep.passed is True
+    assert sweep.env_var == "DEEPSEEK_API_KEY"
+    assert sweep.files_checked >= 1
+    assert outcome.package is not None
+    assert outcome.package_error is None
+    # The runner never wrote the captured value anywhere in the package.
+    for path in outcome.artifact_directory.rglob("*"):
+        if path.is_file():
+            assert _DEEPSEEK_CREDENTIAL.encode("utf-8") not in path.read_bytes()
+
+
+class _LeakThenCrashClient:
+    """Plant the credential value in the run directory, then crash."""
+
+    def __init__(self, directory: Path, value: str) -> None:
+        self._directory = Path(directory)
+        self._value = value
+
+    def complete(self, request):  # noqa: ANN001
+        self._directory.mkdir(parents=True, exist_ok=True)
+        (self._directory / "planted-leak.txt").write_text(
+            self._value, encoding="utf-8"
+        )
+        raise RuntimeError("constructed crash after planting a leak")
+
+
+def test_deepseek_interrupted_path_still_runs_the_credential_value_sweep(
+    tmp_path, monkeypatch, capsys
+):
+    _set_deepseek_credential(monkeypatch)
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-leak-crash")
+    run_directory = tmp_path / "run-ds-leak-crash"
+    client = _LeakThenCrashClient(run_directory, _DEEPSEEK_CREDENTIAL)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    captured = capsys.readouterr()
+    assert _DEEPSEEK_CREDENTIAL not in captured.out
+    assert _DEEPSEEK_CREDENTIAL not in captured.err
+    assert outcome.status is RunStatus.INTERRUPTED
+    sweep = outcome.credential_value_sweep
+    assert sweep is not None
+    assert sweep.passed is False
+    assert sweep.env_var == "DEEPSEEK_API_KEY"
+    assert outcome.package is None
+    assert outcome.package_error is not None
+    assert "CredentialValueLeakError" in outcome.package_error
+    assert _DEEPSEEK_CREDENTIAL not in json.dumps(outcome.to_dict())

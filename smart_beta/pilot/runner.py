@@ -138,6 +138,9 @@ from smart_beta.research.proposal import ProposalEntry, ResearchProposal
 __all__ = [
     "RunnerError",
     "PreflightError",
+    "CredentialValueLeakError",
+    "CredentialValueSweepResult",
+    "credential_value_sweep",
     "PreflightCheck",
     "PreflightReport",
     "preflight_check",
@@ -277,6 +280,16 @@ class PreflightError(RunnerError):
     def __init__(self, message: str, *, report: "PreflightReport | None" = None) -> None:
         super().__init__(message)
         self.report = report
+
+
+class CredentialValueLeakError(RunnerError):
+    """A captured provider credential value occurs in the run artifacts.
+
+    Raised by the runner-side :func:`credential_value_sweep` (which covers the
+    provider credential names the G6 sweep does not know). The message names
+    only the credential variable, the checked file count and the boolean
+    result; it never contains the value or any substring/hash of it.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +642,7 @@ class RunOutcome:
     temporal_firewall_status: str | None = None
     secret_sweep_status: str | None = None
     package_error: str | None = None
+    credential_value_sweep: CredentialValueSweepResult | None = None
     package: ArtifactPackage | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -651,6 +665,11 @@ class RunOutcome:
             "temporal_firewall_status": self.temporal_firewall_status,
             "secret_sweep_status": self.secret_sweep_status,
             "package_error": self.package_error,
+            "credential_value_sweep": (
+                None
+                if self.credential_value_sweep is None
+                else self.credential_value_sweep.to_dict()
+            ),
         }
 
 
@@ -2236,6 +2255,93 @@ def _predecessor_report_section(context: _RunContext) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class CredentialValueSweepResult:
+    """The runner-side credential value sweep summary (no secret material).
+
+    Carries only the credential variable **name**, a boolean result and the
+    number of files checked. It never carries the value or any
+    substring/hash of it, so it is safe to place in the run outcome and to
+    print.
+    """
+
+    env_var: str
+    passed: bool
+    files_checked: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "env_var": self.env_var,
+            "passed": self.passed,
+            "files_checked": self.files_checked,
+        }
+
+
+def credential_value_sweep(
+    directory: str | Path,
+    *,
+    env_var: str,
+    value: str,
+) -> CredentialValueSweepResult:
+    """Search every file under ``directory`` for the captured credential value.
+
+    The G6 :func:`~smart_beta.pilot.artifacts.secret_sweep` value-checks only
+    the names in :data:`~smart_beta.pilot.artifacts.CREDENTIAL_ENV_VARS`, which
+    does not include ``DEEPSEEK_API_KEY``. This runner-side sweep closes that
+    gap: it reads every file in the run's artifact directory (the journal, the
+    ``records/*`` extracts, the config, the manifest, ...) as raw bytes and
+    reports whether the captured value occurs anywhere.
+
+    Only the checked file count, the variable name and a boolean are returned;
+    the value (and any substring/hash of it) is never returned, stored,
+    logged or included in an error message. A file that cannot be read fails
+    the sweep closed.
+    """
+    root = Path(directory)
+    needle = value.encode("utf-8") if isinstance(value, str) else b""
+    checked = 0
+    found = False
+    read_error = False
+    if root.is_dir():
+        for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+            checked += 1
+            if found or read_error:
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                read_error = True
+                continue
+            if needle and needle in data:
+                found = True
+    passed = not found and not read_error
+    return CredentialValueSweepResult(
+        env_var=env_var, passed=passed, files_checked=checked
+    )
+
+
+def _runner_credential_value_sweep(
+    context: "_RunContext",
+) -> CredentialValueSweepResult | None:
+    """Sweep the run directory for the captured provider credential value.
+
+    Returns ``None`` when no credential was captured (dry-run/stub mode), so
+    the stub path is unaffected. Any sweep failure is recorded as failed (fail
+    closed) rather than raised, so the outcome is always returned.
+    """
+    if context.credential is None:
+        return None
+    env_var = provider_credential_env(context.resolved.model.provider)
+    try:
+        return credential_value_sweep(
+            context.artifact_directory, env_var=env_var, value=context.credential
+        )
+    except Exception:  # noqa: BLE001 - a sweep failure fails closed
+        return CredentialValueSweepResult(
+            env_var=env_var, passed=False, files_checked=0
+        )
+
+
 def _finalize(
     context: _RunContext,
     report: ReconstructionReport,
@@ -2244,6 +2350,10 @@ def _finalize(
     *,
     assemble: bool,
 ) -> RunOutcome:
+    # The runner-side credential value sweep runs on every finalize path
+    # (normal, INTERRUPTED/partial and no-assemble), so a leak is caught even
+    # when the G6 package cannot be assembled.
+    credential_sweep = _runner_credential_value_sweep(context)
     read = _read_or_none(context.journal_path)
     if read is None:
         return RunOutcome(
@@ -2253,6 +2363,7 @@ def _finalize(
             journal_path=context.journal_path,
             artifact_directory=context.artifact_directory,
             reconstruction_status=report.status.value,
+            credential_value_sweep=credential_sweep,
         )
     intents = sum(
         1 for record in read.records if record.kind is JournalKind.INVOCATION_INTENT
@@ -2276,6 +2387,7 @@ def _finalize(
             invocation_count=intents,
             reconstruction_status=report.status.value,
             temporal_firewall_status=None,
+            credential_value_sweep=credential_sweep,
         )
 
     report_markdown = None
@@ -2320,6 +2432,24 @@ def _finalize(
         package = None
         package_error = f"{type(exc).__name__}: {exc}"
 
+    # Fail the package closed when the captured credential value occurs
+    # anywhere in the run artifacts, even though the G6 sweep may not
+    # value-check that provider's variable name. The detail names only the
+    # variable, the file count and the result; never the value.
+    if credential_sweep is not None and not credential_sweep.passed:
+        leak_error = CredentialValueLeakError(
+            "credential value sweep failed for "
+            f"{credential_sweep.env_var}: the captured value occurs in the run "
+            f"artifact directory ({credential_sweep.files_checked} files checked)"
+        )
+        leak_detail = f"{type(leak_error).__name__}: {leak_error}"
+        package = None
+        package_error = (
+            leak_detail
+            if package_error is None
+            else f"{package_error}; {leak_detail}"
+        )
+
     return RunOutcome(
         run_id=context.resolved.run_id,
         status=status,
@@ -2339,6 +2469,7 @@ def _finalize(
             None if package is None else package.secret_sweep.status.value
         ),
         package_error=package_error,
+        credential_value_sweep=credential_sweep,
         package=package,
     )
 
