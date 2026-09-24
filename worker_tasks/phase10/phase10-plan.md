@@ -1026,14 +1026,24 @@ reconstructs or independently reimplements Phase-7 evaluation semantics.
     (`primary_horizon`, `primary_point.n_groups`,
     `primary_point.winsorization`, `spec.cost_model.transaction_cost_bps`).
   - For each fold, in partition order, immediately after `fold_portfolio =
-    evaluate_portfolio(sliced, …)`, the engine calls
-    `fold_trace_sink.record_fold(fold_key, role,
-    panel=sliced.copy(deep=True), portfolio=fold_portfolio)`.
+    evaluate_portfolio(sliced, …)` (the hook stays at this authorized
+    observation point), the engine calls `fold_trace_sink.record_fold(fold_key,
+    role, panel=<isolated deep copy of sliced>, portfolio=<isolated deep copy
+    of fold_portfolio>)`.
+    - The portfolio copy must isolate every mutable structure reachable
+      through the sink-visible object: at minimum `net_returns`,
+      `gross_returns`, `turnover`, `costs` and `accounting`.
+- **Observation-isolation invariant (frozen; amended after the P10-S-R2
+  review):** every mutable object visible to `fold_trace_sink` is isolated
+  from every mutable object subsequently used by authoritative Phase-7
+  execution. The sink shares **no** mutable state with authoritative engine
+  objects. "Read-only by contract" is **not** sufficient; isolation is by
+  copy.
 - **Observation only, never intervention:** the engine **ignores callback
   return values**. The sink has no mechanism for changing the panels the
   engine uses, portfolio results, parameters, control flow, metrics or
-  `EvaluationRecord` contents. The panel is passed as a deep copy, and the
-  engine uses no value that is read back from the sink.
+  `EvaluationRecord` contents. The engine uses no value that is read back
+  from the sink.
 - **Sole side effect:** a sink exception propagates and fails the
   evaluation closed **before** holdout consumption (step 8).
 - No other function or file changes.
@@ -1048,20 +1058,29 @@ reconstructs or independently reimplements Phase-7 evaluation semantics.
 - **Per fold, `rank_ic` / `pearson_ic`** =
   `rank_information_coefficient(trace.panel).per_date` /
   `information_coefficient(trace.panel).per_date`: the sealed P7-D primitive
-  applied to the engine's own traced object.
+  applied to the isolated copy of the engine's actual fold panel.
 - **Per fold, `net_long_short` / `gross_long_short`** =
-  `trace.portfolio.net_returns` / `.gross_returns`: the actual per-fold
-  execution output, neither recomputed nor sliced from a whole-sample
-  series.
+  `trace.portfolio.net_returns` / `.gross_returns`: the isolated copy of the
+  actual per-fold execution output, neither recomputed nor sliced from a
+  whole-sample series.
 - **Series mapping:** series map to Phase-7 `Series` (dates → `date`;
   non-finite values → `None`). Dates the primitive omits (fewer than 2
   finite pairs) stay absent; the preregistered `MissingnessPolicy` handles
   them downstream.
 - **Bundle:** `{schema: "inferential-series-v2", evaluation_record_hash =
-  record.content_hash, spec_hash, partition_id, primary: {horizon, n_groups,
-  winsorization, transaction_cost_bps} as reported by the engine, folds:
-  (fold_key, role, rank_ic, pearson_ic, net_long_short, gross_long_short,
-  bound: bool)}`, plus a `content_hash`.
+  record.content_hash, spec_hash, partition_ref_hash, primary: {horizon,
+  n_groups, winsorization, transaction_cost_bps} as reported by the engine,
+  folds: (fold_key, role, rank_ic, pearson_ic, net_long_short,
+  gross_long_short, bound)}`, plus a `content_hash`.
+  - **`partition_ref_hash`** is the deterministic SHA-256 identity of the
+    canonical persisted `record.partition` (`PartitionRef`) used for binding.
+    It is **not** asserted to equal Phase-7 `Partition.partition_id`, and no
+    compatibility alias named `partition_id` exists. If future code needs the
+    runtime Phase-7 partition identity, it must be exposed separately through
+    a future authorized, versioned interface.
+  - **`bound`** is a per-inferential-series mapping `{rank_ic: bool,
+    pearson_ic: bool, net_long_short: bool}`, not one boolean per fold
+    (approved interpretation).
   - The content hash follows §4.1's canonical rules, implemented locally;
     `smart_beta.science` is never imported.
   - **`alignment_digest` is removed**, because no authoritative Phase-7
@@ -1079,8 +1098,8 @@ reconstructs or independently reimplements Phase-7 evaluation semantics.
    `rank_information_coefficient(panel)`,
    `long_short_mean_tstat(portfolio.gross_returns)` and
    `long_short_mean_tstat(portfolio.net_returns)`.
-3. `spec_hash` and partition identity are consistent, and the primary
-   horizon matches.
+3. `spec_hash` and `partition_ref_hash` (computed from `record.partition`)
+   are consistent, and the primary horizon matches.
 4. A series is `bound` only if its estimand's metric was selected in
    `spec.metrics`. Mapping: `MEAN_RANK_IC` ↔ `rank_ic`; `MEAN_PEARSON_IC` ↔
    `ic`; `MEAN_NET_LONG_SHORT` ↔ `turnover_cost_adjusted`. An unbound,
@@ -1374,13 +1393,26 @@ the adversarial tests, the completion SHA, and `sealed files modified: NONE`
   8. Sink return values cannot influence engine execution: a sink returning
      arbitrary objects yields an identical record.
   9. Sink mutation of its received panel cannot alter the `EvaluationRecord`.
+  9b. **Adversarial portfolio mutation (added after the P10-S-R2 review):**
+      a malicious sink mutates every practically mutable sink-visible
+      portfolio component, at minimum `net_returns`, `gross_returns` and any
+      mutable accounting/table structure (`accounting`, `turnover`, `costs`).
+      Compared with the no-sink baseline, these mutations must not alter
+      subsequent Phase-7 metric computation, any `EvaluationRecord` field,
+      `EvaluationRecord.content_hash` or holdout semantics. The test must
+      prove isolation by mutation, not rely on object identity or a
+      "read-only" convention. A no-shared-mutable-state check (no
+      `numpy.shares_memory` between sink-visible and engine-held arrays) is
+      also required.
   10. A sink exception propagates and prevents holdout consumption (the
       `HoldoutRegistry` remains unconsumed).
   11. Fold metric binding is bit-equal in value and equal in `n_obs` to the
       corresponding `FoldResult`, including a winsorization ≠ 0 fixture and
       a multi-fold fixture where fold turnover differs from the global
       series.
-  12. `alignment_digest` does not exist in the amended contract.
+  12. `alignment_digest` does not exist in the amended contract, and the
+      bundle exposes `partition_ref_hash` with no `partition_id` alias.
+      `bound` is the per-series mapping.
   13. Missing, unbound or mismatched series (tampered record, wrong
       collector, duplicate or out-of-order folds, reused collector) fail
       closed with `SeriesBindingError`.
