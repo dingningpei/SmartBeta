@@ -31,8 +31,23 @@ Frozen surface (plan section 13)
   ``Callable[[ResearchProposal], ExperimentDesign]`` G5 wires into
   :meth:`smart_beta.research.loop.ResearchLoop.run_cycle`;
 * :func:`build_frozen_evaluation_spec_template` /
-  :func:`frozen_partition_dates` -- the section-16 declaration builders (see
-  the executability notes below).
+  :func:`subperiod_boundaries` / :func:`frozen_partition_dates` -- the
+  section-16 declaration builders (see the executability notes below).
+
+The section-26b freeze correction (H6-v1 adversarial evidence) changed the
+frozen template in three ways:
+
+1. ``MetricKey.PARAMETER_SENSITIVITY`` is removed and ``parameter_grid`` is
+   the single primary point ``(n_groups=3, horizon=1, cost_bps=C,
+   winsorization=0.01)``;
+2. the subperiod boundaries are derived **exclusively** from the supplied
+   authorized development window as ``(is_start, 2026-01-02, holdout_start)``
+   -- the real-run holdout start is never hardcoded into the template, so the
+   dry-run template ends its last subperiod at the dry-run holdout start
+   (``2026-05-01``);
+3. an unusable development window (the cut not strictly inside it, or any
+   boundary outside ``[is_start, holdout_start]``) is refused with the typed
+   :class:`SubperiodBoundaryError`.
 
 Data certification is **derived**, never defaulted
 --------------------------------------------------
@@ -58,16 +73,12 @@ Section-16 executability notes (pre-freeze fixes)
 -------------------------------------------------
 
 The frozen plan section 16 describes the evaluation template declaratively.
-Three of its literal values are not representable by the sealed P7-C
-contracts (plan section 16 already anticipates such "executability fixes
-discovered ... before any real-data evaluation and recorded as a pre-freeze
-fix"). :func:`build_frozen_evaluation_spec_template` applies the minimal
+Two of its literal values are not representable by the sealed P7-C contracts
+(plan section 16 already anticipates such "executability fixes discovered ...
+before any real-data evaluation and recorded as a pre-freeze fix").
+:func:`build_frozen_evaluation_spec_template` applies the minimal
 constructive fixes and documents each one:
 
-* ``subperiod_rule.boundaries=(2026-01-02,)`` has a single boundary, but
-  :class:`~smart_beta.evaluation.spec.SubperiodRule` requires at least two
-  distinct boundaries, so the evaluation window endpoints are included
-  (``2025-10-15`` and ``2026-07-01`` around the frozen cut ``2026-01-02``);
 * ``universe_variants=()`` is rejected by
   :class:`~smart_beta.evaluation.spec.EvaluationSpec` (non-empty required),
   so the single inert variant ``"all"`` is declared;
@@ -75,6 +86,12 @@ constructive fixes and documents each one:
   the sealed :class:`~smart_beta.evaluation.spec.SplitRule` requires positive
   integers, so ``walk_forward_fold_length=1`` (unused, ``folds=0``) and the
   inclusive holdout length are declared.
+
+The subperiod boundaries are no longer a literal executability fix: section
+26b derives them from the supplied development window (the first and last are
+``is_start``/``holdout_start``; the middle is the frozen ``2026-01-02``
+development cut), which :class:`SubperiodRule` accepts as three distinct,
+ordered boundaries. No real-run holdout date is embedded in the builder.
 
 No provider SDK, network, credential or file I/O is used.
 """
@@ -120,6 +137,7 @@ __all__ = [
     "DesignError",
     "DesignInputError",
     "DesignTemplateIntegrityError",
+    "SubperiodBoundaryError",
     "DataNotCertifiedError",
     # frozen constants
     "PILOT_PERIODS_PER_YEAR",
@@ -130,6 +148,7 @@ __all__ = [
     # configured dates
     "PilotPartitionDates",
     "frozen_partition_dates",
+    "subperiod_boundaries",
     "build_frozen_evaluation_spec_template",
     # provider surface
     "ProposalDesign",
@@ -182,6 +201,16 @@ class DesignError(ValueError):
 
 class DesignInputError(DesignError):
     """A provider input is malformed or inconsistent with the frozen config."""
+
+
+class SubperiodBoundaryError(DesignInputError):
+    """The supplied development window cannot carry the frozen subperiod cut.
+
+    Raised when the section-26b frozen cut is not strictly inside the
+    authorized development interval ``(is_start, holdout_start)``, or when a
+    derived boundary would fall outside ``[is_start, holdout_start]``. The
+    refusal is fail-closed: an unusable window never becomes a template.
+    """
 
 
 class DesignTemplateIntegrityError(DesignError):
@@ -338,21 +367,83 @@ def frozen_partition_dates() -> PilotPartitionDates:
 
 
 # ---------------------------------------------------------------------------
-# section-16 frozen EvaluationSpec template
+# section-16/26b frozen EvaluationSpec template
 # ---------------------------------------------------------------------------
 
 
-def build_frozen_evaluation_spec_template(
-    *, transaction_cost_bps: float = PILOT_TRANSACTION_COST_BPS
-) -> EvaluationSpec:
-    """The frozen section-16 evaluation-spec template.
+def _coerce_partition_dates(
+    value: PilotPartitionDates | Mapping[str, Any],
+) -> PilotPartitionDates:
+    if isinstance(value, PilotPartitionDates):
+        return value
+    if isinstance(value, Mapping):
+        return PilotPartitionDates.from_dict(value)
+    raise DesignInputError(
+        "partition_dates must be a PilotPartitionDates or its serialized "
+        f"mapping form, got {type(value).__name__}"
+    )
 
-    ``factor_provenance_hash`` is the all-zero placeholder; the per-proposal
-    hash is substituted by :func:`build_evaluation_spec`. The three
-    section-16 executability fixes are documented in the module docstring and
-    asserted by the test suite. ``C = 10`` bps ``ONE_WAY`` is the user freeze.
+
+def subperiod_boundaries(
+    partition_dates: PilotPartitionDates | Mapping[str, Any],
+) -> tuple[date, date, date]:
+    """The section-26b subperiod boundaries of the supplied development window.
+
+    Returns ``(is_start, cut, holdout_start)`` where ``cut`` is the frozen
+    ``2026-01-02`` development split. The cut must lie strictly inside the
+    authorized development interval ``(is_start, holdout_start)`` and every
+    boundary must lie inside ``[is_start, holdout_start]``; otherwise the
+    supplied window is refused with :class:`SubperiodBoundaryError`.
+
+    Nothing here references the real-run holdout start: the last boundary is
+    exactly the ``holdout_start`` of the window the caller supplied, so the
+    dry-run template ends its last subperiod at the dry-run holdout start.
     """
-    holdout_length = (_HOLDOUT_END - _HOLDOUT_START).days + 1
+    dates = _coerce_partition_dates(partition_dates)
+    boundaries = (dates.is_start, _SUBPERIOD_CUT, dates.holdout_start)
+    if not (dates.is_start < _SUBPERIOD_CUT < dates.holdout_start):
+        raise SubperiodBoundaryError(
+            "the frozen subperiod cut "
+            f"{_SUBPERIOD_CUT.isoformat()} must lie strictly inside the "
+            "authorized development window "
+            f"({dates.is_start.isoformat()}, {dates.holdout_start.isoformat()}); "
+            "refusing the supplied partition dates"
+        )
+    for boundary in boundaries:
+        if boundary < dates.is_start or boundary > dates.holdout_start:
+            raise SubperiodBoundaryError(
+                f"subperiod boundary {boundary.isoformat()} lies outside the "
+                "authorized development interval "
+                f"[{dates.is_start.isoformat()}, "
+                f"{dates.holdout_start.isoformat()}]; refusing the supplied "
+                "partition dates"
+            )
+    return boundaries
+
+
+def build_frozen_evaluation_spec_template(
+    partition_dates: PilotPartitionDates | Mapping[str, Any],
+    *,
+    transaction_cost_bps: float = PILOT_TRANSACTION_COST_BPS,
+) -> EvaluationSpec:
+    """The frozen evaluation-spec template for one authorized dev window.
+
+    The template is derived from the *supplied* partition dates: the split
+    rule and the subperiod boundaries both come from that development window,
+    so the real-run holdout start is never hardcoded here. Per section-26b
+    correction 1 ``PARAMETER_SENSITIVITY`` is absent and ``parameter_grid`` is
+    the single primary point ``(n_groups=3, horizon=1, cost_bps=C,
+    winsorization=0.01)``. ``factor_provenance_hash`` remains the all-zero
+    placeholder substituted by :func:`build_evaluation_spec`.
+
+    ``SubperiodBoundaryError`` is raised when the window cannot carry the
+    frozen ``2026-01-02`` cut. The remaining executability fixes are
+    documented in the module docstring. ``C = 10`` bps ``ONE_WAY`` is the
+    user freeze.
+    """
+    dates = _coerce_partition_dates(partition_dates)
+    boundaries = subperiod_boundaries(dates)
+    holdout_length = (dates.holdout_end - dates.holdout_start).days + 1
     return EvaluationSpec(
         metrics=(
             MetricKey.IC,
@@ -362,30 +453,21 @@ def build_frozen_evaluation_spec_template(
             MetricKey.MAX_DRAWDOWN,
             MetricKey.TURNOVER_COST_ADJUSTED,
             MetricKey.SUBPERIOD,
-            MetricKey.PARAMETER_SENSITIVITY,
         ),
         horizons=(1,),
         split_rule=SplitRule(
-            is_start=_IS_START,
-            is_end=_IS_END,
-            oos_start=_OOS_START,
-            oos_end=_OOS_END,
+            is_start=dates.is_start,
+            is_end=dates.is_end,
+            oos_start=dates.oos_start,
+            oos_end=dates.oos_end,
             walk_forward_folds=0,
             walk_forward_fold_length=1,
             holdout_length=holdout_length,
         ),
-        subperiod_rule=SubperiodRule(
-            boundaries=(_IS_START, _SUBPERIOD_CUT, _HOLDOUT_START)
-        ),
+        subperiod_rule=SubperiodRule(boundaries=boundaries),
         parameter_grid=(
             ParameterPoint(
                 n_groups=3,
-                horizon=1,
-                cost_bps=transaction_cost_bps,
-                winsorization=0.01,
-            ),
-            ParameterPoint(
-                n_groups=5,
                 horizon=1,
                 cost_bps=transaction_cost_bps,
                 winsorization=0.01,
@@ -753,12 +835,13 @@ def build_design(
             f"periods_per_year={PILOT_PERIODS_PER_YEAR}; got {periods_per_year!r}"
         )
 
+    dates = _coerce_partition_dates(partition_dates)
     template = (
-        build_frozen_evaluation_spec_template()
+        build_frozen_evaluation_spec_template(dates)
         if evaluation_spec_template is None
         else _coerce_template(evaluation_spec_template)
     )
-    partition = build_partition(partition_dates)
+    partition = build_partition(dates)
     holdout_identity = build_holdout_identity(
         partition=partition,
         pilot_data=pilot_data,
