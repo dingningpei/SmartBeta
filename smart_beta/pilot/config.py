@@ -108,6 +108,21 @@ __all__ = [
     # frozen constants
     "PLACEHOLDER_MARKER",
     "STUB_PROVIDER",
+    "ANTHROPIC_PROVIDER",
+    "REAL_MODEL_ID",
+    "REAL_MODEL_EFFORT",
+    "REAL_MAX_OUTPUT_TOKENS",
+    "REAL_TIMEOUT_SECONDS",
+    "REAL_MAX_PROVIDER_RETRIES",
+    "REAL_INPUT_PRICE",
+    "REAL_OUTPUT_PRICE",
+    "REAL_ENDPOINT",
+    "REAL_CUM_INPUT_TOKENS",
+    "REAL_CUM_OUTPUT_TOKENS",
+    "REAL_LLM_COST_BUDGET",
+    "REAL_WALL_CLOCK_SECONDS",
+    "REAL_PRICE_TABLE_ID",
+    "REAL_PRICE_TABLE_SOURCE",
     "SCHEMA_VERSION",
     "REAL_PROGRAM_SOURCE",
     "REAL_FAMILY_SOURCE",
@@ -133,6 +148,7 @@ __all__ = [
     "build_search_policy",
     "build_decision_policy",
     "build_dry_run_config_dict",
+    "build_real_run_config_dict",
     "build_real_run_template_dict",
     "write_config",
     # loading / resolution
@@ -153,6 +169,56 @@ PLACEHOLDER_MARKER = "__USER_FREEZE__"
 
 #: The only admissible model provider through H6 (binding user freeze 2).
 STUB_PROVIDER = "stub"
+
+#: The frozen real-run provider (plan section 26e).
+ANTHROPIC_PROVIDER = "anthropic"
+
+#: The frozen real-run model identity and request contract (plan section 26e).
+REAL_MODEL_ID = "claude-opus-5-5"
+REAL_MODEL_EFFORT = "high"
+REAL_MAX_OUTPUT_TOKENS = 12_000
+REAL_TIMEOUT_SECONDS = 600.0
+REAL_MAX_PROVIDER_RETRIES = 0
+REAL_INPUT_PRICE = 4e-6
+REAL_OUTPUT_PRICE = 20e-6
+REAL_ENDPOINT = "https://api.anthropic.com"
+REAL_PRICE_TABLE_ID = "anthropic-api/claude-opus-5-5/2026-09-24"
+REAL_PRICE_TABLE_SOURCE = (
+    "https://platform.claude.com/docs/en/about-claude/pricing"
+)
+
+#: The frozen real-run operational ceilings (plan section 26e). `llm_tokens`
+#: is the combined sealed-policy budget; the runner additionally enforces the
+#: per-direction input/output ceilings conservatively.
+REAL_CUM_INPUT_TOKENS = 100_000
+REAL_CUM_OUTPUT_TOKENS = 40_000
+REAL_LLM_TOKEN_BUDGET = REAL_CUM_INPUT_TOKENS + REAL_CUM_OUTPUT_TOKENS
+REAL_LLM_COST_BUDGET = 5.0
+REAL_WALL_CLOCK_SECONDS = 1_800.0
+
+#: The real-run prompt template reference (the revised section-26e template).
+REAL_PROMPT_TEMPLATE_REFERENCE = (
+    "smart_beta.pilot.prompt:REAL_PROMPT_TEMPLATE_TEXT"
+)
+
+#: Model settings that would silently change the frozen request contract.
+FORBIDDEN_MODEL_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "temperature",
+        "top_p",
+        "top_k",
+        "seed",
+        "thinking",
+        "betas",
+        "inference_geo",
+        "speed",
+        "tools",
+        "tool_choice",
+        "mcp_servers",
+        "container",
+        "fallbacks",
+    }
+)
 
 #: The §16 dry-run data cap: no row dated on/after this is ever loaded.
 DRY_RUN_DATE_CAP = "2026-07-01"
@@ -355,7 +421,13 @@ def find_placeholders(payload: Mapping[str, Any]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class BudgetRules:
-    """The harness + research budgets (plan section 16)."""
+    """The harness + research budgets (plan section 16).
+
+    ``llm_tokens`` is the sealed-policy combined token budget. The runner also
+    enforces the optional per-direction ``llm_input_tokens`` /
+    ``llm_output_tokens`` ceilings conservatively before every invocation; they
+    default to ``llm_tokens`` so a stub/dry-run config is never narrowed.
+    """
 
     proposals: int
     statistical_m: int
@@ -364,6 +436,22 @@ class BudgetRules:
     llm_cost: float
     wall_clock_seconds: float
     max_provider_retries: int = 0
+    llm_input_tokens: int | None = None
+    llm_output_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        # The per-direction ceilings are optional: a stub/dry-run config that
+        # omits them keeps the frozen combined ``llm_tokens`` behaviour, while
+        # the real config carries the explicit section-26e input/output
+        # ceilings the conservative pre-call rule enforces.
+        for name in ("llm_input_tokens", "llm_output_tokens"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+            ):
+                raise ConfigValidationError(
+                    f"budgets.{name} must be a positive integer or None"
+                )
 
 
 @dataclass(frozen=True)
@@ -376,6 +464,9 @@ class ModelSpec:
     price_table: PriceTable
     stub_responses: tuple[Mapping[str, Any], ...] = ()
     max_provider_retries: int = 0
+    max_output_tokens: int = REAL_MAX_OUTPUT_TOKENS
+    timeout_seconds: float = REAL_TIMEOUT_SECONDS
+    endpoint: str = REAL_ENDPOINT
 
 
 @dataclass(frozen=True)
@@ -831,6 +922,114 @@ def build_real_run_template_dict(*, repo: Path | None = None) -> dict[str, Any]:
     }
 
 
+def build_real_run_config_dict(
+    *,
+    bound_git_commit: str,
+    repo: Path | None = None,
+    approved: bool = True,
+) -> dict[str, Any]:
+    """The frozen real-run configuration (plan section 26e).
+
+    Emits the single ``pilot1a-real-v2`` config dict with every frozen
+    section-26e value: the exact harness commit binding, the Anthropic provider
+    and ``claude-opus-5-5`` model, effort ``high``, the per-invocation output
+    ceiling, the request timeout, zero retries, the frozen price table and the
+    operational ceilings. ``approved`` gates ``security.approved`` so the
+    planner can emit then approve the exact hash; the default is ``True``
+    because the builder only emits already-frozen values.
+
+    The planner writes the returned mapping (for example with
+    :func:`write_config`) as an untracked ``pilot_configs/pilot1a-real-v2.json``
+    after the P1A-PA merge, then runs the runner with that exact hash.
+    """
+    if not isinstance(bound_git_commit, str) or not bound_git_commit:
+        raise ConfigValidationError("bound_git_commit must be a non-empty string")
+    resolved_repo = repo if repo is not None else repo_root()
+    from smart_beta.pilot.prompt import real_template_hash
+
+    prompt_hash = real_template_hash()
+    program = build_research_program(
+        program_id=REAL_PROGRAM_ID,
+        family_id=REAL_FAMILY_ID,
+        label="pilot1a real-run program (frozen)",
+    )
+    research_policy = build_research_policy(
+        program=program,
+        prompt_template_hash=prompt_hash,
+        generator_identity=REAL_MODEL_ID,
+        max_llm_token_budget=REAL_LLM_TOKEN_BUDGET,
+        max_llm_cost_budget=REAL_LLM_COST_BUDGET,
+    )
+    search_policy = build_search_policy(family_id=REAL_FAMILY_ID)
+    decision_policy = build_decision_policy(search_policy=search_policy)
+    template = build_frozen_evaluation_spec_template(frozen_partition_dates())
+    run_id = "pilot1a-real-v2"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "run_mode": "real",
+        "git_baseline": {
+            "label": PHASE9_COMPLETE_TAG,
+            "phase9_complete": PHASE9_COMPLETE_COMMIT,
+            "bound_git_commit": bound_git_commit,
+        },
+        "dataset": _dataset_dict(
+            fixture_dir=GATE_B_FIXTURE_DIR,
+            fixture_tree_id=GATE_B_FIXTURE_TREE_ID,
+            file_hashes=_fixture_digests(resolved_repo),
+            universe=GATE_B_UNIVERSE,
+            start=GATE_B_START,
+            end=GATE_B_END,
+            date_cap=None,
+        ),
+        "research_program": program.to_dict(),
+        "research_policy": research_policy.to_dict(),
+        "search_policy": search_policy.to_dict(),
+        "decision_policy": decision_policy.to_dict(),
+        "family_id": REAL_FAMILY_ID,
+        "budgets": {
+            "proposals": _PROPOSAL_BUDGET,
+            "statistical_m": _STATISTICAL_BUDGET_M,
+            "invocation_ceiling": _INVOCATION_CEILING,
+            "llm_tokens": REAL_LLM_TOKEN_BUDGET,
+            "llm_cost": REAL_LLM_COST_BUDGET,
+            "wall_clock_seconds": REAL_WALL_CLOCK_SECONDS,
+            "llm_input_tokens": REAL_CUM_INPUT_TOKENS,
+            "llm_output_tokens": REAL_CUM_OUTPUT_TOKENS,
+        },
+        "evaluation_spec_template": template.to_dict(),
+        "partition_dates": frozen_partition_dates().to_dict(),
+        "model": {
+            "provider": ANTHROPIC_PROVIDER,
+            "id": REAL_MODEL_ID,
+            "settings": {
+                "effort": REAL_MODEL_EFFORT,
+                "price_table_id": REAL_PRICE_TABLE_ID,
+                "price_table_source": REAL_PRICE_TABLE_SOURCE,
+                "input_per_token": REAL_INPUT_PRICE,
+                "output_per_token": REAL_OUTPUT_PRICE,
+            },
+            "price_table": {
+                "input_per_token": REAL_INPUT_PRICE,
+                "output_per_token": REAL_OUTPUT_PRICE,
+            },
+            "max_provider_retries": REAL_MAX_PROVIDER_RETRIES,
+            "max_output_tokens": REAL_MAX_OUTPUT_TOKENS,
+            "timeout_seconds": REAL_TIMEOUT_SECONDS,
+            "endpoint": REAL_ENDPOINT,
+        },
+        "prompt_template_path": REAL_PROMPT_TEMPLATE_REFERENCE,
+        "prompt_template_hash": prompt_hash,
+        "artifact_destination": f"pilot_runs/pilot1a/{run_id}",
+        "security": {
+            "network": "endpoint-allowlist",
+            "credentials": "model-only-runtime",
+            "provider": ANTHROPIC_PROVIDER,
+            "approved": approved,
+        },
+    }
+
+
 def write_config(payload: Mapping[str, Any], path: str | Path) -> Path:
     """Write one configuration as canonical JSON (sorted keys, ASCII)."""
     destination = Path(path)
@@ -990,6 +1189,24 @@ def _parse_budgets(config: PilotConfig) -> BudgetRules:
             field_name="budgets.wall_clock_seconds",
             minimum=0.0,
         ),
+        llm_input_tokens=(
+            None
+            if "llm_input_tokens" not in budgets
+            else _require_int(
+                budgets["llm_input_tokens"],
+                field_name="budgets.llm_input_tokens",
+                minimum=1,
+            )
+        ),
+        llm_output_tokens=(
+            None
+            if "llm_output_tokens" not in budgets
+            else _require_int(
+                budgets["llm_output_tokens"],
+                field_name="budgets.llm_output_tokens",
+                minimum=1,
+            )
+        ),
     )
 
 
@@ -1039,6 +1256,19 @@ def _parse_model(config: PilotConfig) -> ModelSpec:
                 f"config.model.stub_responses[{index}] must be a JSON object"
             )
         responses.append(dict(item))
+    max_output_tokens = _require_int(
+        model.get("max_output_tokens", REAL_MAX_OUTPUT_TOKENS),
+        field_name="model.max_output_tokens",
+        minimum=1,
+    )
+    timeout_seconds = _require_number(
+        model.get("timeout_seconds", REAL_TIMEOUT_SECONDS),
+        field_name="model.timeout_seconds",
+        minimum=0.0,
+    )
+    endpoint = model.get("endpoint", REAL_ENDPOINT)
+    if not isinstance(endpoint, str) or not endpoint:
+        raise ConfigValidationError("config.model.endpoint must be non-empty text")
     return ModelSpec(
         provider=provider,
         model_id=model_id,
@@ -1046,6 +1276,9 @@ def _parse_model(config: PilotConfig) -> ModelSpec:
         price_table=price_table,
         stub_responses=tuple(responses),
         max_provider_retries=max_retries,
+        max_output_tokens=max_output_tokens,
+        timeout_seconds=timeout_seconds,
+        endpoint=endpoint,
     )
 
 
@@ -1082,6 +1315,83 @@ def _validate_run_variant(
             )
     else:  # pragma: no cover - PilotConfig already restricted the vocabulary
         raise ConfigValidationError(f"unsupported run_mode {run_mode!r}")
+
+
+def _validate_model_provider(run_mode: str, model: ModelSpec) -> None:
+    """Validate the provider against the frozen run mode (plan section 26e).
+
+    The deterministic stub is the only admissible dry-run provider; the real
+    run admits exactly the frozen Anthropic provider with the frozen model id,
+    effort, ceilings, price table and endpoint. No other provider can be
+    silently substituted.
+    """
+    if model.provider == STUB_PROVIDER:
+        if run_mode != "dry_run":
+            raise ConfigValidationError(
+                "the deterministic stub provider is only admissible for a "
+                "dry-run config"
+            )
+        if not model.stub_responses:
+            raise ConfigValidationError(
+                "a stub-provider config must carry a non-empty "
+                "model.stub_responses script"
+            )
+        return
+
+    if model.provider != ANTHROPIC_PROVIDER:
+        raise ConfigValidationError(
+            f"the only admissible providers are {STUB_PROVIDER!r} (dry run) and "
+            f"{ANTHROPIC_PROVIDER!r} (real run); got {model.provider!r}"
+        )
+    if run_mode != "real":
+        raise ConfigValidationError(
+            "the concrete provider is only admissible for a real-run config "
+            "(binding user freeze 2 through H6)"
+        )
+    for key in model.settings:
+        if key in FORBIDDEN_MODEL_SETTING_KEYS:
+            raise ConfigValidationError(
+                f"the real-run model settings must not carry {key!r}; the "
+                "frozen request contract sends no sampling/thinking/tool/beta "
+                "parameters"
+            )
+    if model.model_id != REAL_MODEL_ID:
+        raise ConfigValidationError(
+            f"the real-run model id is frozen to {REAL_MODEL_ID!r}, got "
+            f"{model.model_id!r}"
+        )
+    if model.settings.get("effort") != REAL_MODEL_EFFORT:
+        raise ConfigValidationError(
+            f"the real-run effort is frozen to {REAL_MODEL_EFFORT!r}"
+        )
+    if model.max_output_tokens != REAL_MAX_OUTPUT_TOKENS:
+        raise ConfigValidationError(
+            f"the per-invocation output ceiling is frozen to "
+            f"{REAL_MAX_OUTPUT_TOKENS}"
+        )
+    if float(model.timeout_seconds) != float(REAL_TIMEOUT_SECONDS):
+        raise ConfigValidationError(
+            f"the request timeout is frozen to {REAL_TIMEOUT_SECONDS}"
+        )
+    if model.max_provider_retries != REAL_MAX_PROVIDER_RETRIES:
+        raise ConfigValidationError(
+            f"the provider retry count is frozen to {REAL_MAX_PROVIDER_RETRIES}"
+        )
+    if (
+        abs(model.price_table.input_per_token - REAL_INPUT_PRICE) > 1e-15
+        or abs(model.price_table.output_per_token - REAL_OUTPUT_PRICE) > 1e-15
+    ):
+        raise ConfigValidationError(
+            "the real-run price table is frozen to 4e-6 input / 20e-6 output"
+        )
+    if model.endpoint != REAL_ENDPOINT:
+        raise ConfigValidationError(
+            f"the real-run endpoint is frozen to {REAL_ENDPOINT!r}"
+        )
+    if model.stub_responses:
+        raise ConfigValidationError(
+            "a real-run config must not carry a stub response script"
+        )
 
 
 def resolve_config(config: PilotConfig) -> ResolvedConfig:
@@ -1239,19 +1549,7 @@ def resolve_config(config: PilotConfig) -> ResolvedConfig:
             "research_policy.max_llm_cost_budget must equal budgets.llm_cost"
         )
     _validate_run_variant(config.run_mode, dataset, partition_dates)
-
-    if model.provider != STUB_PROVIDER:
-        raise ConfigValidationError(
-            f"through H6 the only admissible model provider is {STUB_PROVIDER!r} "
-            f"(binding user freeze 2); got {model.provider!r}. The concrete "
-            "provider adapter is deferred until after H6 and needs separate "
-            "authorization."
-        )
-    if not model.stub_responses:
-        raise ConfigValidationError(
-            "a stub-provider config must carry a non-empty model.stub_responses "
-            "script"
-        )
+    _validate_model_provider(config.run_mode, model)
 
     return ResolvedConfig(
         config=config,
