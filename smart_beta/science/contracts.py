@@ -539,10 +539,17 @@ def validate_footprint_shape(body: Any) -> None:
     """Structural schema check of the section 6.4 canonical footprint body.
 
     Validates keys, types, the ISO-date interval ordering/disjointness and the
-    closed :class:`ObservationKind` vocabulary. It performs **no** set algebra
-    (union / intersection / covering); P10-C owns that. Returns ``None`` and
-    raises :class:`ScienceContractError` on any malformed body, so P10-B can
-    validate record footprints without importing P10-C.
+    closed :class:`ObservationKind` vocabulary. It also enforces the frozen
+    canonical block structure: within a block ``subject_keys`` are non-empty,
+    strictly sorted and unique; same-kind blocks have disjoint subject sets
+    and distinct interval lists; and blocks are strictly ascending by
+    ``(observation_kind, tuple(subject_keys))``. A repeated
+    ``observation_kind`` is valid -- this is **not** a one-block-per-kind
+    schema. It is a checker: it rejects a non-canonical body and never
+    canonicalises/rewrites it. It performs **no** set algebra (union /
+    intersection / covering); P10-C owns that. Returns ``None`` and raises
+    :class:`ScienceContractError` on any malformed body, so P10-B can validate
+    record footprints without importing P10-C.
     """
     if not isinstance(body, Mapping):
         raise ScienceContractError(
@@ -601,16 +608,47 @@ def validate_footprint_shape(body: Any) -> None:
     blocks = body["blocks"]
     if not isinstance(blocks, (list, tuple)):
         raise ScienceContractError("footprint body 'blocks' must be a sequence")
-    seen_kinds: set[str] = set()
+    previous_key: tuple[str, tuple[str, ...]] | None = None
+    subjects_by_kind: dict[str, set[str]] = {}
+    interval_lists_by_kind: dict[str, set[tuple[tuple[str, str], ...]]] = {}
     for index, block in enumerate(blocks):
         _validate_block(block, index=index)
         kind = block["observation_kind"]
-        if kind in seen_kinds:
+        subjects = tuple(block["subject_keys"])
+        # Blocks are strictly ascending by the total, deterministic key
+        # ``(observation_kind, tuple(subject_keys))`` (plan section 6.4). The
+        # complete subject tuple participates, not only its first element.
+        block_key = (kind, subjects)
+        if previous_key is not None and block_key <= previous_key:
             raise ScienceContractError(
-                f"footprint body has duplicate block observation_kind {kind!r}; "
-                "the canonical form groups subjects per kind"
+                f"footprint block {index} is out of canonical order; blocks "
+                "must be strictly ascending by (observation_kind, "
+                "tuple(subject_keys))"
             )
-        seen_kinds.add(kind)
+        previous_key = block_key
+        # Subject sets are pairwise disjoint across same-kind blocks, so each
+        # (observation_kind, subject_key) belongs to exactly one block.
+        kind_subjects = subjects_by_kind.setdefault(kind, set())
+        overlap = kind_subjects.intersection(subjects)
+        if overlap:
+            raise ScienceContractError(
+                f"footprint block {index} subject_keys overlap same-kind "
+                f"block subjects {sorted(overlap)}; same-kind subject sets "
+                "must be disjoint"
+            )
+        kind_subjects.update(subjects)
+        # No two same-kind blocks may share an interval list; such blocks are
+        # non-canonical and their subject sets must be merged into one block.
+        interval_list = tuple(
+            (interval[0], interval[1]) for interval in block["intervals"]
+        )
+        kind_interval_lists = interval_lists_by_kind.setdefault(kind, set())
+        if interval_list in kind_interval_lists:
+            raise ScienceContractError(
+                f"footprint block {index} repeats a same-kind interval list; "
+                "same-kind blocks with identical intervals must be merged"
+            )
+        kind_interval_lists.add(interval_list)
     ded = body["ded"]
     if not isinstance(ded, (list, tuple)):
         raise ScienceContractError("footprint body 'ded' must be a sequence")
