@@ -109,6 +109,7 @@ __all__ = [
     "PLACEHOLDER_MARKER",
     "STUB_PROVIDER",
     "ANTHROPIC_PROVIDER",
+    "DEEPSEEK_PROVIDER",
     "REAL_MODEL_ID",
     "REAL_MODEL_EFFORT",
     "REAL_MAX_OUTPUT_TOKENS",
@@ -123,6 +124,22 @@ __all__ = [
     "REAL_WALL_CLOCK_SECONDS",
     "REAL_PRICE_TABLE_ID",
     "REAL_PRICE_TABLE_SOURCE",
+    "DEEPSEEK_MODEL_ID",
+    "DEEPSEEK_REASONING_EFFORT",
+    "DEEPSEEK_MAX_OUTPUT_TOKENS",
+    "DEEPSEEK_TIMEOUT_SECONDS",
+    "DEEPSEEK_MAX_PROVIDER_RETRIES",
+    "DEEPSEEK_INPUT_PRICE",
+    "DEEPSEEK_OUTPUT_PRICE",
+    "DEEPSEEK_ENDPOINT",
+    "DEEPSEEK_PRICE_TABLE_ID",
+    "DEEPSEEK_PRICE_TABLE_SOURCE",
+    "DEEPSEEK_CUM_INPUT_TOKENS",
+    "DEEPSEEK_CUM_OUTPUT_TOKENS",
+    "DEEPSEEK_LLM_COST_BUDGET",
+    "DEEPSEEK_WALL_CLOCK_SECONDS",
+    "DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE",
+    "DEEPSEEK_REAL_CONFIG_RELATIVE",
     "SCHEMA_VERSION",
     "REAL_PROGRAM_SOURCE",
     "REAL_FAMILY_SOURCE",
@@ -136,6 +153,7 @@ __all__ = [
     "DRY_RUN_DATE_CAP",
     "DRY_RUN_CONFIG_RELATIVE",
     "REAL_CONFIG_RELATIVE",
+    "DEEPSEEK_REAL_CONFIG_RELATIVE",
     "LEGACY_V1_CONFIG_RELATIVES",
     # resolved view
     "BudgetRules",
@@ -149,6 +167,7 @@ __all__ = [
     "build_decision_policy",
     "build_dry_run_config_dict",
     "build_real_run_config_dict",
+    "build_deepseek_real_run_config_dict",
     "build_real_run_template_dict",
     "write_config",
     # loading / resolution
@@ -173,6 +192,9 @@ STUB_PROVIDER = "stub"
 #: The frozen real-run provider (plan section 26e).
 ANTHROPIC_PROVIDER = "anthropic"
 
+#: The frozen DeepSeek generator provider (plan section 26f).
+DEEPSEEK_PROVIDER = "deepseek"
+
 #: The frozen real-run model identity and request contract (plan section 26e).
 REAL_MODEL_ID = "claude-opus-5-5"
 REAL_MODEL_EFFORT = "high"
@@ -186,6 +208,29 @@ REAL_PRICE_TABLE_ID = "anthropic-api/claude-opus-5-5/2026-09-24"
 REAL_PRICE_TABLE_SOURCE = (
     "https://platform.claude.com/docs/en/about-claude/pricing"
 )
+
+#: The frozen DeepSeek model identity and request contract (plan section
+#: 26f). The peak price table charges every input token at the cache-miss peak
+#: rate; off-peak pricing never admits an invocation.
+DEEPSEEK_MODEL_ID = "deepseek-v4-pro"
+DEEPSEEK_REASONING_EFFORT = "high"
+DEEPSEEK_MAX_OUTPUT_TOKENS = 12_000
+DEEPSEEK_TIMEOUT_SECONDS = 600.0
+DEEPSEEK_MAX_PROVIDER_RETRIES = 0
+DEEPSEEK_INPUT_PRICE = 1.32e-6
+DEEPSEEK_OUTPUT_PRICE = 3.96e-6
+DEEPSEEK_ENDPOINT = "https://api.deepseek.com"
+DEEPSEEK_PRICE_TABLE_ID = "deepseek-api/deepseek-v4-pro/peak/2026-09-24"
+DEEPSEEK_PRICE_TABLE_SOURCE = "https://api-docs.deepseek.com"
+DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE = "Return json."
+
+#: The frozen DeepSeek operational ceilings (plan section 26f): USD 1.00 hard,
+#: the same 100k/40k per-direction token ceilings and 1,800 s wall clock.
+DEEPSEEK_CUM_INPUT_TOKENS = 100_000
+DEEPSEEK_CUM_OUTPUT_TOKENS = 40_000
+DEEPSEEK_LLM_TOKEN_BUDGET = DEEPSEEK_CUM_INPUT_TOKENS + DEEPSEEK_CUM_OUTPUT_TOKENS
+DEEPSEEK_LLM_COST_BUDGET = 1.0
+DEEPSEEK_WALL_CLOCK_SECONDS = 1_800.0
 
 #: The frozen real-run operational ceilings (plan section 26e). `llm_tokens`
 #: is the combined sealed-policy budget; the runner additionally enforces the
@@ -242,6 +287,8 @@ PROMPT_TEMPLATE_REFERENCE = "smart_beta.pilot.prompt:PROMPT_TEMPLATE_TEXT"
 #: The frozen committed Pilot-1A configuration files (section 26b, v2).
 DRY_RUN_CONFIG_RELATIVE = "pilot_configs/pilot1a-dryrun-v2.json"
 REAL_CONFIG_RELATIVE = "pilot_configs/pilot1a-v2.template.json"
+#: The planner-generated untracked DeepSeek real-run config (plan section 26f).
+DEEPSEEK_REAL_CONFIG_RELATIVE = "pilot_configs/pilot1a-real-deepseek-v1.json"
 #: The superseded v1 configuration files. They are preserved byte-for-byte
 #: and are refused by the corrected preflight.
 LEGACY_V1_CONFIG_RELATIVES = (
@@ -1030,6 +1077,117 @@ def build_real_run_config_dict(
     }
 
 
+def build_deepseek_real_run_config_dict(
+    *,
+    bound_git_commit: str,
+    repo: Path | None = None,
+    approved: bool = True,
+) -> dict[str, Any]:
+    """The frozen DeepSeek real-run configuration (plan section 26f).
+
+    Emits the single ``pilot1a-real-deepseek-v1`` config dict with every frozen
+    section-26f value: the exact harness commit binding, the DeepSeek provider
+    and ``deepseek-v4-pro`` model, reasoning effort ``high``, the transport
+    system message, the per-invocation output ceiling, the request timeout,
+    zero retries, the peak price table and the USD 1.00 operational ceiling.
+    The scientific prompt template is the byte-identical real template
+    (``948454e9...``); the only addition is the approved transport system
+    message, bound into ``model.settings`` so it enters the intent provenance.
+
+    The planner writes the returned mapping (for example with
+    :func:`write_config`) as an untracked
+    ``pilot_configs/pilot1a-real-deepseek-v1.json`` after the P1A-DS merge, then
+    runs the runner with that exact hash.
+    """
+    if not isinstance(bound_git_commit, str) or not bound_git_commit:
+        raise ConfigValidationError("bound_git_commit must be a non-empty string")
+    resolved_repo = repo if repo is not None else repo_root()
+    from smart_beta.pilot.prompt import real_template_hash
+
+    prompt_hash = real_template_hash()
+    program = build_research_program(
+        program_id=REAL_PROGRAM_ID,
+        family_id=REAL_FAMILY_ID,
+        label="pilot1a real-run program (DeepSeek frozen)",
+    )
+    research_policy = build_research_policy(
+        program=program,
+        prompt_template_hash=prompt_hash,
+        generator_identity=DEEPSEEK_MODEL_ID,
+        max_llm_token_budget=DEEPSEEK_LLM_TOKEN_BUDGET,
+        max_llm_cost_budget=DEEPSEEK_LLM_COST_BUDGET,
+    )
+    search_policy = build_search_policy(family_id=REAL_FAMILY_ID)
+    decision_policy = build_decision_policy(search_policy=search_policy)
+    template = build_frozen_evaluation_spec_template(frozen_partition_dates())
+    run_id = "pilot1a-real-deepseek-v1"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "run_mode": "real",
+        "git_baseline": {
+            "label": PHASE9_COMPLETE_TAG,
+            "phase9_complete": PHASE9_COMPLETE_COMMIT,
+            "bound_git_commit": bound_git_commit,
+        },
+        "dataset": _dataset_dict(
+            fixture_dir=GATE_B_FIXTURE_DIR,
+            fixture_tree_id=GATE_B_FIXTURE_TREE_ID,
+            file_hashes=_fixture_digests(resolved_repo),
+            universe=GATE_B_UNIVERSE,
+            start=GATE_B_START,
+            end=GATE_B_END,
+            date_cap=None,
+        ),
+        "research_program": program.to_dict(),
+        "research_policy": research_policy.to_dict(),
+        "search_policy": search_policy.to_dict(),
+        "decision_policy": decision_policy.to_dict(),
+        "family_id": REAL_FAMILY_ID,
+        "budgets": {
+            "proposals": _PROPOSAL_BUDGET,
+            "statistical_m": _STATISTICAL_BUDGET_M,
+            "invocation_ceiling": _INVOCATION_CEILING,
+            "llm_tokens": DEEPSEEK_LLM_TOKEN_BUDGET,
+            "llm_cost": DEEPSEEK_LLM_COST_BUDGET,
+            "wall_clock_seconds": DEEPSEEK_WALL_CLOCK_SECONDS,
+            "llm_input_tokens": DEEPSEEK_CUM_INPUT_TOKENS,
+            "llm_output_tokens": DEEPSEEK_CUM_OUTPUT_TOKENS,
+        },
+        "evaluation_spec_template": template.to_dict(),
+        "partition_dates": frozen_partition_dates().to_dict(),
+        "model": {
+            "provider": DEEPSEEK_PROVIDER,
+            "id": DEEPSEEK_MODEL_ID,
+            "settings": {
+                "reasoning_effort": DEEPSEEK_REASONING_EFFORT,
+                "transport_system_message": DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE,
+                "price_table_id": DEEPSEEK_PRICE_TABLE_ID,
+                "price_table_source": DEEPSEEK_PRICE_TABLE_SOURCE,
+                "input_per_token": DEEPSEEK_INPUT_PRICE,
+                "output_per_token": DEEPSEEK_OUTPUT_PRICE,
+            },
+            "price_table": {
+                "input_per_token": DEEPSEEK_INPUT_PRICE,
+                "output_per_token": DEEPSEEK_OUTPUT_PRICE,
+            },
+            "max_provider_retries": DEEPSEEK_MAX_PROVIDER_RETRIES,
+            "max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+            "timeout_seconds": DEEPSEEK_TIMEOUT_SECONDS,
+            "endpoint": DEEPSEEK_ENDPOINT,
+        },
+        "prompt_template_path": REAL_PROMPT_TEMPLATE_REFERENCE,
+        "prompt_template_hash": prompt_hash,
+        "artifact_destination": f"pilot_runs/pilot1a/{run_id}",
+        "security": {
+            "network": "endpoint-allowlist",
+            "credentials": "model-only-runtime",
+            "provider": DEEPSEEK_PROVIDER,
+            "approved": approved,
+        },
+    }
+
+
 def write_config(payload: Mapping[str, Any], path: str | Path) -> Path:
     """Write one configuration as canonical JSON (sorted keys, ASCII)."""
     destination = Path(path)
@@ -1318,12 +1476,13 @@ def _validate_run_variant(
 
 
 def _validate_model_provider(run_mode: str, model: ModelSpec) -> None:
-    """Validate the provider against the frozen run mode (plan section 26e).
+    """Validate the provider against the frozen run mode.
 
-    The deterministic stub is the only admissible dry-run provider; the real
-    run admits exactly the frozen Anthropic provider with the frozen model id,
-    effort, ceilings, price table and endpoint. No other provider can be
-    silently substituted.
+    The deterministic stub is the only admissible dry-run provider. A real run
+    admits exactly one of the two frozen concrete providers: Anthropic (section
+    26e, ``claude-opus-5-5``) or DeepSeek (section 26f, ``deepseek-v4-pro``),
+    each with its own frozen model id, effort, ceilings, price table and
+    endpoint. No other provider can be silently substituted.
     """
     if model.provider == STUB_PROVIDER:
         if run_mode != "dry_run":
@@ -1338,10 +1497,11 @@ def _validate_model_provider(run_mode: str, model: ModelSpec) -> None:
             )
         return
 
-    if model.provider != ANTHROPIC_PROVIDER:
+    if model.provider not in (ANTHROPIC_PROVIDER, DEEPSEEK_PROVIDER):
         raise ConfigValidationError(
-            f"the only admissible providers are {STUB_PROVIDER!r} (dry run) and "
-            f"{ANTHROPIC_PROVIDER!r} (real run); got {model.provider!r}"
+            f"the only admissible providers are {STUB_PROVIDER!r} (dry run), "
+            f"{ANTHROPIC_PROVIDER!r} (real run) and {DEEPSEEK_PROVIDER!r} "
+            f"(real run); got {model.provider!r}"
         )
     if run_mode != "real":
         raise ConfigValidationError(
@@ -1355,6 +1515,22 @@ def _validate_model_provider(run_mode: str, model: ModelSpec) -> None:
                 "frozen request contract sends no sampling/thinking/tool/beta "
                 "parameters"
             )
+    if model.max_provider_retries != 0:
+        raise ConfigValidationError(
+            "the provider retry count is frozen to 0"
+        )
+    if model.stub_responses:
+        raise ConfigValidationError(
+            "a real-run config must not carry a stub response script"
+        )
+    if model.provider == ANTHROPIC_PROVIDER:
+        _validate_anthropic_model(model)
+        return
+    _validate_deepseek_model(model)
+
+
+def _validate_anthropic_model(model: ModelSpec) -> None:
+    """The frozen section-26e Anthropic values (unchanged by section 26f)."""
     if model.model_id != REAL_MODEL_ID:
         raise ConfigValidationError(
             f"the real-run model id is frozen to {REAL_MODEL_ID!r}, got "
@@ -1388,9 +1564,62 @@ def _validate_model_provider(run_mode: str, model: ModelSpec) -> None:
         raise ConfigValidationError(
             f"the real-run endpoint is frozen to {REAL_ENDPOINT!r}"
         )
-    if model.stub_responses:
+
+
+def _validate_deepseek_model(model: ModelSpec) -> None:
+    """The frozen section-26f DeepSeek values.
+
+    The DeepSeek real run is a separate frozen variant from the archived
+    Anthropic one: the model identity, reasoning effort, endpoint, peak price
+    table and USD 1.00 ceiling are all pinned, and the transport system message
+    is bound into the model settings so it enters the intent provenance.
+    """
+    if model.model_id != DEEPSEEK_MODEL_ID:
         raise ConfigValidationError(
-            "a real-run config must not carry a stub response script"
+            f"the DeepSeek model id is frozen to {DEEPSEEK_MODEL_ID!r}, got "
+            f"{model.model_id!r}"
+        )
+    if model.settings.get("reasoning_effort") != DEEPSEEK_REASONING_EFFORT:
+        raise ConfigValidationError(
+            f"the DeepSeek reasoning effort is frozen to "
+            f"{DEEPSEEK_REASONING_EFFORT!r}"
+        )
+    if model.settings.get("transport_system_message") != (
+        DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE
+    ):
+        raise ConfigValidationError(
+            "the DeepSeek transport system message is frozen to "
+            f"{DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE!r}"
+        )
+    if model.settings.get("price_table_id") != DEEPSEEK_PRICE_TABLE_ID:
+        raise ConfigValidationError(
+            f"the DeepSeek price-table identity is frozen to "
+            f"{DEEPSEEK_PRICE_TABLE_ID!r}"
+        )
+    if model.max_output_tokens != DEEPSEEK_MAX_OUTPUT_TOKENS:
+        raise ConfigValidationError(
+            f"the per-invocation output ceiling is frozen to "
+            f"{DEEPSEEK_MAX_OUTPUT_TOKENS}"
+        )
+    if float(model.timeout_seconds) != float(DEEPSEEK_TIMEOUT_SECONDS):
+        raise ConfigValidationError(
+            f"the request timeout is frozen to {DEEPSEEK_TIMEOUT_SECONDS}"
+        )
+    if model.max_provider_retries != DEEPSEEK_MAX_PROVIDER_RETRIES:
+        raise ConfigValidationError(
+            f"the provider retry count is frozen to {DEEPSEEK_MAX_PROVIDER_RETRIES}"
+        )
+    if (
+        abs(model.price_table.input_per_token - DEEPSEEK_INPUT_PRICE) > 1e-15
+        or abs(model.price_table.output_per_token - DEEPSEEK_OUTPUT_PRICE) > 1e-15
+    ):
+        raise ConfigValidationError(
+            "the DeepSeek price table is frozen to the peak rates "
+            "1.32e-6 input / 3.96e-6 output"
+        )
+    if model.endpoint != DEEPSEEK_ENDPOINT:
+        raise ConfigValidationError(
+            f"the DeepSeek endpoint is frozen to {DEEPSEEK_ENDPOINT!r}"
         )
 
 

@@ -18,6 +18,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import socket
 import subprocess
@@ -48,10 +49,13 @@ from smart_beta.pilot.data import compute_fixture_hashes
 from smart_beta.pilot.journal import Journal, read_journal
 from smart_beta.pilot.model import ModelResponse, StubModelClient
 from smart_beta.pilot.reconstruct import reconstruct
+from smart_beta.pilot.provider_deepseek import DeepSeekUsage
 from smart_beta.pilot.runner import (
     GitProbe,
     PreflightError,
     RunnerError,
+    build_deepseek_client,
+    build_provider_client,
     build_reconstruction_hooks,
     count_raw_candidates,
     install_network_tripwire,
@@ -79,12 +83,13 @@ pytestmark = pytest.mark.usefixtures("offline_guard")
 
 @pytest.fixture(autouse=True)
 def _fake_provider_sdk(monkeypatch):
-    """Make the optional provider SDK look installed (v1.x) by default.
+    """Make the optional provider SDKs look installed (in range) by default.
 
     The real ``anthropic`` package is intentionally not installed in the test
-    environment, so every real-mode preflight test must inject it. This
-    patches only ``importlib.util.find_spec`` and ``importlib.metadata.version``
-    for the ``anthropic`` distribution and never imports it.
+    environment and the ``openai`` package version is environment-dependent, so
+    every real-mode preflight test injects both. This patches only
+    ``importlib.util.find_spec`` and ``importlib.metadata.version`` for the two
+    distributions and never imports either.
     """
     import importlib.metadata
     import importlib.util
@@ -93,13 +98,15 @@ def _fake_provider_sdk(monkeypatch):
     real_version = importlib.metadata.version
 
     def _find_spec(name, *args, **kwargs):
-        if name == "anthropic":
+        if name in ("anthropic", "openai"):
             return object()
         return real_find_spec(name, *args, **kwargs)
 
     def _version(name):
         if name == "anthropic":
             return "1.5.0"
+        if name == "openai":
+            return "3.19.2"
         return real_version(name)
 
     monkeypatch.setattr(importlib.util, "find_spec", _find_spec)
@@ -1810,8 +1817,10 @@ def test_run_pilot_calls_preflight_check_with_credential_required(tmp_path, monk
 # ---------------------------------------------------------------------------
 
 
-def _set_provider_sdk(monkeypatch, *, present: bool, version: str = "1.5.0"):
-    """Override the autouse SDK fake for the anthropic distribution."""
+def _set_provider_sdk(
+    monkeypatch, *, present: bool, version: str = "1.5.0", distribution: str = "anthropic"
+):
+    """Override the autouse SDK fake for one distribution."""
 
     import importlib.metadata
     import importlib.util
@@ -1820,12 +1829,12 @@ def _set_provider_sdk(monkeypatch, *, present: bool, version: str = "1.5.0"):
     real_version = importlib.metadata.version
 
     def _find_spec(name, *args, **kwargs):
-        if name == "anthropic":
+        if name == distribution:
             return object() if present else None
         return real_find_spec(name, *args, **kwargs)
 
     def _version(name):
-        if name == "anthropic":
+        if name == distribution:
             return version
         return real_version(name)
 
@@ -1903,3 +1912,423 @@ def test_preflight_check_does_not_require_the_sdk_in_dry_run(tmp_path, monkeypat
     assert report.passed
     assert report.provider_sdk_version is None
     assert report.check("provider_sdk").detail == "not-real-mode"
+
+
+# ---------------------------------------------------------------------------
+# P1A-DS: DeepSeek provider dispatch (real mode)
+# ---------------------------------------------------------------------------
+
+_DEEPSEEK_CREDENTIAL = "sk-deepseek-planted-test-value-never-print"
+_DEEPSEEK_BOUND = "f" * 40
+
+
+def _set_deepseek_credential(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", _DEEPSEEK_CREDENTIAL)
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _deepseek_preflight_config(
+    tmp_path: Path, run_id: str, *, bound: str = _DEEPSEEK_BOUND
+):
+    """A DeepSeek real config with a dummy dataset, for preflight assertions."""
+    payload = config_mod.build_deepseek_real_run_config_dict(bound_git_commit=bound)
+    payload["run_id"] = run_id
+    payload["artifact_destination"] = str(tmp_path / f"run-{run_id}")
+    payload["dataset"] = {
+        "fixture_dir": str(tmp_path / "dummy-fixture"),
+        "fixture_tree_id": _REAL_FIXTURE_TREE,
+        "file_hashes": [{"path": "dummy", "sha256": "a" * 64}],
+        "universe": ["AAA"],
+        "start": CONSTRUCTED_START,
+        "end": _REAL_END,
+        "date_cap": None,
+    }
+    return payload
+
+
+def _deepseek_constructed_config(
+    tmp_path: Path, run_id: str, *, end: str = CONSTRUCTED_END
+) -> dict:
+    payload = _deepseek_preflight_config(tmp_path, run_id)
+    fixture_dir = tmp_path / "ds-fixture"
+    if not fixture_dir.exists():
+        _write_synthetic_fixture(
+            fixture_dir, CONSTRUCTED_TICKERS, CONSTRUCTED_START, end
+        )
+    hashes = compute_fixture_hashes(fixture_dir)
+    payload["dataset"] = {
+        "fixture_dir": str(fixture_dir),
+        "fixture_tree_id": _REAL_FIXTURE_TREE,
+        "file_hashes": [digest.to_dict() for digest in hashes],
+        "universe": list(CONSTRUCTED_TICKERS),
+        "start": CONSTRUCTED_START,
+        "end": end,
+        "date_cap": None,
+    }
+    return payload
+
+
+def _deepseek_git(**kwargs) -> FakeGit:
+    kwargs.setdefault("head", _DEEPSEEK_BOUND)
+    kwargs.setdefault("tree_id", _REAL_FIXTURE_TREE)
+    return FakeGit(**kwargs)
+
+
+class _UsageReportingClient:
+    """A stub client that additionally reports provider usage metadata."""
+
+    def __init__(self, response, usage: DeepSeekUsage) -> None:
+        self._inner = StubModelClient(response)
+        self.last_usage = usage
+        self.last_request_hash = "b" * 64
+
+    def complete(self, request):  # noqa: ANN001
+        return self._inner.complete(request)
+
+
+def test_deepseek_preflight_requires_the_openai_sdk_v3_range(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-sdk")
+    config = load_config_dict(config_dict)
+    approved = config.config_hash()
+
+    _set_provider_sdk(
+        monkeypatch, present=False, version="3.19.2", distribution="openai"
+    )
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=approved,
+            repo=tmp_path,
+            git=_deepseek_git(),
+            require_credential=False,
+        )
+    check = excinfo.value.report.check("provider_sdk")
+    assert check is not None and check.passed is False
+    assert "not installed" in check.detail
+
+    for bad in ("2.9.0", "4.0.0", "1.0.0"):
+        _set_provider_sdk(
+            monkeypatch, present=True, version=bad, distribution="openai"
+        )
+        with pytest.raises(PreflightError) as excinfo:
+            preflight_check(
+                config,
+                approved_config_hash=approved,
+                repo=tmp_path,
+                git=_deepseek_git(),
+                require_credential=False,
+            )
+        check = excinfo.value.report.check("provider_sdk")
+        assert check is not None and check.passed is False
+        assert bad in check.detail
+
+    _set_provider_sdk(
+        monkeypatch, present=True, version="3.19.2", distribution="openai"
+    )
+    report = preflight_check(
+        config,
+        approved_config_hash=approved,
+        repo=tmp_path,
+        git=_deepseek_git(),
+        require_credential=False,
+    )
+    assert report.passed
+    assert report.provider_sdk_version == "3.19.2"
+
+
+def test_deepseek_missing_credential_refuses(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    config_dict = _deepseek_preflight_config(tmp_path, "ds-no-cred")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "DEEPSEEK_API_KEY" in outcome.detail
+
+
+def test_deepseek_ambient_openai_api_key_refuses(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
+    config_dict = _deepseek_preflight_config(tmp_path, "ds-ambient-openai-key")
+    outcome = _run(
+        config_dict, tmp_path, git=_deepseek_git(), endpoint_resolver=_resolver
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "OPENAI_API_KEY" in outcome.detail
+
+
+def test_deepseek_ambient_openai_base_url_refuses(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example.com")
+    config_dict = _deepseek_preflight_config(tmp_path, "ds-ambient-openai-url")
+    outcome = _run(
+        config_dict, tmp_path, git=_deepseek_git(), endpoint_resolver=_resolver
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "OPENAI_BASE_URL" in outcome.detail
+
+
+def test_deepseek_ambient_anthropic_base_url_refuses(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
+    config_dict = _deepseek_preflight_config(tmp_path, "ds-ambient-anthropic-url")
+    outcome = _run(
+        config_dict, tmp_path, git=_deepseek_git(), endpoint_resolver=_resolver
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "ANTHROPIC_BASE_URL" in outcome.detail
+
+
+def test_deepseek_proxy_override_refuses(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.com")
+    config_dict = _deepseek_preflight_config(tmp_path, "ds-proxy")
+    outcome = _run(
+        config_dict, tmp_path, git=_deepseek_git(), endpoint_resolver=_resolver
+    )
+    assert outcome.status is RunStatus.FAILED_PREFLIGHT
+    assert "proxy" in outcome.detail.lower()
+
+
+def test_deepseek_credential_is_deleted_from_the_runner_environment(
+    tmp_path, monkeypatch
+):
+    _set_deepseek_credential(monkeypatch)
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-env")
+    _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=StubModelClient(_stub_response([_one_candidate(), _one_candidate()])),
+    )
+    assert "DEEPSEEK_API_KEY" not in os.environ
+
+
+def test_git_probe_strips_deepseek_and_openai_credentials(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-planted-value")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-planted-value")
+    monkeypatch.setenv("TIINGO_API_KEY", "tiingo-planted-value")
+    env = GitProbe(".")._subprocess_env()
+    assert "DEEPSEEK_API_KEY" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert "TIINGO_API_KEY" not in env
+    assert "PATH" in env
+
+
+def test_deepseek_network_allowlist_permits_only_api_deepseek():
+    install_network_tripwire(
+        allowed_endpoint=("api.deepseek.com", 443),
+        resolved_addresses=("1.2.3.4",),
+    )
+    try:
+        for address in (
+            ("api.anthropic.com", 443),
+            ("api.openai.com", 443),
+            ("api.tiingo.com", 443),
+            ("api.tushare.pro", 443),
+            ("api.deepseek.com", 80),
+            ("1.2.3.5", 443),
+        ):
+            with pytest.raises(RunnerError):
+                socket.socket().connect(address)
+            with pytest.raises(RunnerError):
+                socket.create_connection(address)
+        with pytest.raises(RunnerError):
+            urllib.request.urlopen("https://api.deepseek.com/v1/chat/completions")
+        # The pinned endpoint delegates to the saved underlying connect (which
+        # the shared offline guard replaces with a raiser), proving it was
+        # *permitted* rather than refused by the allowlist.
+        with pytest.raises(RuntimeError) as excinfo:
+            socket.socket().connect(("1.2.3.4", 443))
+        assert "offline_guard" in str(excinfo.value)
+        with pytest.raises(RuntimeError) as excinfo:
+            socket.create_connection(("api.deepseek.com", 443))
+        assert "offline_guard" in str(excinfo.value)
+    finally:
+        restore_network_tripwire()
+
+
+def test_deepseek_post_call_usage_anomaly_interrupts(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    usage = DeepSeekUsage(
+        model_id=config_mod.DEEPSEEK_MODEL_ID,
+        prompt_tokens=100,
+        completion_tokens=12_001,
+        reasoning_tokens=500,
+        prompt_cache_hit_tokens=0,
+        prompt_cache_miss_tokens=100,
+    )
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-anomaly")
+    client = _UsageReportingClient(_stub_response([_one_candidate()]), usage)
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    assert outcome.status is RunStatus.INTERRUPTED
+    assert "anomaly" in outcome.detail
+    assert outcome.invocation_count == 1
+    read = read_journal(outcome.journal_path)
+    usage_records = [
+        record for record in read.records if record.kind is JournalKind.LLM_USAGE
+    ]
+    assert usage_records
+    payload = usage_records[-1].to_dict()["payload"]
+    assert payload["provider_usage"]["completion_tokens"] == 12_001
+    assert payload["provider_usage"]["reasoning_tokens"] == 500
+    assert payload["provider_usage"]["prompt_cache_miss_tokens"] == 100
+    assert payload["provider_request_hash"] == "b" * 64
+
+
+def test_deepseek_normal_usage_is_recorded_without_an_interrupt(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    # Two candidates stop the run (generator failure) after the usage record.
+    usage = DeepSeekUsage(
+        model_id=config_mod.DEEPSEEK_MODEL_ID,
+        prompt_tokens=100,
+        completion_tokens=50,
+        reasoning_tokens=10,
+        prompt_cache_hit_tokens=5,
+        prompt_cache_miss_tokens=95,
+    )
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-usage")
+    client = _UsageReportingClient(
+        _stub_response([_one_candidate(), _one_candidate()]), usage
+    )
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=client,
+    )
+    assert outcome.status is RunStatus.COMPLETED_STOP
+    assert outcome.stop_reason == StopReason.GENERATOR_FAILURE.value
+    read = read_journal(outcome.journal_path)
+    usage_records = [
+        record for record in read.records if record.kind is JournalKind.LLM_USAGE
+    ]
+    assert len(usage_records) == 1
+    payload = usage_records[0].to_dict()["payload"]
+    assert payload["provider_usage"]["reasoning_tokens"] == 10
+    assert payload["provider_usage"]["prompt_cache_hit_tokens"] == 5
+
+
+def test_deepseek_one_candidate_rule_stops_before_normalization(tmp_path, monkeypatch):
+    _set_deepseek_credential(monkeypatch)
+    response = _stub_response([_one_candidate(), _one_candidate()])
+    config_dict = _deepseek_constructed_config(tmp_path, "ds-multi")
+    outcome = _run(
+        config_dict,
+        tmp_path,
+        git=_deepseek_git(),
+        endpoint_resolver=_resolver,
+        client=StubModelClient(response),
+    )
+    assert outcome.status is RunStatus.COMPLETED_STOP
+    assert outcome.stop_reason == StopReason.GENERATOR_FAILURE.value
+    read = read_journal(outcome.journal_path)
+    assert not any(
+        record.kind is JournalKind.NORMALIZATION_OUTCOME for record in read.records
+    )
+
+
+def test_build_provider_client_dispatches_by_provider(tmp_path, monkeypatch):
+    from smart_beta.pilot import runner as runner_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        runner_mod,
+        "build_anthropic_client",
+        lambda resolved, *, credential: calls.append("anthropic") or "ANTHROPIC",
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "build_deepseek_client",
+        lambda resolved, *, credential: calls.append("deepseek") or "DEEPSEEK",
+    )
+    resolved_ds = resolve_config(
+        load_config_dict(_deepseek_preflight_config(tmp_path, "ds-dispatch"))
+    )
+    assert build_provider_client(resolved_ds, credential="x") == "DEEPSEEK"
+    resolved_pa = resolve_config(
+        load_config_dict(_real_preflight_config(tmp_path, "pa-dispatch"))
+    )
+    assert build_provider_client(resolved_pa, credential="x") == "ANTHROPIC"
+    assert calls == ["deepseek", "anthropic"]
+
+
+def test_build_deepseek_client_constructs_the_frozen_client(tmp_path, monkeypatch):
+    recorded: dict = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            recorded.update(kwargs)
+
+    fake_module = type(sys)("openai")
+    fake_module.OpenAI = _FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    resolved = resolve_config(
+        load_config_dict(_deepseek_constructed_config(tmp_path, "ds-build"))
+    )
+    client = build_deepseek_client(resolved, credential="secret-value")
+    assert type(client).__name__ == "DeepSeekModelClient"
+    assert recorded["api_key"] == "secret-value"
+    assert recorded["base_url"] == config_mod.DEEPSEEK_ENDPOINT
+    assert recorded["max_retries"] == 0
+    assert recorded["timeout"] == 600.0
+
+
+def test_deepseek_precall_projection_includes_the_system_message(tmp_path):
+    from smart_beta.pilot.runner import _projected_input_tokens
+
+    resolved = resolve_config(
+        load_config_dict(_deepseek_preflight_config(tmp_path, "ds-proj"))
+    )
+    prompt = "abc"
+    expected = math.ceil(
+        len(
+            (config_mod.DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE + prompt).encode("utf-8")
+        )
+        / 2
+    )
+    assert _projected_input_tokens(resolved, prompt) == expected
+
+
+def test_anthropic_precall_projection_still_includes_the_schema(tmp_path):
+    from smart_beta.pilot.runner import _projected_input_tokens
+    from smart_beta.pilot.prompt import OUTPUT_JSON_SCHEMA
+
+    resolved = resolve_config(
+        load_config_dict(_real_preflight_config(tmp_path, "pa-proj"))
+    )
+    prompt = "abc"
+    expected = math.ceil(
+        (
+            len(prompt.encode("utf-8"))
+            + len(canonical_json(OUTPUT_JSON_SCHEMA).encode("utf-8"))
+        )
+        / 2
+    )
+    assert _projected_input_tokens(resolved, prompt) == expected

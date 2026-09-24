@@ -72,6 +72,12 @@ from smart_beta.pilot.artifacts import (
 )
 from smart_beta.pilot.config import (
     ANTHROPIC_PROVIDER,
+    DEEPSEEK_ENDPOINT,
+    DEEPSEEK_MAX_OUTPUT_TOKENS,
+    DEEPSEEK_MODEL_ID,
+    DEEPSEEK_PROVIDER,
+    DEEPSEEK_REASONING_EFFORT,
+    DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE,
     REAL_ENDPOINT,
     REAL_MAX_OUTPUT_TOKENS,
     REAL_MODEL_EFFORT,
@@ -143,8 +149,14 @@ __all__ = [
     "scrub_credentials",
     "build_stub_client",
     "build_anthropic_client",
+    "build_deepseek_client",
+    "build_provider_client",
     "build_reconstruction_hooks",
     "count_raw_candidates",
+    "provider_credential_env",
+    "provider_refused_env_vars",
+    "DEEPSEEK_CREDENTIAL_ENV",
+    "PROVIDER_SDK_SPECS",
     "PROVIDER_SDK_DISTRIBUTION",
     "PROVIDER_SDK_MIN_MAJOR",
     "PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE",
@@ -155,6 +167,25 @@ __all__ = [
 PROVIDER_SDK_DISTRIBUTION = "anthropic"
 PROVIDER_SDK_MIN_MAJOR = 1
 PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE = 2
+
+#: Per-provider SDK distribution and frozen major-version range
+#: (``pilot-anthropic = ["anthropic>=1,<2"]`` and
+#: ``pilot-deepseek = ["openai>=3,<4"]`` in ``pyproject.toml``).
+PROVIDER_SDK_SPECS: Mapping[str, tuple[str, int, int]] = {
+    ANTHROPIC_PROVIDER: ("anthropic", 1, 2),
+    DEEPSEEK_PROVIDER: ("openai", 3, 4),
+}
+
+
+def _provider_sdk_spec(provider: str) -> tuple[str, int, int]:
+    """The frozen ``(distribution, min_major, max_major_exclusive)`` spec."""
+    try:
+        return PROVIDER_SDK_SPECS[provider]
+    except KeyError as exc:
+        raise _PreflightFailure(
+            "provider_sdk",
+            f"no frozen SDK range is declared for provider {provider!r}",
+        ) from exc
 
 
 def _provider_sdk_major(version: str) -> int | None:
@@ -178,47 +209,50 @@ def _provider_sdk_major(version: str) -> int | None:
     return int("".join(major_chars))
 
 
-def _provider_sdk_version_in_range(version: str) -> bool:
-    """Whether ``version`` satisfies the frozen ``>=1,<2`` range."""
+def _provider_sdk_version_in_range(
+    version: str, spec: tuple[str, int, int]
+) -> bool:
+    """Whether ``version`` satisfies the frozen per-provider range."""
+    _, min_major, max_major_exclusive = spec
     major = _provider_sdk_major(version)
-    return (
-        major is not None
-        and PROVIDER_SDK_MIN_MAJOR <= major < PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE
-    )
+    return major is not None and min_major <= major < max_major_exclusive
 
 
-def _require_provider_sdk() -> str:
+def _require_provider_sdk(provider: str) -> str:
     """Return the installed provider SDK version, or fail closed.
 
     Uses ``importlib.util.find_spec`` and ``importlib.metadata.version``
     only: it never imports the SDK (and therefore never touches its network
     stack) and never constructs a provider client. The SDK is optional and a
     real run must fail closed before any side effect if it is absent or out of
-    the frozen range.
+    the frozen range. The distribution and range are per provider: Anthropic
+    ``anthropic>=1,<2``, DeepSeek ``openai>=3,<4``.
     """
     import importlib.metadata
     import importlib.util
 
-    if importlib.util.find_spec(PROVIDER_SDK_DISTRIBUTION) is None:
+    distribution, min_major, max_major_exclusive = _provider_sdk_spec(provider)
+    extra = "pilot-anthropic" if provider == ANTHROPIC_PROVIDER else "pilot-deepseek"
+    if importlib.util.find_spec(distribution) is None:
         raise _PreflightFailure(
             "provider_sdk",
-            f"the {PROVIDER_SDK_DISTRIBUTION!r} SDK is not installed; install "
-            "the 'pilot-anthropic' optional extra before a real run",
+            f"the {distribution!r} SDK is not installed; install "
+            f"the {extra!r} optional extra before a real run",
         )
     try:
-        version = importlib.metadata.version(PROVIDER_SDK_DISTRIBUTION)
+        version = importlib.metadata.version(distribution)
     except importlib.metadata.PackageNotFoundError as exc:
         raise _PreflightFailure(
             "provider_sdk",
-            f"the {PROVIDER_SDK_DISTRIBUTION!r} SDK distribution metadata is "
+            f"the {distribution!r} SDK distribution metadata is "
             "not available; the optional extra is not installed",
         ) from exc
-    if not _provider_sdk_version_in_range(version):
+    if not _provider_sdk_version_in_range(version, (distribution, min_major, max_major_exclusive)):
         raise _PreflightFailure(
             "provider_sdk",
-            f"the installed {PROVIDER_SDK_DISTRIBUTION!r} version {version!r} "
-            f"does not satisfy the frozen range >={PROVIDER_SDK_MIN_MAJOR},"
-            f"<{PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE}",
+            f"the installed {distribution!r} version {version!r} "
+            f"does not satisfy the frozen range >={min_major},"
+            f"<{max_major_exclusive}",
         )
     return version
 
@@ -396,11 +430,21 @@ def scrub_credentials(
     return tuple(removed)
 
 
-#: The real-run model credential environment variable (runtime only).
+#: The frozen real-run model credential environment variables (runtime only),
+#: per provider. The Anthropic values are unchanged by section 26f.
 MODEL_CREDENTIAL_ENV = "ANTHROPIC_API_KEY"
-
-#: An alternate model auth token that is removed in real mode.
 MODEL_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+DEEPSEEK_CREDENTIAL_ENV = "DEEPSEEK_API_KEY"
+
+#: Per-provider credential/auth-token env names.
+PROVIDER_CREDENTIAL_ENVS: Mapping[str, str] = {
+    ANTHROPIC_PROVIDER: MODEL_CREDENTIAL_ENV,
+    DEEPSEEK_PROVIDER: DEEPSEEK_CREDENTIAL_ENV,
+}
+PROVIDER_AUTH_TOKEN_ENVS: Mapping[str, tuple[str, ...]] = {
+    ANTHROPIC_PROVIDER: (MODEL_AUTH_TOKEN_ENV,),
+    DEEPSEEK_PROVIDER: (),
+}
 
 #: Environment variables that would silently change the provider endpoint or
 #: route traffic through a proxy; their presence refuses a real run.
@@ -414,32 +458,71 @@ BASE_URL_OR_PROXY_ENV_VARS: tuple[str, ...] = (
     "all_proxy",
 )
 
+#: The DeepSeek real run additionally refuses ambient OpenAI routing variables
+#: (an ``OPENAI_API_KEY``/``OPENAI_BASE_URL`` override could silently redirect
+#: or authenticate the OpenAI-compatible SDK) as well as the Anthropic base URL
+#: and every proxy (plan section 26f).
+DEEPSEEK_REFUSED_ENV_VARS: tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    *BASE_URL_OR_PROXY_ENV_VARS,
+)
 
-def capture_model_credential(*, environ: dict[str, str] | None = None) -> str:
+_PROVIDER_REFUSED_ENV_VARS: Mapping[str, tuple[str, ...]] = {
+    ANTHROPIC_PROVIDER: BASE_URL_OR_PROXY_ENV_VARS,
+    DEEPSEEK_PROVIDER: DEEPSEEK_REFUSED_ENV_VARS,
+}
+
+
+def provider_credential_env(provider: str) -> str:
+    """The credential environment variable for one concrete provider."""
+    try:
+        return PROVIDER_CREDENTIAL_ENVS[provider]
+    except KeyError as exc:
+        raise RunnerError(
+            f"no frozen credential environment variable for provider {provider!r}"
+        ) from exc
+
+
+def provider_refused_env_vars(provider: str) -> tuple[str, ...]:
+    """The ambient base-URL/proxy variables refused for one provider."""
+    try:
+        return _PROVIDER_REFUSED_ENV_VARS[provider]
+    except KeyError as exc:
+        raise RunnerError(
+            f"no frozen ambient-refusal set for provider {provider!r}"
+        ) from exc
+
+
+def capture_model_credential(
+    *, provider: str = ANTHROPIC_PROVIDER, environ: dict[str, str] | None = None
+) -> str:
     """Capture and immediately delete the model credential (real mode).
 
-    Refuses a base-URL or proxy override, removes the alternate auth token,
-    requires the primary credential to be present and non-empty, deletes it
-    from the environment **before any subprocess** (so a later ``git`` cannot
-    inherit it), and returns the value for the in-process provider client and
-    the package value sweep. The value is never logged, printed or journaled.
+    Refuses a base-URL or proxy override (per provider), removes the alternate
+    auth token(s), requires the provider's primary credential to be present
+    and non-empty, deletes it from the environment **before any subprocess**
+    (so a later ``git`` cannot inherit it), and returns the value for the
+    in-process provider client and the package value sweep. The value is never
+    logged, printed or journaled.
     """
+    credential_env = provider_credential_env(provider)
     target = environ if environ is not None else os.environ
-    for name in BASE_URL_OR_PROXY_ENV_VARS:
+    for name in provider_refused_env_vars(provider):
         if target.get(name):
             raise PreflightError(
                 f"{name} is set; a base-URL or proxy override would change the "
                 "frozen provider endpoint and is refused"
             )
-    if MODEL_AUTH_TOKEN_ENV in target:
-        del target[MODEL_AUTH_TOKEN_ENV]
-    value = target.get(MODEL_CREDENTIAL_ENV)
+    for name in PROVIDER_AUTH_TOKEN_ENVS[provider]:
+        target.pop(name, None)
+    value = target.get(credential_env)
     if not value:
         raise PreflightError(
-            f"real mode requires a non-empty {MODEL_CREDENTIAL_ENV} in the "
+            f"real mode requires a non-empty {credential_env} in the "
             "environment; refusing before any call"
         )
-    del target[MODEL_CREDENTIAL_ENV]
+    del target[credential_env]
     for name in DATA_CREDENTIAL_ENV_VARS:
         target.pop(name, None)
     return value
@@ -471,6 +554,8 @@ class GitProbe:
         for name in (
             MODEL_CREDENTIAL_ENV,
             MODEL_AUTH_TOKEN_ENV,
+            DEEPSEEK_CREDENTIAL_ENV,
+            "OPENAI_API_KEY",
             *DATA_CREDENTIAL_ENV_VARS,
         ):
             env.pop(name, None)
@@ -617,6 +702,49 @@ def build_anthropic_client(resolved: ResolvedConfig, *, credential: str) -> Any:
     )
 
 
+def build_deepseek_client(resolved: ResolvedConfig, *, credential: str) -> Any:
+    """Build the real DeepSeek provider client from the frozen config.
+
+    The credential is passed explicitly (never read from the environment here)
+    and the provider is imported lazily, so the module imports without the SDK
+    installed. The frozen transport system message is read from the model
+    settings (so it is bound into the intent provenance).
+    """
+    from smart_beta.pilot.provider_deepseek import DeepSeekModelClient
+
+    settings = dict(resolved.model.settings)
+    effort = settings.get("reasoning_effort", DEEPSEEK_REASONING_EFFORT)
+    system_message = settings.get(
+        "transport_system_message", DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE
+    )
+    return DeepSeekModelClient(
+        model_id=resolved.model.model_id,
+        api_key=credential,
+        reasoning_effort=str(effort),
+        max_output_tokens=resolved.model.max_output_tokens,
+        timeout_seconds=resolved.model.timeout_seconds,
+        base_url=resolved.model.endpoint,
+        system_message=str(system_message),
+    )
+
+
+def build_provider_client(resolved: ResolvedConfig, *, credential: str) -> Any:
+    """Build the concrete provider client for the resolved config's provider.
+
+    Only the two frozen real providers are admitted; the config validator
+    already refuses anything else, so an unknown provider here is a defensive
+    fail-closed error.
+    """
+    if resolved.model.provider == ANTHROPIC_PROVIDER:
+        return build_anthropic_client(resolved, credential=credential)
+    if resolved.model.provider == DEEPSEEK_PROVIDER:
+        return build_deepseek_client(resolved, credential=credential)
+    raise RunnerError(
+        f"no concrete provider client is declared for provider "
+        f"{resolved.model.provider!r}"
+    )
+
+
 def count_raw_candidates(content: str) -> int | None:
     """Deterministically count a raw artifact's candidates, or ``None``.
 
@@ -662,6 +790,75 @@ def cumulative_invocation_usage(
         output_tokens += int(payload["output_tokens"])
         cost += float(payload["cost"])
     return input_tokens, output_tokens, cost
+
+
+def _projected_input_tokens(resolved: ResolvedConfig, prompt: str) -> int:
+    """The conservative projected input-token count for the next invocation.
+
+    Anthropic (section 26e) counts the rendered prompt plus the separately sent
+    output JSON schema. DeepSeek (section 26f) sends the schema inside the user
+    prompt and prepends the fixed transport system message, so it counts the
+    system message plus the user prompt. Both round up at 2 bytes/token.
+    """
+    if resolved.model.provider == DEEPSEEK_PROVIDER:
+        system_message = str(
+            resolved.model.settings.get(
+                "transport_system_message", DEEPSEEK_TRANSPORT_SYSTEM_MESSAGE
+            )
+        )
+        raw = (system_message + prompt).encode("utf-8")
+    else:
+        schema_bytes = canonical_json(OUTPUT_JSON_SCHEMA).encode("utf-8")
+        raw = prompt.encode("utf-8") + schema_bytes
+    return math.ceil(len(raw) / 2)
+
+
+def _provider_invocation_metadata(
+    client: Any,
+) -> Mapping[str, Any] | None:
+    """The provider usage/complete-request metadata, or ``None``.
+
+    A concrete provider client (DeepSeek) exposes ``last_usage`` and
+    ``last_request_hash``; the deterministic stub and the Anthropic adapter do
+    not, so they return ``None`` and add no record.
+    """
+    usage = getattr(client, "last_usage", None)
+    request_hash = getattr(client, "last_request_hash", None)
+    payload: dict[str, Any] = {}
+    if usage is not None:
+        to_dict = getattr(usage, "to_dict", None)
+        if callable(to_dict):
+            payload["provider_usage"] = dict(to_dict())
+        elif isinstance(usage, Mapping):
+            payload["provider_usage"] = dict(usage)
+    if isinstance(request_hash, str) and request_hash:
+        payload["provider_request_hash"] = request_hash
+    return payload or None
+
+
+def _provider_usage_anomaly(client: Any, max_output_tokens: int) -> str | None:
+    """The provider post-call anomaly reason, or ``None``.
+
+    Prefers the provider's own :meth:`anomaly` method (so the DeepSeek contract
+    owns the rule) and falls back to the same two checks over a mapping.
+    """
+    usage = getattr(client, "last_usage", None)
+    if usage is None:
+        return None
+    anomaly = getattr(usage, "anomaly", None)
+    if callable(anomaly):
+        return anomaly(int(max_output_tokens))
+    if isinstance(usage, Mapping):
+        try:
+            completion = int(usage.get("completion_tokens", 0) or 0)
+            reasoning = int(usage.get("reasoning_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if completion > int(max_output_tokens):
+            return "completion_tokens_exceeds_max_tokens"
+        if reasoning > completion:
+            return "reasoning_tokens_exceeds_completion_tokens"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1340,8 +1537,13 @@ def preflight_check(
         )
 
         real_mode = resolved.run_mode == "real"
+        refused_env_vars = (
+            provider_refused_env_vars(resolved.model.provider)
+            if resolved.model.provider in (ANTHROPIC_PROVIDER, DEEPSEEK_PROVIDER)
+            else BASE_URL_OR_PROXY_ENV_VARS
+        )
 
-        for name in BASE_URL_OR_PROXY_ENV_VARS:
+        for name in refused_env_vars:
             if os.environ.get(name):
                 raise _PreflightFailure(
                     "base_url_proxy",
@@ -1351,12 +1553,11 @@ def preflight_check(
         checks.append(PreflightCheck("base_url_proxy", True, ""))
 
         if require_credential:
-            if MODEL_CREDENTIAL_ENV not in os.environ or not os.environ.get(
-                MODEL_CREDENTIAL_ENV
-            ):
+            credential_env = provider_credential_env(resolved.model.provider)
+            if credential_env not in os.environ or not os.environ.get(credential_env):
                 raise _PreflightFailure(
                     "credential_presence",
-                    f"real mode requires a non-empty {MODEL_CREDENTIAL_ENV} in "
+                    f"real mode requires a non-empty {credential_env} in "
                     "the environment; refusing before any call",
                 )
             checks.append(PreflightCheck("credential_presence", True, "present"))
@@ -1371,9 +1572,11 @@ def preflight_check(
 
         # Real mode requires the optional provider SDK to be installed at a
         # satisfying version, checked without importing it or building a
-        # client. Dry-run/stub mode never requires it.
+        # client. Dry-run/stub mode never requires it. The distribution and
+        # frozen range are per provider (section 26f: Anthropic
+        # ``anthropic>=1,<2``, DeepSeek ``openai>=3,<4``).
         if real_mode:
-            provider_sdk_version = _require_provider_sdk()
+            provider_sdk_version = _require_provider_sdk(resolved.model.provider)
             checks.append(
                 PreflightCheck("provider_sdk", True, provider_sdk_version)
             )
@@ -1594,7 +1797,7 @@ def _preflight(
     if real_mode:
         # Capture-then-delete before any later subprocess can inherit it. The
         # git probe additionally strips credentials from every subprocess env.
-        credential = capture_model_credential()
+        credential = capture_model_credential(provider=resolved.model.provider)
     else:
         scrub_credentials(model_credentials=True)
 
@@ -1712,7 +1915,7 @@ def _drive(
     elif resolved.run_mode == "real":
         if not context.credential:  # pragma: no cover - preflight guarantees it
             raise RunnerError("real mode reached the loop without a credential")
-        model_client = build_anthropic_client(
+        model_client = build_provider_client(
             resolved, credential=context.credential
         )
     else:
@@ -1827,10 +2030,7 @@ def _drive(
             loop.feedback,
             template=resolved.prompt_template_text,
         )
-        schema_bytes = canonical_json(OUTPUT_JSON_SCHEMA).encode("utf-8")
-        projected_input = math.ceil(
-            (len(rendered.prompt.encode("utf-8")) + len(schema_bytes)) / 2
-        )
+        projected_input = _projected_input_tokens(resolved, rendered.prompt)
         projected_output = resolved.model.max_output_tokens
         projected_cost = (
             projected_input * resolved.model.price_table.input_per_token
@@ -1874,6 +2074,26 @@ def _drive(
             return status, generated.reason.value, evaluation_records
         assert isinstance(generated, GenerationEvent)  # noqa: S101
         context.append(JournalKind.GENERATION_EVENT, generated.to_dict())
+
+        # Provider usage + post-call anomaly (plan section 26f). When the
+        # concrete provider exposes the captured usage and the complete-request
+        # hash, record them durably; a completion/reasoning anomaly stops the
+        # run before any further invocation (INTERRUPTED, resource). Injected
+        # stub clients expose neither, so the dry-run/H4 path is unchanged.
+        if resolved.run_mode == "real":
+            metadata = _provider_invocation_metadata(model_client)
+            if metadata is not None:
+                context.append(JournalKind.LLM_USAGE, metadata)
+            anomaly = _provider_usage_anomaly(
+                model_client, resolved.model.max_output_tokens
+            )
+            if anomaly is not None:
+                detail = f"provider usage anomaly: {anomaly}"
+                context.append(
+                    JournalKind.INTERRUPTED,
+                    {"status": RunStatus.INTERRUPTED.value, "detail": detail},
+                )
+                return RunStatus.INTERRUPTED, detail, evaluation_records
 
         # Section-26e one-invocation -> at most one candidate guard. It is
         # applied on the real-model path: the frozen real prompt promises
@@ -2076,7 +2296,11 @@ def _finalize(
         sweep_environ = (
             None
             if context.credential is None
-            else {MODEL_CREDENTIAL_ENV: context.credential}
+            else {
+                provider_credential_env(
+                    context.resolved.model.provider
+                ): context.credential
+            }
         )
         package = assemble_package(
             context.artifact_directory,
