@@ -76,6 +76,36 @@ from smart_beta.spec.requirements import (
 
 pytestmark = pytest.mark.usefixtures("offline_guard")
 
+
+@pytest.fixture(autouse=True)
+def _fake_provider_sdk(monkeypatch):
+    """Make the optional provider SDK look installed (v1.x) by default.
+
+    The real ``anthropic`` package is intentionally not installed in the test
+    environment, so every real-mode preflight test must inject it. This
+    patches only ``importlib.util.find_spec`` and ``importlib.metadata.version``
+    for the ``anthropic`` distribution and never imports it.
+    """
+    import importlib.metadata
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    real_version = importlib.metadata.version
+
+    def _find_spec(name, *args, **kwargs):
+        if name == "anthropic":
+            return object()
+        return real_find_spec(name, *args, **kwargs)
+
+    def _version(name):
+        if name == "anthropic":
+            return "1.5.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _find_spec)
+    monkeypatch.setattr(importlib.metadata, "version", _version)
+    yield
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DRY_RUN_CONFIG = _REPO_ROOT / "pilot_configs" / "pilot1a-dryrun-v2.json"
@@ -1619,6 +1649,7 @@ def test_preflight_check_is_side_effect_free_and_offline(tmp_path, monkeypatch):
     assert report.family_id == config.family_id
     assert report.model_id == config_mod.REAL_MODEL_ID
     assert report.price_table_id == config_mod.REAL_PRICE_TABLE_ID
+    assert report.provider_sdk_version == "1.5.0"
     assert report.budgets["llm_input_tokens"] == 100_000
     assert report.budgets["llm_output_tokens"] == 40_000
     assert report.budgets["llm_cost"] == 5.0
@@ -1627,6 +1658,7 @@ def test_preflight_check_is_side_effect_free_and_offline(tmp_path, monkeypatch):
         "config_resolution",
         "approved_config_hash",
         "provider_freeze",
+        "provider_sdk",
         "base_url_proxy",
         "exact_commit_binding",
         "fixture_tree_id",
@@ -1771,3 +1803,103 @@ def test_run_pilot_calls_preflight_check_with_credential_required(tmp_path, monk
     # passed require_credential=True through the single source of truth.
     assert outcome.status is RunStatus.FAILED_PREFLIGHT
     assert recorded.get("require_credential") is True
+
+
+# ---------------------------------------------------------------------------
+# optional provider SDK availability (real mode only)
+# ---------------------------------------------------------------------------
+
+
+def _set_provider_sdk(monkeypatch, *, present: bool, version: str = "1.5.0"):
+    """Override the autouse SDK fake for the anthropic distribution."""
+
+    import importlib.metadata
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    real_version = importlib.metadata.version
+
+    def _find_spec(name, *args, **kwargs):
+        if name == "anthropic":
+            return object() if present else None
+        return real_find_spec(name, *args, **kwargs)
+
+    def _version(name):
+        if name == "anthropic":
+            return version
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _find_spec)
+    monkeypatch.setattr(importlib.metadata, "version", _version)
+
+
+def test_preflight_check_requires_the_pinned_provider_sdk_in_real_mode(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    config_dict = _real_constructed_config(tmp_path, "pf-sdk", end=CONSTRUCTED_END)
+    config = load_config_dict(config_dict)
+    approved = config.config_hash()
+
+    # Absent -> fail closed with the named check.
+    _set_provider_sdk(monkeypatch, present=False)
+    with pytest.raises(PreflightError) as excinfo:
+        preflight_check(
+            config,
+            approved_config_hash=approved,
+            repo=tmp_path,
+            git=_real_git(),
+            require_credential=False,
+        )
+    report = excinfo.value.report
+    assert report is not None
+    check = report.check("provider_sdk")
+    assert check is not None and check.passed is False
+    assert "not installed" in check.detail
+
+    # Out of the frozen >=1,<2 range -> fail closed.
+    for bad in ("0.99.0", "2.0.0", "2.1.0"):
+        _set_provider_sdk(monkeypatch, present=True, version=bad)
+        with pytest.raises(PreflightError) as excinfo:
+            preflight_check(
+                config,
+                approved_config_hash=approved,
+                repo=tmp_path,
+                git=_real_git(),
+                require_credential=False,
+            )
+        report = excinfo.value.report
+        assert report is not None
+        failed = report.check("provider_sdk")
+        assert failed is not None and failed.passed is False
+        assert bad in failed.detail
+
+    # In range -> pass and report the installed version.
+    _set_provider_sdk(monkeypatch, present=True, version="1.5.2")
+    report = preflight_check(
+        config,
+        approved_config_hash=approved,
+        repo=tmp_path,
+        git=_real_git(),
+        require_credential=False,
+    )
+    assert report.passed
+    assert report.provider_sdk_version == "1.5.2"
+    assert report.check("provider_sdk").passed is True
+    assert report.to_dict()["provider_sdk_version"] == "1.5.2"
+
+
+def test_preflight_check_does_not_require_the_sdk_in_dry_run(tmp_path, monkeypatch):
+    # The SDK is absent and out of range, but a dry-run barrier never checks it.
+    _set_provider_sdk(monkeypatch, present=False, version="2.0.0")
+    config_dict = _constructed_config(tmp_path, run_id="pf-dry-sdk")
+    config = load_config_dict(config_dict)
+    report = preflight_check(
+        config,
+        approved_config_hash=config.config_hash(),
+        repo=tmp_path,
+        git=FakeGit(),
+    )
+    assert report.passed
+    assert report.provider_sdk_version is None
+    assert report.check("provider_sdk").detail == "not-real-mode"

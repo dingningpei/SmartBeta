@@ -145,7 +145,82 @@ __all__ = [
     "build_anthropic_client",
     "build_reconstruction_hooks",
     "count_raw_candidates",
+    "PROVIDER_SDK_DISTRIBUTION",
+    "PROVIDER_SDK_MIN_MAJOR",
+    "PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE",
 ]
+
+#: The optional provider SDK distribution and its frozen version range
+#: (``pilot-anthropic = ["anthropic>=1,<2"]`` in ``pyproject.toml``).
+PROVIDER_SDK_DISTRIBUTION = "anthropic"
+PROVIDER_SDK_MIN_MAJOR = 1
+PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE = 2
+
+
+def _provider_sdk_major(version: str) -> int | None:
+    """Return the leading major component of a version string, or ``None``.
+
+    A tiny local parse so no packaging dependency is added; the frozen range
+    is a major-version range, so only the leading integer is needed (a
+    pre-release/build suffix such as ``1.0.0b1`` still has major ``1``).
+    """
+    if not isinstance(version, str):
+        return None
+    text = version.strip().lstrip("vV")
+    major_chars: list[str] = []
+    for char in text:
+        if char.isdigit():
+            major_chars.append(char)
+        else:
+            break
+    if not major_chars:
+        return None
+    return int("".join(major_chars))
+
+
+def _provider_sdk_version_in_range(version: str) -> bool:
+    """Whether ``version`` satisfies the frozen ``>=1,<2`` range."""
+    major = _provider_sdk_major(version)
+    return (
+        major is not None
+        and PROVIDER_SDK_MIN_MAJOR <= major < PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE
+    )
+
+
+def _require_provider_sdk() -> str:
+    """Return the installed provider SDK version, or fail closed.
+
+    Uses ``importlib.util.find_spec`` and ``importlib.metadata.version``
+    only: it never imports the SDK (and therefore never touches its network
+    stack) and never constructs a provider client. The SDK is optional and a
+    real run must fail closed before any side effect if it is absent or out of
+    the frozen range.
+    """
+    import importlib.metadata
+    import importlib.util
+
+    if importlib.util.find_spec(PROVIDER_SDK_DISTRIBUTION) is None:
+        raise _PreflightFailure(
+            "provider_sdk",
+            f"the {PROVIDER_SDK_DISTRIBUTION!r} SDK is not installed; install "
+            "the 'pilot-anthropic' optional extra before a real run",
+        )
+    try:
+        version = importlib.metadata.version(PROVIDER_SDK_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise _PreflightFailure(
+            "provider_sdk",
+            f"the {PROVIDER_SDK_DISTRIBUTION!r} SDK distribution metadata is "
+            "not available; the optional extra is not installed",
+        ) from exc
+    if not _provider_sdk_version_in_range(version):
+        raise _PreflightFailure(
+            "provider_sdk",
+            f"the installed {PROVIDER_SDK_DISTRIBUTION!r} version {version!r} "
+            f"does not satisfy the frozen range >={PROVIDER_SDK_MIN_MAJOR},"
+            f"<{PROVIDER_SDK_MAX_MAJOR_EXCLUSIVE}",
+        )
+    return version
 
 
 # ---------------------------------------------------------------------------
@@ -1095,6 +1170,7 @@ class PreflightReport:
     budgets: Mapping[str, Any]
     resolved: ResolvedConfig = field(repr=False, compare=False)
     pilot_data: PilotData | None = field(default=None, repr=False, compare=False)
+    provider_sdk_version: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -1126,6 +1202,7 @@ class PreflightReport:
             "model_id": self.model_id,
             "price_table_id": self.price_table_id,
             "budgets": dict(self.budgets),
+            "provider_sdk_version": self.provider_sdk_version,
         }
 
 
@@ -1164,6 +1241,7 @@ def _build_preflight_report(
     phase9_commit: str,
     holdout_identity: str,
     checks: Sequence[PreflightCheck],
+    provider_sdk_version: str | None = None,
 ) -> PreflightReport:
     bound = resolved.git_baseline.get("bound_git_commit")
     price_table_id = resolved.model.settings.get("price_table_id")
@@ -1184,6 +1262,7 @@ def _build_preflight_report(
         model_id=resolved.model.model_id,
         price_table_id=None if price_table_id is None else str(price_table_id),
         budgets=_budget_identities(resolved),
+        provider_sdk_version=provider_sdk_version,
         resolved=resolved,
         pilot_data=pilot_data,
     )
@@ -1236,6 +1315,7 @@ def preflight_check(
     head = ""
     phase9_commit = ""
     holdout_identity = ""
+    provider_sdk_version: str | None = None
 
     install_network_tripwire()
     try:
@@ -1288,6 +1368,19 @@ def preflight_check(
         checks.append(
             PreflightCheck("provider_freeze", True, resolved.model.provider)
         )
+
+        # Real mode requires the optional provider SDK to be installed at a
+        # satisfying version, checked without importing it or building a
+        # client. Dry-run/stub mode never requires it.
+        if real_mode:
+            provider_sdk_version = _require_provider_sdk()
+            checks.append(
+                PreflightCheck("provider_sdk", True, provider_sdk_version)
+            )
+        else:
+            checks.append(
+                PreflightCheck("provider_sdk", True, "not-real-mode")
+            )
 
         head = probe.head_commit()
         phase9_commit = str(resolved.git_baseline.get("phase9_complete", ""))
@@ -1417,6 +1510,7 @@ def preflight_check(
             phase9_commit=phase9_commit,
             holdout_identity=holdout_identity,
             checks=checks,
+            provider_sdk_version=provider_sdk_version,
         )
     except _PreflightFailure as failure:
         checks.append(PreflightCheck(failure.name, False, failure.detail))
@@ -1430,6 +1524,7 @@ def preflight_check(
                 phase9_commit=phase9_commit,
                 holdout_identity=holdout_identity,
                 checks=checks,
+                provider_sdk_version=provider_sdk_version,
             )
         raise PreflightError(
             f"preflight check {failure.name!r} failed: {failure.detail}",
@@ -1447,6 +1542,7 @@ def preflight_check(
                 phase9_commit=phase9_commit,
                 holdout_identity=holdout_identity,
                 checks=checks,
+                provider_sdk_version=provider_sdk_version,
             )
             raise PreflightError(str(exc), report=report) from exc
         raise
