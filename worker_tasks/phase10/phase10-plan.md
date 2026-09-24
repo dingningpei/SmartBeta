@@ -191,6 +191,18 @@ and hashing.
 - `validate_footprint_shape(body)`: a structural schema check of the §6.4
   canonical body (keys, types, sorted/disjoint intervals). There is no set
   algebra; it lets P10-B validate records without depending on P10-C.
+  - **Corrected after the Wave-2 P10-C blocker.** The validator checks, and
+    fails closed on, **only** the structural/canonical block properties
+    frozen in §6.4:
+    - subject keys within a block are strictly sorted and unique;
+    - the canonical interval shape holds;
+    - subject sets are disjoint across same-kind blocks;
+    - no two same-kind blocks have identical interval lists;
+    - blocks are strictly ordered by `(observation_kind,
+      tuple(subject_keys))`.
+  - It **must not** enforce one block per `observation_kind`.
+  - It is a checker: it rejects a non-canonical body and never
+    canonicalizes. Canonical construction is P10-C's job (§6.5).
 
 ### 4.4 Package surface
 
@@ -503,6 +515,31 @@ failure does produce overlap and is caught (§18).
   - Normalization: expand to per-(kind, subject) interval lists; merge; group
     subjects with identical interval lists. The result is unique for a given
     SOF.
+  - **Block structure (frozen; corrected after the Wave-2 P10-C blocker).**
+    - A block is one `observation_kind` plus the canonical set of subjects
+      that share **exactly the same** canonical interval list.
+    - A footprint **may contain multiple blocks with the same
+      `observation_kind`**; a repeated `observation_kind` is valid.
+    - **Within a block:** `subject_keys` are non-empty, strictly sorted and
+      unique. `intervals` use the canonical closed-interval representation,
+      are strictly ordered and do not overlap.
+    - **Across blocks of the same `observation_kind`:**
+      - subject sets are **disjoint**, so each `(observation_kind,
+        subject_key)` belongs to exactly one block;
+      - no two blocks have identical interval lists. Blocks that would have
+        identical lists are non-canonical, and their subject sets must be
+        merged into one block.
+    - **Canonical block order:** blocks are strictly ascending by the total,
+      deterministic key `(observation_kind, tuple(subject_keys))`, compared
+      lexicographically. The key uses the complete subject tuple, not only
+      the first subject. It is total because subject sets of same-kind blocks
+      are disjoint and non-empty.
+    - This representation preserves every subject↔date association. Two
+      source-observation footprints that share no `(subject_key,
+      observation_kind, observation_date)` therefore never collapse to the
+      same body or `footprint_id` merely because they use the same
+      `observation_kind`.
+    - Footprint semantics (R-4, §6.1–6.3, §6.6) are unchanged.
 - **`footprint_id`** = `content_hash({schema, determinable, unresolved,
   blocks})`. Identity is the SOF only: the maps, calendar, rules version and
   DED are audit fields. Two vendors whose data map to the same observations
