@@ -81,6 +81,10 @@ No Phase-10 task modifies:
 The **only** exceptions are the explicitly owned paths in §16:
 - the **new** additive Phase-7 file `smart_beta/evaluation/inferential_series.py`
   (P10-S);
+- the **versioned observational fold-trace hook** in sealed
+  `smart_beta/evaluation/engine.py` (P10-S), exactly as defined in §12.1(a)
+  (amendment approved after the Wave-1 blocker). It changes no Phase-7
+  evaluation semantics;
 - P10-V's two pilot-harness files, pre-authorized as the future security fix
   in `pilot1-plan.md` §26g.
 
@@ -987,48 +991,108 @@ determination is suppressed by the other.
 
 ## 12. Phase-7/8/9 interfaces
 
-### 12.1 Phase-7 additive interface (P10-S: new `smart_beta/evaluation/inferential_series.py`)
+### 12.1 Phase-7 versioned interface (P10-S) — AMENDED (Wave-1 blocker)
 
-- **Ownership:** Phase 7 (evidence production) owns empirical series.
-  Phase 10 owns admissibility and assessment.
-- **Why a sidecar is enough:** the sealed P7-D primitives already compute
-  `.per_date`, but `EvaluationRecord` does not persist it. The additive
-  sidecar exposes it without touching any sealed file.
+**Amendment provenance.** The v1 text (frozen at `dea829c`) was blocked by
+P10-S in Wave 1 as a specification defect. This amendment was approved by
+independent review, with explicit authorization for ONE narrow,
+observation-only modification of the sealed `smart_beta/evaluation/engine.py`.
 
-`build_inferential_series(record, alignments_by_horizon, partition) ->
-InferentialSeriesBundle`. Inputs:
-- the `EvaluationRecord` returned by `evaluate()`;
-- the **same** P7-B `ForwardReturnAlignment` objects the caller passed to
-  `evaluate(alignments_by_horizon=...)`;
-- the same `Partition`.
+**Frozen invariant.** Phase 7 owns empirical evaluation semantics. Phase 10
+consumes authoritative outputs from that execution. Phase 10 never
+reconstructs or independently reimplements Phase-7 evaluation semantics.
 
-Output `InferentialSeriesBundle{schema: "inferential-series-v1",
-evaluation_record_hash, spec_hash, partition_id, horizon (primary),
-alignment_digest, folds: tuple[FoldSeries{fold_key, role, rank_ic,
-pearson_ic, net_long_short}], content_hash}`:
-- **Per-date IC series:** `rank_information_coefficient(fold_panel).per_date`
-  and `information_coefficient(fold_panel).per_date`, from the public P7-D
-  primitives, on the primary-horizon alignment sliced per fold **exactly as**
-  `evaluate()` slices.
-- **Net long-short:** sliced by fold from `record.cost_adjusted_series`.
-  Never recomputed.
+**Why v1 was insufficient (evidence, `engine.py` at `dea829c`):**
+- No authoritative alignment digest exists: `ForwardReturnAlignment` carries
+  no hash.
+- `evaluate()` builds `primary_panel = winsorize_panel(primary_alignment.panel,
+  primary_point.winsorization)`, using the grid point for `spec.horizons[0]`,
+  **before** slicing folds, and `EvaluationRecord` does not persist the
+  parameter. The v1 sidecar could not observe the transformed panel.
+- Fold metrics come from independent per-fold `evaluate_portfolio(sliced,
+  …)` runs, whose first rebalance has turnover 0. Slicing the whole-sample
+  `cost_adjusted_series` is therefore not equivalent.
 
-**Binding cross-check (fail closed, `SeriesBindingError`):**
-- For every fold and every IC / long-short metric present in
-  `record.fold_results`, the sidecar's aggregate must reproduce the record's
-  `MetricValue.value` (bit-equal) and `n_obs` (equal).
-- `record.spec_hash`, `record.partition` and `partition_id` must match.
+**(a) Versioned observational hook in sealed `smart_beta/evaluation/engine.py`
+(the only authorized sealed Phase-7 change):**
+- Signature: `evaluate(..., *, fold_trace_sink=None)`, a keyword-only
+  argument, default `None`.
+- **When `None`:** control flow, arithmetic and the returned
+  `EvaluationRecord` are byte-identical to the sealed version.
+- **When supplied:**
+  - Once, before the fold loop, the engine calls
+    `fold_trace_sink.record_primary(horizon, n_groups, winsorization,
+    transaction_cost_bps)`, passing the values the engine actually uses
+    (`primary_horizon`, `primary_point.n_groups`,
+    `primary_point.winsorization`, `spec.cost_model.transaction_cost_bps`).
+  - For each fold, in partition order, immediately after `fold_portfolio =
+    evaluate_portfolio(sliced, …)`, the engine calls
+    `fold_trace_sink.record_fold(fold_key, role,
+    panel=sliced.copy(deep=True), portfolio=fold_portfolio)`.
+- **Observation only, never intervention:** the engine **ignores callback
+  return values**. The sink has no mechanism for changing the panels the
+  engine uses, portfolio results, parameters, control flow, metrics or
+  `EvaluationRecord` contents. The panel is passed as a deep copy, and the
+  engine uses no value that is read back from the sink.
+- **Sole side effect:** a sink exception propagates and fails the
+  evaluation closed **before** holdout consumption (step 8).
+- No other function or file changes.
 
-**No alternate PIT path:**
-- The sidecar never loads data, never calls `align_forward_returns`, never
-  calls `evaluate()` and never consumes a holdout.
-- The confirmation study derives alignments once through P7-B and passes the
-  same objects to both calls.
+**(b) Additive module `smart_beta/evaluation/inferential_series.py` (new):**
+- **`FoldTraceCollector`** implements the sink. It is append-only and
+  single-use: a second primary record, a duplicate fold key, or use after
+  `seal()` is refused. Its callbacks return `None`.
+- **`build_inferential_series(record, collector) -> InferentialSeriesBundle`**
+  never loads data, aligns, winsorizes, slices, forms portfolios or calls
+  `evaluate()`.
+- **Per fold, `rank_ic` / `pearson_ic`** =
+  `rank_information_coefficient(trace.panel).per_date` /
+  `information_coefficient(trace.panel).per_date`: the sealed P7-D primitive
+  applied to the engine's own traced object.
+- **Per fold, `net_long_short` / `gross_long_short`** =
+  `trace.portfolio.net_returns` / `.gross_returns`: the actual per-fold
+  execution output, neither recomputed nor sliced from a whole-sample
+  series.
+- **Series mapping:** series map to Phase-7 `Series` (dates → `date`;
+  non-finite values → `None`). Dates the primitive omits (fewer than 2
+  finite pairs) stay absent; the preregistered `MissingnessPolicy` handles
+  them downstream.
+- **Bundle:** `{schema: "inferential-series-v2", evaluation_record_hash =
+  record.content_hash, spec_hash, partition_id, primary: {horizon, n_groups,
+  winsorization, transaction_cost_bps} as reported by the engine, folds:
+  (fold_key, role, rank_ic, pearson_ic, net_long_short, gross_long_short,
+  bound: bool)}`, plus a `content_hash`.
+  - The content hash follows §4.1's canonical rules, implemented locally;
+    `smart_beta.science` is never imported.
+  - **`alignment_digest` is removed**, because no authoritative Phase-7
+    digest exists. Binding is established by the record hash, by tracing
+    within the same call, and by bit-equal aggregates.
 
-**Escalation:**
-- If exact binding is impossible without modifying `engine.py`, `metrics.py`
-  or `spec.py`, P10-S **stops as a blocker**. It never edits sealed files.
-- A versioned engine change would need separate authorization.
+**(c) Binding cross-check (fails closed with `SeriesBindingError`):**
+1. The collector's fold keys and roles equal `record.fold_results`, in
+   order, and there is exactly one primary record.
+2. For each fold and each metric present in `record.fold_results` among
+   {`ic`, `rank_ic`, `long_short`, `turnover_cost_adjusted`}, the sealed
+   primitive applied to the traced object must give `.to_metric_value(key)`
+   equal to the record's value: bit-equal value and equal `n_obs`. The
+   primitives are `information_coefficient(panel)`,
+   `rank_information_coefficient(panel)`,
+   `long_short_mean_tstat(portfolio.gross_returns)` and
+   `long_short_mean_tstat(portfolio.net_returns)`.
+3. `spec_hash` and partition identity are consistent, and the primary
+   horizon matches.
+4. A series is `bound` only if its estimand's metric was selected in
+   `spec.metrics`. Mapping: `MEAN_RANK_IC` ↔ `rank_ic`; `MEAN_PEARSON_IC` ↔
+   `ic`; `MEAN_NET_LONG_SHORT` ↔ `turnover_cost_adjusted`. An unbound,
+   missing or mismatched series fails closed, and Phase 10 refuses it
+   downstream as `SERIES_BINDING_FAILURE`.
+
+**(d) Caller contract (P10-H):** one `evaluate(...,
+alignments_by_horizon=…, fold_trace_sink=collector)` call per member, then
+`build_inferential_series(record, collector)`. Collectors are single-use.
+
+**Escalation:** any need to change sealed Phase-7 code beyond hook (a) is a
+STOP.
 
 ### 12.2 Phase-8 interface (read-only; P10-I `adapters.py`)
 
@@ -1135,10 +1199,11 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
      series or inference failure (then p := 1, §10).
 3. **Write-ahead:** append `CONSUMPTION`, then `ACCESS`, **before** any
    outcome value is read.
-4. Derive alignments once (P7-B). Per member, run `evaluate(...,
-   alignments_by_horizon=...)` (a fresh Phase-7 in-memory holdout token per
-   call) and `build_inferential_series`. Persist both, and append DERIVED
-   records.
+4. Derive alignments once (P7-B). Per member, create a fresh single-use
+   `FoldTraceCollector` and run `evaluate(..., alignments_by_horizon=...,
+   fold_trace_sink=collector)` (a fresh Phase-7 in-memory holdout token per
+   call). Then run `build_inferential_series(record, collector)` (§12.1(d)).
+   Persist both, and append DERIVED records.
 5. Re-check each member's procedure admission, identity and revocation
    against the current K snapshot (§9.3). Run inference per member through
    the single dispatch → DERIVED records.
@@ -1273,23 +1338,59 @@ the adversarial tests, the completion SHA, and `sealed files modified: NONE`
   equal content → equal hash.
 - **Evidence:** golden-hash table in the test file.
 
-**P10-S — inferential series, Phase-7 versioned additive** (Wave 1)
-- **Owns:** `smart_beta/evaluation/inferential_series.py` (new),
-  `tests/test_evaluation_inferential_series.py`.
-- **Forbidden:** every existing `smart_beta/evaluation/*` file, including
-  `__init__.py`.
-- **Contract:** §12.1.
-- **Tests:**
-  - synthetic evaluation; the bundle reproduces fold aggregates bit-equal;
-  - rank and Pearson per-date series equal the primitives' `.per_date`;
-  - net long-short slices equal `cost_adjusted_series`;
-  - the content hash is stable.
-- **Adversarial:**
-  - a tampered record value, alignment for a different horizon, or
-    mismatched partition → `SeriesBindingError`;
-  - a monkeypatched `evaluate`, `align_forward_returns` or holdout
-    `consume` is never called by the sidecar.
-- **Evidence:** a `git diff --stat` showing only the owned paths.
+**P10-S — inferential series, Phase-7 versioned interface** (Wave 1; AMENDED; re-run as P10-S-R2)
+- **Owns (new files):** `smart_beta/evaluation/inferential_series.py`,
+  `tests/test_evaluation_inferential_series.py`,
+  `tests/test_evaluation_engine_fold_trace.py`.
+- **Owns (authorized sealed modification):** `smart_beta/evaluation/engine.py`,
+  **only** the §12.1(a) observational hook.
+- **Forbidden:**
+  - `smart_beta/evaluation/__init__.py`, `metrics.py`, `portfolio.py`,
+    `robustness.py`, `spec.py`, `forward_returns.py`, `partition.py`;
+  - every other sealed path;
+  - every existing test file, including `tests/test_evaluation_engine.py`;
+  - any change to `engine.py` other than the hook.
+- **Contract:** §12.1 (amended).
+- **Mandatory regression and adversarial evidence** (each item an explicit
+  test):
+  1. `evaluate(..., fold_trace_sink=None)` produces the same
+     `EvaluationRecord`/`content_hash` as the pre-hook behaviour, on the
+     existing engine fixtures (golden hashes taken at `dea829c`).
+  2. `evaluate(..., fold_trace_sink=collector)` produces the same
+     `EvaluationRecord`/`content_hash` as `sink=None`.
+  3. `record_primary` reports exactly the engine-used primary horizon,
+     `n_groups`, winsorization and transaction cost.
+  4. Fold traces contain the actual engine-created winsorized sliced panel
+     and per-fold portfolio.
+  5. Per-date IC/rank-IC are computed only from the traced fold panel, with
+     the existing sealed metric primitives.
+  6. Net/gross long-short series come directly from the traced fold
+     portfolio.
+  7. The sidecar never loads market data, aligns, winsorizes, slices, forms
+     portfolios or calls `evaluate()`. Monkeypatched sentinels on
+     `align_forward_returns`, `winsorize_panel`, `evaluate_portfolio`,
+     `evaluate` and data loaders raise if called during
+     `build_inferential_series`.
+  8. Sink return values cannot influence engine execution: a sink returning
+     arbitrary objects yields an identical record.
+  9. Sink mutation of its received panel cannot alter the `EvaluationRecord`.
+  10. A sink exception propagates and prevents holdout consumption (the
+      `HoldoutRegistry` remains unconsumed).
+  11. Fold metric binding is bit-equal in value and equal in `n_obs` to the
+      corresponding `FoldResult`, including a winsorization ≠ 0 fixture and
+      a multi-fold fixture where fold turnover differs from the global
+      series.
+  12. `alignment_digest` does not exist in the amended contract.
+  13. Missing, unbound or mismatched series (tampered record, wrong
+      collector, duplicate or out-of-order folds, reused collector) fail
+      closed with `SeriesBindingError`.
+  14. `metrics.py`, `portfolio.py`, `robustness.py` and `spec.py` are
+      byte-identical to `dea829c` (a digest test).
+  15. Existing tests remain unmodified.
+- **Evidence:**
+  - `git diff --stat` showing only the owned paths;
+  - the exact `engine.py` diff, containing only the hook;
+  - the full suite with provider credentials scrubbed process-locally.
 
 **P10-V — full-package secret-value sweep (P1A-SV)** (Wave 1)
 - **Owns:** `smart_beta/pilot/runner.py`, `smart_beta/pilot/artifacts.py`
@@ -1803,7 +1904,11 @@ Carried forward as explicit statements:
 
 Stop and report; never route around any of the following:
 - any need to modify a sealed file outside §16's authorized paths;
-- the P10-S bit-equal binding being impossible without an engine change;
+- any change to sealed Phase-7 code beyond the §12.1(a) observational
+  hook, or any hook behaviour that is not purely observational (return
+  values used, engine inputs mutable through the sink, or control flow
+  affected other than by a sink exception failing closed before holdout
+  consumption);
 - any attempt to append a `PROCEDURE_ADMISSION` without a passed PA
   barrier, or a `test_only` procedure reaching a production registry;
 - any procedure dossier that cannot be reproduced bit-identically;
