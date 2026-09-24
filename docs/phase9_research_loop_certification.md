@@ -180,3 +180,47 @@ operationally:
   §2 plus the reviewer judgment of §3–§4.
 - §6 observations: **RECORDED**.
 - Everything in §7: **NOT CERTIFIED**.
+
+---
+
+## 9. Correction addendum (2026-09-24): end-to-end temporal firewall NOT CERTIFIED
+
+This addendum corrects an overstatement in §4–§5 above. The historical
+`phase9-complete` tag, the sealed code and the original text are left
+unchanged; this section records what later integration evidence showed.
+
+**Evidence.** Pilot-1A barrier H6-v1 (run `pilot1a-dryrun-v1`, journal
+SHA-256 `563d41b4634db34274cd8b2f176c0ac886c7c320ec827daffe7745c91970b2b4`;
+see `worker_tasks/pilot1/pilot1-plan.md` §26b) produced generator-visible
+history containing holdout-dependent aggregates:
+- a `subperiod_stability` row spanning the holdout fold;
+- a `parameter_sensitivity` table computed over the full evaluated sample,
+  holdout included.
+
+**Correction.**
+- **Phase-9 local structural firewall property — holds as stated.**
+  `GeneratorVisibleResearchHistory` and `ResearchFeedback` exclude
+  explicit holdout-fold results, holdout availability and consumption, the
+  final `DecisionRecord` and ACCEPT/REJECT/DEFER, and holdout-dependent
+  reason codes.
+- **End-to-end temporal information-flow firewall property — NOT
+  CERTIFIED by Phase 9 alone.**
+  - `DevelopmentEvidenceRecord.from_evaluation_record` copies Phase-7
+    robustness tables (`subperiod_table`, `parameter_sensitivity_table`,
+    `universe_sensitivity_table`) verbatim.
+  - Phase 7 may compute those aggregates over data that includes the
+    reserved holdout.
+  - Composed, holdout-dependent aggregate evidence can reach the generator.
+
+  The stronger claim *"no reserved holdout evidence reaches the generator"*
+  therefore holds only where the robustness aggregates are separately
+  proven holdout-independent.
+
+**Current compensating control.** The Pilot-1A harness temporal coverage
+guard (pilot plan §26b, TF-1…TF-6) enforces the end-to-end property for
+Pilot-1A runs only.
+
+**Deferred sealed-level correction (mandatory).** Pilot plan §26c (FIX B:
+B1 Phase-7 development-only robustness / B2 Phase-9 provenance-gated
+projection / B3 both). Until it lands, this NOT CERTIFIED boundary stands.
+Phase 9 is not "repaired" by the harness guard.

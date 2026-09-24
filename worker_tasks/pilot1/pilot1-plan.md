@@ -1077,6 +1077,166 @@ Merged task commits:
   dry-run partition, dry-run program/family ids). The runner CLI takes
   `--config` and `--approved-config-hash`.
 
+## 26b. Pilot-1A freeze correction after H6 adversarial integration evidence
+
+**User decision (2026-09-24):** FIX A for Pilot 1A. FIX B is recorded as
+mandatory deferred sealed-level work (§26c). The sealed Phase-6/7/8/9 code
+stays unchanged. The original H6 result **remains FAIL/BLOCKED** and is not
+reinterpreted.
+
+**H6-v1 failure record (preserved; never deleted, overwritten or reused):**
+- run_id `pilot1a-dryrun-v1`; master `480a67a`;
+- config `pilot_configs/pilot1a-dryrun.json`, hash
+  `14236390449444c0c4fad99f5ab4d14794d7298a27316ddd6bb8781d4e3be3f2`;
+- package `pilot_runs/pilot1a/pilot1a-dryrun-v1/` (git-ignored, kept on
+  disk);
+- journal SHA-256
+  `563d41b4634db34274cd8b2f176c0ac886c7c320ec827daffe7745c91970b2b4`
+  (71 records);
+- mechanical checks green: stub-only, 0 calls, cap honored,
+  RECONSTRUCTION_EXACT, key-based firewall/secret audits PASS.
+
+The leak, found in generator-visible `visible_history` →
+`experiments[].robustness_tables`:
+- `subperiod_stability` row `subperiod_1` = [2026-01-02, 2026-07-01),
+  `n_rebalances=121`, overlapping the dry-run holdout fold
+  [2026-05-01, 2026-07-01);
+- `parameter_sensitivity` `n_rebalances=175` = the entire evaluated sample
+  including the holdout fold.
+
+The v1 config files are retained unchanged and are **refused** by the
+corrected preflight.
+
+**Root cause:**
+- P7-G computes `parameter_sensitivity` over the full per-horizon alignment
+  (`evaluation/engine.py` ~L824). Subperiod rows cover whatever the
+  configured boundaries span.
+- P9-B `DevelopmentEvidenceRecord.from_evaluation_record` drops
+  holdout-*fold* results but copies `subperiod_table`,
+  `parameter_sensitivity_table` and `universe_sensitivity_table` verbatim
+  into generator-visible evidence.
+- The harness hardcoded the real holdout start as the last subperiod
+  boundary.
+- The G3/G6 firewall audits are key/substring based and cannot see temporal
+  derivation.
+
+**Corrections (pre-real-run; they apply to every Pilot-1A config):**
+1. `EvaluationSpec.metrics` = `IC, RANK_IC, LONG_SHORT, SHARPE, MAX_DRAWDOWN,
+   TURNOVER_COST_ADJUSTED, SUBPERIOD`. **`PARAMETER_SENSITIVITY` is
+   removed.** `parameter_grid` = the single primary point `(n_groups=3,
+   horizon=1, cost_bps=10, winsorization=0.01)`.
+2. `DecisionPolicy.required_evidence` loses
+   `PARAMETER_SENSITIVITY_TABLE`. No empty table is fabricated or required.
+3. **Subperiod boundaries are derived from the config's authorized
+   development window only:** `(is_start, 2026-01-02, holdout_start)` of
+   *that* config. The cut must lie strictly inside `(is_start,
+   holdout_start)`, or the config is refused. For the dry run that is
+   `(2025-10-15, 2026-01-02, 2026-05-01)`; for the real run
+   `(2025-10-15, 2026-01-02, 2026-07-01)`.
+4. The scientific claim (§6) is unchanged. §22 PASS item 9 now also requires
+   the temporal firewall (below).
+
+**Temporal information-flow firewall (TF; harness-level, fail-closed):**
+- **TF-1 Authorized interval.** Generator-visible development interval
+  `D = [is_start, holdout_start)` from the config. It is cross-checked
+  against every source `EvaluationRecord.partition`: the IS fold start must
+  equal `is_start` and the HOLDOUT fold start must equal `holdout_start`, or
+  the check FAILs.
+- **TF-2 Coverage derived only from sealed record content**, never from
+  names or guesses:
+  - a visible fold item `(experiment, fold_key)` → that record's partition
+    `FoldBoundary [start, end)`. Realizations are contained by the P7-B §8.1
+    purge contract: a label whose `[t, t+h]` crosses a fold boundary or
+    leaves the partition is dropped.
+  - a subperiod row → its own `[subperiod_start, subperiod_end)`. It is a
+    formation-date slice of the same purged alignment, with per-date
+    cross-sectional winsorization.
+- **TF-3 Containment.** Every covered item must satisfy
+  `is_start ≤ start` and `end_exclusive ≤ holdout_start`. The reserved
+  holdout therefore contributes **zero** observations.
+- **TF-4 Unknown coverage fails closed.** Categories with no row-level
+  temporal provenance (`parameter_sensitivity`, `universe_sensitivity`,
+  `redundancy`, benchmark series) must be **empty**; any row → FAIL. A
+  visible item with no derived coverage → FAIL.
+- **TF-5 Closed schema.** The generator-visible experiment and feedback
+  dicts must contain exactly the known P9-B keys. Any unknown key, or any
+  robustness table whose name is not in the coverage-declarable set
+  `{subperiod_stability}` and which has rows, → FAIL. So a new or renamed
+  empirical category can never pass by default.
+- **TF-6 Enforcement points.**
+  - **Pre-call:** the runner checks before **every** invocation. Failure →
+    `loop.stop(HOLDOUT_FIREWALL_VIOLATION)`, with no call.
+  - **Post-hoc:** G6 re-derives from the journaled `visible_history` /
+    `research_feedback` snapshots and `evaluation_record` payloads, and
+    writes `temporal_firewall_audit.json`. That file has one row per item:
+    `experiment_id, evaluation_record_hash, category, item_key,
+    source_start, source_end_exclusive, authorized_start,
+    authorized_end_exclusive, verdict`. It is a required, fail-closed
+    package artifact.
+
+**Rework tasks (minimum ownership; sealed files must stay NONE):**
+
+| Task | Owned files | Depends |
+|---|---|---|
+| P1A-G2R | `smart_beta/pilot/design.py`, `tests/test_pilot_design.py` | merged harness |
+| P1A-G6R | new `smart_beta/pilot/temporal.py`, new `tests/test_pilot_temporal.py`, `smart_beta/pilot/artifacts.py`, `smart_beta/pilot/report.py`, `tests/test_pilot_artifacts.py`; **bounded P1A-C change:** `smart_beta/pilot/contracts.py` (`ArtifactLayout.temporal_firewall_audit` as a required artifact) + `tests/test_pilot_contracts.py` | merged harness |
+| P1A-G5R | `smart_beta/pilot/config.py`, `smart_beta/pilot/runner.py`, new `pilot_configs/pilot1a-dryrun-v2.json`, new `pilot_configs/pilot1a-v2.template.json`, `tests/test_pilot_runner.py`, `tests/test_pilot_integration.py` (v1 config files untouched) | G2R, G6R |
+
+The P1A-C change is justified: the frozen `ArtifactLayout` contract is
+closed, and the temporal audit must be a *required*, fail-closed member of
+the package rather than an optional extra file.
+
+**G5R specifics:**
+- run_id `pilot1a-dryrun-v2`;
+- refuse any run whose run_id or artifact directory already exists;
+- refuse the v1 configs (PARAMETER_SENSITIVITY present / hardcoded boundary);
+- run the pre-call TF check before every generate;
+- the Gate-B capped integration case asserts the maximum generator-visible
+  source date is < the dry-run holdout start.
+
+**Required adversarial tests (G6R, `tests/test_pilot_temporal.py`):**
+- (A) parameter-sensitivity rows computed including holdout dates → FAIL;
+- (B) subperiod interval overlapping the holdout by one date → FAIL;
+- (C) a harmless-named table whose coverage includes the holdout → FAIL;
+- (D) all visible evidence ending before the holdout start → PASS;
+- (E) missing or unknown coverage metadata → FAIL CLOSED;
+- (F) a new generator-visible empirical category/key without a coverage
+  declaration → FAIL CLOSED.
+
+These are exercised on real sealed `EvaluationRecord`s produced by the
+sealed engine (constructed data), not only on hand-built dicts.
+
+**Barriers rerun:** focused G2R/G5R/G6R → integration → H4 → H5 (now
+including the temporal firewall and the hard-kill reconstruction rerun) →
+H6-v2.
+
+**H6-v2 passes only if**, in addition to the §18 H6 conditions:
+- every generator-visible empirical item has auditable coverage;
+- all of it lies inside `D`;
+- reserved holdout contribution = 0;
+- missing coverage fails closed;
+- `temporal_firewall_audit` is PASS;
+- RECONSTRUCTION_EXACT;
+- the H6-v1 evidence is still preserved with its recorded hash.
+
+## 26c. Deferred FIX B — mandatory sealed-level correctness work (not implemented)
+
+The end-to-end temporal information-flow property ("no reserved holdout
+information reaches the generator") is **not** guaranteed by the sealed
+Phase 7 + Phase 9 composition. The Pilot-1A harness guard (§26b TF) is a
+compensating control, **not** a repair of Phase 9. A future sealed-level
+review must decide where the invariant belongs:
+- **B1:** Phase-7 robustness/sensitivity APIs explicitly support
+  development-only computation for generator feedback.
+- **B2:** the Phase-9 projection refuses any empirical aggregate whose
+  temporal provenance is not proven holdout-independent.
+- **B3:** both layers carry explicit temporal provenance and enforce the
+  invariant.
+
+No choice among B1–B3 is made here. Until FIX B lands, any use of the Phase
+7+9 composition outside a harness that enforces TF must treat
+generator-visible robustness aggregates as potentially holdout-dependent.
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
