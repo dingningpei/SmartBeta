@@ -1237,6 +1237,141 @@ No choice among B1–B3 is made here. Until FIX B lands, any use of the Phase
 7+9 composition outside a harness that enforces TF must treat
 generator-visible robustness aggregates as potentially holdout-dependent.
 
+## 26d. Real-model run freeze review (2026-09-24; configuration/governance only)
+
+Baseline `e1aa6f0`. H6-v1 (FAIL; journal `563d41b4…`) and H6-v2 (PASS;
+journal `370add1d…`) are preserved.
+
+**Real-run identity:** `pilot1a-real-v2`, the single run identity. The
+config must bind:
+- the exact harness commit;
+- fixture tree `84c80f57…` + per-file hashes;
+- ResearchPolicy, SearchPolicy, DecisionPolicy and the §26b EvaluationSpec
+  template;
+- `family_id`;
+- the prompt SHA-256;
+- the model configuration;
+- `C = 10` bps ONE_WAY;
+- the budgets;
+- the holdout identity;
+- artifact destination `pilot_runs/pilot1a/pilot1a-real-v2`.
+
+**Single-run rule (frozen, not loosened):** Pilot 1A gets **at most one**
+real-model run that registers an experiment. After ≥1 registered
+experiment there is no retry, no replacement run_id, no fresh in-memory
+holdout governance, and no rerun after inspecting results. An infrastructure
+failure **before** any experiment is registered allows at most one retry,
+with a new run_id linked to the failed attempt (§17). To be enforced
+mechanically by the adapter task (below): real-mode preflight refuses if any
+prior real-mode journal under `pilot_runs/pilot1a/` contains an
+`orchestration_outcome`.
+
+**Holdout:**
+- real final holdout = inclusive 2026-07-01 … 2026-09-15 (sealed half-open
+  fold [2026-07-01, 2026-09-16));
+- `holdout_id = e74807afe9d9e41c25487221860aedfe8827697290efa9b42988e42f47ab4bb8`,
+  partition `535a2f15…`;
+- the dry-run holdout `d6adfbc8…` (recomputed, equal to the H6-v2 journal)
+  is distinct;
+- H6-v1 and H6-v2 never loaded a row ≥ 2026-07-01 (G1 cap, audited);
+- mechanically governed: YES; scientifically untouched: NO (Phase-5A
+  artifacts; possible pretrained-model knowledge).
+
+**Prompt review:** the current template (`smart_beta.pilot.prompt:PROMPT_TEMPLATE_TEXT`,
+SHA-256 `bea7923f…`) is **firewall-clean**. On the rendered pre-run fixture
+(SHA-256 `93709e1d…`) the key/structure firewall and the temporal firewall
+both PASS. It is **operationally insufficient** for a real model and is
+**not frozen**:
+- (a) it omits the §16 prompt-declared bounds (lag 0–5, windows 2–20);
+- (b) it omits the exact Phase-6 FactorSpec grammar: the expression-node
+  format, the input/`DataRequirement` binding, the exact semantic id
+  `daily_total_return`, and the `missing_policy` vocabulary. A real model
+  would likely yield `NO_ADMISSIBLE_CANDIDATE`;
+- (c) it requests multiple candidates, while the sealed loop registers every
+  admitted candidate and evaluates only the first, so one response could
+  exhaust the proposal budget (3) on a single experiment;
+- (d) it states no research objective.
+
+The prompt is frozen (bytes + SHA-256 + both firewall audits) only after the
+revision in the adapter task.
+
+**Model/provider:** a user decision.
+- Recommended: Anthropic, via the official Python SDK as an **optional**
+  extra, over the existing provider-neutral `ModelClient`.
+- Request shape: single-turn `messages.create`; JSON-schema structured
+  output (`output_config.format`); **no `tools`/`mcp_servers`/`container`
+  fields**, so no web or server tools; SDK `max_retries=0`, so every
+  attempt is a journaled intent/result.
+- Mapping: `response.usage` → tokens; `response.model` → provenance;
+  `stop_reason` `refusal`/`max_tokens` → `GeneratorFailureError`.
+- Current Claude models accept **no** temperature/sampling/seed, so the
+  template's `temperature` setting must be removed.
+- Training cutoff: **UNKNOWN** (not documented in the bundled provider
+  reference); provenance only either way.
+
+**Proposed operational ceilings (user approval required; not statistical
+budgets):**
+- invocations 5 (existing ceiling);
+- max output 16,000 tokens per call;
+- cumulative input ≤ 100,000, output ≤ 80,000, total ≤ 180,000 tokens;
+- ≤ USD 5.00;
+- wall clock 1,800 s;
+- provider retries 0;
+- request timeout 600 s.
+
+Basis: the largest rendered H6-v2 prompt is ~24.5k characters (≈7k tokens)
+before the revision. The proposal budget (3) and statistical m (3) are
+unchanged.
+
+**Credential boundary:** runtime-only.
+- The model key is read once by the runner in the real-run process, handed
+  to the provider client as an explicit `api_key`, and **deleted from
+  `os.environ` before any subprocess** (e.g. git), so it is never
+  inherited.
+- It is never printed, journaled or packaged; the G6 value sweep verifies
+  this.
+- Data-provider credentials stay scrubbed. Workers and tests never see it.
+
+**Network policy:** the H6 total tripwire stays, with one exception.
+- `socket.connect` is allowed only to the addresses of the pinned model
+  endpoint (e.g. `api.anthropic.com:443`, resolved at preflight).
+- `urllib.request.urlopen` stays blocked, so the Tiingo/Tushare clients
+  cannot connect.
+- Base-URL overrides via the environment are refused.
+- All empirical data stays offline.
+
+**Real config:** `pilot_configs/pilot1a-real-v2.json` is **not yet
+producible**. The existing preflight refuses the unfilled template
+(`failed_preflight`, 0 invocations, no run directory created) and refuses
+any non-stub provider by design. The final config is generated after the
+adapter task merges (it must bind that exact commit) and after the user
+freezes.
+
+**Bounded provider-adapter task P1A-PA (proposed; NOT launched):**
+- **Owned files:** new `smart_beta/pilot/provider_anthropic.py`;
+  `smart_beta/pilot/prompt.py` (revision a–d);
+  `smart_beta/pilot/config.py` (real-mode provider allowance, exact-commit
+  binding, per-direction ceilings, pinned endpoint, no temperature);
+  `smart_beta/pilot/runner.py` (HEAD == bound commit, endpoint-only
+  allowlist, credential capture-then-scrub, cumulative ceilings,
+  single-run guard); `pyproject.toml` (optional extra only); new
+  `tests/test_pilot_provider.py`; updates to `tests/test_pilot_runner.py`
+  and `tests/test_pilot_model.py`; new `pilot_configs/pilot1a-real-v2.json`
+  generated at the end.
+- **Tests (offline, fake SDK client injected):**
+  - request has no tools, JSON-schema output and the pinned model;
+  - usage and model echo mapped;
+  - refusal / max_tokens / transport / timeout mapped and journaled;
+  - no hidden SDK retries;
+  - credential absent from journal, package and subprocess env;
+  - allowlist permits only the pinned endpoint and refuses others and
+    urllib;
+  - preflight refuses a wrong HEAD, a prior experiment-registering real
+    run, placeholders, and a base-URL override;
+  - the revised prompt passes both firewall audits;
+  - the H4/H6 stub paths remain green.
+- **Sealed files modified: NONE.**
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
