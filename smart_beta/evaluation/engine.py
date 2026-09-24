@@ -48,6 +48,8 @@ which is *designed* to be consumed (the frozen single-use token).
 
 from __future__ import annotations
 
+import copy
+
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -630,10 +632,11 @@ def evaluate(
         Optional Phase-10 observational sink. When supplied, the engine reports
         the primary configuration once and each executed fold through
         ``record_primary``/``record_fold``. Return values are ignored, the
-        panel is a deep copy, and a sink exception propagates and fails the
-        evaluation closed before holdout consumption. When ``None`` (the
-        default) control flow, arithmetic and the returned record are
-        unchanged.
+        panel and portfolio are isolated deep copies (the sink shares no
+        mutable state with authoritative engine objects), and a sink
+        exception propagates and fails the evaluation closed before holdout
+        consumption. When ``None`` (the default) control flow, arithmetic and
+        the returned record are unchanged.
 
     Returns
     -------
@@ -803,7 +806,7 @@ def evaluate(
                 _fold_key(fold),
                 FoldRole(fold.role.value),
                 panel=sliced.copy(deep=True),
-                portfolio=fold_portfolio,
+                portfolio=copy.deepcopy(fold_portfolio),
             )
         fold_metrics = tuple(
             metric_value

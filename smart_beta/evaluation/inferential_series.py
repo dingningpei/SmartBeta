@@ -479,7 +479,7 @@ class InferentialSeriesBundle:
     schema: str
     evaluation_record_hash: str
     spec_hash: str
-    partition_id: str
+    partition_ref_hash: str
     primary: PrimaryTrace
     folds: tuple[FoldSeries, ...]
 
@@ -503,7 +503,7 @@ class InferentialSeriesBundle:
             "schema": self.schema,
             "evaluation_record_hash": self.evaluation_record_hash,
             "spec_hash": self.spec_hash,
-            "partition_id": self.partition_id,
+            "partition_ref_hash": self.partition_ref_hash,
             "primary": self.primary.to_content(),
             "folds": [fold.to_content() for fold in self.folds],
         }
@@ -519,14 +519,16 @@ class InferentialSeriesBundle:
 # ---------------------------------------------------------------------------
 
 
-def _partition_identity(record: EvaluationRecord) -> str:
+def _partition_ref_hash(record: EvaluationRecord) -> str:
     """Canonical identity of the record-carried partition reference.
 
     ``EvaluationRecord`` persists the partition as a ``PartitionRef`` (fold
-    boundaries + holdout key); the authoritative ``Partition.partition_id``
-    also covers the split rule, which the record does not carry. This is the
-    deterministic identity of what Phase 7 actually persisted, and binding
-    never depends on re-deriving the partition object.
+    boundaries + holdout key); the authoritative Phase-7 runtime partition
+    identity also covers the split rule, which the record does not carry. This
+    is the deterministic identity of what Phase 7 actually persisted, and
+    binding never depends on re-deriving the partition object. It is **not**
+    asserted to equal the runtime Phase-7 partition identity and has no
+    compatibility alias.
     """
     return content_hash(
         {
@@ -699,7 +701,7 @@ def build_inferential_series(
         schema=SCHEMA,
         evaluation_record_hash=record.content_hash,
         spec_hash=record.spec_hash,
-        partition_id=_partition_identity(record),
+        partition_ref_hash=_partition_ref_hash(record),
         primary=primary,
         folds=tuple(folds),
     )

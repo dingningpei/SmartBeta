@@ -320,19 +320,32 @@ def test_multi_fold_fixture_binds_where_fold_turnover_differs_from_global() -> N
 
 
 # ---------------------------------------------------------------------------
-# item 12 -- alignment_digest is gone
+# item 12 -- alignment_digest is gone; partition_ref_hash has no alias
 # ---------------------------------------------------------------------------
 
 
-def test_alignment_digest_does_not_exist() -> None:
+def test_alignment_digest_and_partition_id_aliases_do_not_exist() -> None:
+    from collections.abc import Mapping
+
     _, _, record, collector = _record_and_collector()
     bundle = build_inferential_series(record, collector)
     payload = bundle.to_dict()
     assert "alignment_digest" not in payload
+    assert "partition_ref_hash" in payload
+    assert payload["partition_ref_hash"] == bundle.partition_ref_hash
+    # No ``partition_id`` compatibility alias, on the object or the payload.
+    assert "partition_id" not in payload
+    assert not hasattr(bundle, "partition_id")
     assert not hasattr(bundle, "alignment_digest")
     source = pathlib.Path(series_mod.__file__).read_text(encoding="utf-8")
     assert "alignment_digest" not in source
+    assert "partition_id" not in source
     assert bundle.schema == SCHEMA == "inferential-series-v2"
+    # The approved per-series bound mapping (not one boolean per fold).
+    fold = bundle.folds[0]
+    assert isinstance(fold.bound, Mapping)
+    assert set(fold.bound) == {"rank_ic", "pearson_ic", "net_long_short"}
+    assert all(isinstance(flag, bool) for flag in fold.bound.values())
 
 
 # ---------------------------------------------------------------------------

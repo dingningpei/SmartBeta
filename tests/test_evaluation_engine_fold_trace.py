@@ -21,6 +21,7 @@ No network, provider, PIT, or experiment-registry call is made.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal, assert_series_equal
@@ -98,6 +99,37 @@ class _MutatingSink:
         self.mutated = True
         panel.loc[:, VALUE_COL] = 0.0
         panel["injected"] = 1.0
+        return None
+
+
+class _AdversarialPortfolioSink:
+    """Mutates every practically mutable sink-visible object.
+
+    Item 9b: the panel and every mutable portfolio component (return series,
+    turnover/cost series, and the accounting table) are mutated in place. The
+    engine must have isolated all of them by deep copy, so the record and its
+    hash stay identical to the no-sink baseline.
+    """
+
+    def __init__(self) -> None:
+        self.panels: list[pd.DataFrame] = []
+        self.portfolios: list[object] = []
+
+    def record_primary(self, *args, **kwargs):
+        return None
+
+    def record_fold(self, fold_key, role, *, panel, portfolio):
+        panel.loc[:, VALUE_COL] = -1.0
+        panel["injected"] = 1.0
+        for component in ("net_returns", "gross_returns", "turnover", "costs"):
+            series = getattr(portfolio, component)
+            series.iloc[:] = 987654.321
+        accounting = portfolio.accounting
+        for column in ("gross_return", "turnover", "cost", "net_return"):
+            accounting.loc[:, column] = -123456.789
+        accounting["injected"] = -1.0
+        self.panels.append(panel)
+        self.portfolios.append(portfolio)
         return None
 
 
@@ -297,6 +329,76 @@ def test_panel_mutation_by_the_sink_cannot_change_the_record() -> None:
     _, record = _evaluate_with_sink(sink=sink)
     assert sink.mutated is True
     assert record.content_hash == _GOLDEN_FULL_HAPPY_HASH
+
+
+# ---------------------------------------------------------------------------
+# item 9b -- adversarial mutation of every sink-visible portfolio component
+# ---------------------------------------------------------------------------
+
+
+def test_adversarial_portfolio_and_panel_mutation_cannot_change_the_record(
+    monkeypatch,
+) -> None:
+    """Item 9b: no-shared-mutable-state proof by mutation and memory checks."""
+    baseline = _evaluate()
+
+    engine_slices: list[pd.DataFrame] = []
+    engine_portfolios: list[object] = []
+    real_evaluate_portfolio = engine_mod.evaluate_portfolio
+    real_slice_panel = engine_mod._slice_panel
+
+    def capturing_evaluate_portfolio(*args, **kwargs):
+        result = real_evaluate_portfolio(*args, **kwargs)
+        engine_portfolios.append(result)
+        return result
+
+    def capturing_slice_panel(*args, **kwargs):
+        result = real_slice_panel(*args, **kwargs)
+        engine_slices.append(result)
+        return result
+
+    monkeypatch.setattr(engine_mod, "evaluate_portfolio", capturing_evaluate_portfolio)
+    monkeypatch.setattr(engine_mod, "_slice_panel", capturing_slice_panel)
+
+    sink = _AdversarialPortfolioSink()
+    _, record = _evaluate_with_sink(sink=sink)
+
+    # The mutation must not have altered any record field or the hash.
+    assert record.content_hash == _GOLDEN_FULL_HAPPY_HASH
+    assert record.to_dict() == baseline.to_dict()
+
+    # ``_slice_panel`` is called once per fold; the fold portfolios are the
+    # tail of the captured ``evaluate_portfolio`` calls.
+    assert len(engine_slices) == len(sink.panels) == 3
+    assert len(engine_portfolios) >= len(sink.portfolios)
+    fold_portfolios = engine_portfolios[-len(sink.portfolios):]
+    assert len(fold_portfolios) == len(sink.portfolios) == 3
+
+    # No sink-visible array shares memory with the engine-held array.
+    for sink_panel, engine_panel in zip(sink.panels, engine_slices):
+        assert not np.shares_memory(
+            sink_panel[VALUE_COL].to_numpy(), engine_panel[VALUE_COL].to_numpy()
+        )
+        assert not np.shares_memory(
+            sink_panel[DATE_COL].to_numpy(), engine_panel[DATE_COL].to_numpy()
+        )
+    for sink_portfolio, engine_portfolio in zip(sink.portfolios, fold_portfolios):
+        assert sink_portfolio is not engine_portfolio
+        for component in ("net_returns", "gross_returns", "turnover", "costs"):
+            assert not np.shares_memory(
+                getattr(sink_portfolio, component).to_numpy(),
+                getattr(engine_portfolio, component).to_numpy(),
+            ), component
+        for column in ("gross_return", "turnover", "cost", "net_return"):
+            assert not np.shares_memory(
+                sink_portfolio.accounting[column].to_numpy(),
+                engine_portfolio.accounting[column].to_numpy(),
+            ), column
+        # Prove the mutations landed on the copies, not the engine objects.
+        if not engine_portfolio.net_returns.empty:
+            assert float(engine_portfolio.net_returns.iloc[0]) != 987654.321
+        if not engine_portfolio.accounting.empty:
+            assert float(engine_portfolio.accounting["net_return"].iloc[0]) != -123456.789
 
 
 # ---------------------------------------------------------------------------
