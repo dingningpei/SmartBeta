@@ -1,10 +1,15 @@
-# Post-Pilot-1A — Scientific Evidence Framework (RESEARCH / ARCHITECTURE DESIGN)
+# Post-Pilot-1A — Scientific Evidence Framework (RESEARCH / ARCHITECTURE DESIGN, v3.1 — FROZEN)
 
-**Status:** research and design only. No code, tests, sealed authority, Pilot
-evidence, holdout, credential or model was touched.
+**Status:** research and design only; **FROZEN at v3.1** as the scientific
+authority for the Phase-10 plan (`worker_tasks/phase10/phase10-plan.md`). No
+code, tests, sealed authority, Pilot evidence, holdout, credential or model
+was touched.
 
-- Baseline: `pilot1a-complete` → `1d1f70ae41ab91676002373a52be3815436549bb`
-  (tag object `c83e8d72…`).
+- **v1** was committed at `1babbd1`. **v2** was the second-pass review
+  (§0.2). **v3** made narrow third-pass corrections (§0.1). **v3.1** adds the
+  two freeze clarifications (§0.0). Later versions supersede earlier ones
+  wherever they differ.
+- Baseline: `pilot1a-complete` → `1d1f70ae41ab91676002373a52be3815436549bb`.
 - Sources read: Pilot-1A evidence (`pilot_evidence/pilot1a-real-deepseek-v1/`),
   `worker_tasks/phase7/phase7-plan.md` §7–9, `worker_tasks/phase8/phase8-plan.md`
   §5, §7, §10–11, `worker_tasks/phase9/phase9-plan.md`,
@@ -12,683 +17,846 @@ evidence, holdout, credential or model was touched.
   §26b–26g, and the implementations in `smart_beta/evaluation/`,
   `smart_beta/experiment/judge.py` and `smart_beta/research/history.py`.
 
-**Claim labels used throughout:**
-- **[E]** established statistical result;
+**Claim labels:**
+- **[T]** theorem or result from the literature, valid under the stated
+  assumptions;
+- **[A]** assumption;
 - **[M]** methodological recommendation from the literature;
 - **[D]** design choice (ours);
-- **[I]** our inference or judgment.
+- **[I]** inference for smart_beta.
+
+---
+
+## 0. REVIEW HISTORY
+
+### 0.0 FREEZE CLARIFICATIONS (v3.1)
+
+| # | v3 position | v3.1 frozen position |
+|---|---|---|
+| A1 | SUPPORTED (Holm) and NOT_SUPPORTED (bound below SESOI) listed together, implying a common multiplicity guarantee | **CHANGED.** They do **not** share a multiplicity guarantee. **SUPPORTED** carries Holm FWER control over the frozen confirmatory family, conditional on valid individual p-values. **NOT_SUPPORTED** is a **hypothesis-local** conclusion: a predeclared hypothesis-local bound excludes the predeclared SESOI. Phase 10 claims **no** family-wise refutation control. INCONCLUSIVE = neither established. NOT_ASSESSED = evidence or protocol inadmissible. Family-wise NOT_SUPPORTED control is a possible future extension only (§11, §17). |
+| A2 | "A confirmation source may be consumed only once" | **CHANGED.** Confirmation freshness belongs to the **underlying empirical observations** (**EvidenceFootprint**, §4.7), never to filenames, artifact hashes, vendor objects or dataset identifiers. Material overlap with an already-consumed footprint never receives fresh-confirmation status. Undeterminable overlap fails closed. The exact schema and overlap policy are frozen in the Phase-10 spec. |
+
+### 0.1 THIRD-PASS CORRECTIONS (v3, narrow)
+
+Only three conceptual corrections were made; other sections are unchanged
+apart from consistency edits.
+
+| # | v2 position | v3 position |
+|---|---|---|
+| C1 | "Strong confirmation is prospective"; historical data give at most replication, with unknown exposure for LLM hypotheses | **CHANGED.** *Statistical admissibility* is separated from *epistemic (Knowledge-PIT) assurance* (§5). Historical data can support valid confirmatory inference when selection was independent of them. Five grades: G1 prospective, G2 historical with strong recorded separation, G3 historical with declared separation, G4 known-exposed, G5 unknown exposure. Model pretraining is a **disclosed residual that caps claim strength**, not an impossible "prove absence" requirement. |
+| C2 | Holm condition included a generic development/confirmation embargo | **CHANGED.** Holm needs only valid individual p-values, under any dependence among them (§9). Time-series dependence is a validity problem *for each individual test*. Every confirmatory analysis predeclares a dependence-handling design matched to estimand, horizon, overlap, serial dependence and cross-sectional construction. An embargo is one option, not a universal requirement. Holm does not make invalid p-values valid. |
+| C3 | Exposure log + relation | **CHANGED.** Knowledge PIT is an **append-only, content-addressed provenance/exposure graph** K (§4). EvidenceRole(E, H, K) is *derived*, never stored or set manually. Roles can only be downgraded by later records (non-exposure evidence counts only if recorded before freeze). Missing provenance fails closed to UNKNOWN_EXPOSURE. The chain W → OOS metric → generator input → H2 mechanically makes W DEVELOPMENT for H2. |
+
+The Phase-10 certification statement and nonclaims are rewritten (§17.1–17.2).
+The v2 answers to questions 4, 5, 6, 7 and 10 below are superseded where
+marked.
+
+### 0.2 SECOND-PASS REVIEW (v2, changes from v1)
+
+An independent review raised four issues. The resolution of each follows.
+Substantive changes are marked **CHANGED**.
+
+| # | v1 position | v2 position |
+|---|---|---|
+| 1 | "Minimum detectable rank-IC ≈ 0.08–0.09" stated as a fact | **CHANGED.** Now derived explicitly (§7.2). Across plausible assumptions the MDE is **0.069–0.18**; 0.08–0.09 sits at the *optimistic* end. The per-date IC series is not recorded, so the dispersion and serial dependence that drive power **cannot be estimated from repository data**. It is an illustrative diagnosis, not a protocol constant. |
+| 1b | "Pilot evidence is structurally incapable of either verdict" | **CHANGED — v1 was wrong.** Low power to *detect* an effect is not inability to *refute* one. Exp 1's holdout rank-IC (−0.046) gives a one-sided 95% upper bound below 0.03 for any long-run SD ≤ ≈0.33. With a pre-registered SESOI of 0.03 on a clean window, NOT_SUPPORTED would have been reachable. The actual blockers are **contamination and no pre-registration**, not power. |
+| 1c | Power gate as a hard admissibility condition | **CHANGED.** Power is a *design* property, not a *validity* condition. Minimum version: disclose the pre-study MDE at registration. A hard gate is optional policy (§12). |
+| 2 | Mean rank-IC as the default primary endpoint | **CHANGED.** There is no universal endpoint. Each confirmatory hypothesis pre-declares a primary **estimand** from an admissible set, fixed by the research-program policy before exploration (§6). Rank-IC is the *recommended* estimand for "cross-sectional ordering predictability" hypotheses, and diagnostic otherwise. |
+| 3 | E-values listed in the "stronger future version" | **CHANGED.** Reclassified as a **FUTURE RESEARCH CANDIDATE** (§8.5). E-BH's validity under arbitrary dependence presupposes valid e-values. Constructing valid e-values for our estimands under serially dependent returns requires a *conditional-mean* null, which differs from the unconditional estimand of interest. |
+| 4 | "Exposure ledger" as a supporting component | **CHANGED — now central.** **Knowledge PIT** (§4) is formalized. Evidence role is a *relation* on (evidence, hypothesis, research-history state, exposure history), not a property of a date range. It replaces intrinsic "OOS/holdout" semantics for scientific purposes. |
+| 5 | "Historical untouched data" as confirmation | **CHANGED.** Separated *data not previously loaded* from *evidence not previously known* (§5). Historical data can give at most **historical replication with unknown exposure** for LLM-generated hypotheses. Only prospective data give strong confirmation. *[Superseded by v3 C1, §0.1.]* |
+| 6 | Holm "valid after adaptive exploration" | **Refined.** It is valid **only** under explicit conditions (§9). Holm controls FWER over the frozen family on the confirmation evidence. It does **not** correct the exploration history, the winner's curse, or cross-study error. |
+| 7 | "Canonical class" as one equivalence notion | **CHANGED.** Five equivalence relations are separated (§10). Test counting uses *estimand-specific statistical equivalence*, established by declared invariance rules plus matched missing-data and universe policies. |
+| 8 | MDV with seven components incl. robustness/replication axes, a power gate, and development-only partitions | **CHANGED.** A leaner MDV (§12). Robustness and replication axes, the hard power gate and development-only Phase-7 partitions are removed from the minimum. Knowledge-PIT evidence roles, pre-registration, one-time confirmation sources and estimand-specific inference are kept. |
+| 9 | Phase 10 named "Scientific Evidence Protocol" | **CHANGED.** Responsibility defined first (§17): **Phase 10 — Knowledge-PIT & Confirmatory Evidence Protocol**. It certifies *refusal and classification*, not discovery. |
+
+Also corrected: the null SD of Spearman ρ for N independent pairs is
+**1/√(N−1)** (= 0.20 at N = 26) [T]. v1 used the Fisher-z Pearson form
+1/√(N−3).
+
+### Answers to the ten review questions
+
+1. **Is the 0.08–0.09 Pilot power claim defensible?** Only as an optimistic
+   illustration. The derived MDE for mean daily rank-IC over T = 52 is
+   0.069–0.18, depending on test sidedness, α and the (unestimable from repo
+   data) daily-IC dispersion σ ∈ [0.20, 0.30] and AR(1) φ ∈ [0, 0.3]. The
+   robust conclusion is qualitative: *the Pilot holdout cannot detect
+   IC effects of plausible size (≈0.02–0.05)*. The number itself is not a
+   protocol constant (§7.2).
+2. **Should rank-IC be the universal primary endpoint?** No. It is the
+   recommended estimand for ordering-predictability hypotheses. Each
+   confirmatory hypothesis pre-declares its estimand from an admissible menu,
+   fixed by program policy before exploration (§6).
+3. **Are e-values part of the planned architecture?** No — a future research
+   candidate only (§8.5).
+4. **Is Knowledge PIT valid?** Yes, as a formal relation over a recorded
+   exposure log, with fail-closed handling of unknown exposure. It is
+   **complete for recorded machine channels** and **necessarily incomplete for
+   human, public and pretraining knowledge**, which are declared, not
+   reconstructed (§4). *[v3: formalized as an append-only provenance graph
+   with derived, downgrade-only roles.]*
+5. **Can historical, previously unloaded data provide confirmation?**
+   *[v3, superseding v2:]* Yes, statistically, when the separation holds
+   (grades G2/G3). Epistemic strength depends on how much of the separation
+   is mechanically recorded. Pretraining and public exposure are disclosed
+   residuals that cap claim strength. Only G1 prospective data give the
+   strongest, fully auditable separation (§5).
+6. **When does OOS evidence become development evidence?** For hypothesis H,
+   window W is development evidence for H iff some function of data in W (any
+   metric, bit, rank, plot or summary) entered the influence set of H before
+   H's freeze time. Machine-precisely: a journaled generator input or a
+   recorded human/program change derived from W precedes H's
+   `GenerationEvent` (§4.5; mechanically, invariant 4 in §4.4).
+7. **When is Holm valid for a promoted set after adaptive exploration?** When
+   the family, estimands, nulls, directions, α, analysis plan and
+   confirmation source are frozen before any function of the confirmation
+   evidence reaches an influencing channel. The confirmation evidence must be
+   independent of the selection information, or conditionally valid given it,
+   and each marginal p-value must be valid. Holm then controls FWER over that
+   family *for the confirmation-period estimands*, and nothing more (§9).
+   *[v3: no universal embargo. Each test predeclares its dependence-handling
+   design, and Holm does not repair invalid p-values.]*
+8. **Which equivalence matters for test counting?** Estimand-specific
+   statistical equivalence (§10).
+9. **Revised MDV:** see §12. Six components.
+10. **What should Phase 10 certify?** That the system classifies evidence
+    roles relative to each hypothesis from its recorded exposure history, and
+    **refuses** confirmatory conclusions unless evidence is confirmatory for
+    that hypothesis under a hash-frozen pre-registration. When permitted, it
+    computes the pre-registered inference with Holm over the frozen family and
+    records a multi-axis assessment that never upgrades governance ACCEPT,
+    development evidence, or unknown-exposure evidence into scientific support
+    (§17). *[v3: superseded by the exact statement in §17.1.]*
 
 ---
 
 ## 1. Executive conclusion
 
-1. **[I] The binding constraint is data, not statistics.** On the only data the
-   system can use today — 26 names, a single 52-trading-day holdout, and a
-   window already inspected in Phase 5A — **no** test procedure can yield a
-   scientifically defensible SUPPORTED or NOT_SUPPORTED conclusion for any
-   plausible factor effect.
-   - The minimum detectable mean rank-IC is ≈0.08–0.09. Plausible cross-sectional
-     factor ICs are ≈0.02–0.05.
-   - The next phase must therefore *build the judgment machinery* **and** make the
-     system *refuse* confirmatory conclusions when the design is inadequate or the
-     data are contaminated. It must not produce false precision.
+1. **[I] The binding constraints are exposure and data, not statistics.** The
+   Gate-B window is exposed (Phase-5A human exposure, and the Pilot report
+   showed holdout metrics to humans), and it is short and narrow. No procedure
+   applied to it can support a confirmatory claim for a hypothesis frozen
+   after that exposure.
+2. **[I] Keep Phase-8 ACCEPT/REJECT/DEFER as governance.** Add a separate
+   scientific assessment whose axes cannot be collapsed into governance.
+3. **[T/I] The only broadly valid design for arbitrary, unmodeled LLM
+   adaptivity is sample splitting in the Knowledge-PIT sense.**
+   - Exploration may use any evidence.
+   - Confirmation uses evidence that no influencing channel had observed when
+     the confirmatory family was frozen (Cox 1975 [T] for the simple case).
+   - Corrections applied to the exploration history cannot restore validity
+     for data that informed selection.
+4. **[I] Historical ≠ statistically invalid (v3).** Historical data can
+   support valid confirmatory inference when selection was independent of
+   them. Prospective data give the strongest, most mechanically auditable
+   separation. Claims are graded G1–G5 by auditable separation (§5).
+5. **[D] Phase 10 = Knowledge-PIT & Confirmatory Evidence Protocol.**
+   Minimal:
+   - a Knowledge-PIT evidence-role relation;
+   - hash-frozen pre-registration of confirmatory studies with pre-declared
+     estimands;
+   - one-time confirmation keyed to underlying observations (EvidenceFootprint);
+   - estimand-specific inference;
+   - Holm;
+   - a minimal multi-axis assessment.
 
-2. **[I] Phase 8's ACCEPT/REJECT/DEFER is a governance vocabulary and should stay
-   one.** Scientific conclusions need a separate, multi-axis record: governance
-   validity, evidence role, statistical, economic, robustness, replication and
-   production are independent axes. Collapsing them was the root of the
-   "ACCEPT with negative holdout" confusion.
-
-3. **[M/I] The defensible design for an autonomous LLM search is
-   *separate exploration from confirmation*.**
-   - The LLM loop explores freely on development data. That produces candidates,
-     not conclusions.
-   - A small, pre-registered set of candidates is then promoted by a frozen rule
-     and tested **once** on data that played no role in generation or selection.
-     Multiplicity is corrected over the *confirmatory* family only.
-   - This is sample splitting. Its validity does not depend on modeling the LLM's
-     adaptive search [E], provided the confirmation data are genuinely untouched.
-     Every "correct the whole adaptive history" alternative (Bonferroni over a
-     guessed m, online FDR, SPA over the history) either needs assumptions an
-     LLM-driven search violates or has very low power.
-
-4. **[I] Fixed-m Bonferroni (Phase 8) is adequate as a *search-budget governor*
-   and as a valid FWER bound for a small pre-registered confirmatory family.**
-   It is **not** adequate as a scientific correction over an adaptive exploration
-   history: m is unknowable ex ante, it counts syntactic rather than
-   decision-relevant tests, and it ignores dependence.
-
-5. **[I] In the current design, "OOS" is not out-of-sample for any generated
-   hypothesis after the first.** The generator sees OOS metrics as feedback
-   (P9-B channels `OOS_METRICS`), so from H2 onward the OOS window is
-   development data. Only data never exposed to the generator, the researchers,
-   or earlier study designs can confirm.
-
-6. **[D] Minimum defensible next phase (Phase 10 — Scientific Evidence
-   Protocol):**
-   - a multi-axis scientific assessment record;
-   - pre-registered confirmatory studies (endpoint, direction, smallest effect of
-     interest, α, analysis plan, candidate set) with a mandatory power/design
-     adequacy gate;
-   - an evidence-exposure (contamination) ledger that persists across runs;
-   - rule-based canonicalization for endpoint-invariant transforms (this would
-     have merged `standardize(ret)` and `rank(ret)`);
-   - fold-level HAC and block-bootstrap inference on per-date series;
-   - acquisition of a genuinely untouched confirmation dataset, which is the
-     only thing that can make SUPPORTED reachable.
+   Its value today is *refusal*: on current data it outputs NOT_ASSESSED.
 
 ---
 
 ## 2. What Pilot 1A exposed
 
-These points are from the evidence record and the code.
+Unchanged from v1, with corrections.
 
 | Observation | Evidence | Consequence |
 |---|---|---|
-| ACCEPT ≠ support | Exp 1 `standardize(ret)` ACCEPT; holdout IC −0.0020, rank-IC −0.0463, net long-short −0.0014/day, Sharpe −1.80 | The Phase-8 judge applies no performance criterion (`judge.py` scope note). The system has no scientific judgment at all. |
-| Only pooled inference exists | `primary_metrics` t-stats pool IS+OOS+holdout (227 dates, one Newey-West lag = 6); `FoldResult.metrics` carry `value` and `n_obs` only, no SE | No holdout-specific test statistic exists in the record. The pooled statistic mixes development and confirmatory data. |
-| Holdout underpowered | 26 names × 52 holdout days | Minimum detectable rank-IC ≈ 0.08–0.09; Sharpe SE ≈ 2.2 (annualized) |
-| Holdout contaminated | Phase 5A computed and committed market-factor and per-name returns over the window | Not scientifically untouched, independent of the Phase-8 mechanics |
-| OOS used as feedback | P9-B feedback channels expose IS/OOS metrics to the generator | OOS is development data for H2 and H3 |
-| Semantic redundancy | Exp 1 ≡ Exp 2 for every rank-based endpoint (identical rank-IC, long-short, Sharpe and drawdown in every fold) | Two statistical slots were consumed by one decision-relevant hypothesis |
-| Costs dominate | Daily turnover ≈0.65–0.8 at 10 bps ⇒ ≈7 bps/day cost vs ≈3 bps/day gross spread (Exp 1 IS) | Gross-return "significance" is economically irrelevant here; the economic endpoint must be net of cost. |
-| Single-consumer holdout | Exp 2 and 3 DEFER `holdout_previously_consumed`; their holdout metrics exist but are ungoverned | One holdout supports one experiment; a promotion *set* cannot be confirmed together. |
-| LLM prior knowledge | Documented training cutoff Jun 2026 covers IS/OOS | Hypotheses may encode memorized in-sample patterns (a known LLM alpha-mining concern) |
+| ACCEPT ≠ support | Exp 1 ACCEPT; holdout IC −0.0020, rank-IC −0.0463, net long-short −0.0014/day, Sharpe −1.80 | No scientific judgment exists; the judge has no performance criterion |
+| Only pooled inference recorded | `primary_metrics` t-stats pool IS+OOS+holdout (227 dates, Newey-West lag 6); `FoldResult.metrics` carry `value`/`n_obs` only | No confirmation-window test statistic exists in the record |
+| Per-date IC series not recorded | only aggregates; per-date net long-short is recorded (`cost_adjusted_series`, `portfolio_accounting`) | IC dispersion and autocorrelation are unestimable from the repo; net long-short nuisance parameters are estimable |
+| Window exposure | Phase-5A artifacts; Pilot report displayed holdout metrics for all 3 experiments | The window is exposed for every hypothesis frozen afterwards |
+| OOS used as feedback | P9-B channels `OOS_METRICS` | OOS is development evidence for H2 and H3 |
+| Portfolio equivalence | Exp 1 and 2 net long-short series identical (development-dated series byte-equal; identical rank metrics in every fold) | Estimand-specific equivalence is observed; Pearson IC differs |
+| Costs dominate | turnover ≈0.65–0.8/day at 10 bps vs gross spread ≈3 bps/day (Exp 1 IS) | The economic estimand must be net of costs |
+| LLM pretraining | documented cutoff Jun 2026 | IS/OOS lie before the cutoff: disclosed pretraining residual (§5.2) |
 
 ---
 
-## 3. Scientific question and terminology
+## 3. Terminology
 
-**Question.** What evidence must exist before the system may say a factor
-hypothesis is scientifically *supported*, *not supported*, *inconclusive*, or
-that the evidence is *invalid* for judgment?
-
-**Terms [D]:**
-- **Signal** — a deterministic cross-sectional score (a Phase-6 `FactorSpec`
-  evaluated on PIT inputs).
-- **Hypothesis** — a directional claim about the population relationship
-  between a *signal equivalence class* and future returns on a declared
-  universe and horizon, measured by a declared endpoint, with a declared
-  smallest effect of scientific interest (SESOI). A formula alone is not a
-  hypothesis.
-- **Experiment** — one evaluation of one signal under one EvaluationSpec
-  (Phase-8 `experiment_id`; unchanged).
-- **Study** — a pre-registered, frozen analysis plan that tests a *set* of
-  hypotheses on a declared data window with a declared inference procedure.
-  Studies are **exploratory** or **confirmatory**.
-- **Evidence role** of a data window with respect to a hypothesis:
-  - **development** — the hypothesis or its selection may have depended on it;
-  - **confirmatory** — provably not used for generation or selection;
-  - **contaminated** — exposed by some channel (generator, human, earlier
-    study, pretraining), so it cannot be confirmatory.
-- **Search attempt** (budget unit) vs **statistical test** (inference unit):
-  distinct concepts (§6).
+- **Signal:** a Phase-6 `FactorSpec` evaluated on PIT inputs.
+- **Hypothesis H:** a directional claim about a declared **estimand** θ(H),
+  for a signal equivalence class, universe, horizon and construction, with a
+  declared SESOI δ(H) in θ-units.
+- **Freeze time τ(H):** the time of the hash-frozen record that fixes H's
+  specification. For generated hypotheses, the journaled `GenerationEvent` /
+  `ResearchProposal` time. For a confirmatory study, the pre-registration hash
+  time.
+- **Fold role:** Phase 7's mechanical partition label (IS/OOS/WF/HOLDOUT).
+  **Unchanged and sealed.**
+- **Evidence role:** derived by EvidenceRole(E, H, K) from the immutable
+  Knowledge-PIT provenance graph K (§4); never stored or set manually. **This, not fold role, governs scientific use.**
+- **Search attempt** (Phase-8 budget unit) vs **statistical test** (Phase-10
+  inference unit): distinct.
 
 ---
 
-## 4. Literature review
+## 4. Knowledge PIT (provenance formalization) — REVISED v3
 
-For each method: the problem it solves, its assumptions, its fit to an
-adaptive LLM search, the inputs it needs, and the failure modes that remain.
+### 4.1 Motivation
 
-### 4.1 Multiple testing and the factor zoo
+Data PIT answers "what data was knowable at t". Scientific inference
+additionally needs "what evidence had the research process observed when H was
+frozen". The two are independent. Perfectly PIT-clean data can be
+scientifically contaminated for H, because an earlier result derived from the
+same data informed H.
 
-**Harvey, Liu & Zhu (2016), "…and the Cross-Section of Expected Returns", RFS 29(1):5–68.**
-- **Problem:** hundreds of published factors imply high false-discovery rates
-  at t = 2.
-- **Method:** Bonferroni, Holm and BHY applied to the historical factor record,
-  with correlation and publication-bias adjustments. It recommends new factors
-  clear **t > 3.0**. [E for their sample and model; M as a hurdle.]
-- **Assumptions:** an estimate of the number of tests actually tried, including
-  unpublished ones, which they model.
-- **Fit:** a *static* hurdle calibrated to the academic literature's history. It
-  is not calibrated to our search process. A fixed t hurdle inherits no
-  guarantee under adaptive LLM search, because our effective number of tests
-  differs.
-- **Remaining failure:** a hurdle is not a procedure. It ignores power; with
-  N = 26, t > 3 is practically unreachable for real effects.
+**v3 principle [D]:** an evidence role is **never** an intrinsic, stored or
+manually editable property of a date range, dataset or fold. It is always
+**derived**, by a deterministic function, from an append-only provenance and
+exposure history.
 
-**Harvey & Liu (2020), "False (and Missed) Discoveries in Financial Economics", JF 75(5).**
-- Double-bootstrap estimation of FDR and power trade-offs. It emphasizes that
-  raising hurdles raises *missed* discoveries. [M]
-- **Fit:** it motivates reporting the error trade-off rather than one threshold.
-  It needs a large population of tested strategies to bootstrap.
+### 4.2 The Knowledge-PIT history K [D]
 
-**Chordia, Goyal & Saretto (2020), "Anomalies and False Rejections", RFS 33(5).**
-- About 2 million data-mined accounting strategies under multiple-hypothesis
-  control; few survive. [E for their sample]
-- **Fit:** this is the closest analogue to autonomous search. It shows the
-  *scale* problem: mechanical search needs corrections scaled to the search
-  space, not to the number of "published" candidates.
+K is an **append-only, content-addressed provenance/exposure graph**.
 
-**Chen, Lopez-Lira & Zimmermann, "Does Peer-Reviewed Research Help Predict Stock Returns?" (arXiv 2212.10317).**
-- Mining about 29,000 accounting ratios for t > 2 produces post-sample
-  predictability similar to peer-reviewed predictors; about 50% remains
-  post-sample. [E for their sample]
-- **Relevance [I]:** machine-generated signals are not a priori worse than
-  "theory". But post-sample decay of about half is the norm, so in-sample
-  magnitudes must be shrunk. The LLM's "economic rationale" field carries no
-  evidential weight by itself.
+- Every node carries a content hash, a `recorded_at` time, and (where
+  applicable) an `event_time`.
+- Every edge is itself an append-only record with `recorded_at`.
+- Nothing is edited or deleted.
+- K is identified by the hash of its record log, so every role computation is
+  reproducible against a named K.
 
-**Hou, Xue & Zhang (2020), "Replicating Anomalies", RFS 33(5):2019–2133.**
-- With NYSE breakpoints and value weighting, 65% of 452 anomalies fail
-  |t| ≥ 1.96, and 82% fail the 2.78 multiple-test hurdle. [E]
-- **Relevance:** construction choices (microcaps, weighting) move conclusions.
-  Robustness to construction is a first-class axis.
+The schema below is indicative only; it is not frozen here.
 
-**Jensen, Kelly & Pedersen (2023), "Is There a Replication Crisis in Finance?", JF 78(5):2465–2518.**
-- A hierarchical Bayesian model: most factors replicate, cluster into 13
-  themes, and work out-of-sample across 93 countries. Evidence is *strengthened*
-  by the number of related factors through shrinkage. [E for their data and
-  model]
-- **Relevance [I]:** replication is about themes (clusters), not formulas.
-  Shrinkage across related signals is the principled answer to "many similar
-  tests". It needs many factors and long, broad data, which we do not have.
+**Candidate node types:**
 
-**McLean & Pontiff (2016), "Does Academic Research Destroy Stock Return Predictability?", JF 71(1):5–32.**
-- Returns are 26% lower out-of-sample and 58% lower post-publication. [E]
-- **Relevance:** an upper bound on data-mining shrinkage around 26%. Any
-  in-sample effect size should be discounted before power and SESOI planning.
-
-**Giglio, Liao & Xiu (2021), "Thousands of Alpha Tests", RFS 34(7):3456–3496.**
-- FDR control for many alpha tests in linear factor models, robust to omitted
-  factors and missing data. It is asymptotic in both the number of tests and
-  T. [E]
-- **Fit:** relevant when we test many alphas against a factor model. It
-  requires a large test population and panels, and it is asymptotic. It is
-  inappropriate for 3 candidates on 26 names.
-
-**Feng, Giglio & Xiu (2020), "Taming the Factor Zoo", JF 75(3).**
-- Double-selection LASSO tests a new factor's *marginal* contribution given the
-  zoo. [M]
-- **Relevance:** "redundancy" should be tested as marginal pricing
-  contribution, not only pairwise correlation. It needs a benchmark factor set.
-
-### 4.2 Data snooping and "best-of-many"
-
-**White (2000), "A Reality Check for Data Snooping", Econometrica 68(5).**
-- Tests whether the *best* of K strategies beats a benchmark, accounting for
-  the search, via a stationary bootstrap of the full K-strategy return matrix.
-  [E, asymptotic]
-- **Assumptions:** the K strategies are specified in advance; stationarity;
-  their joint return series are available.
-
-**Hansen (2005), "A Test for Superior Predictive Ability", JBES 23(4).**
-- A studentized, recentered improvement on the Reality Check that is less
-  sensitive to poor, irrelevant strategies. [E]
-
-**Romano & Wolf (2005), "Stepwise Multiple Testing as Formalized Data Snooping", Econometrica 73(4).**
-- A stepdown bootstrap that identifies *which* strategies beat the benchmark,
-  with FWER control and dependence exploited. [E]
-
-**Fit for the whole family [I]:** these are the *correct* tools when the
-question is "is the best of the strategies we tried real?" and the full set of
-tried strategies is known and re-evaluable on common data. Our registry makes
-the tried set knowable, which is a real advantage. But:
-- **(a)** the tried set is *adaptively grown*; the Reality Check assumes a fixed
-  universe of candidates, so adding strategies after seeing results changes the
-  null distribution;
-- **(b)** they need the per-period return series of **every** tried strategy on
-  the **same** window;
-- **(c)** the power is low with short T.
-
-Recommended use: *reporting* on exploration history, not a confirmatory gate.
-
-### 4.3 Backtest overfitting
-
-**Bailey & López de Prado (2014), "The Deflated Sharpe Ratio", JPM 40(5):94–107.**
-- Adjusts the observed Sharpe for the number of trials, the variance of trial
-  Sharpes, non-normality (skew/kurtosis) and sample length. [E, under a
-  Gaussian-extreme-value approximation]
-- **Needs:** the number of *independent* trials, and the cross-trial Sharpe
-  variance. Both are ill-defined under dependent, adaptive trials.
-- **Fit:** useful as a skeptical *report* on exploration winners. It is not a
-  confirmatory test, and the "effective number of independent trials" is not
-  estimable reliably from a few dozen correlated LLM trials.
-
-**Bailey, Borwein, López de Prado & Zhu (2017), "The Probability of Backtest Overfitting", J. Comp. Finance 20(4):39–70 (CSCV).**
-- Estimates how often the in-sample-best configuration underperforms the median
-  out-of-sample, using combinatorially symmetric cross-validation over a
-  strategy × time matrix. [E as a procedure]
-- **Needs:** many candidate configurations evaluated on the same partitioned
-  panel.
-- **Fit:** a diagnostic of *search-process* overfitting. It suits a
-  "family-level report" once exploration produces dozens of candidates on a
-  common window. It is not a per-hypothesis verdict.
-
-**Lo (2002), "The Statistics of Sharpe Ratios", FAJ 58(4)**, and **Ledoit & Wolf (2008), J. Empirical Finance 15(5).**
-- Sharpe standard errors under serial correlation, and HAC/bootstrap tests for
-  Sharpe differences. [E]
-- **Relevance:** the Sharpe SE with 52 daily observations is huge (≈2.2 in
-  annualized units at SR ≈ 0). A holdout Sharpe of −1.80 is statistically
-  uninformative.
-
-### 4.4 Classical FWER and FDR
-
-**Holm (1979), Scand. J. Stat.** — uniformly more powerful than Bonferroni and
-FWER-valid under arbitrary dependence. [E] **Fit:** strictly better than
-Bonferroni for a pre-registered confirmatory family. Adopt.
-
-**Benjamini & Hochberg (1995), JRSS-B; Benjamini & Yekutieli (2001), Ann. Stat.**
-- BH controls FDR under independence or PRDS. BY controls it under arbitrary
-  dependence at a log(m) cost. [E]
-- **Fit:** appropriate for *screening* many exploratory candidates, where some
-  false discoveries are tolerable. Not appropriate for a "SUPPORTED" claim
-  about a specific hypothesis, where FWER semantics are clearer.
-
-### 4.5 Adaptive and online inference
-
-**Foster & Stine (2008), α-investing, JRSS-B 70(2); Javanmard & Montanari (2018), Ann. Stat. 46(2), LORD; Ramdas et al. (2017–2018), LORD++/SAFFRON.**
-- Online FDR for a *stream* of hypotheses tested in sequence, with an α-wealth
-  budget. [E; several versions are proven only under independence or specific
-  dependence]
-- **Fit [I]:** conceptually the closest match to "H1 → H2 → H3 …". But the
-  guarantees need each p-value to be valid *conditional on the past*. When H2
-  is chosen after seeing H1's results *on the same data*, H2's p-value on that
-  data is not conditionally valid. Online FDR fixes the *counting* problem, not
-  the *reuse-of-data* problem. It is valid only if each test uses fresh data
-  (or data independent of the selection information).
-
-**Vovk & Wang (2021), Ann. Stat. 49(3); Wang & Ramdas (2022), "False Discovery Rate Control with E-values", JRSS-B 84(3):822–852 (e-BH); Ramdas, Grünwald, Vovk & Shafer (2023), Stat. Sci. (safe anytime-valid inference).**
-- E-values and test martingales support optional stopping and continuation;
-  e-BH controls FDR under **arbitrary dependence**. [E]
-- **Fit [I]:** the best-matched tool for **prospective** confirmation, where
-  new data arrive over time and are monitored with a pre-registered
-  martingale. Anytime validity makes "keep watching until evidence is
-  decisive" legitimate. It does **not** rescue inference on data already used
-  for selection. It needs data that *arrive after* the hypothesis is frozen.
-
-**Dwork, Feldman, Hardt, Pitassi, Reingold & Roth (2015), "The Reusable Holdout", Science 349(6248):636–638.**
-- Differential-privacy-style noise on holdout answers allows many adaptive
-  queries while bounding overfitting. [E, i.i.d.-sample theory]
-- **Fit [I]:** theoretically attractive for letting a generator query a
-  confirmation set a controlled number of times. But its guarantees assume
-  i.i.d. samples. Financial time series are neither independent nor
-  identically distributed, and the budget of queries is small for short
-  samples. A research direction, not a component to build now.
-
-**Selective inference** (Fithian, Sun & Taylor 2014; Taylor & Tibshirani 2015, PNAS).
-- Valid inference conditional on a selection event, when the selection rule is
-  known and mathematically tractable (e.g. lasso). [E]
-- **Fit:** an LLM's selection rule is neither known nor tractable. It is not
-  applicable, except through its simplest instance, *data splitting*, which is
-  exactly the exploration/confirmation design.
-
-**Gelman & Loken (2014), "The garden of forking paths", American Scientist.**
-- Undisclosed analytic flexibility invalidates nominal p-values even without
-  conscious fishing. [M]
-- **Relevance:** every evaluation-parameter choice made after seeing data is a
-  fork. Pre-registration must freeze the analysis plan, not only the formula.
-
-### 4.6 Out-of-sample, holdout and protocol design
-
-**Arnott, Harvey & Markowitz (2019), "A Backtesting Protocol in the Era of Machine Learning", JFDS 1(1).**
-- A research-protocol checklist: pre-specify, count trials, respect true OOS,
-  mind costs and economic mechanism. [M]
-
-**López de Prado (2018), *Advances in Financial Machine Learning*.**
-- Purging and embargo for overlapping labels; combinatorial purged
-  cross-validation. [M] **Relevance:** Phase 7 already purges cross-boundary
-  labels (§8.1). The embargo concept matters once horizons exceed 1.
-
-**Nosek et al. (2018), "The Preregistration Revolution", PNAS 115(11).**
-- Pre-registration distinguishes confirmatory from exploratory evidence; it
-  does not forbid exploration. [M]
-
-### 4.7 Economic significance and costs
-
-**Novy-Marx & Velikov (2016), "A Taxonomy of Anomalies and Their Trading Costs", RFS 29(1).**
-- Many anomalies' profits disappear after realistic costs, especially
-  high-turnover ones. [E]
-- **Relevance:** Pilot 1A's 1-day return signals have turnover ≈70%/day.
-  Costs, not t-stats, decide their economic status.
-
-### 4.8 LLM-driven factor mining
-
-AlphaAgent (arXiv 2502.16789), Chain-of-Alpha (arXiv 2508.06312), QuantaAlpha
-(arXiv 2602.07085), and LLM evolutionary factor search (arXiv 2507.17211)
-**[I from reading their framing]**:
-- The field recognizes that backtest-feedback loops overfit ("alpha decay", "LLM
-  p-hacking"), and that pretrained models may have memorized market history.
-- Mitigations reported are mostly regularized exploration and later-dated
-  test windows, i.e. process design rather than new inferential theory.
-- None provides a validity guarantee for adaptive LLM search. This supports
-  treating the LLM loop as *exploration*.
-
-### 4.9 Summary: which method for which job [I]
-
-| Job | Suitable | Unsuitable / why |
-|---|---|---|
-| Search-budget governance (stop runaway search) | fixed-m budget (Phase 8), α-wealth accounting | treating the budget as inference |
-| Confirmatory significance on untouched data | pre-registered endpoint + Holm (or Bonferroni) over the small promoted family; HAC or block-bootstrap SE | BH (wrong error semantics for a specific claim); DSR/PBO (not tests) |
-| Reporting skepticism about exploration winners | DSR, Romano-Wolf/SPA on the tried set, PBO when enough candidates | as gates (unstable with short T and dependent trials) |
-| Prospective / sequential confirmation | e-values / test martingales, e-BH | fixed-sample tests with repeated looks |
-| Replication across themes and markets | hierarchical shrinkage (JKP-style) once data exist | single-formula replication |
-| Redundancy / marginal value | spanning regressions or double-selection vs a benchmark set | pairwise correlation alone |
-
----
-
-## 5. Proposed scientific evidence model [D]
-
-```
-            EXPLORATION (autonomous, adaptive)          CONFIRMATION (frozen, once)
-  generator ⇄ development data (IS, "OOS")      →  pre-registered study on untouched data
-  output: candidates + exploration report           output: scientific assessment
-  claims: none about truth                          claims: bounded, per axis
-```
-
-1. **Exploration may use any development data and any adaptivity.** Its outputs
-   are *candidates*, with full lineage and every tested variant recorded (Phase
-   8/9 already do this). Statistics computed here are *selection statistics*.
-   They are reported, never read as evidence for truth.
-2. **Promotion** is a frozen, pre-declared rule applied to exploration outputs.
-   Example: "at most k = 3 candidates, distinct canonical classes, ranked by
-   development rank-IC, with a net-of-cost development spread > 0".
-   Promotion creates a **confirmatory study** object *before* confirmation data
-   are touched.
-3. **Confirmation** evaluates the promoted set once, on a window whose exposure
-   ledger shows no generator, human or pretraining exposure (to the extent
-   knowable). Inference follows the pre-registered plan, with FWER over the
-   promoted family.
-4. **Scientific assessment** is a multi-axis record (§11), derived
-   mechanically from the confirmatory result plus the declared robustness and
-   replication evidence.
-5. **Exploration history is never re-used as confirmatory evidence.** A
-   hypothesis whose confirmation window becomes contaminated loses its
-   confirmatory role permanently.
-
-**Why this, rather than correcting the whole adaptive history [I]:**
-- sample splitting is valid under arbitrary, unmodeled selection by the LLM,
-  because confirmation data are independent of selection [E];
-- it needs no estimate of the "effective number of tests" in exploration;
-- it makes the generator firewall a *scientific* requirement (it protects
-  independence) rather than only a governance one.
-
-**The cost:** data. Confirmation consumes data that exploration cannot use.
-
----
-
-## 6. Hypothesis, experiment and family ontology [D]
-
-**Canonical signal class.** Two signals are *endpoint-equivalent* for endpoint
-E if E is invariant to the transformation between them.
-- Rank-based endpoints (rank-IC, quantile-sort portfolios) are invariant to any
-  strictly increasing per-date transform: `rank`, affine `standardize` with
-  positive scale, positive scaling, adding a per-date constant.
-- Pearson IC is invariant only to per-date positive affine maps.
-
-A **rule-based canonicalizer** (a declared rewrite set per endpoint, not
-learned semantic inference) maps each FactorSpec to a canonical form for the
-study's endpoint. `standardize(ret)` and `rank(ret)` canonicalize to the same
-class under rank-IC. Signals built from different inputs, lags or windows do
-not. This is deliberately **incomplete**: it detects declared invariances only,
-and the general semantic-equivalence nonclaim stays.
-
-**When is a change a new hypothesis vs a robustness test?**
-
-| Change | Classification |
+| Node | Meaning |
 |---|---|
-| sign | Same class, opposite direction. The directional hypothesis must be declared *before* confirmation. A sign flip after seeing development results is a new exploratory candidate, not a free re-test. |
-| lag, window, transform (non-invariant), input field | New signal class ⇒ new hypothesis |
-| strictly monotone transform under a rank endpoint | Same class ⇒ same hypothesis (no new test) |
-| universe, transaction cost, portfolio construction, horizon | Robustness dimensions of the *same* hypothesis **if pre-declared** as a robustness grid. Changed after seeing results ⇒ a new analysis (forking path) that must be counted. |
-| EvaluationSpec (endpoint, partition, horizon as primary) | A different study design. The primary endpoint and horizon are part of the hypothesis. |
+| `EvidenceArtifact` | a physical data source (provenance, packaging); its scientific identity is its **EvidenceFootprint** (§4.7), not its file, hash, vendor or dataset id |
+| `DerivedMetric` | any function of evidence: metric, fold result, bit (ACCEPT, rank), plot, summary, DecisionRecord |
+| `GeneratorInput` | a journaled generator-visible payload (visible history, feedback snapshot, prompt) |
+| `HumanDecision` | a recorded human act: program, prompt or policy change, promotion, or a declared observation |
+| `ExposureDeclaration` | a declared exposure or non-exposure for a channel that cannot be observed mechanically (human, public literature, model pretraining) |
+| `ResearchProposal` / `Hypothesis` | Phase-9 proposal and the frozen hypothesis specification |
+| `PreRegistration` | the hash-frozen confirmatory contract (§6, §9) |
+| `ConfirmationStudy` | the execution that consumes a confirmation source under a PreRegistration |
+| `AccessRecord` | a machine-logged read of an `EvidenceArtifact` by a component |
 
-**Units [D]:**
-- The **search-budget unit** stays Phase-8's `experiment_id`. It is a
-  governance cost, and it is fine that it overcounts.
-- The **statistical test unit** is *(canonical class, direction, endpoint,
-  universe, horizon)* inside a **confirmatory study**. Only confirmatory tests
-  enter the scientific multiplicity family.
-- These units are intentionally **not** identical.
+**Candidate edge types:**
 
-**Statistical family [D]:** the set of hypotheses tested in *one confirmatory
-study* (pre-registered). Cross-study familywise control is handled by
-pre-registered study-level α allocation (e.g. a fixed α per confirmation
-window), not by pooling unrelated studies.
-
----
-
-## 7. Primary endpoint design
-
-**[I] No endpoint is universally right.** Each hypothesis should pre-register
-**one** primary statistical endpoint and **one** economic endpoint, with
-direction and a SESOI.
-
-| Candidate | For | Against |
-|---|---|---|
-| Pearson IC | uses magnitudes | outlier-sensitive; scale-dependent; weak economic meaning |
-| **Rank-IC (mean of per-date Spearman)** | robust; uses the full cross-section; construction-free; invariant to monotone transforms | economic magnitude unclear; noisy at small N |
-| Long-short (quantile) return | economic; portfolio-level | depends on n_groups, weighting and breakpoints; lower power |
-| Sharpe of long-short | scale-free | very large SE at short T; non-normal |
-| Alpha vs factor model | measures marginal contribution | needs a certified benchmark factor set (US CAPM only today; FF/CH factors not certified for this universe) |
-
-**[D] Recommended default:**
-- **Primary statistical endpoint: mean rank-IC** at the declared horizon.
-  Directional (one-sided in the declared direction), inferred by
-  Newey-West/HAC with a lag rule declared ex ante, plus a stationary block
-  bootstrap as a robustness check on the SE.
-- **Primary economic endpoint: net-of-cost long-short return** (declared
-  construction, cost model and turnover), tested one-sided against a declared
-  economic SESOI. It is a *separate axis*, not a co-primary on the same α.
-
-**Required analysis properties:**
-- directionality declared;
-- the SESOI declared in endpoint units, justified from prior evidence and
-  discounted about 25–50% for expected decay (McLean-Pontiff; Chen et al.);
-- autocorrelation handled by a HAC lag ≥ horizon − 1 and an ex-ante rule;
-- cross-sectional dependence acknowledged: the per-date IC SE exceeds
-  1/√(N−3) under factor structure, so the time-series-of-ICs approach is
-  preferred;
-- non-normality handled by the bootstrap check;
-- multiple horizons or constructions either (a) pre-declared with one primary,
-  the rest as robustness, or (b) all primary with Holm across them.
-
----
-
-## 8. Multiple-testing and adaptive-search framework
-
-1. **Search governance (keep Phase 8).** Fixed-m budgets bound exploration cost
-   and prevent unbounded search. **[I]** Their semantics are "budget", not
-   "inferential guarantee over the adaptive history".
-2. **Confirmatory significance (new).** Holm over the pre-registered
-   confirmatory family at α_study. This is valid FWER under arbitrary
-   dependence [E], and because confirmation data are untouched it is valid
-   regardless of how exploration chose the candidates.
-3. **Exploration reporting (new, report-only).** For the family's exploration
-   history, report:
-   - the canonical-class count;
-   - Romano-Wolf/SPA p-values of the best candidate *where the tried set is
-     re-evaluable on a common window*;
-   - the DSR of the best candidate with a declared trial count;
-   - PBO when ≥ about 16 candidates exist.
-
-   Labeled **exploratory**, never a gate.
-4. **Prospective confirmation (stronger future).** E-value test martingales on
-   data arriving after freeze, with e-BH across simultaneously monitored
-   hypotheses (valid under arbitrary dependence).
-
-**[I] What does not survive LLM adaptivity:**
-- any p-value computed on data the generator saw, or that informed selection;
-- BH or online-FDR over exploration p-values (not conditionally valid);
-- Bonferroni with m = "experiments so far" (a data-dependent m);
-- DSR as a gate (unknown effective trial count).
-
----
-
-## 9. Holdout and evidence-contamination model
-
-**Exposure ledger [D].** A persistent, append-only record of every
-(data window × universe × target) and every *channel* that has seen it:
-- generator feedback;
-- human inspection (e.g. Phase 5A artifacts);
-- a prior study's confirmation;
-- pretraining, by the documented model cutoff;
-- aggregates leaked through robustness tables (the §26b lesson).
-
-A window is eligible as confirmatory for a hypothesis only if the ledger shows
-no exposure channel that could inform that hypothesis's generation or
-selection. Contamination is **permanent**.
-
-**Role of each fold [D]:**
-
-| Fold | Role |
+| Edge | Meaning |
 |---|---|
-| IS | exploration fitting and selection |
-| "OOS" / validation | exploration model checking; development data once shown to the generator |
-| Walk-forward | exploration stability evidence |
-| Confirmation window | one-time, pre-registered, study-level; consumed by a *promotion set*, not a single experiment |
-| Prospective window | data dated after freeze; the strongest confirmation |
+| `derived_from` | DerivedMetric → EvidenceArtifact / DerivedMetric |
+| `included_in` | DerivedMetric → GeneratorInput / HumanDecision |
+| `observed_by` | node → channel (generator, human:role, program, pretraining:model, public) |
+| `influenced` | GeneratorInput / HumanDecision → ResearchProposal / Hypothesis / PreRegistration |
+| `available_before` | EvidenceArtifact → time (earliest time the data existed or were obtainable) |
+| `frozen_before` | Hypothesis / PreRegistration → time (hash-freeze time τ) |
+| `consumed_by` | EvidenceArtifact → ConfirmationStudy |
 
-**[I] Design recommendation:**
-- abandon "one final holdout consumed by the first experiment" as the
-  scientific design;
-- keep Phase-8 single-use holdout governance as the *mechanical* guard, but
-  make the consuming entity a **confirmatory study** (a batch);
-- prefer **sequential forward windows**: each new calendar block, once
-  accrued, becomes a new confirmation window for the studies frozen before it.
+**Derived sets:**
 
-The cross-run holdout ledger (a deferred item) becomes mandatory.
+- **footprint(v)**: the union of the EvidenceFootprints (§4.7) of every
+  `EvidenceArtifact` reachable from v through `derived_from*`.
+- **Anc(H, K)**: the influence ancestry of H, i.e. every node with a path
+  to H through `derived_from` / `included_in` / `influenced` / `observed_by`
+  edges whose events precede τ(H), restricted to channels in Ch(H). For an
+  LLM-generated H, Ch(H) = generator, program, humans who edit the program or
+  prompt, promotion rule, and the generator's pretraining.
+- **ExposedFP(H, K)** = ∪ footprint(v) over v ∈ Anc(H, K).
 
----
+### 4.3 EvidenceRole(E, H, K) [D]
 
-## 10. Robustness vs replication
+Here E is a candidate confirmation `EvidenceArtifact`, H is a hypothesis
+under a `PreRegistration` P with freeze time τ_P, and K is the history.
+The rules are applied in order; **the first match wins**.
 
-**[I] Robustness** is the same data, varied analysis: subperiods, universe
-policy variants, parameter grid, cost levels, construction. It detects
-fragility and does **not** add independent evidence (the samples overlap
-heavily).
-
-**Replication** requires new *observations*, in rough order of evidential
-value:
-1. **Prospective later period** — genuinely new data; strongest; subject to
-   regime change.
-2. **Different market or universe with low overlap** (e.g. China A-shares vs
-   US), when PIT-certified.
-3. **Independently sourced or reconstructed data** for the same period —
-   guards against vendor artifacts, not sampling error.
-4. **An independent research process** reproducing the claim from its
-   specification.
-
-Alternative portfolio construction on the same data is robustness, not
-replication. Because asset returns share common factors, "different" universes
-in the same period are positively correlated tests. Replication evidence must
-be discounted for overlap, or modeled hierarchically (JKP-style) when enough
-studies exist.
-
----
-
-## 11. Scientific decision-state machine [D]
-
-A **ScientificAssessment** has independent axes. It is never collapsed into
-one score.
-
-| Axis | States | Moves by |
+| # | Role | Condition |
 |---|---|---|
-| governance_validity | VALID / INVALID | Phase-8 record and provenance integrity |
-| evidence_role | EXPLORATORY / CONFIRMATORY / CONTAMINATED | exposure ledger + study pre-registration |
-| design_adequacy | ADEQUATE / UNDERPOWERED | pre-registered power check: minimum detectable effect ≤ SESOI at α_study, 80% power |
-| statistical | SUPPORTED / NOT_SUPPORTED / INCONCLUSIVE / NOT_ASSESSED | confirmatory result, below |
-| economic | MATERIAL / NOT_MATERIAL / INCONCLUSIVE / NOT_ASSESSED | net-of-cost endpoint vs economic SESOI |
-| robustness | CONSISTENT / FRAGILE / NOT_ASSESSED | pre-declared robustness grid (sign agreement, no single-slice dependence) |
-| replication | REPLICATED / NOT_REPLICATED / NOT_ATTEMPTED | a separate confirmatory study on new observations |
-| production_readiness | NOT_CERTIFIED | always, in this system's scope |
+| 1 | **DEVELOPMENT** (known-exposed) | footprint(E) ∩ ExposedFP(H, K) ≠ ∅ (any cell overlap, conservatively; also covers `consumed_by` a previous study for H, which makes a re-analysis ROBUSTNESS, not confirmation) |
+| 2 | **UNKNOWN_EXPOSURE** | the provenance *required* to decide rule 1 or rules 3–5 is missing (§4.6) |
+| 3 | **CONFIRMATION_PROSPECTIVE** | `available_before`(E) > τ_P for every cell. The data did not exist when P was frozen, and no machine path exists. |
+| 4 | **CONFIRMATION_HISTORICAL_RECORDED** | E predates τ_P; K contains mechanical separation evidence recorded **before** τ_P: E was hash-sealed and its `AccessRecord`s show no read by any Ch(H) machine component before τ_P, and no path exists. Human non-exposure is declared before τ_P. |
+| 5 | **CONFIRMATION_HISTORICAL_DECLARED** | E predates τ_P; no machine path exists, but separation rests on declarations that cannot be mechanically audited, e.g. data existed in the environment before access logging, or separation is by human attestation only |
 
-**Statistical-axis rule** (only if `evidence_role = CONFIRMATORY` and
-`design_adequacy = ADEQUATE`; otherwise NOT_ASSESSED):
-- **SUPPORTED:** the Holm-adjusted one-sided test rejects "effect ≤ 0" **and**
-  the point estimate is in the declared direction.
-- **NOT_SUPPORTED:** an equivalence (TOST-style) test shows the effect < SESOI.
-  Absence of significance alone is never NOT_SUPPORTED.
-- **INCONCLUSIVE:** otherwise (the interval spans both 0 and the SESOI).
+**Residual-exposure disclosures:** these are separate from the role.
+- For every confirmation role, K must hold `ExposureDeclaration`s for the
+  channels that cannot be observed mechanically:
+  - model pretraining (documented model cutoff vs E's window);
+  - public literature on the signal class over E's window;
+  - human knowledge.
+- These are **attached to the assessment as residuals**. They never upgrade a
+  role (§5).
 
-**Composite labels** are derived strings for humans. For example,
-"supported, economically material, robust, unreplicated" requires every
-component. SUPPORTED on the statistical axis alone never implies economic
-materiality.
+### 4.4 Invariants [D]
+
+1. **Derivation.** A role is a pure function of (E, H, K). It may be cached
+   only keyed by hash(K), and nothing may write a role directly.
+2. **Append-only.** K is never edited. A correction is a new record.
+3. **Downgrade-only monotonicity.** For K ⊆ K′, role(E, H, K′) ≤ role(E, H, K)
+   in the order PROSPECTIVE > HISTORICAL_RECORDED > HISTORICAL_DECLARED >
+   {UNKNOWN_EXPOSURE, DEVELOPMENT}.
+   - Newly recorded *exposure* (including a late human declaration of prior
+     exposure) may downgrade a role at any time.
+   - Evidence of *non-exposure* counts only if recorded before τ_P (or before
+     the first access of E, whichever is earlier). Absence cannot be
+     back-filled.
+4. **Chain closure.** Take W → `DerivedMetric`(OOS metric for H1)
+   `derived_from` W → `included_in` `GeneratorInput` g → g `influenced` H2,
+   with g's event before τ(H2). Then W ⊆ ExposedFP(H2, K), so by rule 1 every
+   E with footprint overlapping W is DEVELOPMENT for H2. **This holds
+   mechanically; no human judgment enters.**
+5. **Relativity.** The same E can be CONFIRMATION for H1 (frozen before the
+   exposure) and DEVELOPMENT for H2.
+
+### 4.5 When OOS becomes development
+
+Window W becomes development evidence for H at the first recorded event,
+timestamped before τ(H), in which any node whose footprint overlaps W
+enters Anc(H, K). In practice this is a journaled generator input, or a
+recorded human or program decision derived from W.
+
+- For H1 frozen before that event, W's role is unchanged.
+- Any re-specification of H1 after the event is a new hypothesis, for which W
+  is DEVELOPMENT.
+- In Pilot 1A, generator inputs containing IS/OOS summaries preceded H2 and
+  H3, so IS/OOS are DEVELOPMENT for them by invariant 4.
+
+### 4.6 Machine-observable vs declared channels; fail-closed rules
+
+What counts as observing is **any function of the data**, including a single
+bit (the holdout-bit argument of Phase 9 §7a) [D].
+
+| Channel | Observability | Recorded as |
+|---|---|---|
+| generator inputs | **machine, exact** | `GeneratorInput` from journals; footprints computed from source records (the TF firewall already computes them) |
+| system reads of data | **machine, exact** if logged | `AccessRecord` |
+| program / prompt / policy / promotion rules | **machine** (git, hash-frozen artifacts); the evidence *consulted* in making a change must be declared | `HumanDecision` + `derived_from` edges |
+| human observation | **declared only** | `ExposureDeclaration`; repository artifacts create *implied* exposure (e.g. committed Phase-5A outputs, Pilot reports) |
+| model pretraining | **declared, coarse** | `ExposureDeclaration` with documented cutoff; memorization is unobservable |
+| public literature | **declared, coarse** | `ExposureDeclaration` (signal class × period) |
+
+**Fail-closed rules [D]** (each one yields rule 2, UNKNOWN_EXPOSURE):
+- E has no footprint, or a footprint that cannot be computed.
+- Some `DerivedMetric` or `GeneratorInput` in the relevant history lacks
+  `derived_from` edges, so its footprint is unknown.
+- E predates τ_P and carries neither access records nor a pre-τ_P
+  non-exposure declaration.
+- Ch(H) contains a machine channel whose journal is missing or fails its
+  integrity check.
+- A required residual declaration (human, pretraining or public) is absent.
+  Its absence yields UNKNOWN_EXPOSURE; a *present* declaration of exposure
+  yields DEVELOPMENT or a downgraded grade (§5).
+
+**[I]** Knowledge PIT is exact for recorded machine channels and conservative
+elsewhere. It records declarations about human, public and pretraining
+knowledge and never claims to reconstruct them.
+
+### 4.7 EvidenceFootprint and confirmation freshness (v3.1) [D]
+
+**Frozen invariant:** confirmation freshness belongs to the underlying
+empirical observations, not to filenames, artifacts, vendors or dataset
+identifiers.
+
+An **EvidenceFootprint** identifies the underlying empirical observations a
+study's evidence depends on. It is canonicalized along at least these
+dimensions (the exact schema is frozen in the Phase-10 spec, not here):
+- **population / universe:** vendor-independent canonical security
+  identities;
+- **time interval:** the observation dates;
+- **variables / economic observations:** canonical economic variable class
+  (e.g. adjusted close-to-close total return), not vendor field names;
+- **prediction horizon:** mapped to the underlying realization interval, so
+  an h-day forward return depends on the atomic observations it spans;
+- **underlying observation identity:** the atomic (security, variable,
+  interval) cells, so that renaming, repackaging, re-vendoring or
+  transforming does not change identity.
+
+**Consequences:**
+
+| Case | Status |
+|---|---|
+| same stocks, dates and returns from a different vendor | same cells ⇒ **not** automatically fresh |
+| same file split into two files | same cells ⇒ **not** two independent sources |
+| same dates, partially overlapping universe | overlap detected and governed |
+| same universe, partially overlapping dates | overlap detected and governed |
+| same underlying returns transformed (ranked, standardized, re-horizoned) | derivations share cells ⇒ transformation does not manufacture fresh evidence |
+
+**Conservative rules:**
+- Material overlap with an already-consumed confirmation footprint, or with
+  ExposedFP(H, K), must never silently receive fresh-confirmation status.
+- If overlap cannot be determined reliably (unmappable identity, unknown
+  variable class, unknown realization interval), the result **fails closed**
+  (§4.6).
+- The materiality threshold and the carving rules (e.g. whether a
+  pre-registration may declare a footprint that excludes consumed cells)
+  are frozen in the Phase-10 spec.
 
 ---
 
-## 12. Pilot-1A worked example
+## 5. Evidence grades: statistical admissibility vs epistemic assurance — REVISED v3
 
-This applies the framework to the observed evidence. No re-test and no new
-data. [I] The framework's rules were fixed above, independent of these
-numbers.
+**v3 correction.** v2 implied that only data not existing at freeze can give
+strong confirmation. That conflated two properties:
 
-| | `standardize(ret)` | `rank(ret)` | `rank(rolling_mean(ret,5))` |
-|---|---|---|---|
-| governance_validity | VALID | VALID | VALID |
-| canonical class (rank endpoint) | C1 | **C1** (same class) | C2 |
-| evidence_role of holdout | CONTAMINATED (Phase-5A exposure) | CONTAMINATED; also ungoverned (DEFER) | CONTAMINATED; ungoverned (DEFER) |
-| evidence_role of IS/OOS | EXPLORATORY | EXPLORATORY | EXPLORATORY (generated after IS/OOS feedback) |
-| design_adequacy | UNDERPOWERED (minimum detectable rank-IC ≈ 0.08–0.09 vs a plausible SESOI of ≤ 0.03) | same | same |
-| statistical | **NOT_ASSESSED** | **NOT_ASSESSED** | **NOT_ASSESSED** |
-| economic (exploratory report) | unfavorable: net spread IS −0.0003/day, OOS ≈ 0, holdout −0.0020/day; turnover ≈70%/day | identical portfolios ⇒ same | mixed: IS negative, OOS positive (development only) |
-| robustness | NOT_ASSESSED (single construction; the subperiod table is exploratory) | — | — |
-| replication | NOT_ATTEMPTED | NOT_ATTEMPTED | NOT_ATTEMPTED |
-| production | NOT_CERTIFIED | NOT_CERTIFIED | NOT_CERTIFIED |
+- **Statistical admissibility:** is the confirmatory p-value valid?
+  - It requires the family and test to be frozen before any function of E
+    influenced selection.
+  - It requires E to be independent of the selection information, or the
+    test to be valid conditional on it (§9).
+  - Historical data can satisfy this [T: data splitting, Cox 1975]. **Historical
+    ≠ statistically invalid.**
+- **Epistemic (Knowledge-PIT) assurance:** how much of that separation is
+  *mechanically auditable* rather than declared.
+  - Prospective data give the strongest, most auditable separation, because
+    no channel can have observed data that did not exist.
+  - Historical data depend on recorded or declared separation.
 
-- **None** is scientifically supported, and **none** is "not supported". The
-  evidence is structurally incapable of either verdict. The correct system
-  output is *"no confirmatory conclusion available: contaminated and
-  underpowered confirmation data"*.
-- **Redundancy:** Exp 2 would not be a separate statistical test. It is C1
-  again. Its Phase-8 slot stays consumed (a historical governance fact, not
-  rewritten), but the scientific layer counts one test for C1 and records a
-  **search-efficiency finding**. Going forward, canonicalization before
-  evaluation would have skipped it.
-- **Phase-5A exposure:** this alone removes the confirmatory role of the
-  2026-07-01…09-15 window, whatever the Phase-8 mechanics say. It would even
-  if the power were adequate.
-- **Exp 3's OOS Sharpe 2.73** is precisely the kind of adaptively selected
-  development statistic the framework refuses to treat as evidence. It is the
-  winner of a small adaptive search on a window the generator had seen through
-  earlier feedback.
+"Data not previously loaded" is still **not** "evidence not previously
+known". The grade records how much of the separation is known versus
+asserted.
+
+### 5.1 Grade model [D]
+
+| Grade (role) | Confirmatory inference admissible? | Epistemic claim strength | Mechanically certifiable | Declaration / nonclaim |
+|---|---|---|---|---|
+| **G1 PROSPECTIVE_UNEXPOSED** (rule 3) | **Yes** | Strongest: "confirmed on data that did not exist when the contract was frozen" | freeze hash and time; data availability times after τ_P; no machine path; one-time consumption | data-availability timestamps from the vendor are an attested input; stationarity beyond the window is an assumption |
+| **G2 HISTORICAL, STRONG RECORDED SEPARATION** (rule 4) | **Yes** | Strong, qualified: "confirmed on historical data sealed and unread by any recorded machine channel before freeze; residual pretraining/public exposure disclosed" | seal hash; absence of `AccessRecord`s before τ_P; no machine path; pre-τ_P non-exposure declarations exist and are ordered | human non-exposure (declared); pretraining and public exposure are residuals, **not** proven absent |
+| **G3 HISTORICAL, DECLARED SEPARATION** (rule 5) | **Yes, conditionally**: the inference is computed and reported, but the conclusion is labeled *declaration-dependent* | Moderate: "confirmatory *if* the declared separation holds" | freeze order; no *recorded* machine path; declarations exist and were recorded before τ_P | the separation itself; Phase 10 certifies only that the declaration was recorded, not that it is true |
+| **G4 KNOWN-EXPOSED** (rule 1, DEVELOPMENT) | **No** (exploratory only) | None for confirmation | the exposure path itself | — |
+| **G5 UNKNOWN_EXPOSURE** (rule 2) | **No** (fail closed) | None for confirmation | that required provenance is missing | — |
+
+**Orthogonal descriptors** (they do not change the grade):
+- **cross-market** (asset overlap, common global factors);
+- **later vintage or alternate vendor of the same cells**. This is
+  *measurement robustness, not new sampling evidence*. It is never a
+  confirmation source for H if the original cells are in ExposedFP(H).
+
+### 5.2 Model pretraining for LLM-generated hypotheses [D/I]
+
+- **No impossible requirement.** Nothing requires proving that a historical
+  window is absent from pretraining. That cannot be proven, and requiring it
+  would make every pre-cutoff window unusable by definition.
+- **Why this is a residual rather than disqualifying [I].**
+  - Pretraining does not observe *the evaluation of H on E*.
+  - At most, it encodes diffuse knowledge of market history and published
+    anomaly performance, which may bias *which* hypotheses are generated
+    toward ones that worked historically.
+  - That is a threat to independence between selection and E, whose size is
+    unknown. So it caps **claim strength**; it does not flip admissibility.
+- **Conservative handling:**
+  1. Each assessment records the model's documented cutoff versus E's window.
+     E entirely after the cutoff removes the residual *as documented by the
+     provider* (an attested input).
+  2. If H is semantically close to a published anomaly documented over E's
+     window, the public-literature residual is declared. A reviewer may
+     downgrade to G3. Phase 10 does not infer semantic closeness (§10).
+  3. Reports never state "unexposed to the model" for pre-cutoff data. They
+     state "pretraining exposure: not reconstructable; residual disclosed".
+  4. Prefer G1, or G2 with post-cutoff windows, for the strongest claims.
+
+---
+
+## 6. Estimand-first endpoint design
+
+**Chain:** hypothesis → **estimand** θ (a population quantity for a declared
+period) → estimator θ̂ → test and interval. Rank-IC is one estimator of one
+estimand, not the endpoint of every hypothesis.
+
+**Admissibility of an estimand [D].** An estimand is admissible only if all of
+these hold:
+1. It is a well-defined population quantity for the declared universe,
+   horizon, period and construction.
+2. It has a declared **direction** (one-sided hypothesis).
+3. It has a declared **SESOI** δ in θ-units, justified from external evidence,
+   discounted for expected post-sample decay (McLean-Pontiff 2016 [T for their
+   sample]: −26% out-of-sample, −58% post-publication).
+4. Its estimator is computed by the Phase-7 authority.
+5. There is an inference method whose assumptions are stated and plausible
+   for the series: HAC, fixed-b, or block bootstrap.
+6. It has a declared **invariance class**, i.e. which signal transforms leave
+   θ unchanged (§10).
+7. **Economic estimands** are net of the declared cost model and turnover;
+   statistical-only estimands are labeled as such.
+
+**Admissible menu (initial) [D]:**
+
+| Estimand | Hypothesis class | Invariance |
+|---|---|---|
+| mean daily rank-IC | cross-sectional ordering predictability | strictly increasing per-date transforms |
+| mean daily Pearson IC | linear predictive association | positive per-date affine maps only |
+| mean net long-short return (frozen construction and costs) | tradeable premium after costs | ordering (for quantile sorts with fixed breakpoints and matched missing/universe policy) |
+| benchmark-adjusted alpha | marginal premium beyond known factors | construction-dependent; **not admissible until a certified benchmark factor set exists** |
+
+**Primary vs secondary [D]:**
+- **exactly one primary** estimand per hypothesis per study, enforced;
+- secondary estimands are descriptive and never enter Holm;
+- if several estimands are primary (e.g. rank-IC *and* net long-short), each
+  is a separate hypothesis in the Holm family.
+
+**Preventing endpoint shopping [D]:**
+- The estimand is selected by the **research-program policy**, frozen before
+  exploration, via a class → estimand map. The generator cannot choose it.
+- It is hash-frozen into the pre-registration before the confirmation source
+  exists or is readable.
+- Any change after an exposure of the confirmation footprint voids the study
+  for confirmatory use.
+
+**Rank-IC status [D]:**
+- *recommended* primary for ordering-predictability hypotheses;
+- *diagnostic* (secondary) for tradeable-premium hypotheses;
+- never universal.
+
+---
+
+## 7. Power and precision
+
+### 7.1 Where N and T enter [T/A]
+
+- **Daily estimator:** ρ̂_t = Spearman correlation across N_t stocks between
+  the signal at t and the return over (t, t+h].
+- **Cross-sectional uncertainty (N):**
+  - under H0 with N independent, exchangeable pairs, Var(ρ̂_t) = 1/(N−1) [T];
+    at N = 26, SD 0.20;
+  - cross-sectional dependence (common factors, industry clustering) raises
+    the effective variance [A/I];
+  - true time variation in ρ_t adds a component that does **not** shrink with
+    N [A].
+
+  So σ² = Var(ρ̂_t) ≥ 1/(N−1) in practice [I].
+- **Time-series inference (T):** the estimand is μ = E[ρ_t] over the period.
+  The estimator is ρ̄ = (1/T) Σ ρ̂_t, with Var(ρ̄) ≈ σ²_LR / T, where
+  σ²_LR = σ²(1 + 2Σ_k γ_k) is the long-run variance [T under stationarity].
+  - Effective sample size T_eff = T σ² / σ²_LR.
+  - **N·T is not the sample size**: observations within a date are one
+    correlated cross-section summarized by one ρ̂_t, and dates are serially
+    dependent.
+- **HAC:** a Newey-West estimate of σ²_LR with lag ℓ declared ex ante
+  (ℓ ≥ h − 1). In small T, standard critical values over-reject; fixed-b
+  critical values (Kiefer & Vogelsang 2005 [T]) are preferable.
+- **Missing data [A]:** the Pilot panel is complete (26 names on every date;
+  one purged date per boundary). The holdout has T = 52 formation dates.
+
+### 7.2 Pilot-1A MDE — illustrative diagnosis
+
+- **Test:** H0: μ ≤ 0 vs H1: μ = δ > 0, power 0.80.
+- **Formula:** MDE = (z_{1−α} + z_{0.80}) · σ_LR / √T, with T = 52 and
+  σ_LR = σ·√((1+φ)/(1−φ)) (AR(1)).
+
+| σ (daily rank-IC) | φ | T_eff | one-sided α=.05 | two-sided α=.05 | one-sided α=.05/3 | two-sided α=.05/3 |
+|---|---|---|---|---|---|---|
+| 0.20 (null floor) | 0.0 | 52.0 | 0.069 | 0.078 | 0.082 | 0.090 |
+| 0.20 | 0.2 | 34.7 | 0.084 | 0.095 | 0.101 | 0.110 |
+| 0.25 | 0.0 | 52.0 | 0.086 | 0.097 | 0.103 | 0.112 |
+| 0.25 | 0.2 | 34.7 | 0.106 | 0.119 | 0.126 | 0.137 |
+| 0.30 | 0.0 | 52.0 | 0.103 | 0.117 | 0.124 | 0.135 |
+| 0.30 | 0.3 | 28.0 | 0.141 | 0.159 | 0.168 | 0.183 |
+
+- **Unestimable from the repo:** the per-date IC series is not recorded, so σ
+  and φ cannot be estimated.
+- For the **net long-short** estimand, the development-dated series (T = 175)
+  shows small autocorrelations (ACF₁ 0.027 for Exp 1/2 and 0.103 for Exp 3).
+  That is evidence of low serial dependence for *that* estimand only.
+- **Conclusion [I]:** the MDE is ≥ ≈0.07 even under the null-floor
+  assumption, and plausibly 0.09–0.15, against practitioner-scale ICs of
+  roughly 0.02–0.05 (a heuristic, not a theorem). Detection power is therefore
+  negligible.
+
+**Refutation is a different matter [I].**
+- Exp 1's holdout rank-IC of −0.0463 gives one-sided 95% upper bounds of
+  −0.001 / +0.011 / +0.022 / +0.034 for σ_LR = 0.20 / 0.25 / 0.30 / 0.35.
+- Against a pre-registered δ = 0.03, a TOST-style bound (Schuirmann 1987;
+  Lakens 2017 [T/M]) would reject θ ≥ δ for σ_LR up to ≈0.33.
+- Caveats: with T = 52, HAC standard errors are imprecise [T: Kiefer &
+  Vogelsang], so the bounds are approximate.
+- None of this applies to Pilot 1A: nothing was pre-registered, and the window
+  is exposed.
+
+### 7.3 Sharpe
+
+- Under i.i.d. normal returns, SE(ŜR_ann) ≈ √252·√((1 + SR_d²/2)/T) (Lo 2002
+  [T]) ≈ **2.20** at T = 52. Opdyke (2007) [T] gives the stationary-ergodic,
+  non-normal, serially correlated generalization.
+- MDE (one-sided α = .05, 80%) ≈ **5.5 annualized**.
+- The holdout Sharpe of −1.80 has a 95% interval of roughly [−6.1, +2.5]. It
+  is uninformative.
+- Sharpe is not recommended as a primary estimand at short T.
+
+### 7.4 Protocol-suitable quantities [D]
+
+- A frozen protocol may not use the Pilot numbers.
+- At registration it must estimate σ and σ_LR **from development evidence only**
+  for the declared estimand. That requires the exported per-date series (a
+  Phase-7 extension; §13).
+- It must record the MDE for the declared δ, α and T of the confirmation
+  source, together with a sensitivity band (e.g. φ ∈ {0, 0.2}).
+- Disclosure is mandatory; a hard gate is optional (§12).
+
+---
+
+## 8. Multiple testing and adaptive search
+
+### 8.1 Roles
+
+- **Search governance:** Phase 8's fixed-m budget. Valid as a *budget*.
+- **Confirmatory inference:** Holm over the pre-registered family on
+  confirmation evidence (§9).
+- **Exploration reporting:** DSR, Romano-Wolf/SPA or PBO where the tried set
+  is re-evaluable on a common window. Report only.
+
+### 8.2 Classical results used [T]
+
+- **Holm (1979):** FWER ≤ α under arbitrary dependence among *valid*
+  p-values.
+- **Benjamini & Hochberg (1995):** FDR under independence or PRDS. **Benjamini
+  & Yekutieli (2001):** FDR under arbitrary dependence at a log m cost.
+- **White (2000), Hansen (2005), Romano & Wolf (2005):** bootstrap FWER/SPA
+  tests for a *pre-specified* set of strategies under stationarity and weak
+  dependence.
+- **Bailey & López de Prado (2014), DSR; Bailey et al. (2017), PBO:**
+  approximations or diagnostics requiring trial counts, trial variance, or a
+  common strategy × time matrix.
+
+### 8.3 What does not survive LLM adaptivity [I]
+
+- Any p-value on data in the influence set of the hypothesis.
+- BH or online-FDR over exploration p-values: the online-FDR guarantees
+  (Javanmard & Montanari 2018; Ramdas et al.) need conditionally valid
+  p-values given the past, and reused data breaks that.
+- Bonferroni with a data-dependent m.
+- DSR as a gate (the effective trial count is unknowable).
+- Reality Check / SPA over a set that grew adaptively on the same window.
+
+### 8.4 Fixed-m Bonferroni (Phase 8)
+
+Valid FWER for a pre-declared family of m tests on valid p-values [T]. It is
+correctly scoped by Phase 8 as a budget. It is not a scientific correction for
+the adaptive exploration history.
+
+### 8.5 E-values — FUTURE RESEARCH CANDIDATE
+
+- **Result [T]:** e-BH (Wang & Ramdas 2022) controls FDR at level α for
+  **any** dependence among **valid** e-values (E[e] ≤ 1 under each null).
+- **Construction problem [T/A]:**
+  - Anytime-valid e-processes and confidence sequences (Howard et al. 2021;
+    Waudby-Smith & Ramdas 2024; Ramdas et al. 2023) are nonnegative
+    supermartingales under the null with respect to a filtration F_t.
+  - For a daily series X_t (e.g. rank-IC, bounded in [−1, 1]), the betting
+    construction E_t = Π(1 + λ_s(X_s − m)) with predictable λ_s is valid under
+    H0 when **E[X_t | F_{t−1}] = m** (conditional-mean null).
+- **Mismatch [I]:**
+  - Our estimand is the *unconditional* period mean. Serially dependent
+    returns can have unconditional mean ≤ 0 with conditional means sometimes
+    positive. The conditional-mean null is then false, so the test "detects"
+    something other than the estimand.
+  - Conversely, rejecting the conditional null establishes only that the
+    conditional mean was positive at some times.
+  - Cross-sectional dependence enters within each daily X_t and is not the
+    problem. Serial dependence and conditional heteroskedasticity are.
+  - Optional stopping is valid only for the conditional null.
+  - Adaptive hypothesis generation is harmless **only** if H is frozen before
+    the monitored data begin (prospective).
+  - Unbounded estimands (net returns) need bounds or truncation that alter the
+    estimand.
+- **Conclusion:** not an architectural commitment. Revisit if a prospective
+  program with a meaningful conditional-mean estimand is defined.
+
+---
+
+## 9. Holm after arbitrary adaptive exploration — REVISED v3
+
+**Holm (1979) [T].** For m hypotheses whose individual p-values are valid,
+i.e. P(p_i ≤ u) ≤ u for every true null (exactly or asymptotically), the step-down
+procedure controls FWER ≤ α. That holds under **any** dependence among the
+p_i. Holm needs no independence among p-values and does nothing to repair an
+invalid p-value.
+
+**Conditions for a promoted family after adaptive LLM exploration:**
+
+1. **Frozen contract.** Before τ_P, a `PreRegistration` P hash-freezes:
+   - the family F;
+   - for each H ∈ F: one primary estimand, direction, null (θ ≤ 0), SESOI δ,
+     and test;
+   - α_study;
+   - the confirmation source;
+   - the **dependence-handling design** (condition 4).
+2. **Knowledge-PIT admissibility.** EvidenceRole(E, H, K) ∈ {G1, G2, G3} for
+   **every** H ∈ F (§4–5). G3 results carry the declaration-dependent label.
+3. **Validity conditional on selection.** For each true null H_i ∈ F, p_i is
+   valid conditional on the information that selected F. This holds when E is
+   independent of the selection information under the null, or when the
+   test's validity does not depend on it.
+   - Serial dependence between development-period and confirmation-period
+     data can violate this for time-adjacent historical windows.
+   - That is a **threat to the individual test's validity**, to be addressed
+     by the predeclared dependence design (condition 4). It is not a Holm
+     requirement.
+4. **Valid individual inference under a predeclared dependence design.** Each
+   confirmatory analysis predeclares how it handles dependence. Candidates,
+   when justified:
+   - HAC / Newey-West with a declared lag rule and fixed-b critical values
+     (Kiefer & Vogelsang 2005);
+   - block or stationary bootstrap with a declared block rule;
+   - non-overlapping observations (e.g. sampling at the horizon h);
+   - an explicit gap or embargo between development and confirmation data,
+     where the dependence structure calls for one;
+   - other dependence-aware resampling or validated time-series procedures.
+
+   The design must match:
+   - the estimand;
+   - the horizon and **overlap structure** (h-day returns overlap at daily
+     sampling ⇒ MA(h−1) dependence at least);
+   - the serial dependence observed in *development* data;
+   - the cross-sectional construction (per-date statistics summarize one
+     correlated cross-section; stocks × dates are not independent).
+
+   No design is universally required; none is universally sufficient.
+5. **One use.** E's EvidenceFootprint (§4.7) is consumed once, by this study
+   (`consumed_by` in K). Freshness is keyed to underlying observations, not to
+   artifacts.
+
+**What Holm then controls [T, given 1–5]:** P(≥ 1 false rejection among the
+true nulls in F, for the confirmation-period estimands) ≤ α_study. This holds
+under any dependence among the p_i, however F was selected, including by an
+LLM over arbitrary development history.
+
+**What it does NOT do:**
+- make invalid individual financial time-series p-values valid;
+- provide any family-wise guarantee for NOT_SUPPORTED conclusions, which are
+  hypothesis-local (§11);
+- correct errors in the exploration history;
+- correct winner's-curse bias (development estimates are biased upward);
+- guarantee that F contains the best candidates;
+- generalize beyond the confirmation period (that needs stationarity [A]);
+- control error across multiple studies or windows (that needs study-level
+  α allocation [D]);
+- upgrade G3 declarations or pretraining residuals into certified facts.
+
+---
+
+## 10. Equivalence relations
+
+| Relation | Definition | Decidable? |
+|---|---|---|
+| expression equivalence | identical canonical `FactorSpec` AST | yes (hash) |
+| ordering equivalence | identical per-date orderings of scores (incl. ties) on every date and name, under the same missing-data and universe policy | provable by declared invariance rules; empirical check only on observed data |
+| portfolio equivalence | identical holdings sequence under a frozen construction | follows from ordering equivalence for quantile sorts with fixed breakpoints |
+| estimand-specific statistical equivalence | θ̂ and its inference are identical functions of the data for the declared estimand | yes, for declared invariance classes (§6) |
+| semantic hypothesis equivalence | same economic claim | **not decidable; a nonclaim** |
+
+`standardize(ret)` and `rank(ret)`:
+- **statistically equivalent for rank-IC and quantile-sort estimands**, with
+  identical missing/universe handling (in Pilot 1A, `missing_policy` differed —
+  `propagate` vs `drop` — which is harmless only because no data were
+  missing);
+- **not equivalent for Pearson IC** (the observed Pearson ICs differ).
+
+**Minimum machinery for counting [D]:**
+- declared invariance rewrites per admissible estimand;
+- a policy-match check (missing policy, universe filter, winsorization);
+- applied at **promotion**, so one representative per estimand-specific class
+  enters F.
+
+No learned or LLM equivalence.
+
+---
+
+## 11. Scientific assessment (minimal state model)
+
+| Axis | States |
+|---|---|
+| governance_validity | VALID / INVALID (from Phase 8 and provenance) |
+| evidence_role | derived: DEVELOPMENT / UNKNOWN_EXPOSURE / CONFIRMATION_PROSPECTIVE / CONFIRMATION_HISTORICAL_RECORDED / CONFIRMATION_HISTORICAL_DECLARED / ROBUSTNESS (§4), with the K hash |
+| statistical | SUPPORTED / NOT_SUPPORTED / INCONCLUSIVE / NOT_ASSESSED |
+| economic | same states when an economic estimand is primary or declared secondary; otherwise NOT_ASSESSED |
+| production_readiness | NOT_CERTIFIED (constant) |
+
+**Statistical rule (frozen, v3.1):**
+- **SUPPORTED:** the confirmatory primary test rejects its null in the
+  declared direction after the frozen family's Holm procedure.
+  - Multiplicity guarantee: Holm FWER control over the frozen confirmatory
+    family, conditional on valid individual p-values.
+- **NOT_SUPPORTED:** a predeclared hypothesis-local inferential bound (e.g. a
+  one-sided (1−α) upper bound, TOST-style, Schuirmann 1987) excludes the
+  predeclared SESOI, per the frozen analysis contract.
+  - This is a **hypothesis-local** conclusion. Phase 10 claims no family-wise
+    refutation or error control for NOT_SUPPORTED unless a future protocol
+    explicitly adds and preregisters such a procedure.
+- **INCONCLUSIVE:** neither the SUPPORTED condition nor the hypothesis-local
+  NOT_SUPPORTED condition is established.
+- **NOT_ASSESSED:** the evidence or protocol is not admissible for scientific
+  assessment. Examples:
+  - DEVELOPMENT or UNKNOWN_EXPOSURE evidence;
+  - a non-preregistered study;
+  - an already-consumed (overlapping) confirmation footprint;
+  - invalid or incomplete required provenance.
+
+**Grade qualifier:**
+- G1, G2 or G3 per §5, with the attached residual declarations (human,
+  public literature, pretraining);
+- G3 conclusions are labeled *declaration-dependent*.
+
+Robustness and replication are recorded as **links to other studies**, not
+states, in the minimum version.
+
+---
+
+## 12. REVISED MINIMUM DEFENSIBLE VERSION
+
+| # | Component | Why necessary | Failure prevented | Repo data today | Deterministic? |
+|---|---|---|---|---|---|
+| 1 | **Knowledge-PIT append-only provenance graph + derived EvidenceRole(E, H, K)** (machine channels exact from journals and access records; human, pretraining and public declared; missing provenance fails closed; downgrade-only) | Confirmatory status depends on what influenced H | Calling development or exposed data "confirmation" (e.g. Pilot OOS, the Phase-5A window) | **Partial:** generator exposures fully journaled (Pilot/H6); Phase-5A and Pilot-report human exposures declarable; model cutoffs documented | yes, given the log |
+| 2 | **Hash-frozen confirmatory pre-registration:** family, one primary estimand per H from the admissible menu, direction, δ, α_study, inference method and **predeclared dependence-handling design** (e.g. HAC + fixed-b, block bootstrap, non-overlapping sampling, gap where justified), confirmation source; estimand chosen by program policy | Validity of the confirmatory test requires everything frozen before confirmation evidence | Endpoint shopping, forking paths, post-hoc SESOI | **Missing** (new object) | yes |
+| 3 | **One-time confirmation consumption keyed to EvidenceFootprint** (§4.7; study-level, batch; underlying observations, not artifacts) | Reuse reintroduces adaptivity | Repeated testing on the same confirmation data | **Partial:** Phase-8 single-use `holdout_id` mechanics exist but are experiment-level | yes |
+| 4 | **Estimand-specific inference on per-date series** under the predeclared dependence design | A confirmation-window test statistic must exist | Using pooled or holdout-mixed statistics (today's only t-stats) | **Partial:** net long-short per-date series recorded; rank/Pearson-IC per-date series **missing** (Phase-7 extension) | yes |
+| 5 | **Holm over the frozen family** (SUPPORTED) plus a hypothesis-local TOST-style NOT_SUPPORTED against δ (no family-wise claim) | FWER over the promoted family for SUPPORTED; refutation distinct from non-significance | Multiple-candidate false positives; "not significant ⇒ refuted" | computable from item 4 | yes |
+| 6 | **Minimal assessment record** (§11), separate from DecisionRecord; estimand-specific equivalence check at promotion | Governance ACCEPT must never read as support; duplicate tests must not appear as independent support | ACCEPT-as-evidence; double-counted support | trivially constructible | yes |
+
+**Removed from v1's minimum** (still recommended later):
+- robustness and replication axes (now study links);
+- the hard power gate (now MDE **disclosure**, which requires item 4's
+  series);
+- development-only Phase-7 partitions. Unnecessary: exploration is capped
+  before the confirmation footprint, as the Pilot G1 cap already does, and
+  its folds are simply development evidence.
+- the general canonical-class machinery (reduced to estimand-specific
+  invariance rules at promotion).
+
+**Expected output on today's data:** evidence_role = DEVELOPMENT or
+UNKNOWN_EXPOSURE for every available window, so statistical = NOT_ASSESSED.
+That is correct.
 
 ---
 
 ## 13. Required changes to the current architecture
 
-**Must stay intact (sealed guarantees):**
-- Phase 6: admission and trust boundary; no provider fields; PIT
-  vintage rules.
-- Phase 7: purge rules; single computation authority for metrics.
-- Phase 8: append-only registry; identities; single-use exact holdout
-  mechanics; budget locks.
-- Phase 9: write-ahead generation; proposal-before-evidence; structural
-  firewall; family-escape prevention.
-- The Pilot-1A harness temporal firewall (§26b TF).
-- **The Phase-8 DecisionRecord keeps its meaning (governance). It is not
-  repurposed as a scientific verdict.**
+**Sealed guarantees that must remain intact:**
+- Phase 6: admission and trust.
+- Phase 7: purge rules and sole metric authority.
+- Phase 8: append-only registry, identities, exact single-use mechanics,
+  budget locks.
+- Phase 9: write-ahead, proposal-before-evidence, structural firewall.
+- The Pilot harness TF firewall.
+- DecisionRecord keeps its governance meaning.
 
 **Placement [D]:**
-1. **New layer after Phase 8: "Scientific Evidence Protocol" (Phase 10).** It
-   owns the confirmatory study, pre-registration, canonicalization,
-   exposure-ledger reading, design adequacy, confirmatory inference and the
-   ScientificAssessment. It consumes Phase-7 records and Phase-8 governance
-   **read-only**.
-2. **Phase 7 (versioned extension, a new phase-scoped change):**
-   - export per-date series per fold (IC, rank-IC, gross and net spread,
-     turnover);
-   - fold-level HAC SEs with an ex-ante lag rule;
-   - optional block bootstrap;
-   - allow **development-only partitions** (no holdout fold) for exploration.
-     Sealed Phase 7 requires a holdout fold in every evaluation, which forces
-     exploration to "consume" holdouts it should never touch.
-
-   This is a sealed-authority change and needs its own authorization.
-3. **Phase 8 (versioned extension):**
-   - holdout consumption by a **study** (batch) identity;
-   - the persistent **cross-run** holdout/exposure ledger (merging deferred
-     item 7).
-4. **Phase 9:**
-   - reclassify OOS feedback explicitly as development evidence (a
-     semantics/doc change);
-   - add promotion as a governed step, with the generator never seeing
-     confirmation data;
-   - apply FIX B (temporal provenance) as a prerequisite.
-5. **Data:** a genuinely untouched confirmation dataset (see §17), a
-   prerequisite for any SUPPORTED state.
+1. **New layer after Phase 8 (Phase 10):** Knowledge-PIT provenance graph and derived EvidenceRole,
+   pre-registration, confirmation-source consumption, inference from recorded
+   series, Holm/TOST, and the assessment record. Read-only over Phases 6–9.
+2. **Phase-7 versioned extension:** export per-date series per fold for each
+   admissible estimand. Fold-level HAC may live in Phase 10 as *inference on
+   recorded series* rather than a metric recomputation, which avoids
+   duplicating Phase-7 metric authority. **Sealed change — separate
+   authorization.**
+3. **Phase-8 versioned extension:** study-level (batch) confirmation-source
+   consumption, and a persistent cross-run ledger (merges deferred item 7).
+   It could alternatively live wholly in Phase 10 as a new governance object,
+   leaving Phase 8 untouched. **To decide at the Phase-10 design barrier.**
+4. **Phase 9:** feed generator-input journals into the provenance graph (already
+   journaled), document OOS feedback as development evidence, and apply FIX B.
+5. **Data:** prospective accrual (G1) and/or a broader universe (power);
+   sealed, access-logged historical sources (G2) are a valid, weaker-assurance
+   complement.
 
 ---
 
@@ -696,157 +864,225 @@ numbers.
 
 | Requirement | Status |
 |---|---|
-| Full hypothesis and experiment history, lineage | **available** (Phase 8/9 registries, journals) |
-| Canonical signal classes | **missing** (needs a rule-based canonicalizer) |
-| Per-date IC / rank-IC series per fold | **missing** (only aggregates recorded) |
-| Per-date net long-short and turnover | **partially available** (`portfolio_accounting`, `cost_adjusted_series`; primary construction only) |
-| Fold-level SEs (HAC / bootstrap) | **missing** (only pooled t-stats) |
-| Subperiod / universe / parameter sensitivity | **partially available** (subperiod; parameter sensitivity removed in Pilot 1A for leakage; universe variants inert) |
-| Transaction-cost sensitivity | **partially available** (single cost; the grid mechanism exists) |
-| Dependence among candidates (return-series correlations) | **partially available** (redundancy mechanism exists; not populated) |
-| Benchmark factor-model residuals | **missing** (US CAPM only; no certified FF/CH for this universe) |
-| Effective number of independent tests | **fundamentally difficult** (not reliably estimable from few, dependent, adaptive trials) |
-| Exposure / contamination history (human, generator, pretraining) | **missing**; pretraining exposure is **fundamentally difficult** (cutoff dates are coarse; memorization is unobservable) |
-| Holdout exposure history across runs | **missing** (per-run in-memory only) |
-| Untouched confirmation data | **missing** (Gate-B window contaminated) |
-| Replication datasets (other market, later period) | **missing** (China fundamentals path blocked in 5B; prospective data only after 2026-09-15) |
-| Power inputs (cross-sectional IC dispersion, autocorrelation) | **partially available** (derivable from exploration series once exported) |
+| Hypothesis and experiment history, lineage, freeze times | **available** (Phase 8/9, journals) |
+| Generator-exposure footprints | **available** (journaled inputs + record partitions) |
+| Human exposure (Phase-5A, Pilot report) | **declarable**; general human knowledge **fundamentally unobservable** |
+| Pretraining exposure | **coarse** (cutoff dates); memorization **fundamentally unobservable** |
+| Public-literature exposure | **coarse declaration** |
+| Per-date rank/Pearson-IC series per fold | **missing** |
+| Per-date net long-short, turnover | **partially available** (primary construction) |
+| Fold-level SEs | **missing** (derivable once series exist) |
+| Estimand-specific invariance rules | **missing** (small, declarable) |
+| Effective number of independent tests | **fundamentally difficult** (not required by the MDV) |
+| Benchmark factor-model residuals | **missing** (alpha estimand not admissible yet) |
+| Prospective confirmation data | **missing** (accrues after freeze) |
+| Replication datasets | **missing** |
 
 ---
 
-## 15. Failure modes and adversarial cases
+## 15. Failure modes
 
-1. **Selection leaking into confirmation** through the promotion rule (e.g.
-   promoting on a statistic computed on the confirmation window). Guard:
-   promotion reads only development evidence, enforced like the TF firewall.
-2. **Pre-registration theater:** an analysis plan edited after peeking. Guard:
-   hash-frozen before the confirmation window is readable; a ledger check.
-3. **Contaminated "untouched" data:** vendor restatements, or humans viewing
-   dashboards. Guard: exposure-ledger discipline; this can never be fully
-   proven [I].
-4. **SESOI gaming:** choosing a tiny SESOI to reach SUPPORTED, or a huge one to
-   reach NOT_SUPPORTED. Guard: justified ex ante from external evidence,
-   bounded by policy.
-5. **Canonicalizer incompleteness** lets non-obvious equivalents through.
-   Accepted; documented nonclaim; exploration counts stay honest.
-6. **Regime change** makes prospective confirmation "fail" a real effect.
-   Report as NOT_REPLICATED with date context; do not overwrite.
-7. **Underpowered studies repeatedly rerun until significant.** Guard: the
-   design-adequacy gate plus study-level α allocation per window.
-8. **LLM memorization** creating in-sample fits. Guard: confirmation windows
-   dated after the model's training cutoff.
-9. **Dependence across the confirmatory family.** Holm stays valid; power
-   loss is accepted.
-10. **Cost-model optimism.** The economic axis must use declared,
-    conservative costs; a sensitivity grid should be pre-declared.
+1. **Promotion reads confirmation data.** Guard: provenance-graph check at
+   τ_P (access records, footprint overlap).
+2. **Pre-registration edited after peeking.** Guard: hash plus provenance
+   ordering.
+3. **Undeclared human exposure.** Guard: attestations. Residual risk is
+   stated.
+4. **SESOI gaming.** Guard: policy bounds and external justification.
+5. **Incomplete invariance rules.** Effect: conservative over-counting
+   (Holm remains valid).
+6. **Serial dependence across the development/confirmation boundary.**
+   Guard: the predeclared dependence-handling design (a gap is one option).
+   Residual risk: approximate conditional validity of the individual test.
+7. **Short-T HAC over-rejection.** Guard: fixed-b critical values and
+   bootstrap sensitivity.
+8. **Regime change.** Prospective failure is reported as such, not
+   overwritten.
+9. **Repeated underpowered studies on successive windows.** Guard:
+   study-level α allocation plus MDE disclosure.
+10. **LLM memorization.** Guard: pretraining is a disclosed residual that caps
+    claim strength (§5.2). Prefer G1 or post-cutoff G2 windows for the
+    strongest claims.
+11. **Back-filled non-exposure.** Guard: non-exposure evidence counts only if
+    recorded before τ_P (§4.4, invariant 3).
+12. **Repackaged or re-vendored confirmation data.** Guard: freshness keyed to
+    the EvidenceFootprint (§4.7); unknown overlap fails closed.
 
 ---
 
 ## 16. Explicit nonclaims
 
 This framework does not claim:
+- reconstruction of human, public or pretraining knowledge, or proof that a
+  historical window is absent from pretraining;
+- the truth of recorded declarations (G3 separation, human non-exposure);
+- that Holm repairs invalid individual p-values;
+- family-wise error control for NOT_SUPPORTED (hypothesis-local only);
+- data equivalence beyond what footprint canonicalization establishes;
 - general semantic-equivalence detection;
-- valid inference on data used for selection;
+- correction of the adaptive exploration history;
+- valid inference on development or unknown-exposure evidence;
+- generalization beyond the confirmation period without stationarity;
 - a reliable effective-number-of-tests estimate;
-- elimination of pretraining leakage;
-- production readiness;
-- causal mechanisms;
-- that rank-IC is the right endpoint for every hypothesis;
-- that SUPPORTED means profitable after costs;
-- that any Pilot-1A factor is supported or refuted.
+- e-value validity for our estimands;
+- that any Pilot-1A factor is supported or refuted;
+- production readiness.
 
 ---
 
-## 17. Open questions
+## 17. Phase 10 — responsibility, name and certification — REVISED v3
 
-1. What confirmation data can be obtained? Options: a longer and broader US
-   history (licensing and survivorship-safe membership needed), prospective
-   accrual (slow: 3 months ≈ 60 days, still underpowered for N = 26), or a
-   larger universe (the most effective lever for power).
-2. How should α be allocated across sequential confirmation windows (fixed per
-   window vs α-spending vs e-value wealth)?
-3. What is the right default SESOI in rank-IC units for daily horizons on large
-   universes? Literature-informed but disputable.
-4. Should the generator see *any* development metrics, or only governance
-   status? More feedback means better exploration but more development data
-   consumed.
-5. How should replication across overlapping universes be discounted in
-   practice with few studies?
-6. Is a batch holdout acceptable to Phase-8 governance semantics, or is a new
-   study-level governance object cleaner?
+**Responsibility:** decide *which evidence may support which scientific
+conclusion about which hypothesis*, from immutable provenance, and refuse
+otherwise.
+
+- It is **not** a decision layer (decisions and governance are Phase 8).
+- It is **not** a statistics library.
+- It is a **knowledge-provenance and confirmation protocol**.
+
+**Name:** **Phase 10 — Knowledge-PIT & Confirmatory Evidence Protocol.**
+
+### 17.1 Candidate certification statement (exact, for review)
+
+> **Phase 10 certifies, mechanically and deterministically, that:**
+>
+> 1. **Immutable provenance.** The Knowledge-PIT history K is append-only and
+>    content-addressed. Every generator input, derived metric, recorded human
+>    or program decision, system access record, exposure declaration,
+>    hypothesis, pre-registration and confirmation study used by the protocol
+>    is a hash-identified record in K. No record is edited or deleted, and
+>    every result names the hash of the K it was computed against.
+> 2. **Derived, hypothesis-relative evidence roles.** For every (evidence
+>    source E, hypothesis H), the evidence role is computed by the frozen
+>    function EvidenceRole(E, H, K) and is never stored or set manually.
+>    - Any recorded provenance path from data overlapping E's footprint into
+>      H's influence ancestry before H's freeze yields DEVELOPMENT.
+>    - Missing required provenance yields UNKNOWN_EXPOSURE.
+>    - Evidence of non-exposure counts only if recorded before freeze, so
+>      roles can only be downgraded by later records.
+> 3. **Pre-registration before confirmatory evidence.** A confirmatory
+>    conclusion is produced only for a hypothesis whose pre-registration was
+>    hash-frozen before any recorded observation of its confirmation evidence
+>    by an influencing channel.
+> 4. **One primary estimand and test contract.** Each pre-registered
+>    hypothesis has exactly one primary estimand, direction, null, SESOI, test
+>    and predeclared dependence-handling design. Its inference is computed
+>    exactly as declared from the Phase-7 per-date series of the confirmation
+>    source. Secondary quantities are never inferential.
+> 5. **One-use confirmation footprints.** Confirmation freshness is keyed to
+>    the EvidenceFootprint of underlying observations, not to files, artifact
+>    hashes, vendors or dataset ids. Each footprint is consumed by at most one
+>    confirmatory study. Any overlapping later analysis is classified
+>    ROBUSTNESS or DEVELOPMENT, never confirmation, and undeterminable overlap
+>    fails closed.
+> 6. **Predeclared individual inference and multiplicity control.**
+>    Individual p-values and bounds are computed by the predeclared
+>    procedure.
+>    - SUPPORTED = Holm rejection in the declared direction over exactly the
+>      frozen confirmatory family (FWER control conditional on valid
+>      individual p-values).
+>    - NOT_SUPPORTED = a hypothesis-local predeclared bound excludes SESOI,
+>      with no family-wise claim.
+>    - INCONCLUSIVE otherwise.
+>    - All of this is conditional on the predeclared procedure's validity
+>      assumptions, which are recorded, not certified.
+> 7. **Refusal.** The statistical assessment is NOT_ASSESSED whenever the
+>    role is DEVELOPMENT, UNKNOWN_EXPOSURE or ROBUSTNESS, the study is not
+>    pre-registered, or its confirmation footprint overlaps an already-consumed
+>    footprint, or required provenance is invalid or incomplete.
+> 8. **Graded, disclosed claims.** Every assessment records its evidence
+>    grade (G1–G3) and attaches the recorded human, public-literature and
+>    model-pretraining exposure declarations as disclosed residuals.
+> 9. **Separation from governance.** The scientific assessment is a record
+>    distinct from the Phase-8 DecisionRecord. A governance ACCEPT,
+>    development evidence and unknown-exposure evidence are never converted
+>    into scientific support, and production readiness is always
+>    NOT_CERTIFIED.
+
+### 17.2 Phase-10 nonclaims
+
+Phase 10 does **not** certify or claim:
+- that any factor is true, or that any alpha or premium exists;
+- production readiness or tradeability;
+- complete reconstruction of human knowledge or exposure;
+- complete reconstruction of LLM pretraining knowledge, or absence of any
+  window from pretraining;
+- the truth of declarations: G3 separations, human non-exposure, vendor
+  availability timestamps, model cutoffs;
+- universal validity of any statistical test. Validity of the individual
+  p-values rests on the predeclared dependence design's recorded
+  assumptions;
+- that Holm repairs invalid individual p-values, corrects the exploration
+  history, or controls error across studies;
+- family-wise error control for NOT_SUPPORTED;
+- semantic equivalence in general (only declared, estimand-specific
+  invariance rules);
+- reusable confirmation data;
+- generalization beyond the confirmation period.
+
+### 17.3 Later, optional (not Phase 10)
+
+- exploration reports (DSR, SPA/Romano-Wolf, PBO);
+- robustness and replication axes;
+- marginal-contribution tests vs benchmark factors;
+- hierarchical shrinkage;
+- e-value research;
+- reusable-holdout research;
+- a preregistered family-wise procedure for NOT_SUPPORTED (refutation).
+
+### 17.4 Recommended Phase-10 content
+
+- **(a)** A design barrier freezing:
+  - the Knowledge-PIT schema and EvidenceRole function;
+  - the grade model;
+  - the pre-registration contract, including the dependence-design menu;
+  - the admissible estimand menu;
+  - the invariance rules;
+  - the assessment record.
+- **(b)** The Phase-7 per-date series export.
+- **(c)** The confirmation-source consumption object and cross-run ledger
+  (placement decided at the barrier), merged with FIX B.
+- **(d)** The minimum layer (§12).
+- **(e)** A separate prospective-accrual and/or broader-universe data track.
+- **(f)** P1A-SV before any further real run.
 
 ---
 
-## 18. Recommended next phase
+## 18. Pilot-1A worked example (revised)
 
-**RECOMMENDED SCIENTIFIC ARCHITECTURE.** An exploration/confirmation split:
-- governance (Phase 8) unchanged in meaning;
-- a new Scientific Evidence Protocol layer owning pre-registered confirmatory
-  studies, canonical classes, the exposure ledger, design adequacy,
-  confirmatory inference (Holm, HAC, bootstrap) and the multi-axis
-  ScientificAssessment;
-- Phase 7 extended to export per-date fold series with fold-level SEs and to
-  allow development-only partitions;
-- Phase 8 extended with study-level holdout consumption and a cross-run
-  exposure ledger;
-- FIX B as a prerequisite.
+| | `standardize(ret)` | `rank(ret)` | `rank(rolling_mean(ret,5))` |
+|---|---|---|---|
+| governance_validity | VALID | VALID | VALID |
+| estimand-specific class (rank-IC) | C1 | C1 (equivalent; Pearson IC not) | C2 |
+| evidence_role of IS/OOS | DEVELOPMENT (known human exposure of the window via Phase-5A artifacts; the program was designed with it) | DEVELOPMENT (additionally: generator input with C1's IS/OOS preceded τ, invariant 4) | DEVELOPMENT |
+| evidence_role of holdout | DEVELOPMENT (Phase-5A human exposure; now also Pilot-report exposure) | same | same |
+| pre-registered estimand / δ | none | none | none |
+| statistical | **NOT_ASSESSED** | **NOT_ASSESSED** | **NOT_ASSESSED** |
+| economic (exploratory note) | net spread IS −0.0003/day, OOS ≈ 0; turnover ≈70%/day | identical portfolios | IS negative, OOS positive (development) |
+| production | NOT_CERTIFIED | NOT_CERTIFIED | NOT_CERTIFIED |
 
-**MINIMUM DEFENSIBLE VERSION.**
-1. The ScientificAssessment multi-axis record, where `statistical =
-   NOT_ASSESSED` unless both confirmatory and adequate.
-2. A confirmatory-study pre-registration object: endpoint, direction, SESOI,
-   α, analysis plan, candidate set, window, hash-frozen.
-3. A design-adequacy (power) gate.
-4. An exposure ledger with at least static declarations: the Phase-5A window,
-   generator-visible windows, the model cutoff, and holdout consumption across
-   runs.
-5. A rule-based canonicalizer for rank- and affine-invariant transforms.
-6. Fold-level HAC inference on exported per-date series.
-7. Holm over the confirmatory family.
-
-This version will correctly output "NOT_ASSESSED / UNDERPOWERED /
-CONTAMINATED" on today's data. That is its value: it prevents unjustified
-claims.
-
-**STRONGER FUTURE VERSION.**
-- Prospective sequential confirmation with e-value martingales and e-BH.
-- Exploration reports with Romano-Wolf/SPA, DSR and PBO.
-- Marginal-contribution tests vs a certified benchmark factor set.
-- Hierarchical (JKP-style) shrinkage across signal themes and markets.
-- Cross-market replication once PIT-certified non-US data exist.
-- A reusable-holdout-style controlled query interface, researched for time
-  series first.
-
-**WHAT SHOULD NOT BE BUILT YET.**
-- LLM- or learned semantic-equivalence inference.
-- A single composite "factor score".
-- DSR, PBO or SPA as decision gates.
-- Online FDR or α-investing over exploration p-values.
-- A reusable holdout on financial time series.
-- Hierarchical Bayesian machinery (too few factors and markets).
-- Any mechanism that would let the current Gate-B data produce SUPPORTED.
-- Semantic-equivalence work beyond the declared invariance rules.
-
-**Recommended next phase content (Phase 10 — Scientific Evidence
-Protocol):**
-- **(a)** freeze this ontology, state machine and pre-registration contract
-  (design barrier);
-- **(b)** a versioned Phase-7 extension for per-date fold series,
-  fold-level HAC and development-only partitions;
-- **(c)** a Phase-8 extension for study-level holdout consumption and the
-  cross-run exposure ledger, merged with FIX B;
-- **(d)** the minimum-version scientific layer;
-- **(e)** a separate data-acquisition track scoped to obtaining a genuinely
-  untouched, adequately powered confirmation dataset (a larger universe
-  and/or longer history), without which no future SUPPORTED claim is
-  reachable;
-- **(f)** P1A-SV (the full-package secret-value sweep) before any further
-  real-model run.
+**Correction to v1:** had C1 been pre-registered with rank-IC, direction +,
+δ = 0.03, and a clean window, the observed −0.046 would probably have yielded
+NOT_SUPPORTED (§7.2). The Pilot's NOT_ASSESSED is due to exposure and the
+absence of pre-registration, **not** to power alone. Detection of a true
+δ ≈ 0.03 would still have been impossible.
 
 ---
 
 ## Sources
 
+**Primary methodological sources verified for this revision:**
+- Cox (1975), Biometrika 62 — https://academic.oup.com/biomet/article-abstract/62/2/441/337164
+- Kiefer & Vogelsang (2005), Econometric Theory 21(6) — https://ideas.repec.org/a/cup/etheor/v21y2005i06p1130-1164_05.html
+- Howard, Ramdas, McAuliffe & Sekhon (2021), Ann. Stat. 49(2) — https://projecteuclid.org/journals/annals-of-statistics/volume-49/issue-2/Time-uniform-nonparametric-nonasymptotic-confidence-sequences/10.1214/20-AOS1991.full
+- Waudby-Smith & Ramdas (2024), JRSS-B 86(1) — https://academic.oup.com/jrsssb/article/86/1/1/7043257
+- Wang & Ramdas (2022), JRSS-B 84(3) — https://academic.oup.com/jrsssb/article/84/3/822/7056146
+- Schuirmann (1987) — https://www.semanticscholar.org/paper/A-comparison-of-the-Two-One-Sided-Tests-Procedure-Schuirmann/053b97e316fc43588e6235f88a1a7a4077342de7
+- Lakens (2017) — https://journals.sagepub.com/doi/10.1177/1948550617697177
+- Opdyke (2007) — https://www.semanticscholar.org/paper/Comparing-Sharpe-ratios:-So-where-are-the-p-values-Opdyke/77448b71402c706a687fe86231d6d895d67252cc
+- Ledoit & Wolf (2008) — http://www.ledoit.net/Robust_Sharpe_2008.pdf
+
+**Verified in v1:**
 - Harvey, Liu & Zhu (2016) — https://academic.oup.com/rfs/article/29/1/5/1843824
 - Hou, Xue & Zhang (2020) — https://academic.oup.com/rfs/article-abstract/33/5/2019/5236964
 - Jensen, Kelly & Pedersen (2023) — https://onlinelibrary.wiley.com/doi/full/10.1111/jofi.13249
@@ -854,16 +1090,19 @@ Protocol):**
 - McLean & Pontiff (2016) — https://onlinelibrary.wiley.com/doi/abs/10.1111/jofi.12365
 - Giglio, Liao & Xiu (2021) — https://academic.oup.com/rfs/article-abstract/34/7/3456/5911131
 - Dwork et al. (2015) — https://www.science.org/doi/10.1126/science.aaa9375
-- Bailey & López de Prado (2014), DSR — https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
-- Bailey, Borwein, López de Prado & Zhu (2017), PBO — https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
-- Wang & Ramdas (2022), e-BH — https://academic.oup.com/jrsssb/article/84/3/822/7056146
-- Online FDR (LORD) reference implementation — https://academic.oup.com/bioinformatics/article/35/20/4196/5380770
-- LLM alpha mining: AlphaAgent https://arxiv.org/abs/2502.16789 ; Chain-of-Alpha https://arxiv.org/abs/2508.06312 ; QuantaAlpha https://arxiv.org/html/2602.07085 ; LLM evolutionary factor search https://arxiv.org/abs/2507.17211
-- Classical references cited from the literature (White 2000; Hansen 2005;
-  Romano & Wolf 2005; Holm 1979; Benjamini & Hochberg 1995; Benjamini &
-  Yekutieli 2001; Foster & Stine 2008; Javanmard & Montanari 2018; Vovk & Wang
-  2021; Ramdas et al. 2023; Lo 2002; Ledoit & Wolf 2008; Feng, Giglio & Xiu
-  2020; Chordia, Goyal & Saretto 2020; Harvey & Liu 2020; Novy-Marx & Velikov
-  2016; Arnott, Harvey & Markowitz 2019; Gelman & Loken 2014; Nosek et al.
-  2018; López de Prado 2018) are cited from their published versions and
-  were not re-fetched in this review.
+- Bailey & López de Prado (2014) — https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
+- Bailey et al. (2017) — https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
+
+**Classical, cited from their published versions (not re-fetched):** White
+(2000); Hansen (2005); Romano & Wolf (2005); Holm (1979); Benjamini & Hochberg
+(1995); Benjamini & Yekutieli (2001); Javanmard & Montanari (2018); Ramdas et
+al. (2023, Stat. Sci.); Lo (2002); Newey & West (1987).
+
+**LLM factor-mining papers** (AlphaAgent, Chain-of-Alpha, QuantaAlpha,
+arXiv 2507.17211) are cited only as evidence that the field recognizes
+feedback-loop overfitting and pretraining leakage. **They are not authority
+for any statistical validity claim in this document.**
+
+**Computations** (§7.2 table; development-dated autocorrelations) were
+performed on recorded Pilot-1A series restricted to dates before 2026-07-01.
+No holdout-dated observation was used as a protocol input.
