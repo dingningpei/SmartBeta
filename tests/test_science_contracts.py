@@ -487,9 +487,174 @@ def test_validate_footprint_shape_rejects_malformed_blocks(block: object) -> Non
         validate_footprint_shape(_body(blocks=[block]))
 
 
-def test_validate_footprint_shape_rejects_duplicate_observation_kind() -> None:
+def test_same_kind_blocks_with_disjoint_subjects_and_intervals_validate() -> None:
+    body = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:000001"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+            _block(
+                subjects=["SEC:CN:600000"],
+                intervals=[["2020-02-01", "2020-02-05"]],
+            ),
+        ]
+    )
+    assert validate_footprint_shape(body) is None
+
+
+def test_same_kind_subjects_keep_their_own_date_association() -> None:
+    first = ["2020-01-01", "2020-01-03"]
+    second = ["2020-02-01", "2020-02-05"]
+    body = _body(
+        blocks=[
+            _block(subjects=["SEC:CN:000001"], intervals=[first]),
+            _block(subjects=["SEC:CN:600000"], intervals=[second]),
+        ]
+    )
+    assert validate_footprint_shape(body) is None
+    blocks = body["blocks"]
+    assert blocks[0]["subject_keys"] == ["SEC:CN:000001"]
+    assert blocks[0]["intervals"] == [first]
+    assert blocks[1]["subject_keys"] == ["SEC:CN:600000"]
+    assert blocks[1]["intervals"] == [second]
+
+
+def test_genuinely_disjoint_same_kind_sofs_have_distinct_identity() -> None:
+    body_a = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:000001"],
+                intervals=[["2020-01-01", "2020-01-01"]],
+            )
+        ]
+    )
+    body_b = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:600000"],
+                intervals=[["2020-02-01", "2020-02-01"]],
+            )
+        ]
+    )
+    assert validate_footprint_shape(body_a) is None
+    assert validate_footprint_shape(body_b) is None
+    assert canonical_json(body_a) != canonical_json(body_b)
+    assert content_hash(body_a) != content_hash(body_b)
+    identity_keys = ("schema", "determinable", "unresolved", "blocks")
+    identity_a = {key: body_a[key] for key in identity_keys}
+    identity_b = {key: body_b[key] for key in identity_keys}
+    assert content_hash(identity_a) != content_hash(identity_b)
+
+
+def test_same_kind_overlapping_subject_sets_are_rejected() -> None:
+    body = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:000001"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+            _block(
+                subjects=["SEC:CN:000001", "SEC:CN:600000"],
+                intervals=[["2020-02-01", "2020-02-05"]],
+            ),
+        ]
+    )
     with pytest.raises(ScienceContractError):
-        validate_footprint_shape(_body(blocks=[_block(), _block()]))
+        validate_footprint_shape(body)
+
+
+def test_same_kind_identical_interval_lists_are_rejected() -> None:
+    body = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:000001"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+            _block(
+                subjects=["SEC:CN:600000"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+        ]
+    )
+    with pytest.raises(ScienceContractError):
+        validate_footprint_shape(body)
+
+
+@pytest.mark.parametrize("subjects", [[], ["b", "a"], ["a", "a"], ["a", ""]])
+def test_non_canonical_subject_keys_are_rejected(subjects: list[str]) -> None:
+    with pytest.raises(ScienceContractError):
+        validate_footprint_shape(_body(blocks=[_block(subjects=subjects)]))
+
+
+def test_out_of_order_same_kind_blocks_are_rejected() -> None:
+    body = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:600000"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+            _block(
+                subjects=["SEC:CN:000001"],
+                intervals=[["2020-02-01", "2020-02-05"]],
+            ),
+        ]
+    )
+    with pytest.raises(ScienceContractError, match="strictly ascending"):
+        validate_footprint_shape(body)
+
+
+def test_full_tuple_ordering_rejects_first_subject_ties() -> None:
+    # Both subject tuples start with the same subject, so a comparator that
+    # used only the first subject would call them tied; the frozen full-tuple
+    # key sees the second block as descending and rejects the body.
+    body = _body(
+        blocks=[
+            _block(
+                subjects=["SEC:CN:000001", "SEC:CN:600000"],
+                intervals=[["2020-01-01", "2020-01-03"]],
+            ),
+            _block(
+                subjects=["SEC:CN:000001", "SEC:CN:000002"],
+                intervals=[["2020-02-01", "2020-02-05"]],
+            ),
+        ]
+    )
+    with pytest.raises(ScienceContractError, match="strictly ascending"):
+        validate_footprint_shape(body)
+
+
+def test_unrelated_existing_golden_hashes_are_unchanged() -> None:
+    assert len(GOLDEN_HASHES) == 5
+    for label, payload, expected_json, expected_hash in GOLDEN_HASHES:
+        assert canonical_json(payload) == expected_json, label
+        assert content_hash(payload) == expected_hash, label
+
+
+def test_other_contract_behaviour_is_unchanged() -> None:
+    # Canonical serialization / hashing surface.
+    assert canonical_json({"b": 2, "a": 1}) == '{"a":1,"b":2}'
+    assert canonical_json((1, 2)) == "[1,2]"
+    assert content_hash((1, 2, 3)) == content_hash([1, 2, 3])
+    assert canonical_json({"d": dt.date(2020, 1, 2)}) == '{"d":"2020-01-02"}'
+    with pytest.raises(ScienceContractError):
+        canonical_json(float("inf"))
+    # Footprint schema acceptance for a canonical and an undeterminable body.
+    assert validate_footprint_shape(_body()) is None
+    assert (
+        validate_footprint_shape(
+            _body(
+                determinable=False,
+                unresolved=["unmapped column 'close'"],
+                security_map_hash=None,
+                market_series_map_hash=None,
+                variable_map_hash=None,
+                calendar_hash=None,
+                blocks=[],
+            )
+        )
+        is None
+    )
 
 
 def test_footprint_id_is_the_identity_subset_only() -> None:
