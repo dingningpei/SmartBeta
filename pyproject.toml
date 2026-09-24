@@ -22,6 +22,7 @@ dev = [
     "pytest>=8.0",
 ]
 pilot-anthropic = ["anthropic>=1,<2"]
+pilot-deepseek = ["openai>=3,<4"]
 
 [tool.setuptools.packages.find]
 include = ["smart_beta*"]
