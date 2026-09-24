@@ -777,6 +777,7 @@ def test_artifact_layout_default_names():
     assert layout.records_dir == "records"
     assert layout.reconstruction_report == "reconstruction_report.json"
     assert layout.firewall_audit == "firewall_audit.json"
+    assert layout.temporal_firewall_audit == "temporal_firewall_audit.json"
     assert layout.secret_sweep == "secret_sweep.json"
     assert layout.report == "report.md"
 
@@ -790,6 +791,7 @@ def test_artifact_layout_required_artifacts():
         "journal.jsonl",
         "reconstruction_report.json",
         "firewall_audit.json",
+        "temporal_firewall_audit.json",
         "secret_sweep.json",
         "report.md",
     )
@@ -809,6 +811,8 @@ def test_artifact_layout_rejects_path_traversal_and_separators():
         ArtifactLayout(config="nested/config.json")
     with pytest.raises(ArtifactLayoutError):
         ArtifactLayout(report="..")
+    with pytest.raises(ArtifactLayoutError):
+        ArtifactLayout(temporal_firewall_audit="nested/audit.json")
     with pytest.raises(PilotValidationError):
         ArtifactLayout(journal="")
     with pytest.raises(PilotValidationError):
