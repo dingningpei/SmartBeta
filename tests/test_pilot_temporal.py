@@ -35,6 +35,7 @@ from pilot_support import offline_guard  # noqa: F401
 
 from smart_beta.evaluation.engine import evaluate
 from smart_beta.evaluation.spec import (
+    EvaluationRecord,
     EvidenceTable,
     MetricKey,
     ParameterPoint,
@@ -508,6 +509,130 @@ def test_case_f_new_feedback_key_fails_closed(pilot_data):
 
     assert audit.status is TemporalVerdict.FAIL
     assert "schema" in _failing_categories(audit)
+
+
+# ---------------------------------------------------------------------------
+# TF-2 provenance: visible rows/items must be present in the sealed record
+# ---------------------------------------------------------------------------
+
+
+def test_spoofed_subperiod_row_absent_from_sealed_record_fails(pilot_data):
+    """A visible subperiod row narrowed to lie inside D but not in the record fails."""
+    record = _real_record(pilot_data)
+    visible = _visible_for(record)
+    payload = visible.to_dict()
+    tables = payload["experiments"][0]["robustness_tables"]
+    subperiod = next(table for table in tables if table["name"] == _SUBPERIOD_TABLE)
+    columns = list(subperiod["columns"])
+    key_index = columns.index("subperiod_key")
+    start_index = columns.index("subperiod_start")
+    end_index = columns.index("subperiod_end")
+    first = list(subperiod["rows"][0])
+    # Narrow the interval so it trivially satisfies containment in D while
+    # not being a row of the sealed record's subperiod_table.
+    first[start_index] = _IS_START.isoformat()
+    first[end_index] = "2025-12-01"
+    assert first[start_index] < first[end_index] < _HOLDOUT_START.isoformat()
+    subperiod["rows"][0] = first
+
+    audit = audit_temporal_firewall(
+        payload,
+        None,
+        [record],
+        is_start=_IS_START,
+        holdout_start=_HOLDOUT_START,
+    )
+
+    assert audit.status is TemporalVerdict.FAIL
+    assert "subperiod" in _failing_categories(audit)
+    spoofed = [
+        row
+        for row in audit.failures
+        if row.category == "subperiod" and row.item_key == str(first[key_index])
+    ]
+    assert spoofed
+    # Coverage is never taken from the visible row.
+    assert spoofed[0].source_start is None
+    assert spoofed[0].source_end_exclusive is None
+    assert "absent" in spoofed[0].detail
+
+
+def test_visible_fold_metrics_mismatch_fails(pilot_data):
+    """A visible fold item whose metrics differ from the sealed record fails."""
+    record = _real_record(pilot_data)
+    visible = _visible_for(record)
+    payload = visible.to_dict()
+    fold_items = payload["experiments"][0]["fold_evidence"]
+    assert fold_items
+    target = fold_items[0]
+    metrics = target["metrics"]
+    assert metrics
+    original = metrics[0]["value"]
+    metrics[0]["value"] = 1.0 if original is None else original + 1.0
+
+    audit = audit_temporal_firewall(
+        payload,
+        None,
+        [record],
+        is_start=_IS_START,
+        holdout_start=_HOLDOUT_START,
+    )
+
+    assert audit.status is TemporalVerdict.FAIL
+    assert "fold" in _failing_categories(audit)
+    mismatch = [
+        row
+        for row in audit.failures
+        if row.category == "fold" and row.item_key == target["fold_key"]
+    ]
+    assert mismatch
+    assert "metrics" in mismatch[0].detail
+
+
+def test_feedback_fold_metrics_mismatch_fails(pilot_data):
+    """The same provenance rule covers ResearchFeedback fold items."""
+    record = _real_record(pilot_data)
+    visible = _visible_for(record)
+    feedback_payload = _feedback_for(visible).to_dict()
+    experiment = feedback_payload["experiments"][0]
+    fold_key = experiment["is_folds"][0]["fold_key"]
+    experiment["is_folds"][0]["metrics"] = []
+
+    audit = audit_temporal_firewall(
+        None,
+        feedback_payload,
+        [record],
+        is_start=_IS_START,
+        holdout_start=_HOLDOUT_START,
+    )
+
+    assert audit.status is TemporalVerdict.FAIL
+    assert "fold" in _failing_categories(audit)
+    assert any(
+        row.category == "fold" and row.item_key == fold_key
+        for row in audit.failures
+    )
+
+
+def test_sealed_provenance_match_survives_journal_json_round_trip(pilot_data):
+    """The post-hoc path must match rows/metrics after JSON serialization."""
+    record = _real_record(pilot_data)
+    visible = _visible_for(record)
+    feedback = _feedback_for(visible)
+    record_payload = json.loads(json.dumps(record.to_dict()))
+    visible_payload = json.loads(json.dumps(visible.to_dict()))
+    feedback_payload = json.loads(json.dumps(feedback.to_dict()))
+    rebuilt = EvaluationRecord.from_dict(record_payload)
+
+    audit = audit_temporal_firewall(
+        visible_payload,
+        feedback_payload,
+        [rebuilt],
+        is_start=_IS_START,
+        holdout_start=_HOLDOUT_START,
+    )
+    assert audit.status is TemporalVerdict.PASS, audit.findings
+    assert not audit.failures
 
 
 # ---------------------------------------------------------------------------

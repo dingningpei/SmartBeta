@@ -59,6 +59,7 @@ from enum import Enum
 from typing import Any
 
 from smart_beta.evaluation.spec import EvaluationRecord, FoldRole
+from smart_beta.pilot.contracts import PilotContractError, canonical_json
 from smart_beta.research.history import (
     GeneratorVisibleResearchHistory,
     ResearchFeedback,
@@ -697,6 +698,60 @@ def _coverage_row(
     )
 
 
+def _metric_signature(metric: Any) -> str | None:
+    """Canonical JSON signature of one sealed/visible metric mapping."""
+    if not isinstance(metric, Mapping):
+        return None
+    try:
+        return canonical_json(metric)
+    except PilotContractError:
+        return None
+
+
+def _metrics_signature(metrics: Any) -> tuple[str, ...] | None:
+    """Order-insensitive canonical signature of a metric list.
+
+    ``None`` means the value is not a well-formed metric sequence; any such
+    value fails closed. The signature is a sorted tuple so the frozen
+    constructors' name ordering is not content.
+    """
+    if not isinstance(metrics, Sequence) or isinstance(
+        metrics, (str, bytes, bytearray)
+    ):
+        return None
+    signatures: list[str] = []
+    for metric in metrics:
+        signature = _metric_signature(metric)
+        if signature is None:
+            return None
+        signatures.append(signature)
+    return tuple(sorted(signatures))
+
+
+def _sealed_fold_metrics(record: EvaluationRecord, fold_key: Any) -> tuple[Any, ...] | None:
+    """The matched sealed ``FoldResult`` metrics for ``fold_key``, if any."""
+    for fold_result in record.fold_results:
+        if fold_result.fold_key == fold_key:
+            return tuple(metric.to_dict() for metric in fold_result.metrics)
+    return None
+
+
+def _sealed_fold_role(record: EvaluationRecord, fold_key: Any) -> FoldRole | None:
+    for fold_result in record.fold_results:
+        if fold_result.fold_key == fold_key:
+            return fold_result.role
+    return None
+
+
+def _row_as_mapping(columns: Sequence[Any], row: Any) -> dict[str, Any] | None:
+    """Zip one visible table row onto its declared columns, or ``None``."""
+    if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
+        return None
+    if len(row) != len(columns):
+        return None
+    return {str(column): row[index] for index, column in enumerate(columns)}
+
+
 def _audit_fold_items(
     items: Any,
     *,
@@ -776,6 +831,37 @@ def _audit_fold_items(
             authorized_start=authorized_start,
             holdout_start=holdout_start,
         )
+        failure_details: list[str] = []
+        sealed_role = _sealed_fold_role(record, fold_key)
+        sealed_metrics = _sealed_fold_metrics(record, fold_key)
+        if sealed_role is None or sealed_metrics is None:
+            verdict = TemporalVerdict.FAIL
+            failure_details.append(
+                f"fold_key {fold_key!r} has no matching sealed fold_results entry"
+            )
+        else:
+            if sealed_role is FoldRole.HOLDOUT:
+                verdict = TemporalVerdict.FAIL
+                failure_details.append(
+                    "matched sealed fold_results entry is the reserved "
+                    "HOLDOUT role"
+                )
+            visible_signature = _metrics_signature(item.get("metrics"))
+            sealed_signature = _metrics_signature(sealed_metrics)
+            if (
+                visible_signature is None
+                or sealed_signature is None
+                or visible_signature != sealed_signature
+            ):
+                verdict = TemporalVerdict.FAIL
+                failure_details.append(
+                    "visible fold metrics do not exactly equal the matched "
+                    "sealed fold_results metrics"
+                )
+        if failure_details:
+            detail = "; ".join(
+                part for part in (detail, *failure_details) if part
+            )
         rows.append(
             _coverage_row(
                 experiment_id=experiment_id,
@@ -856,13 +942,34 @@ def _audit_subperiod_table(
     holdout_start: date,
 ) -> None:
     record_hash = None if record is None else record.content_hash
-    columns = _as_items(table.get("columns"))
-    table_rows = _as_items(table.get("rows"))
-    try:
-        key_index = columns.index(SUBPERIOD_KEY_COLUMN)
-        start_index = columns.index(SUBPERIOD_START_COLUMN)
-        end_index = columns.index(SUBPERIOD_END_COLUMN)
-    except ValueError:
+    if record is None:
+        rows.append(
+            _coverage_row(
+                experiment_id=experiment_id,
+                record_hash=None,
+                category="subperiod",
+                item_key=SUBPERIOD_TABLE_NAME,
+                source_start=None,
+                source_end=None,
+                verdict=TemporalVerdict.FAIL,
+                carrier=carrier,
+                detail="no source EvaluationRecord to match subperiod rows against",
+                authorized_start=authorized_start,
+                holdout_start=holdout_start,
+            )
+        )
+        return
+
+    sealed_table = record.subperiod_table
+    sealed_columns = tuple(sealed_table.columns)
+    if not all(
+        column in sealed_columns
+        for column in (
+            SUBPERIOD_KEY_COLUMN,
+            SUBPERIOD_START_COLUMN,
+            SUBPERIOD_END_COLUMN,
+        )
+    ):
         rows.append(
             _coverage_row(
                 experiment_id=experiment_id,
@@ -874,7 +981,7 @@ def _audit_subperiod_table(
                 verdict=TemporalVerdict.FAIL,
                 carrier=carrier,
                 detail=(
-                    "subperiod table is missing one of the coverage columns "
+                    "the matched sealed record's subperiod_table lacks one of "
                     f"{SUBPERIOD_KEY_COLUMN}/{SUBPERIOD_START_COLUMN}/"
                     f"{SUBPERIOD_END_COLUMN}; coverage cannot be derived"
                 ),
@@ -883,50 +990,94 @@ def _audit_subperiod_table(
             )
         )
         findings.append(
-            "subperiod table lacks row-level temporal coverage columns"
+            "sealed subperiod_table lacks row-level temporal coverage columns"
         )
         return
-    for index, row in enumerate(table_rows):
-        if not isinstance(row, Sequence) or isinstance(row, (str, bytes, bytearray)):
+
+    sealed_by_signature: dict[str, Mapping[str, Any]] = {}
+    for sealed_row in sealed_table.rows:
+        sealed_mapping = _row_as_mapping(sealed_columns, sealed_row)
+        if sealed_mapping is None:
+            continue
+        try:
+            signature = canonical_json(sealed_mapping)
+        except PilotContractError:  # pragma: no cover - sealed cells are scalars
+            continue
+        sealed_by_signature.setdefault(signature, sealed_mapping)
+
+    visible_columns = _as_items(table.get("columns"))
+    visible_rows = _as_items(table.get("rows"))
+    columns_match = tuple(visible_columns) == sealed_columns
+
+    for index, row in enumerate(visible_rows):
+        mapping = _row_as_mapping(visible_columns, row)
+        if mapping is None or not columns_match:
+            item_key = (
+                str(mapping.get(SUBPERIOD_KEY_COLUMN))
+                if mapping is not None
+                and SUBPERIOD_KEY_COLUMN in mapping
+                else str(index)
+            )
             rows.append(
                 _coverage_row(
                     experiment_id=experiment_id,
                     record_hash=record_hash,
                     category="subperiod",
-                    item_key=str(index),
+                    item_key=item_key,
                     source_start=None,
                     source_end=None,
                     verdict=TemporalVerdict.FAIL,
                     carrier=carrier,
-                    detail="subperiod row is not a sequence",
+                    detail=(
+                        "visible subperiod row does not exactly match any row "
+                        "of the matched sealed record's subperiod_table "
+                        "(columns/arity differ)"
+                    ),
                     authorized_start=authorized_start,
                     holdout_start=holdout_start,
                 )
             )
             continue
-        if len(row) <= max(key_index, start_index, end_index):
+
+        try:
+            signature = canonical_json(mapping)
+        except PilotContractError:
+            signature = None
+        item_key = str(mapping.get(SUBPERIOD_KEY_COLUMN, index))
+        sealed_match = (
+            None if signature is None else sealed_by_signature.get(signature)
+        )
+        if sealed_match is None:
             rows.append(
                 _coverage_row(
                     experiment_id=experiment_id,
                     record_hash=record_hash,
                     category="subperiod",
-                    item_key=str(index),
+                    item_key=item_key,
                     source_start=None,
                     source_end=None,
                     verdict=TemporalVerdict.FAIL,
                     carrier=carrier,
-                    detail="subperiod row is shorter than its declared columns",
+                    detail=(
+                        "visible subperiod row is absent from the matched "
+                        "sealed record's subperiod_table; coverage is never "
+                        "taken from the visible row"
+                    ),
                     authorized_start=authorized_start,
                     holdout_start=holdout_start,
                 )
             )
             continue
-        item_key = str(row[key_index])
+
         try:
             source_start = _coerce_date(
-                row[start_index], field_name="subperiod_start"
+                sealed_match[SUBPERIOD_START_COLUMN],
+                field_name="subperiod_start",
             )
-            source_end = _coerce_date(row[end_index], field_name="subperiod_end")
+            source_end = _coerce_date(
+                sealed_match[SUBPERIOD_END_COLUMN],
+                field_name="subperiod_end",
+            )
         except TemporalFirewallError as exc:
             rows.append(
                 _coverage_row(
