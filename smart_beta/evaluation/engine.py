@@ -580,6 +580,7 @@ def evaluate(
     expected_spec_hash: str | None = None,
     partition_id: str | None = None,
     return_col: str = DEFAULT_RETURN_COL,
+    fold_trace_sink: Any = None,
 ) -> EvaluationRecord:
     """Orchestrate a Phase-7 evaluation and assemble an ``EvaluationRecord``.
 
@@ -625,6 +626,14 @@ def evaluate(
     factor_provenance_hash, expected_spec_hash, partition_id:
         Optional identity pins; when supplied they must match the frozen spec /
         supplied partition exactly, otherwise ``EvaluationIdentityMismatchError``.
+    fold_trace_sink:
+        Optional Phase-10 observational sink. When supplied, the engine reports
+        the primary configuration once and each executed fold through
+        ``record_primary``/``record_fold``. Return values are ignored, the
+        panel is a deep copy, and a sink exception propagates and fails the
+        evaluation closed before holdout consumption. When ``None`` (the
+        default) control flow, arithmetic and the returned record are
+        unchanged.
 
     Returns
     -------
@@ -774,6 +783,13 @@ def evaluate(
     )
 
     # -- 5. per-fold results (P7-A boundaries drive the slice) ------------
+    if fold_trace_sink is not None:
+        fold_trace_sink.record_primary(
+            primary_horizon,
+            primary_point.n_groups,
+            primary_point.winsorization,
+            spec.cost_model.transaction_cost_bps,
+        )
     fold_results: list[FoldResult] = []
     for fold in partition.folds:
         sliced = _slice_panel(primary_panel, fold.start, fold.end)
@@ -782,6 +798,13 @@ def evaluate(
             primary_point.n_groups,
             transaction_cost_bps=spec.cost_model.transaction_cost_bps,
         )
+        if fold_trace_sink is not None:
+            fold_trace_sink.record_fold(
+                _fold_key(fold),
+                FoldRole(fold.role.value),
+                panel=sliced.copy(deep=True),
+                portfolio=fold_portfolio,
+            )
         fold_metrics = tuple(
             metric_value
             for _, metric_value, _ in _metric_observations(
