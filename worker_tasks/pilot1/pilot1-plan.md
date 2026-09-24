@@ -1540,6 +1540,117 @@ Barrier PA (untracked). The dry-run v2 config file and its hash stay
 byte-identical (H6-v2 must remain reproducible). Any other production file
 needed → STOP and report. Sealed files: NONE.
 
+## 26f. P1A-DS — DeepSeek generator adapter (user freezes 2026-09-24; binding; supersedes §26e generator choice)
+
+**Decision:** the Pilot-1A generator is **DeepSeek**; cross-LLM comparison is
+deferred.
+- The Anthropic adapter (`provider_anthropic.py`, merged at `cf1092f`)
+  stays **untouched** as implementation evidence.
+- The Anthropic real config (`74504a9a…`) is **NOT AUTHORIZED**. It is
+  archived byte-identical at
+  `pilot_configs/archive/pilot1a-real-v2.anthropic.NOT-AUTHORIZED.json` (see
+  `pilot_configs/archive/README.md`).
+- `ANTHROPIC_API_KEY` is never used.
+
+**Official DeepSeek facts** (`https://api-docs.deepseek.com`, retrieved
+2026-09-24):
+- `deepseek-v4-pro` → DeepSeek-V4-Pro-0813;
+- OpenAI-compatible base `https://api.deepseek.com`; env `DEEPSEEK_API_KEY`;
+- `response_format` is `text` or `json_object` only (valid JSON, **no schema
+  enforcement**);
+- thinking is on by default; `reasoning_effort` ∈ {none, low, high, max};
+- usage fields `prompt_tokens`, `completion_tokens`, `reasoning_tokens`,
+  `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`;
+- `finish_reason` ∈ {stop, length, content_filter, tool_calls,
+  insufficient_system_resource, aborted};
+- errors 400/401/402/422/429/500/503;
+- `deepseek-v4-pro` peak prices: input (cache miss) **$1.32/MTok**, input
+  (cache hit) $0.044/MTok, output **$3.96/MTok**; off-peak is half.
+
+**Frozen request (provider-neutral `ModelClient.complete`):**
+- The client is `openai.OpenAI(api_key=<captured DEEPSEEK_API_KEY>,
+  base_url="https://api.deepseek.com", max_retries=0, timeout=600)`, with the
+  SDK pinned to `openai>=3,<4` (3.19.2 installed; its
+  `chat.completions.create` accepts every field below).
+- One `chat.completions.create` with: `model="deepseek-v4-pro"`;
+  `messages=[{"role":"system","content":"Return json."}, {"role":"user",
+  "content":<scientific prompt, byte-identical template 948454e9…>}]`;
+  `response_format={"type":"json_object"}`; `reasoning_effort="high"`;
+  `max_tokens=12000`.
+- It **never** sends `tools`, `tool_choice`, `temperature`, `top_p`, `seed`,
+  `stream`, `logprobs`, `n`, or `extra_body`.
+- `"Return json."` is a transport-only message: no scientific content, and
+  included in the request-artifact hash and provenance.
+- The complete request hash covers model + both messages + all parameters.
+
+**Mapping:**
+- content of `choices[0].message.content` → raw artifact;
+- `response.model` → provider model id (recorded verbatim, alongside the
+  documented V4-Pro-0813 provenance);
+- `finish_reason`: `stop` → OK (empty content → empty-output failure);
+  `length` → max-tokens; `content_filter` → refusal; `tool_calls`,
+  `insufficient_system_resource`, `aborted` → provider error;
+- timeout / connection → transport; HTTP status (402/429/5xx etc.) →
+  provider error with status;
+
+all → `GeneratorFailureError` with a journaled result.
+
+**Usage and cost (conservative, peak):**
+- Record `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, cache
+  hit/miss and model.
+- Cost = `prompt_tokens × 1.32e-6 + completion_tokens × 3.96e-6` (every
+  input token at the cache-**miss** peak rate). `completion_tokens` includes
+  reasoning (OpenAI-compatible convention).
+- The price-table identity is `deepseek-api/deepseek-v4-pro/peak/2026-09-24`,
+  with source URL and retrieval date recorded.
+- A post-call anomaly — `completion_tokens > max_tokens` or
+  `reasoning_tokens > completion_tokens` — is recorded, and no further
+  invocation is admitted (INTERRUPTED, resource).
+
+**Ceilings:**
+- configured invocations 5 (effective 3 under the output rule);
+- cumulative input 100,000, output 40,000; max output per invocation 12,000;
+- **USD 1.00**;
+- wall clock 1,800 s; request timeout 600 s; retries 0.
+
+The conservative pre-call rule (§26e) is unchanged, using peak rates and
+`projected_input = ceil(utf8_bytes(system msg + user prompt)/2)`. Off-peak
+pricing never admits an invocation.
+
+**Invalid candidate policy (accepted limitation):**
+- There are no schema-repair calls, hidden retries, second-chance prompts,
+  fallback models, automatic correction, or multiple candidates.
+- One invocation → at most one candidate (the runner count check,
+  real-mode).
+- An inadmissible candidate is recorded (GenerationEvent + rejection) and
+  follows the sealed stop semantics.
+
+**Governance:**
+- The §26e exact-commit binding, single-untracked-config rule,
+  side-effect-free `preflight_check`, SDK availability check (now per
+  provider) and single-run guard all apply.
+- Archived configs are not runs.
+- Real mode refuses ambient `OPENAI_API_KEY`, `OPENAI_BASE_URL`,
+  `ANTHROPIC_BASE_URL` and proxy variables. `DEEPSEEK_API_KEY` is required,
+  captured, and deleted from `os.environ` before any subprocess.
+- Network: only `api.deepseek.com:443` (preflight-resolved) is allowed.
+  Anthropic, OpenAI, Tiingo, Tushare and all other hosts are blocked;
+  `urllib` stays blocked.
+
+**Owned files (P1A-DS):**
+- new `smart_beta/pilot/provider_deepseek.py`;
+- bounded additions to `smart_beta/pilot/config.py` (a DeepSeek real-config
+  builder; run_id `pilot1a-real-deepseek-v1`) and
+  `smart_beta/pilot/runner.py` (provider dispatch for credential, env
+  refusals, endpoint, SDK range, client construction);
+- `pyproject.toml` (optional extra `pilot-deepseek = ["openai>=3,<4"]` only);
+- new `tests/test_pilot_provider_deepseek.py`;
+- bounded updates to `tests/test_pilot_runner.py`.
+
+`provider_anthropic.py`, `prompt.py`, all other pilot modules, and the sealed
+code stay untouched. Anthropic tests, H4/H6-v2 and the dry-run configs must
+stay green and byte-identical.
+
 ## 27. Next action
 
 STOP. Await review and a separate authorization for the Pilot-1A harness
