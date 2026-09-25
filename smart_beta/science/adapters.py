@@ -72,11 +72,11 @@ The Phase-7/8 hash domain (``evaluation_record_hash``, ``content_hash``,
 ``packaging_hash``) and the Phase-10 ``record_hash`` domain are distinct and
 are never compared across. ``packaging_hash`` is metadata and is never used
 as a join key: the artifact is located through the ``DERIVED``'s
-``derived_from`` / the ``ACCESS``'s ``artifact_record_hash`` references (or,
-for a crash between the ``ARTIFACT`` and its ``ACCESS``, through the
-explicit ``payload.experiment_id`` identity the ingestion records on the
-root). Re-ingestion is idempotent: it appends only the missing records and
-never rewrites K.
+``derived_from`` reference and the ``ACCESS``'s ``artifact_record_hash``
+reference only. The ARTIFACT schema carries no identity field. Re-ingestion
+is idempotent: it appends only what a valid chain is missing and never
+rewrites K; a crash that left only an orphan ARTIFACT is repaired by
+appending a fresh complete chain, leaving the orphan immutable.
 
 :func:`registry_ingestion_completeness` is the pure, fail-closed completeness
 predicate the section 13.2 gate uses: over K plus a sealed
@@ -163,7 +163,6 @@ __all__ = [
     # constants
     "CONFIRMATION_DERIVATION_KINDS",
     "PHASE7_EVALUATION_DERIVATION_KIND",
-    "REGISTRY_INGESTION_INCOMPLETE",
     "EVALUATION_INGESTION_COMPONENTS",
 ]
 
@@ -398,12 +397,6 @@ CONFIRMATION_DERIVATION_KINDS = frozenset(
         "confirmation_assessment",
     }
 )
-
-#: The section 13.2 completeness-gate refusal reason. It mirrors the frozen
-#: ``ReasonCode`` token (added to the closed vocabulary before Wave 5 by the
-#: P10-A recovery task). It is a string here so this task owns only
-#: ``adapters.py`` and does not bind to a sibling task's enum member.
-REGISTRY_INGESTION_INCOMPLETE = "REGISTRY_INGESTION_INCOMPLETE"
 
 #: The three links every registered evaluation must have in K (section 13.2).
 EVALUATION_INGESTION_COMPONENTS: tuple[str, ...] = ("DERIVED", "ARTIFACT", "ACCESS")
@@ -653,7 +646,6 @@ def record_evaluation_artifact(
     dataset: DevelopmentDataset,
     program_id: str | None = None,
     available_from: str | None = None,
-    experiment_id: str | None = None,
 ) -> KnowledgeRecord:
     """Append the whole-evaluation ``ARTIFACT`` root of a Phase-7 evaluation.
 
@@ -666,13 +658,9 @@ def record_evaluation_artifact(
 
     ``available_from`` defaults to the last fold's ``end`` date; it is
     attested metadata only. ``packaging_hash`` is the ``EvaluationRecord``
-    content hash (metadata only, not identity).
-
-    When ``experiment_id`` is supplied it is recorded as an explicit Phase-8
-    identity key on the root (``payload.experiment_id``) so that an ingestion
-    interrupted after the root but before its ``ACCESS`` / ``DERIVED`` can be
-    repaired idempotently without ever using ``packaging_hash`` as a join key
-    (plan section 12.3).
+    content hash (metadata only, not identity). The ARTIFACT schema carries
+    no identity field (plan section 12.3): an evaluation's identity is
+    established only by its DERIVED/ACCESS chain, never by the artifact.
 
     ``sealed`` is **False**. Plan section 5.4 rule 4's ``sealed = true`` means
     the data were hash-sealed at ingestion and never read before the
@@ -687,22 +675,17 @@ def record_evaluation_artifact(
     )
     folds = _fold_boundaries(evaluation_record)
     default_available_from = max(fold.end for fold in folds).isoformat()
-    payload: dict[str, Any] = {
-        "packaging_hash": content_hash_value,
-        "sealed": False,
-        "available_from": available_from or default_available_from,
-        "source_label": "phase7-evaluation",
-    }
-    if experiment_id is not None:
-        payload["experiment_id"] = _require_sha256_hex(
-            experiment_id, field_name="experiment_id"
-        )
     return log.append(
         kind=RecordKind.ARTIFACT,
         channel=Channel.PROGRAM,
         program_id=program_id,
         footprint=aggregate_footprint(evaluation_record, dataset).body,
-        payload=payload,
+        payload={
+            "packaging_hash": content_hash_value,
+            "sealed": False,
+            "available_from": available_from or default_available_from,
+            "source_label": "phase7-evaluation",
+        },
     )
 
 
@@ -861,32 +844,6 @@ def _access_for_component(
     return matches[0] if matches else None
 
 
-def _artifact_for_experiment(
-    records: Sequence[KnowledgeRecord], experiment_id: str
-) -> KnowledgeRecord | None:
-    matches = tuple(
-        record
-        for record in records
-        if record.kind is RecordKind.ARTIFACT
-        and record.payload.get("experiment_id") == experiment_id
-    )
-    if len(matches) > 1:
-        raise AdapterError(
-            "multiple phase7-evaluation ARTIFACT roots for experiment "
-            f"{experiment_id}"
-        )
-    return matches[0] if matches else None
-
-
-def _resolve_artifact_record(
-    log: KnowledgeLog, artifact_hash: str
-) -> KnowledgeRecord:
-    for record in log.read():
-        if record.record_hash == artifact_hash:
-            return record
-    raise AdapterError(f"artifact root {artifact_hash} is not present in K")
-
-
 def ingest_registered_evaluation(
     log: KnowledgeLog,
     *,
@@ -904,13 +861,16 @@ def ingest_registered_evaluation(
     identities and the ``ACCESS`` component is
     ``phase7-evaluation:<experiment_id>`` (plan section 12.3).
 
-    The root is located through K ``record_hash`` references only -- the
-    ``DERIVED``'s ``derived_from``, then the ``ACCESS``'s
-    ``artifact_record_hash``, then the root's explicit
-    ``payload.experiment_id`` -- never through ``packaging_hash`` and never
-    through a cross-domain hash comparison. Re-ingestion appends only the
-    missing records (so a repair may append an ``ACCESS`` after an older
-    ``DERIVED``) and never rewrites K. Returns the appended records in order.
+    The chain's root is located through K ``record_hash`` references only:
+    the ``DERIVED``'s ``derived_from`` names the ARTIFACT, and the ACCESS must
+    name that same ARTIFACT. The ARTIFACT payload carries no identity field.
+    ``packaging_hash`` is never a join key and no Phase-10 ``record_hash`` is
+    ever compared with a Phase-7/8 hash. Re-ingestion is idempotent: if a
+    valid complete chain already exists nothing is appended; a DERIVED that
+    links its ARTIFACT but lacks its ACCESS gets the ACCESS appended to that
+    same root; and a crash that left only an orphan ARTIFACT (no DERIVED)
+    appends a fresh ARTIFACT -> ACCESS -> DERIVED chain, leaving the orphan
+    immutable. Returns the appended records in order.
     """
     log = _require_log(log)
     from smart_beta.experiment.registry import ExperimentEntry
@@ -943,7 +903,6 @@ def ingest_registered_evaluation(
     by_hash = {record.record_hash: record for record in records}
 
     derived = _phase7_evaluation_derived(records, experiment_id)
-    artifact_hash: str | None = None
     if derived is not None:
         if derived.payload.get("content_hash") != entry_hash:
             raise AdapterError(
@@ -956,73 +915,73 @@ def ingest_registered_evaluation(
                 "existing phase7_evaluation DERIVED has no ARTIFACT parent; "
                 "refusing to guess a root"
             )
-    else:
-        access = _access_for_component(records, component=component)
-        if access is not None:
-            candidate = access.payload.get("artifact_record_hash")
-            target = by_hash.get(candidate) if isinstance(candidate, str) else None
-            if target is None or target.kind is not RecordKind.ARTIFACT:
-                raise AdapterError(
-                    "existing ACCESS does not name a prior ARTIFACT root"
+        artifact_record = by_hash[artifact_hash]
+        if artifact_record.footprint is None:
+            raise AdapterError(
+                "phase7-evaluation ARTIFACT root carries no footprint"
+            )
+        # A valid complete chain is the DERIVED plus its linked ARTIFACT plus
+        # an ACCESS naming that same ARTIFACT. If the ACCESS is missing (a
+        # legacy DERIVED) the repair appends it to that root; otherwise the
+        # ingestion is already complete and appends nothing.
+        if (
+            _access_for_component(
+                records, component=component, artifact_hash=artifact_hash
+            )
+            is None
+        ):
+            appended.append(
+                log.append(
+                    kind=RecordKind.ACCESS,
+                    channel=Channel.SYSTEM,
+                    program_id=program_id,
+                    footprint=artifact_record.footprint,
+                    payload={
+                        "artifact_record_hash": artifact_hash,
+                        "component": component,
+                    },
                 )
-            artifact_hash = candidate
-        else:
-            artifact = _artifact_for_experiment(records, experiment_id)
-            if artifact is not None:
-                artifact_hash = artifact.record_hash
+            )
+        return tuple(appended)
 
-    if artifact_hash is None:
-        root = record_evaluation_artifact(
-            log,
-            evaluation_record=evaluation_record,
-            dataset=dataset,
-            program_id=program_id,
-            available_from=available_from,
-            experiment_id=experiment_id,
-        )
-        appended.append(root)
-        artifact_hash = root.record_hash
-        by_hash[artifact_hash] = root
-
-    artifact_record = by_hash.get(artifact_hash)
-    if artifact_record is None:
-        artifact_record = _resolve_artifact_record(log, artifact_hash)
-    if artifact_record.footprint is None:
-        raise AdapterError("phase7-evaluation ARTIFACT root carries no footprint")
-
-    access = _access_for_component(
-        log.read(), component=component, artifact_hash=artifact_hash
+    # No DERIVED: the registry-owned pair has no chain. Any ARTIFACT already in
+    # K is an orphan: it establishes no identity and is never reused or
+    # reverse-looked-up. Append a fresh ARTIFACT_1 -> ACCESS_1 -> DERIVED_1
+    # chain; the orphan stays immutable.
+    root = record_evaluation_artifact(
+        log,
+        evaluation_record=evaluation_record,
+        dataset=dataset,
+        program_id=program_id,
+        available_from=available_from,
     )
-    if access is None:
-        appended.append(
-            log.append(
-                kind=RecordKind.ACCESS,
-                channel=Channel.SYSTEM,
-                program_id=program_id,
-                footprint=artifact_record.footprint,
-                payload={
-                    "artifact_record_hash": artifact_hash,
-                    "component": component,
-                },
-            )
+    appended.append(root)
+    appended.append(
+        log.append(
+            kind=RecordKind.ACCESS,
+            channel=Channel.SYSTEM,
+            program_id=program_id,
+            footprint=root.footprint,
+            payload={
+                "artifact_record_hash": root.record_hash,
+                "component": component,
+            },
         )
-
-    if derived is None:
-        appended.append(
-            log.append(
-                kind=RecordKind.DERIVED,
-                channel=Channel.PROGRAM,
-                program_id=program_id,
-                refs={"derived_from": (artifact_hash,)},
-                footprint=artifact_record.footprint,
-                payload={
-                    "derivation_kind": PHASE7_EVALUATION_DERIVATION_KIND,
-                    "content_hash": entry_hash,
-                    "experiment_id": experiment_id,
-                },
-            )
+    )
+    appended.append(
+        log.append(
+            kind=RecordKind.DERIVED,
+            channel=Channel.PROGRAM,
+            program_id=program_id,
+            refs={"derived_from": (root.record_hash,)},
+            footprint=root.footprint,
+            payload={
+                "derivation_kind": PHASE7_EVALUATION_DERIVATION_KIND,
+                "content_hash": entry_hash,
+                "experiment_id": experiment_id,
+            },
         )
-
+    )
     return tuple(appended)
 
 
@@ -1094,9 +1053,9 @@ class RegistryIngestionReport:
     issues: tuple[RegistryIngestionIssue, ...] = ()
 
     @property
-    def reason(self) -> str | None:
+    def reason(self) -> ReasonCode | None:
         """``REGISTRY_INGESTION_INCOMPLETE`` iff any link is missing."""
-        return None if self.complete else REGISTRY_INGESTION_INCOMPLETE
+        return None if self.complete else ReasonCode.REGISTRY_INGESTION_INCOMPLETE
 
     def __bool__(self) -> bool:
         return self.complete
@@ -1104,7 +1063,7 @@ class RegistryIngestionReport:
     def to_dict(self) -> dict[str, Any]:
         return {
             "complete": self.complete,
-            "reason": self.reason,
+            "reason": None if self.reason is None else self.reason.value,
             "entries_checked": self.entries_checked,
             "issues": [issue.to_dict() for issue in self.issues],
         }

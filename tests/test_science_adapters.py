@@ -66,7 +66,6 @@ from smart_beta.research.history import (
 from smart_beta.research.policy import GenerationMethod
 from smart_beta.science.adapters import (
     PHASE7_EVALUATION_DERIVATION_KIND,
-    REGISTRY_INGESTION_INCOMPLETE,
     AdapterError,
     DevelopmentDataset,
     FirewallAuditReport,
@@ -99,6 +98,7 @@ from smart_beta.science.contracts import (
     EvidenceGrade,
     EvidenceRole,
     ObservationKind,
+    ReasonCode,
     RecordKind,
 )
 from smart_beta.science.footprint import (
@@ -1195,6 +1195,13 @@ def test_ingest_registered_evaluation_appends_artifact_access_derived(tmp_path):
         RecordKind.DERIVED,
     ]
     artifact, access, derived = appended
+    # The ARTIFACT schema has no identity field (plan section 12.3).
+    assert set(artifact.payload) == {
+        "packaging_hash",
+        "sealed",
+        "available_from",
+        "source_label",
+    }
     # The ACCESS references the evaluation ARTIFACT root by Phase-10 hash with
     # the frozen component and inherits its complete footprint.
     assert access.payload["artifact_record_hash"] == artifact.record_hash
@@ -1300,31 +1307,119 @@ def test_repair_appends_access_after_older_derived(tmp_path):
     assert sum(1 for item in log.read() if item.kind is RecordKind.DERIVED) == 1
 
 
-def test_crash_after_artifact_before_access_detected_and_repaired(tmp_path):
+def test_crash_after_artifact_leaves_orphan_and_is_incomplete(tmp_path):
     log = _new_log(tmp_path)
     record = _evaluation_record()
     registry, entry = _registry_with(record)
-    # The crash boundary: only the ARTIFACT root is durable.
-    artifact = record_evaluation_artifact(
-        log,
-        evaluation_record=record,
-        dataset=_dataset(),
-        program_id=PROGRAM_ID,
-        experiment_id=entry.experiment_id,
+    # The crash boundary: only an orphan ARTIFACT_0 is durable (no ACCESS or
+    # DERIVED). The ARTIFACT schema carries no identity field.
+    orphan = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
     )
+    assert set(orphan.payload) == {
+        "packaging_hash",
+        "sealed",
+        "available_from",
+        "source_label",
+    }
     incomplete = registry_ingestion_completeness(log, registry.snapshot())
     assert not incomplete.complete
-    assert incomplete.reason == REGISTRY_INGESTION_INCOMPLETE
+    assert incomplete.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
     assert any(issue.component == "DERIVED" for issue in incomplete.issues)
+
+
+def test_recovery_appends_fresh_chain_and_orphan_remains(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    orphan = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
     appended = _ingest(log, entry, record)
-    kinds = [item.kind for item in appended]
-    assert RecordKind.ACCESS in kinds and RecordKind.DERIVED in kinds
-    # The orphan ARTIFACT is reused, never duplicated (only missing records).
-    assert RecordKind.ARTIFACT not in kinds
+    # Recovery appends a FRESH complete chain; the orphan stays immutable.
+    assert [item.kind for item in appended] == [
+        RecordKind.ARTIFACT,
+        RecordKind.ACCESS,
+        RecordKind.DERIVED,
+    ]
+    fresh_artifact, fresh_access, fresh_derived = appended
+    assert fresh_artifact.record_hash != orphan.record_hash
     artifacts = [item for item in log.read() if item.kind is RecordKind.ARTIFACT]
-    assert len(artifacts) == 1
-    assert artifacts[0].record_hash == artifact.record_hash
+    assert [item.record_hash for item in artifacts] == [
+        orphan.record_hash,
+        fresh_artifact.record_hash,
+    ]
+    # ACCESS and DERIVED bind the same FRESH root.
+    assert fresh_access.payload["artifact_record_hash"] == fresh_artifact.record_hash
+    assert fresh_derived.refs["derived_from"] == (fresh_artifact.record_hash,)
+    assert fresh_derived.payload["experiment_id"] == entry.experiment_id
+    assert fresh_derived.payload["content_hash"] == entry.evaluation_record_hash
+    # The ACCESS inherits the full whole-evaluation footprint and component.
+    assert fresh_access.footprint == fresh_artifact.footprint
+    assert fresh_access.payload["component"] == (
+        f"phase7-evaluation:{entry.experiment_id}"
+    )
+    # Completeness is established only via the fresh chain.
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert report.complete
+    assert report.reason is None
+
+
+def test_second_re_ingestion_adds_no_duplicate_logical_ingestion(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    _ingest(log, entry, record)
+    before = tuple(item.record_hash for item in log.read())
+    assert _ingest(log, entry, record) == ()
+    assert tuple(item.record_hash for item in log.read()) == before
     assert registry_ingestion_completeness(log, registry.snapshot()).complete
+
+
+def test_orphan_with_a_payload_experiment_id_is_never_joined(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    # Even a bogus orphan carrying the entry's id in its payload is never
+    # joined: the ingestion appends a fresh chain and leaves the orphan alone.
+    fp = aggregate_footprint(record, _dataset()).body
+    orphan = log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        program_id=PROGRAM_ID,
+        footprint=fp,
+        payload={
+            "packaging_hash": entry.evaluation_record_hash,
+            "sealed": False,
+            "available_from": "2021-12-31",
+            "source_label": "phase7-evaluation",
+            "experiment_id": entry.experiment_id,
+        },
+    )
+    appended = _ingest(log, entry, record)
+    fresh_artifact = appended[0]
+    assert fresh_artifact.record_hash != orphan.record_hash
+    assert appended[2].refs["derived_from"] == (fresh_artifact.record_hash,)
+    # The orphan still exists, unmodified.
+    assert any(item.record_hash == orphan.record_hash for item in log.read())
+    assert registry_ingestion_completeness(log, registry.snapshot()).complete
+
+
+def test_registry_ingestion_reason_uses_registered_reason_code(tmp_path):
+    from smart_beta.science import adapters as adapters_module
+
+    # No local duplicate reason constant in the adapter module.
+    assert not hasattr(adapters_module, "REGISTRY_INGESTION_INCOMPLETE")
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, _ = _registry_with(record)
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert not report.complete
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+    assert report.to_dict()["reason"] == "REGISTRY_INGESTION_INCOMPLETE"
 
 
 def test_snapshot_entry_missing_access_fails_predicate(tmp_path):
@@ -1344,7 +1439,7 @@ def test_snapshot_entry_missing_access_fails_predicate(tmp_path):
     )
     report = registry_ingestion_completeness(log, registry.snapshot())
     assert not report.complete
-    assert report.reason == REGISTRY_INGESTION_INCOMPLETE
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
     assert [issue.component for issue in report.issues] == ["ACCESS"]
 
 
@@ -1389,7 +1484,7 @@ def test_completeness_predicate_never_raises_into_a_pass_on_truncated_log(tmp_pa
         handle.write('{"seq": 3, "prev_hash": "')
     report = registry_ingestion_completeness(log.path, registry.snapshot())
     assert not report.complete
-    assert report.reason == REGISTRY_INGESTION_INCOMPLETE
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
 
 
 def test_mismatched_experiment_id_or_evaluation_record_hash_rejected(tmp_path):
