@@ -1933,6 +1933,89 @@ match and is never adopted.
 | ACCESS durable | original execution and every authorized resume use the prefix through ACCESS |
 | later unrelated K growth | never changes K_exec |
 
+### 13.3c Concurrent one-use arbitration (approved before Wave 5)
+
+The step-2 one-use check and the CONSUMPTION append are not atomic
+(`KnowledgeLog` has no conditional append). Two concurrent studies could
+therefore both pass the check. P10-H resolves this deterministically with
+existing K sequence authority. P10-B is unchanged, and no schema, hash,
+record kind, reason code, state or exception class is added.
+
+**1. Two checks.**
+- The step-2 pre-consumption one-use check stays; it serves ordinary
+  uncontended execution.
+- A mandatory **second check** runs after the study's CONSUMPTION **and**
+  ACCESS are durable and **before the first empirical read**. It is
+  authoritative for arbitration.
+
+**2. Precedence.**
+- Let `c_self` be the study's unique CONSUMPTION (§13.3b) and `seq_self =
+  c_self.seq`.
+- Within K_exec (§13.3b), consider only CONSUMPTION records with `seq <
+  seq_self`. Later CONSUMPTION records are ignored even if they appear
+  inside K_exec because of append interleaving.
+- Earlier CONSUMPTION wins. Precedence is never decided by ACCESS seq,
+  K_exec membership alone, wall-clock time, process scheduling, or which
+  check finished first.
+- Example: for the order A-CONSUMPTION, B-CONSUMPTION, B-ACCESS, A-ACCESS,
+  A ignores B and B must evaluate A.
+
+**3. Second overlap check.** Compute P10-C `overlap(consumption_fp_self,
+c_prior.footprint)` for every such prior record:
+- every result DISJOINT → arbitration passes and execution proceeds;
+- any OVERLAP → `FOOTPRINT_ALREADY_CONSUMED`;
+- otherwise, any UNDETERMINABLE → `FOOTPRINT_OVERLAP_UNDETERMINABLE`.
+
+The existing §6.6 overlap semantics are unchanged; only the precedence
+between the two reasons is stated here.
+
+**4. Losing study.** This is a post-consumption, pre-read terminal
+admissibility refusal. It is not an ordinary pre-execution refusal, not
+`STUDY_INTERRUPTED`, not an inference failure, and not an
+outcome-based assessment.
+- **Every** family member is NOT_ASSESSED with the same arbitration reason
+  set, canonicalized by `ReasonCode` order and supplied to P10-G `assess`
+  (at K_exec) as `inadmissibility_reasons`. So no `INFERENCE_INVALID` is
+  synthesized.
+- The result is persisted in the study store only.
+- CONSUMPTION and ACCESS remain, and nothing new is appended: no
+  empirical read, no Phase-6/7 confirmation execution, no inference, and
+  no `confirmation_series`, `confirmation_inference` or
+  `confirmation_assessment` record. There is no rollback and no freshness
+  restoration.
+
+**5. The losing CONSUMPTION in later studies.**
+- It stays durable: an irreversible reservation that lost arbitration.
+- Under the existing definition (P10-E freeze check 3 and the step-2
+  check: every prior CONSUMPTION), it blocks every later study.
+- It can never block its earlier winner, because only lower-seq
+  CONSUMPTION counts.
+- No "winning" field or status bit exists.
+
+**6. Crash and replay.**
+- A crash after ACCESS and before or during the second check: on resume
+  the check is recomputed from the fixed K_exec with the same result.
+- A crash after arbitration passes but before complete step-4 evidence
+  falls under §13.3a item 2 (terminal `STUDY_INTERRUPTED`; no re-read).
+- `replay_study` recomputes arbitration from the same K_exec with an
+  identical result.
+
+**7. Required tests (P10-H).**
+
+| Case | Expected |
+|---|---|
+| A. both pre-checks pass; A-CONS, B-CONS, A-ACC, B-ACC; overlapping | A proceeds; B terminal NOT_ASSESSED (`FOOTPRINT_ALREADY_CONSUMED`); B makes no empirical read |
+| B. A-CONS, B-CONS, B-ACC, A-ACC | same as case A |
+| C. B's CONSUMPTION has the lower seq | B wins regardless of ACCESS order |
+| D. disjoint concurrent footprints | both proceed |
+| E. the earlier footprint is UNDETERMINABLE to the later study | fail closed: `FOOTPRINT_OVERLAP_UNDETERMINABLE` |
+| F. instrumented reader | the losing study performs zero empirical reads |
+| G. durability | the losing study's CONSUMPTION and ACCESS remain |
+| H. replay against the same K_exec | identical arbitration result |
+
+The pre-existing P10-E freeze-time race does not affect these guarantees,
+because P10-H re-arbitrates at execution; it stays outside Wave 5.
+
 ### 13.4 Replay
 
 `replay_study(K, store, study_id)` recomputes the roles (at the recorded
