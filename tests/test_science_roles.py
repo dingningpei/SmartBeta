@@ -466,17 +466,29 @@ def _role(scenario: dict[str, K.KnowledgeRecord], chain: _Chain) -> EvidenceRole
 
 
 def test_rule_1a_consumed_overlap_is_robustness() -> None:
+    # P10-D-R2 (plan section 5.4 rule 1a temporal amendment): only a
+    # pre-tau_P CONSUMPTION is eligible. A prior preregistration that
+    # contains H is registered before the assessed P, so the consuming
+    # record's seq is strictly less than tau_P.
     chain = _Chain()
     decision = chain.append(**_decision())
     unexposed_artifact = chain.append(**_artifact(_fp(subject=SUBJECT_B)))
     freeze = chain.append(
         **_freeze([decision.record_hash, unexposed_artifact.record_hash])
     )
+    prior_prereg = chain.append(**_preregistration(freeze))
+    consumed_artifact = chain.append(
+        **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
+    )
+    consumption = chain.append(
+        **_consumption(prior_prereg, consumed_artifact, _fp(start=DAY10, end=DAY10))
+    )
     prereg = chain.append(**_preregistration(freeze))
     artifact = chain.append(
         **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
     )
-    chain.append(**_consumption(prereg, artifact, _fp(start=DAY10, end=DAY10)))
+    # The eligible CONSUMPTION is strictly pre-tau_P.
+    assert consumption.seq < prereg.seq
     assert (
         R.evidence_role(
             artifact.record_hash,
@@ -487,6 +499,99 @@ def test_rule_1a_consumed_overlap_is_robustness() -> None:
         )
         == EvidenceRole.ROBUSTNESS
     )
+
+
+def test_rule_1a_own_post_tau_p_consumption_is_not_robustness() -> None:
+    # P10-D-R2 (A): a study's own write-ahead CONSUMPTION references the
+    # assessed preregistration P (which contains H) and its footprint overlaps
+    # fp(E) by construction, but its seq is > tau_P, so rule 1a must not fire.
+    chain = _Chain()
+    decision = chain.append(**_decision())
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    artifact = chain.append(
+        **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
+    )
+    own = chain.append(
+        **_consumption(prereg, artifact, _fp(start=DAY10, end=DAY10))
+    )
+    assert own.seq > prereg.seq
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert role is not EvidenceRole.ROBUSTNESS
+    assert role is EvidenceRole.CONFIRMATION_PROSPECTIVE
+
+
+def test_rule_1a_later_post_tau_p_consumption_is_not_robustness() -> None:
+    # P10-D-R2 (C): eligibility is temporal, not identity-based. A CONSUMPTION
+    # whose preregistration contains H and whose footprint overlaps fp(E),
+    # but which is appended after tau_P, must not fire rule 1a even though it
+    # does not reference the assessed preregistration P.
+    chain = _Chain()
+    decision = chain.append(**_decision())
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    earlier_prereg = chain.append(**_preregistration(freeze))
+    prereg = chain.append(**_preregistration(freeze))
+    earlier_artifact = chain.append(
+        **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
+    )
+    artifact = chain.append(
+        **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
+    )
+    later = chain.append(
+        **_consumption(earlier_prereg, earlier_artifact, _fp(start=DAY10, end=DAY10))
+    )
+    assert later.seq > prereg.seq
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert role is not EvidenceRole.ROBUSTNESS
+    assert role is EvidenceRole.CONFIRMATION_PROSPECTIVE
+
+
+def test_rule_1a_boundary_seq_equal_tau_p_is_excluded() -> None:
+    # P10-D-R2 (D) boundary. Rule 1a admits only seq(c) < tau_P, so a
+    # CONSUMPTION at seq(c) == tau_P is excluded. In a verified prefix,
+    # seq(c) == tau_P is structurally impossible: tau_P is the seq of the
+    # assessed PREREGISTRATION P itself, and a verified prefix assigns each
+    # seq to exactly one record. Two independent proofs: (1) structural -- the
+    # record at tau_P is P, never a CONSUMPTION; (2) mechanical -- the rule-1a
+    # loop's skip condition rejects records with seq >= tau_p.
+    chain = _Chain()
+    decision = chain.append(**_decision())
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    artifact = chain.append(
+        **_artifact(_fp(start=DAY10, end=DAY10), available_from=DAY10)
+    )
+    chain.append(**_consumption(prereg, artifact, _fp(start=DAY10, end=DAY10)))
+    records = chain.read()
+    tau_p = prereg.seq
+    assert records[tau_p].kind is RecordKind.PREREGISTRATION
+    assert records[tau_p].record_hash == prereg.record_hash
+    assert all(
+        record.kind is not RecordKind.CONSUMPTION
+        for record in records
+        if record.seq == tau_p
+    )
+    # The eligible set is exactly {record.seq < tau_p}; every CONSUMPTION in
+    # this chain is post-tau_P and therefore excluded.
+    assert all(
+        record.seq != tau_p
+        for record in records
+        if record.kind is RecordKind.CONSUMPTION
+    )
+    source = inspect.getsource(R.evidence_role)
+    assert "record.seq >= tau_p" in source
 
 
 def test_rule_1a_consumption_without_h_is_ignored() -> None:
