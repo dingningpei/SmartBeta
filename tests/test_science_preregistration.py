@@ -27,6 +27,11 @@ import hashlib
 import pytest
 
 import phase10_fixtures as fixtures
+from smart_beta.experiment.registry import (
+    DecisionEntry,
+    ExperimentEntry,
+    RegistrySnapshot,
+)
 from smart_beta.science import knowledge as K
 from smart_beta.science import preregistration as P
 from smart_beta.science.contracts import (
@@ -141,6 +146,34 @@ def _log(tmp_path, clock: _SequenceClock | None = None) -> K.KnowledgeLog:
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _registry_snapshot(*, num_experiments: int = 1, num_decisions: int = 0):
+    """A small deterministic sealed ``RegistrySnapshot`` (no real evaluation)."""
+    experiments = tuple(
+        ExperimentEntry(
+            registration_index=index,
+            experiment_id=_sha(f"experiment-{index}"),
+            hypothesis_id=_sha(f"hypothesis-{index}"),
+            evaluation_record_hash=_sha(f"evaluation-{index}"),
+            family_id="family-1",
+        )
+        for index in range(num_experiments)
+    )
+    decision_experiment_id = (
+        experiments[0].experiment_id
+        if experiments
+        else _sha("decision-experiment")
+    )
+    decisions = tuple(
+        DecisionEntry(
+            registration_index=index,
+            experiment_id=decision_experiment_id,
+            decision_record_hash=_sha(f"decision-{index}"),
+        )
+        for index in range(num_decisions)
+    )
+    return RegistrySnapshot(experiments=experiments, decisions=decisions)
 
 
 _CONSTRUCTION = {
@@ -330,7 +363,16 @@ def _confirmation(*, footprint=None, window=("2021-07-01", "2021-07-05"), partit
     )
 
 
-def _prereg(setup, *, members=None, confirmation=None, alpha_study=0.05, power_disclosure=None):
+def _prereg(
+    setup,
+    *,
+    members=None,
+    confirmation=None,
+    alpha_study=0.05,
+    power_disclosure=None,
+    registry_snapshot=None,
+    registry_snapshot_ref=None,
+):
     if members is None:
         members = tuple(
             _member(
@@ -347,12 +389,16 @@ def _prereg(setup, *, members=None, confirmation=None, alpha_study=0.05, power_d
             member.hypothesis_id: {"unavailable_reason": "not computed in v1"}
             for member in members
         }
+    if registry_snapshot is None and registry_snapshot_ref is None:
+        registry_snapshot = _registry_snapshot()
     return P.PreRegistration(
         estimand_policy_record=setup["policy_record"].record_hash,
         members=members,
         alpha_study=alpha_study,
         confirmation=confirmation,
         power_disclosure=power_disclosure,
+        registry_snapshot=registry_snapshot,
+        registry_snapshot_ref=registry_snapshot_ref,
     )
 
 
@@ -745,6 +791,7 @@ def test_estimand_policy_must_precede_the_program_first_freeze(tmp_path):
         alpha_study=0.05,
         confirmation=_confirmation(),
         power_disclosure={"H-1": {"unavailable_reason": "n/a"}},
+        registry_snapshot=_registry_snapshot(),
     )
     with pytest.raises(P.PreregistrationError):
         P.validate_preregistration(
@@ -1149,6 +1196,7 @@ def test_endpoint_changed_after_access_is_refused(tmp_path):
         alpha_study=0.05,
         confirmation=_confirmation(),
         power_disclosure={"H-1": {"unavailable_reason": "n/a"}},
+        registry_snapshot=_registry_snapshot(),
     )
     with pytest.raises(P.PreregistrationRefused) as excinfo:
         P.validate_preregistration(
@@ -1486,3 +1534,161 @@ def test_window_last_day_one_day_before_exclusive_end_accepted():
 def test_window_start_before_inclusive_holdout_start_refused():
     with pytest.raises(P.PreregistrationError):
         _confirmation(window=("2021-06-30", "2021-07-05"))
+
+
+# ===========================================================================
+# section 7.2 registry_snapshot_ref (P10-E-R repair)
+#
+# The ref ``{snapshot_hash, experiment_count, decision_count}`` is derived
+# only from a sealed ``smart_beta.experiment.registry.RegistrySnapshot``
+# passed in at freeze, is part of ``prereg_id``, and later registry mutation
+# cannot rewrite it. No worker-local registry serialization or hashing.
+# ===========================================================================
+
+
+def test_registry_snapshot_ref_round_trips_with_sealed_snapshot(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    # The sealed snapshot round-trips through its own serialization.
+    clone = RegistrySnapshot.from_dict(snapshot.to_dict())
+    assert clone == snapshot
+    assert clone.snapshot_hash == snapshot.snapshot_hash
+    expected_ref = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 2,
+        "decision_count": 1,
+    }
+    prereg = _prereg(setup, registry_snapshot=clone)
+    assert dict(prereg.registry_snapshot_ref) == expected_ref
+    assert prereg.to_content()["registry_snapshot_ref"] == expected_ref
+    # The ref survives the canonical preregistration-body round-trip.
+    restored = P.PreRegistration.from_content(prereg.to_content())
+    assert dict(restored.registry_snapshot_ref) == expected_ref
+    assert restored.prereg_id == prereg.prereg_id
+    # Replay may rebuild the same body from the persisted ref alone.
+    ref_only = _prereg(setup, registry_snapshot_ref=expected_ref)
+    assert ref_only.prereg_id == prereg.prereg_id
+
+
+def test_registry_snapshot_ref_mismatch_is_refused(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    derived = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 2,
+        "decision_count": 1,
+    }
+    # A caller-supplied ref must equal the one derived from the snapshot.
+    for bad in (
+        {**derived, "snapshot_hash": "0" * 64},
+        {**derived, "experiment_count": 3},
+        {**derived, "decision_count": 0},
+    ):
+        with pytest.raises(P.PreregistrationError):
+            _prereg(
+                setup,
+                registry_snapshot=snapshot,
+                registry_snapshot_ref=bad,
+            )
+    # A tampered persisted ref is caught by the prereg_id recomputation.
+    prereg = _prereg(setup, registry_snapshot=snapshot)
+    tampered = prereg.to_content()
+    tampered["registry_snapshot_ref"] = {**derived, "decision_count": 0}
+    with pytest.raises(P.PreregistrationError):
+        P.PreRegistration.from_content(tampered)
+
+
+def test_preregistration_requires_a_registry_binding(tmp_path):
+    setup = _setup(tmp_path)
+    member = _member(
+        setup["freezes"][0],
+        setup["contract"],
+        setup["admission_record"],
+        setup["policy"],
+    )
+    with pytest.raises(P.PreregistrationError):
+        P.PreRegistration(
+            estimand_policy_record=setup["policy_record"].record_hash,
+            members=(member,),
+            alpha_study=0.05,
+            confirmation=_confirmation(),
+            power_disclosure={"H-1": {"unavailable_reason": "n/a"}},
+        )
+
+
+def test_later_registry_mutation_does_not_rewrite_the_bound_ref(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=1)
+    prereg = _prereg(setup, registry_snapshot=snapshot)
+    bound_ref = dict(prereg.registry_snapshot_ref)
+    bound_id = prereg.prereg_id
+    # Appending to the live registry changes the visible snapshot ...
+    grown = RegistrySnapshot(
+        experiments=snapshot.experiments
+        + (
+            ExperimentEntry(
+                registration_index=1,
+                experiment_id=_sha("experiment-late"),
+                hypothesis_id=_sha("hypothesis-late"),
+                evaluation_record_hash=_sha("evaluation-late"),
+                family_id="family-1",
+            ),
+        ),
+        decisions=snapshot.decisions
+        + (
+            DecisionEntry(
+                registration_index=0,
+                experiment_id=snapshot.experiments[0].experiment_id,
+                decision_record_hash=_sha("decision-late"),
+            ),
+        ),
+    )
+    assert grown.snapshot_hash != snapshot.snapshot_hash
+    assert len(grown.experiments) != len(snapshot.experiments)
+    # ... but the preregistration-bound ref (and id) never move.
+    assert dict(prereg.registry_snapshot_ref) == bound_ref
+    assert prereg.prereg_id == bound_id
+    record = P.append_preregistration(
+        setup["log"], prereg, registry=setup["registry"]
+    )
+    assert dict(P.preregistration_from_record(record).registry_snapshot_ref) == bound_ref
+
+
+def test_prereg_id_changes_when_the_registry_ref_changes(tmp_path):
+    setup = _setup(tmp_path)
+    one = _prereg(setup, registry_snapshot=_registry_snapshot(num_experiments=1))
+    two = _prereg(
+        setup,
+        registry_snapshot=_registry_snapshot(num_experiments=2, num_decisions=1),
+    )
+    assert one.registry_snapshot_ref != two.registry_snapshot_ref
+    assert one.prereg_id != two.prereg_id
+
+
+def test_registry_ref_uses_sealed_authority_not_local_hashing(tmp_path, monkeypatch):
+    # Static authority boundary: only the sealed RegistrySnapshot type may be
+    # imported from the registry module -- never its serialization/hashing.
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(P.__file__).read_text(encoding="utf-8"))
+    registry_imports: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "smart_beta.experiment.registry"
+        ):
+            registry_imports.update(alias.name for alias in node.names)
+    assert registry_imports == {"RegistrySnapshot"}
+    # Functional proof: the ref delegates to the sealed snapshot_hash property
+    # rather than re-serializing or re-hashing the registry locally.
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    sentinel = "e" * 64
+    monkeypatch.setattr(
+        RegistrySnapshot, "snapshot_hash", property(lambda self: sentinel)
+    )
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup, registry_snapshot=snapshot)
+    assert prereg.registry_snapshot_ref["snapshot_hash"] == sentinel
+    assert prereg.registry_snapshot_ref["experiment_count"] == 2
+    assert prereg.registry_snapshot_ref["decision_count"] == 1

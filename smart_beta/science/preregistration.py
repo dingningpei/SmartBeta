@@ -64,12 +64,13 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
 
 from smart_beta.evaluation.spec import FoldRole, PartitionRef
+from smart_beta.experiment.registry import RegistrySnapshot
 from smart_beta.science.contracts import (
     DERIVATION_RULES_VERSION,
     NULL_HYPOTHESIS,
@@ -1029,11 +1030,78 @@ _PREREG_BODY_KEYS = frozenset(
         "members",
         "alpha_study",
         "confirmation",
+        "registry_snapshot_ref",
         "partition_ref_hash",
         "analysis_plan_id",
         "power_disclosure",
     }
 )
+
+#: The frozen shape of the section 7.2 ``registry_snapshot_ref``.
+_REGISTRY_SNAPSHOT_REF_KEYS = frozenset(
+    {"snapshot_hash", "experiment_count", "decision_count"}
+)
+
+
+def _normalize_registry_snapshot_ref(value: Any) -> Mapping[str, Any]:
+    """Validate and freeze a section 7.2 ``registry_snapshot_ref``.
+
+    Only the three frozen keys are accepted; the caller may never add a
+    worker-chosen field. The hash is a lowercase sha256 and the counts are
+    non-negative integers.
+    """
+    if not isinstance(value, Mapping):
+        raise PreregistrationError(
+            "registry_snapshot_ref must be a mapping, got "
+            f"{type(value).__name__}"
+        )
+    if set(value.keys()) != _REGISTRY_SNAPSHOT_REF_KEYS:
+        raise PreregistrationError(
+            "registry_snapshot_ref keys must be exactly "
+            f"{sorted(_REGISTRY_SNAPSHOT_REF_KEYS)}, got {sorted(value.keys())}"
+        )
+    return _freeze(
+        {
+            "snapshot_hash": _expect_sha256(
+                value["snapshot_hash"],
+                where="registry_snapshot_ref.snapshot_hash",
+            ),
+            "experiment_count": _expect_int(
+                value["experiment_count"],
+                where="registry_snapshot_ref.experiment_count",
+                minimum=0,
+            ),
+            "decision_count": _expect_int(
+                value["decision_count"],
+                where="registry_snapshot_ref.decision_count",
+                minimum=0,
+            ),
+        }
+    )
+
+
+def _registry_snapshot_ref_from_snapshot(
+    snapshot: RegistrySnapshot,
+) -> Mapping[str, Any]:
+    """Derive the ref from sealed ``RegistrySnapshot`` authority only.
+
+    The hash is the snapshot's own ``snapshot_hash`` and the counts are the
+    lengths of its contiguous registration-order tuples. This module never
+    re-serializes or re-hashes registry content locally.
+    """
+    if not isinstance(snapshot, RegistrySnapshot):
+        raise PreregistrationError(
+            "registry_snapshot must be a sealed RegistrySnapshot, got "
+            f"{type(snapshot).__name__}"
+        )
+    return _freeze(
+        {
+            "snapshot_hash": snapshot.snapshot_hash,
+            "experiment_count": len(snapshot.experiments),
+            "decision_count": len(snapshot.decisions),
+        }
+    )
+
 
 _POWER_DISCLOSURE_REQUIRED = ("mde", "sigma_lr", "T_conf", "source_record")
 
@@ -1113,8 +1181,12 @@ class PreRegistration:
     alpha_study: float
     confirmation: ConfirmationDesign
     power_disclosure: Mapping[str, Mapping[str, Any]]
+    registry_snapshot_ref: Mapping[str, Any] | None = None
+    registry_snapshot: InitVar[RegistrySnapshot | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self, registry_snapshot: RegistrySnapshot | None
+    ) -> None:
         _expect_sha256(
             self.estimand_policy_record,
             where="PreRegistration.estimand_policy_record",
@@ -1167,6 +1239,34 @@ class PreRegistration:
                 member_ids=[member.hypothesis_id for member in self.members],
             ),
         )
+        # Section 7.2 registry binding: the ref is derived from the sealed
+        # RegistrySnapshot passed in at freeze; a supplied ref must agree with
+        # that derivation. Replay (from_content) may supply the ref alone.
+        derived_ref: Mapping[str, Any] | None = None
+        if registry_snapshot is not None:
+            derived_ref = _registry_snapshot_ref_from_snapshot(registry_snapshot)
+        supplied_ref = self.registry_snapshot_ref
+        if supplied_ref is not None:
+            supplied_ref = _normalize_registry_snapshot_ref(supplied_ref)
+        if supplied_ref is None and derived_ref is None:
+            raise PreregistrationError(
+                "a frozen PreRegistration requires a sealed RegistrySnapshot "
+                "(or, for replay, its registry_snapshot_ref)"
+            )
+        if (
+            supplied_ref is not None
+            and derived_ref is not None
+            and supplied_ref != derived_ref
+        ):
+            raise PreregistrationError(
+                "registry_snapshot_ref does not match the sealed "
+                "RegistrySnapshot it was derived from"
+            )
+        object.__setattr__(
+            self,
+            "registry_snapshot_ref",
+            derived_ref if supplied_ref is None else supplied_ref,
+        )
 
     # -- derived identity --------------------------------------------------
 
@@ -1203,6 +1303,7 @@ class PreRegistration:
             "members": [member.to_content() for member in self.members],
             "alpha_study": self.alpha_study,
             "confirmation": self.confirmation.to_content(),
+            "registry_snapshot_ref": _plain(self.registry_snapshot_ref),
             "partition_ref_hash": self.partition_ref_hash,
             "analysis_plan_id": self.analysis_plan_id,
             "power_disclosure": {
@@ -1238,6 +1339,7 @@ class PreRegistration:
                 "members",
                 "alpha_study",
                 "confirmation",
+                "registry_snapshot_ref",
                 "partition_ref_hash",
                 "analysis_plan_id",
                 "power_disclosure",
@@ -1261,6 +1363,7 @@ class PreRegistration:
             alpha_study=mapping["alpha_study"],
             confirmation=ConfirmationDesign.from_content(mapping["confirmation"]),
             power_disclosure=mapping["power_disclosure"],
+            registry_snapshot_ref=mapping["registry_snapshot_ref"],
         )
         if prereg.analysis_plan_id != mapping["analysis_plan_id"]:
             raise PreregistrationError(
