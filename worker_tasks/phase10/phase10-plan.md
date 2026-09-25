@@ -708,7 +708,7 @@ StudyProtocol.
 | `members` | a tuple, sorted by `hypothesis_id`, of `MemberContract` |
 | `alpha_study` | α for Holm, in (0, 0.5) |
 | `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the canonical sealed Phase-7 PartitionRef representation with HOLDOUT = window; see "Frozen identity details" below), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
-| `registry_snapshot_ref` | `{snapshot_hash, experiment_count, decision_count}` of the sealed Phase-8 `RegistrySnapshot` visible at preregistration freeze, **derived and validated only through sealed `RegistrySnapshot` authority** (its `snapshot_hash`, canonical serialization and contiguous registration-index prefix semantics); no other registry hash exists. The hash binds the canonical identity, the counts bind the shape, and the ref is part of `prereg_id`. Later registry mutation cannot rewrite it. P10-H persists the exact `RegistrySnapshot.to_dict()` body for replay and verifies it against this ref (§13.2). |
+| `registry_snapshot_ref` | `{snapshot_hash, experiment_count, decision_count}` of the sealed Phase-8 `RegistrySnapshot` visible at preregistration freeze, **derived and validated only through sealed `RegistrySnapshot` authority** (its `snapshot_hash`, canonical serialization and contiguous registration-index prefix semantics); no other registry hash exists. The hash binds the canonical identity, the counts bind the shape, and the ref is part of `prereg_id`. Later registry mutation cannot rewrite it. **Freeze vs replay:** creating or freezing a *new* preregistration (`append_preregistration`) requires the sealed `RegistrySnapshot` and verifies the ref against it exactly, refusing on mismatch; a caller-supplied bare ref is never authority for a new freeze. A bare persisted ref is accepted only when reconstructing an already-existing preregistration for replay, under the existing integrity validation. P10-H persists the exact `RegistrySnapshot.to_dict()` body for replay and verifies it against this ref (§13.2). |
 | `partition_ref_hash` | the §4.1 canonical SHA-256 identity of the canonical `partition_spec`, i.e. `content_hash(PartitionRef.to_dict())`. Semantics are identical to the frozen P10-S `InferentialSeriesBundle.partition_ref_hash` (§12.1(b)). |
 | `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, DECISION_RULE_VERSION, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
 | `power_disclosure` | per member `{mde, sigma_lr, T_conf, source_record}` or `{unavailable_reason}`. Disclosure is mandatory; **there is no gate** (SD §7.4, §12). |
@@ -1165,6 +1165,28 @@ determination is suppressed by the other.
   NOT_ASSESSED with `ROLE_DEVELOPMENT` after a late human-exposure
   declaration.
 - The original is never mutated, and a reassessment can never upgrade.
+- **Family-wide reassessment (clarified before Barrier 4; R-3 remains
+  authoritative).** If reassessment against K_now makes **any** member of a
+  frozen family inadmissible, reassessment runs at the **frozen-family**
+  level, not only for that hypothesis.
+  - For every member i: p_i*(K_now) = the original preregistered inference
+    p_i if i remains admissible under K_now, and **1** if i is inadmissible
+    under K_now.
+  - That 1 is the frozen R-3 multiplicity placeholder, **not** an empirical
+    p-value, and it is never persisted or represented as one.
+  - Family membership and m are unchanged. No member is dropped, no p-value
+    is re-estimated, no empirical inference is re-run, and no new
+    statistical family is created.
+  - The same frozen Holm procedure runs over all m members. Each member is
+    then re-derived through the §11.2 mapping, using the recomputed Holm
+    result and its existing admissible evidence and bound.
+  - A new DERIVED reassessment record is appended **only** for members whose
+    assessment materially changes; unchanged members get no redundant
+    record.
+  - **Downgrade-only is enforced explicitly**, not assumed from Holm
+    monotonicity. A recomputation that would imply an upgrade for any member
+    is refused (fail closed), and no upgrading record is appended. Repeated
+    reassessment under the same K_now is deterministic and idempotent.
 
 ---
 
@@ -1377,12 +1399,27 @@ reconstructed read-only:
   - **Identity domains:** Phase-7/8 evaluation hashes and Phase-10
     `record_hash`es are distinct domains and are never compared across. The
     ARTIFACT `packaging_hash` is metadata, never a join key.
-  - **Idempotence and crash:** re-ingestion is idempotent. It appends only
-    the missing ARTIFACT, ACCESS or DERIVED record for an entry and never
-    rewrites K. A repair may therefore append ACCESS after an older DERIVED;
-    completeness depends on existence and linkage, not relative order. A
-    crash after ARTIFACT and before ACCESS leaves a mechanically detectable
-    incomplete ingestion, which the §13.2 gate refuses.
+  - **Idempotence and crash (clarified before Wave 5).**
+    - **Idempotent:** if a valid complete chain (ARTIFACT, ACCESS, DERIVED,
+      linked as above) already exists for the registry-owned pair
+      (`experiment_id`, `evaluation_record_hash`), re-ingestion creates no
+      further logically complete chain.
+    - **Legacy repair:** if a DERIVED record exists and links its ARTIFACT
+      root but its ACCESS is missing (e.g. records written before this
+      amendment), the repair appends the ACCESS to **that** root, which is
+      located through `DERIVED.refs.derived_from`. It may follow the older
+      DERIVED record.
+    - **Crash after ARTIFACT and before ACCESS (no DERIVED):** the orphan
+      ARTIFACT_0 stays immutable. Recovery appends a **fresh** complete
+      chain, ARTIFACT_1 → ACCESS_1 → DERIVED_1, and never mutates, deletes
+      or reuses ARTIFACT_0. No reverse lookup of experiment identity from an
+      orphan is required.
+    - **No new ARTIFACT schema:** there is no identity field on ARTIFACT
+      (e.g. no `payload.experiment_id`).
+    - **Completeness:** an orphan ARTIFACT, or several, never establishes
+      completeness; only a valid complete chain does. An unrepaired orphan
+      leaves a mechanically detectable incomplete ingestion, which the §13.2
+      gate refuses.
 - **Hypotheses:** `HYPOTHESIS_FREEZE` per admitted proposal/experiment, with
   `influenced_by` = its GenerationEvent's GENERATOR_INPUT.
 - **Program freezes:** each `ResearchProgram` freeze → a `HUMAN_DECISION
