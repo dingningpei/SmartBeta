@@ -413,7 +413,12 @@ def _prereg_records(log: K.KnowledgeLog):
 def _freeze_and_consume(setup, *, footprint=None, study_id="study-1"):
     """Append a frozen preregistration plus one CONSUMPTION of ``footprint``."""
     prereg = _prereg(setup)
-    record = P.append_preregistration(setup["log"], prereg, registry=setup["registry"])
+    record = P.append_preregistration(
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
+    )
     footprint = footprint if footprint is not None else _footprint_body()
     artifact = setup["log"].append(
         kind=RecordKind.ARTIFACT,
@@ -620,6 +625,7 @@ def test_append_with_distinct_admissions_records_all_consulted(tmp_path):
         setup["log"],
         prereg,
         registry=_registry(setup["contract"], second_contract),
+        registry_snapshot=_registry_snapshot(),
     )
     assert set(record.refs["consulted"]) == {
         setup["admission_record"].record_hash,
@@ -661,7 +667,10 @@ def test_append_preregistration_refs_and_payload(tmp_path):
     prereg = _prereg(setup)
     prefix = setup["log"].read()
     record = P.append_preregistration(
-        setup["log"], prereg, registry=setup["registry"]
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
     )
     assert record.kind is RecordKind.PREREGISTRATION
     assert record.seq == len(prefix)
@@ -681,7 +690,10 @@ def test_preregistration_from_record_round_trip(tmp_path):
     setup = _setup(tmp_path)
     prereg = _prereg(setup)
     record = P.append_preregistration(
-        setup["log"], prereg, registry=setup["registry"]
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
     )
     restored = P.preregistration_from_record(record)
     assert restored.to_content() == prereg.to_content()
@@ -693,7 +705,10 @@ def test_a_record_body_tamper_is_detected(tmp_path):
     setup = _setup(tmp_path)
     prereg = _prereg(setup)
     record = P.append_preregistration(
-        setup["log"], prereg, registry=setup["registry"]
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
     )
     payload = dict(record.payload)
     payload["preregistration_hash"] = "0" * 64
@@ -961,7 +976,10 @@ def test_retrospective_admission_cannot_repair_a_frozen_preregistration(tmp_path
     # Build and freeze the preregistration.
     prereg = _prereg(setup)
     record = P.append_preregistration(
-        setup["log"], prereg, registry=setup["registry"]
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
     )
     prefix_at_freeze = setup["log"].read()
     second_contract = _contract(procedure_id="late-proc", version="1.0.0")
@@ -1158,7 +1176,10 @@ def test_refused_preregistration_writes_no_record(tmp_path):
     prereg = _prereg(setup, confirmation=overlapping)
     with pytest.raises(P.PreregistrationRefused):
         P.append_preregistration(
-            setup["log"], prereg, registry=setup["registry"]
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=_registry_snapshot(),
         )
     assert len(_prereg_records(setup["log"])) == before
 
@@ -1473,7 +1494,10 @@ def test_admission_must_be_in_freeze_prefix_and_retrospective_refused(tmp_path):
     assert excinfo.value.reason is ReasonCode.PROCEDURE_NOT_ADMITTED
     # Once it is genuinely in the prefix, the same body is admissible.
     record = P.append_preregistration(
-        setup["log"], prereg, registry=_registry(new_contract)
+        setup["log"],
+        prereg,
+        registry=_registry(new_contract),
+        registry_snapshot=_registry_snapshot(),
     )
     assert record.kind is RecordKind.PREREGISTRATION
 
@@ -1649,7 +1673,10 @@ def test_later_registry_mutation_does_not_rewrite_the_bound_ref(tmp_path):
     assert dict(prereg.registry_snapshot_ref) == bound_ref
     assert prereg.prereg_id == bound_id
     record = P.append_preregistration(
-        setup["log"], prereg, registry=setup["registry"]
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=_registry_snapshot(),
     )
     assert dict(P.preregistration_from_record(record).registry_snapshot_ref) == bound_ref
 
@@ -1692,3 +1719,155 @@ def test_registry_ref_uses_sealed_authority_not_local_hashing(tmp_path, monkeypa
     assert prereg.registry_snapshot_ref["snapshot_hash"] == sentinel
     assert prereg.registry_snapshot_ref["experiment_count"] == 2
     assert prereg.registry_snapshot_ref["decision_count"] == 1
+
+
+# ===========================================================================
+# section 7.2 "Freeze vs replay" (P10-E-R correction)
+#
+# ``append_preregistration`` -- the only new-freeze path -- requires the
+# sealed RegistrySnapshot and verifies the ref against it. A bare persisted
+# ref is accepted only on the replay/deserialization path.
+# ===========================================================================
+
+
+def test_new_freeze_with_matching_snapshot_accepted(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    prereg = _prereg(setup, registry_snapshot=snapshot)
+    record = P.append_preregistration(
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=snapshot,
+    )
+    assert record.kind is RecordKind.PREREGISTRATION
+    assert record.payload["preregistration_hash"] == prereg.prereg_id
+    assert dict(prereg.registry_snapshot_ref) == {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 2,
+        "decision_count": 1,
+    }
+
+
+def test_new_freeze_without_sealed_snapshot_rejected(tmp_path):
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup)
+    # Omitting the required snapshot is a call-site error ...
+    with pytest.raises(TypeError):
+        P.append_preregistration(
+            setup["log"], prereg, registry=setup["registry"]
+        )
+    # ... and an explicit None is refused by the freeze check.
+    with pytest.raises(P.PreregistrationError):
+        P.append_preregistration(
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=None,
+        )
+    assert _prereg_records(setup["log"]) == []
+
+
+def test_bare_correct_looking_ref_is_never_freeze_authority(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    bare_ref = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 2,
+        "decision_count": 1,
+    }
+    # The bare ref round-trips for replay ...
+    prereg = _prereg(setup, registry_snapshot_ref=bare_ref)
+    assert dict(prereg.registry_snapshot_ref) == bare_ref
+    # ... but it cannot freeze a new record without the sealed snapshot.
+    with pytest.raises(P.PreregistrationError):
+        P.append_preregistration(
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=None,
+        )
+    assert _prereg_records(setup["log"]) == []
+
+
+def test_freeze_snapshot_hash_mismatch_rejected(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    bare_ref = {
+        "snapshot_hash": "0" * 64,
+        "experiment_count": 2,
+        "decision_count": 1,
+    }
+    prereg = _prereg(setup, registry_snapshot_ref=bare_ref)
+    with pytest.raises(P.PreregistrationError):
+        P.append_preregistration(
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=snapshot,
+        )
+    assert _prereg_records(setup["log"]) == []
+
+
+def test_freeze_experiment_count_mismatch_rejected(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    bare_ref = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 3,
+        "decision_count": 1,
+    }
+    prereg = _prereg(setup, registry_snapshot_ref=bare_ref)
+    with pytest.raises(P.PreregistrationError):
+        P.append_preregistration(
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=snapshot,
+        )
+    assert _prereg_records(setup["log"]) == []
+
+
+def test_freeze_decision_count_mismatch_rejected(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=2, num_decisions=1)
+    bare_ref = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "experiment_count": 2,
+        "decision_count": 0,
+    }
+    prereg = _prereg(setup, registry_snapshot_ref=bare_ref)
+    with pytest.raises(P.PreregistrationError):
+        P.append_preregistration(
+            setup["log"],
+            prereg,
+            registry=setup["registry"],
+            registry_snapshot=snapshot,
+        )
+    assert _prereg_records(setup["log"]) == []
+
+
+def test_replay_deserialization_does_not_require_a_new_freeze(tmp_path):
+    setup = _setup(tmp_path)
+    snapshot = _registry_snapshot(num_experiments=1, num_decisions=1)
+    prereg = _prereg(setup, registry_snapshot=snapshot)
+    record = P.append_preregistration(
+        setup["log"],
+        prereg,
+        registry=setup["registry"],
+        registry_snapshot=snapshot,
+    )
+    # Replay from the persisted record: no sealed snapshot is supplied.
+    restored = P.preregistration_from_record(record)
+    assert restored.to_content() == prereg.to_content()
+    assert restored.prereg_id == prereg.prereg_id
+    # Deserialization from the persisted body: also no snapshot.
+    from_body = P.PreRegistration.from_content(
+        record.payload["preregistration"]
+    )
+    assert from_body.to_content() == prereg.to_content()
+    # The bare persisted ref remains accepted on the replay path.
+    ref_only = _prereg(
+        setup, registry_snapshot_ref=dict(restored.registry_snapshot_ref)
+    )
+    assert ref_only.prereg_id == prereg.prereg_id

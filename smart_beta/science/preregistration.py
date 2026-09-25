@@ -1766,9 +1766,18 @@ def append_preregistration(
     prereg: PreRegistration,
     *,
     registry: InferenceProcedureRegistry,
+    registry_snapshot: RegistrySnapshot,
     calendar: Any = None,
 ) -> KnowledgeRecord:
     """Validate and append the single ``PREREGISTRATION`` record (R-5a).
+
+    ``registry_snapshot`` is the sealed Phase-8 ``RegistrySnapshot`` visible
+    at this freeze. Section 7.2 ("Freeze vs replay") makes it **required**
+    for a new freeze: the preregistration's ``registry_snapshot_ref`` must
+    equal the ref derived from it (``snapshot_hash`` and the two tuple
+    lengths), so a caller-supplied bare ref is never authority for a new
+    freeze. A bare persisted ref is accepted only on the replay path
+    (:func:`preregistration_from_record` / ``PreRegistration.from_content``).
 
     ``refs.influenced_by`` = the members' ``HYPOTHESIS_FREEZE`` records plus
     the ``ESTIMAND_POLICY`` record. ``refs.consulted`` = every member's
@@ -1776,6 +1785,16 @@ def append_preregistration(
     """
     if not isinstance(log, KnowledgeLog):
         raise PreregistrationError("log must be a KnowledgeLog")
+    if not isinstance(prereg, PreRegistration):
+        raise PreregistrationError("prereg must be a PreRegistration")
+    # Freeze binding: the sealed snapshot is the only authority for the ref.
+    # ``_registry_snapshot_ref_from_snapshot`` rejects ``None``/a non-snapshot.
+    derived_ref = _registry_snapshot_ref_from_snapshot(registry_snapshot)
+    if prereg.registry_snapshot_ref != derived_ref:
+        raise PreregistrationError(
+            "registry_snapshot_ref does not match the sealed RegistrySnapshot "
+            "supplied for the freeze"
+        )
     prefix = log.read()
     policy = validate_preregistration(
         prereg, prefix=prefix, registry=registry, calendar=calendar
