@@ -577,9 +577,11 @@ def _canonical_partition_spec(
     never silently normalized; P10-E reproduces none of the sealed rules.
 
     The persisted boundary is the half-open ``[start, end)`` interval
-    carried verbatim by ``engine._partition_ref``; the \"whole window in the
-    HOLDOUT fold\" check uses the direct ``start <= w0 and w1 <= end``
-    translation (section 7.3 check 4). ``Partition.partition_id`` is never
+    carried verbatim by ``engine._partition_ref`` (``engine._slice_panel``
+    selects ``date >= start and date < end``; ``end`` is exclusive). The
+    plan's confirmation window ``[w0, w1]`` is inclusive, so the whole
+    window lies in the HOLDOUT fold (section 7.3 check 4) exactly when
+    ``start <= w0 and w1 < end``. ``Partition.partition_id`` is never
     consulted.
     """
     if not isinstance(value, Mapping):
@@ -613,7 +615,9 @@ def _canonical_partition_spec(
     holdout = holdouts[0]
     w0 = date.fromisoformat(window[0])
     w1 = date.fromisoformat(window[1])
-    if not (holdout.start <= w0 and w1 <= holdout.end):
+    # Half-open sealed fold: `start` inclusive, `end` exclusive; the plan's
+    # window `[w0, w1]` is inclusive.
+    if not (holdout.start <= w0 and w1 < holdout.end):
         raise PreregistrationError(
             "partition_spec must place the whole confirmation window in the "
             f"HOLDOUT fold: window=[{window[0]}, {window[1]}] "

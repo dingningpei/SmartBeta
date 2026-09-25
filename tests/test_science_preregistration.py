@@ -1453,3 +1453,36 @@ def test_forged_timestamps_cannot_substitute_for_k_sequence(tmp_path):
     P.validate_preregistration(
         prereg, prefix=setup["log"].read(), registry=setup["registry"]
     )
+
+
+# ===========================================================================
+# half-open HOLDOUT boundary (independent review of f4e2755)
+#
+# Sealed Phase-7 folds are half-open [start, end) with `end` exclusive
+# (partition.py docstring; engine._slice_panel uses date < end), while the
+# plan's confirmation window [w0, w1] is inclusive. The whole-window
+# containment is therefore start <= w0 and w1 < end.
+# ===========================================================================
+
+
+def test_window_last_day_equal_to_exclusive_holdout_end_refused():
+    # The default HOLDOUT fold is [2021-07-01, 2021-12-31); w1 == end is not
+    # part of the fold.
+    with pytest.raises(P.PreregistrationError):
+        _confirmation(window=("2021-07-01", "2021-12-31"))
+    # Explicitly-past-the-end windows are refused too.
+    with pytest.raises(P.PreregistrationError):
+        _confirmation(window=("2021-07-01", "2022-01-01"))
+
+
+def test_window_last_day_one_day_before_exclusive_end_accepted():
+    confirmation = _confirmation(window=("2021-07-01", "2021-12-30"))
+    assert confirmation.window == ("2021-07-01", "2021-12-30")
+    # It survives a canonical reconstruction.
+    restored = P.ConfirmationDesign.from_content(confirmation.to_content())
+    assert restored.window == ("2021-07-01", "2021-12-30")
+
+
+def test_window_start_before_inclusive_holdout_start_refused():
+    with pytest.raises(P.PreregistrationError):
+        _confirmation(window=("2021-06-30", "2021-07-05"))
