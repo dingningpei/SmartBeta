@@ -31,7 +31,8 @@ Frozen semantics (plan section 5.4, first match wins)
 rule         condition
 ===========  =========================================================
 1a           ``ROBUSTNESS``: ``overlap(fp(E), fp(c)) = OVERLAP`` for a
-             ``CONSUMPTION`` whose preregistration contains ``H``
+             pre-``tau_P`` ``CONSUMPTION`` (``seq(c) < tau_P``) whose
+             preregistration contains ``H``
 1b           ``DEVELOPMENT``: ``overlap(fp(E), ExposedFP) = OVERLAP``
 2            ``UNKNOWN_EXPOSURE``: an overlap is ``UNDETERMINABLE``; an
              ancestry record lacks/unverifiably carries a footprint; a
@@ -983,7 +984,7 @@ def evidence_role(
     # -- rule 1a: ROBUSTNESS -------------------------------------------------
     undeterminable = False
     for record in records:
-        if record.kind != RecordKind.CONSUMPTION:
+        if record.kind != RecordKind.CONSUMPTION or record.seq >= tau_p:
             continue
         containment = _prereg_contains_h(record, index, freeze)
         consumption_footprint = _footprint_of(record, calendar)
