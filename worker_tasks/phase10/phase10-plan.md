@@ -1857,6 +1857,82 @@ dedup).**
   authorized by the Phase-10 contract. No K record is created merely
   because the study store holds a terminal orchestration state.
 
+### 13.3b Execution knowledge snapshot K_exec and recovery conflicts (approved before Wave 5)
+
+This section positions the "authorized execution K snapshot" of §9.3 and
+§13.2 step 5. It uses only the existing `KnowledgeSnapshot(length,
+head_hash)` and `KnowledgeIntegrityError`. It adds no schema, hash
+domain, record kind, reason code, scientific state or exception class.
+
+**1. Definition.** K_exec is fixed by durable execution state and is never
+re-taken from "current K":
+- **ACCESS durable:** K_exec is the exact K prefix ending at and including
+  the study's confirmation ACCESS record (component
+  `confirmation-study:<study_id>`), i.e. `length = ACCESS.seq + 1` and
+  `head_hash = ACCESS.record_hash`.
+- **CONSUMPTION durable, ACCESS absent** (crash): K_exec is the prefix
+  ending at and including the study's CONSUMPTION record. It is used for
+  interruption recovery only.
+- **Pre-execution refusal:** no write-ahead record exists. K_exec is the
+  exact immutable prefix the refusal and admission checks read. No K record
+  is appended to establish it.
+
+**2. Authority.** For a study whose ACCESS is durable, the same K_exec is
+used for every original-execution authority that needs the execution
+snapshot:
+- step-5 revocation visibility (`run_inference` receives the admission and
+  every `PROCEDURE_REVOCATION` in K_exec);
+- step-6 role computation and `assess(...)`, which is passed exactly the
+  K_exec prefix;
+- the assessment's `knowledge_snapshot`;
+- crash resume and exact assessment reconstruction.
+
+No current-K snapshot taken at step 5, at step 6 or at resume ever replaces
+K_exec. Ordering is sequence/prefix authority, never wall-clock time.
+
+**3. Later knowledge.**
+- Records appended after K_exec (a later `PROCEDURE_REVOCATION`, ACCESS,
+  `EXPOSURE_DECLARATION` or any other record) never change the original
+  execution.
+- They reach an existing assessment only through §11.3 downgrade-only
+  reassessment. The original assessment is never recomputed against a
+  later prefix, and its identity is never mutated.
+- Original execution is therefore a function of K_exec, the frozen
+  preregistration and the persisted authorized evidence.
+
+**4. Persistence and replay.**
+- K_exec is persisted without new schema, in two ways:
+  - as the existing `knowledge_snapshot` field of every stored
+    ScientificAssessment, including refused and interrupted families;
+  - for ACCESS- or CONSUMPTION-bounded studies, as the exact position of
+    that study's own write-ahead record in K.
+- Resume and `replay_study` recover K_exec from these and never take a
+  fresh snapshot.
+- More than one ACCESS with component `confirmation-study:<study_id>`, or
+  more than one CONSUMPTION with payload `study_id`, is a K integrity
+  violation → `KnowledgeIntegrityError`.
+- Same frozen inputs, same persisted evidence and same K_exec → the same
+  reconstructed object, content hash and `assessment_id`. An unrelated
+  later append never produces a new `assessment_id` or a duplicate
+  `confirmation_assessment`.
+
+**5. More than one exact DERIVED match (§13.3a item 5).** This is a hard
+Knowledge-PIT integrity failure: raise the existing P10-B
+`KnowledgeIntegrityError`. P10-H never chooses one, appends another,
+persists a replacement, or masks the failure as NOT_ASSESSED or
+`STUDY_INTERRUPTED`; it is not a scientific outcome. Same `content_hash`
+with the wrong `derivation_kind` or wrong `derived_from` is not an exact
+match and is never adopted.
+
+**6. Crash-matrix snapshot rows (added to §13.3a item 7).**
+
+| Durable state | Snapshot used |
+|---|---|
+| before CONSUMPTION | no write-ahead boundary; a refusal uses the prefix its gate checks read |
+| CONSUMPTION durable, ACCESS absent | interruption recovery uses the prefix through CONSUMPTION |
+| ACCESS durable | original execution and every authorized resume use the prefix through ACCESS |
+| later unrelated K growth | never changes K_exec |
+
 ### 13.4 Replay
 
 `replay_study(K, store, study_id)` recomputes the roles (at the recorded
