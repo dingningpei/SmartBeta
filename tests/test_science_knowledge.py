@@ -410,6 +410,149 @@ def test_generator_input_requires_included_and_footprint(tmp_path) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# GENERATOR_INPUT empty-included exception (plan sections 5.2 / 12.3)
+# ---------------------------------------------------------------------------
+
+
+def _undeterminable_footprint(*unresolved: str) -> dict:
+    return fixtures.synthetic_footprint_body(
+        blocks=[], determinable=False, unresolved=list(unresolved)
+    )
+
+
+def _generator_payload(**overrides) -> dict:
+    payload = {
+        "generation_event_id": "evt-unknown",
+        "history_snapshot_hash": _sha("visible-history"),
+        "model_id": "deepseek-v4-pro",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_generator_input_empty_included_unknown_token_accepted(tmp_path) -> None:
+    """(1) empty included + undeterminable + exact token -> accepted."""
+    assert K.GENERATOR_INPUT_INCLUDED_UNKNOWN == "generator_input_included_unknown"
+    log = _log(tmp_path)
+    record = log.append(
+        kind=RecordKind.GENERATOR_INPUT,
+        payload=_generator_payload(),
+        refs={"included": []},
+        footprint=_undeterminable_footprint(K.GENERATOR_INPUT_INCLUDED_UNKNOWN),
+    )
+    assert record.refs["included"] == ()
+    assert record.footprint["determinable"] is False
+    assert record.footprint["unresolved"] == (K.GENERATOR_INPUT_INCLUDED_UNKNOWN,)
+    # Append/hash/replay behaviour stays unchanged for this new state.
+    assert content_hash(record.body()) == record.record_hash
+    replayed = log.replay(snapshot=log.snapshot())
+    assert [r.record_hash for r in replayed] == [record.record_hash]
+
+
+def test_generator_input_empty_included_determinable_rejected(tmp_path) -> None:
+    """(2) empty included + determinable footprint -> rejected."""
+    log = _log(tmp_path)
+    with pytest.raises(K.KnowledgeContractError):
+        log.append(
+            kind=RecordKind.GENERATOR_INPUT,
+            payload=_generator_payload(),
+            refs={"included": []},
+            footprint=_footprint(),
+        )
+    assert len(log) == 0
+
+
+def test_generator_input_empty_included_missing_token_rejected(tmp_path) -> None:
+    """(3) empty included + undeterminable but no unresolved items -> rejected."""
+    log = _log(tmp_path)
+    with pytest.raises(K.KnowledgeContractError):
+        log.append(
+            kind=RecordKind.GENERATOR_INPUT,
+            payload=_generator_payload(),
+            refs={"included": []},
+            footprint=_undeterminable_footprint(),
+        )
+    assert len(log) == 0
+
+
+def test_generator_input_empty_included_wrong_reason_rejected(tmp_path) -> None:
+    """(4) empty included + undeterminable + wrong reason only -> rejected."""
+    log = _log(tmp_path)
+    with pytest.raises(K.KnowledgeContractError):
+        log.append(
+            kind=RecordKind.GENERATOR_INPUT,
+            payload=_generator_payload(),
+            refs={"included": []},
+            footprint=_undeterminable_footprint("some_other_reason"),
+        )
+    assert len(log) == 0
+
+
+def test_generator_input_empty_included_token_plus_reason_preserved(tmp_path) -> None:
+    """(5) empty included + undeterminable + token plus another reason -> accepted,
+    with both reasons preserved."""
+    log = _log(tmp_path)
+    other_reason = "visible_history_unmapped"
+    record = log.append(
+        kind=RecordKind.GENERATOR_INPUT,
+        payload=_generator_payload(),
+        refs={"included": []},
+        footprint=_undeterminable_footprint(
+            K.GENERATOR_INPUT_INCLUDED_UNKNOWN, other_reason
+        ),
+    )
+    assert record.refs["included"] == ()
+    assert record.footprint["unresolved"] == (
+        K.GENERATOR_INPUT_INCLUDED_UNKNOWN,
+        other_reason,
+    )
+    # The reason list survives a read/replay round-trip unchanged.
+    read_back = log.read()[0]
+    assert read_back.footprint["unresolved"] == (
+        K.GENERATOR_INPUT_INCLUDED_UNKNOWN,
+        other_reason,
+    )
+
+
+def test_generator_input_non_empty_included_valid_unchanged(tmp_path) -> None:
+    """(6) non-empty valid included -> accepted exactly as before."""
+    log = _log(tmp_path)
+    artifact = log.append(**_artifact_kwargs())
+    record = log.append(
+        kind=RecordKind.GENERATOR_INPUT,
+        payload=_generator_payload(),
+        refs={"included": [artifact.record_hash]},
+        footprint=_footprint(),
+    )
+    assert record.refs["included"] == (artifact.record_hash,)
+    assert record.footprint["determinable"] is True
+
+
+def test_generator_input_non_empty_included_invalid_unchanged_rejection(
+    tmp_path,
+) -> None:
+    """(7) non-empty invalid envelope -> rejected exactly as before."""
+    log = _log(tmp_path)
+    artifact = log.append(**_artifact_kwargs())
+    with pytest.raises(K.KnowledgeContractError):
+        log.append(
+            kind=RecordKind.GENERATOR_INPUT,
+            payload=_generator_payload(model_id=""),
+            refs={"included": [artifact.record_hash]},
+            footprint=_footprint(),
+        )
+    assert len(log) == 1
+
+
+def test_derived_empty_derived_from_still_rejected(tmp_path) -> None:
+    """(8) the GENERATOR_INPUT exception does not extend to DERIVED."""
+    log = _log(tmp_path)
+    with pytest.raises(K.KnowledgeContractError):
+        log.append(**_derived_kwargs(refs={"derived_from": []}))
+    assert len(log) == 0
+
+
 def test_human_decision_requires_consulted_or_all_prior(tmp_path) -> None:
     log = _log(tmp_path)
     with pytest.raises(K.KnowledgeContractError):

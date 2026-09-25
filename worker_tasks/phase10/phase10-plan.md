@@ -257,8 +257,8 @@ and hashing.
 | Kind | Why necessary | Required content |
 |---|---|---|
 | `ARTIFACT` | freshness and footprint identity of physical evidence | `footprint` (computed, never declared, §6.4); payload: `packaging_hash` (sha256 of bytes, metadata only), `sealed: bool`, `available_from: date` (attested), `source_label` (metadata only; **not identity**) |
-| `DERIVED` | any function of evidence (metric, bit, series, assessment) carries its parents' exposure | `refs.derived_from` non-empty; `footprint` = the canonical union of the parents' footprints. The **writers** (P10-I, P10-H) compute it with P10-C at append; P10-D re-verifies it at every role computation (unverifiable → rule 2). The log itself (P10-B) validates footprint *shape* only (P10-A schema) and is footprint-algebra-agnostic. Payload: `derivation_kind`, `content_hash` of the derived object. |
-| `GENERATOR_INPUT` | the exact machine channel into hypotheses | `refs.included` (the records the generator saw); payload: `generation_event_id`, `history_snapshot_hash`, generator/model identity; `footprint` = union over `included` (verified) |
+| `DERIVED` | any function of evidence (metric, bit, series, assessment) carries its parents' exposure | `refs.derived_from` non-empty; `footprint` = the canonical union of the parents' footprints, **exactly**. Phase-10 v1 never narrows a DERIVED footprint relative to its parents; there is no restriction or slicing derivation. A DERIVED value may have a narrower *semantic* scope (e.g. one fold's metric) while its *exposure* footprint is still the full parent union: the exposure footprint answers "which source observations were implicated in producing or observing this information", not "which observations does the value summarize". The **writers** (P10-I, P10-H) compute it with P10-C at append; P10-D re-verifies it at every role computation (unverifiable → rule 2). The log itself (P10-B) validates footprint *shape* only (P10-A schema) and is footprint-algebra-agnostic. Payload: `derivation_kind`, `content_hash` of the derived object. |
+| `GENERATOR_INPUT` | the exact machine channel into hypotheses | `refs.included` (the records the generator saw); payload: `generation_event_id`, `history_snapshot_hash`, generator/model identity; `footprint` = union over `included` (verified). **Single, GENERATOR_INPUT-only exception (frozen):** `refs.included` may be empty **if and only if** `footprint.determinable == false` **and** `footprint.unresolved` contains the exact protocol reason `generator_input_included_unknown`; other frozen unresolved reasons may coexist and are preserved. An empty `included` then means "the identities of the included empirical inputs cannot be determined", **never** "zero empirical inputs". The union rule does not apply to this state, and the footprint stays UNDETERMINABLE, so downstream exposure classification fails closed (§5.4 rule 2). Any other empty-included GENERATOR_INPUT is invalid, and the non-empty path is unchanged. This exception does **not** extend to DERIVED or any other record type. |
 | `HUMAN_DECISION` | program, prompt, policy and estimand-policy acts and family selection | `refs.consulted`, **or** `payload.consulted_all_prior = true` (the conservative default, meaning every record with a smaller seq); payload: `decision_kind` ∈ {`PROGRAM_FREEZE`, `PROMPT_CHANGE`, `POLICY_CHANGE`, `ESTIMAND_POLICY`, `FAMILY_SELECTION`, `PROCEDURE_ADMISSION`, `PROCEDURE_REVOCATION`, `OTHER`}, `actor_role`; the admission and revocation payloads are fixed in §9.3 |
 | `EXPOSURE_DECLARATION` | unobservable channels, declared | the full `ExposureDeclaration` contract in §5.2a; `event_time` = `claim.exposure_event_date` (required iff EXPOSED) |
 | `ACCESS` | a machine read of an artifact | payload: `artifact_record_hash`, `component` |
@@ -336,23 +336,72 @@ For a preregistration P at τ_P and a member H (with program lineage L(H)):
    - `HYPOTHESIS_FREEZE(H)` and the refs of `PREREGISTRATION(P)`.
    - **Program-scope conservatism:** every record with channel ∈
      {GENERATOR, PROGRAM, HUMAN}, seq < τ_P, and `program_id` ∈ L(H).
+   - **`consulted_all_prior` seeding (clarified before Wave-3 integration).**
+     Explicit influence/reference edges are always seeds. For **every**
+     record whose ancestry is constructed, **including the PREREGISTRATION
+     P itself**, `consulted_all_prior = true` additionally seeds every
+     eligible record with seq strictly smaller than that record's own seq,
+     subject to the rules above.
+     - A preregistration's `consulted_all_prior = true` is **not** ignored.
+     - Ordering authority is K sequence and prefix membership, never
+       wall-clock timestamps.
 2. **Closure.** Follow `refs` (all four lists) transitively.
    `consulted_all_prior = true` adds every record with a smaller seq than
    that decision.
 3. **Anc(H, P, K)** = the closure, restricted to seq < τ_P (automatic,
    because refs point backwards).
-4. **ExposedFP(H, P, K)** = ∪ footprints of Anc members ∪ footprints of
-   every `EXPOSURE_DECLARATION` with channel HUMAN and polarity EXPOSED for
-   which either holds:
-   - it was recorded at seq < τ_P;
-   - **or** its `event_time` < date(`recorded_at` of P).
+4. **ExposedFP(H, P, K) = ObservedFP ∪ DeclaredExposedFP.** Influence
+   ancestry and empirical exposure are **distinct** concepts: membership in
+   Anc does not by itself mean a record embodies an observation of data.
+   - **ObservedFP** = ∪ footprint(r) for r ∈ Anc with record type ∈
+     {**DERIVED**, **GENERATOR_INPUT**}. In Phase-10 v1, only these two
+     record types embody empirical observation.
+   - **Descriptor and governance records contribute no footprint merely by
+     being in Anc:** `ARTIFACT`, `CONSUMPTION` and `EXPOSURE_DECLARATION`.
+     They are not inert; they act only through their dedicated frozen
+     rules:
+     - declaration `EXPOSED` → the DeclaredExposedFP rule below;
+     - declaration `NOT_EXPOSED` → coverage in §5.4 rules 4–5;
+     - PRETRAINING/PUBLIC → the residual and class-match cap rules;
+     - `ACCESS` → the dedicated pre-freeze ACCESS rule (§5.4 rule 2);
+     - `CONSUMPTION` → ROBUSTNESS (rule 1a) and one-use governance
+       (§6.8).
+   - **Self-exposure is excluded.** A study's own sealed ARTIFACT that is
+     in Anc (e.g. via `consulted_all_prior`) never makes the study
+     DEVELOPMENT by carrying the study's evidence footprint.
+   - **DeclaredExposedFP (dedicated declaration rule, unchanged)** = ∪
+     footprints of every `EXPOSURE_DECLARATION` with channel HUMAN and
+     polarity EXPOSED for which either holds, whether or not it is in Anc:
+     - it was recorded at seq < τ_P;
+     - **or** its `event_time` < date(`recorded_at` of P).
 
-   The second case means a *late* declaration of an *earlier* exposure
-   still counts, so it downgrades.
+     The second case means a *late* declaration of an *earlier* exposure
+     still counts, so it downgrades.
+   - **Fail-closed rules are unchanged:** undeterminable overlap,
+     unverifiable ancestry footprints, missing required declarations,
+     pre-freeze ACCESS and unknown provenance still yield UNKNOWN_EXPOSURE
+     (§5.4 rule 2) or NOT_ASSESSED.
 5. **Residual declarations** (never role-raising):
    - PRETRAINING declarations for every generator model identity appearing
      in Anc;
    - PUBLIC declarations overlapping footprint(E).
+6. **Mandatory P10-D regression cases for this clarification:**
+   1. **Implicit prior empirical exposure:** a prior DERIVED record from
+      another program, whose footprint overlaps E, recorded at seq < τ_P
+      and not listed in `refs.consulted`, while P has `consulted_all_prior
+      = true` → **DEVELOPMENT** (never G2).
+   2. **ARTIFACT self-exposure protection:** the study's own sealed ARTIFACT
+      is in Anc via `consulted_all_prior`. Its footprint contributes nothing
+      to ExposedFP, and there is no downgrade from that fact alone.
+   3. **NOT_EXPOSED declaration:** an `EXPOSURE_DECLARATION(NOT_EXPOSED)`
+      in Anc is **not** unioned into ExposedFP; it acts only through
+      coverage.
+   4. **EXPOSED declaration path separation:** a HUMAN
+      `EXPOSURE_DECLARATION(EXPOSED)` overlapping E downgrades through
+      DeclaredExposedFP, **not** through ObservedFP. This is made
+      observable, e.g. ObservedFP ∩ fp(E) = ∅ while the role is
+      DEVELOPMENT, and a late EXPOSED declaration outside Anc still
+      downgrades.
 
 ### 5.4 EvidenceRole(E, H, P, K) — frozen rule order (first match wins)
 
@@ -656,9 +705,46 @@ StudyProtocol.
 | `estimand_policy_record` | `record_hash` of the ESTIMAND_POLICY decision |
 | `members` | a tuple, sorted by `hypothesis_id`, of `MemberContract` |
 | `alpha_study` | α for Holm, in (0, 0.5) |
-| `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the Phase-7 partition with HOLDOUT = window), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
-| `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, decision-rule version, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
+| `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the canonical sealed Phase-7 PartitionRef representation with HOLDOUT = window; see "Frozen identity details" below), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
+| `partition_ref_hash` | the §4.1 canonical SHA-256 identity of the canonical `partition_spec`, i.e. `content_hash(PartitionRef.to_dict())`. Semantics are identical to the frozen P10-S `InferentialSeriesBundle.partition_ref_hash` (§12.1(b)). |
+| `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, DECISION_RULE_VERSION, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
 | `power_disclosure` | per member `{mde, sigma_lr, T_conf, source_record}` or `{unavailable_reason}`. Disclosure is mandatory; **there is no gate** (SD §7.4, §12). |
+
+**Frozen identity details (clarified before Wave-3 integration, after the
+P10-E review):**
+- **Partition authority.**
+  - `partition_spec` is the canonical persisted representation of the
+    sealed Phase-7 `PartitionRef`.
+  - Runtime `Partition` / `Partition.partition_id` is **not** the Phase-10
+    preregistration identity, and there are never two competing partition
+    identities.
+  - Canonical path: input → `PartitionRef.from_dict(input)` →
+    `PartitionRef.to_dict()`. The supplied representation must **already
+    equal** that result, or the preregistration is **refused**.
+  - A non-canonical caller representation is never silently normalized.
+  - Validation authority is the sealed `PartitionRef`. P10-E does not
+    reproduce its rules locally.
+- **`partition_ref_hash`** = §4.1 `content_hash(PartitionRef.to_dict())`,
+  the same frozen serialization and hash semantics as P10-S.
+  - Separate call sites (P10-E via `smart_beta.science.contracts`, P10-S via
+    its local §4.1 implementation) must produce identical values, and
+    cross-module equality is tested. No second, divergent hash algorithm
+    exists.
+- **Cross-phase binding (future P10-H requirement):**
+  `preregistration.partition_ref_hash ==
+  inferential_series_bundle.partition_ref_hash`.
+  - A mismatch fails closed.
+  - There is no fallback to `Partition.partition_id`, to date-window
+    equality alone, or to a locally reconstructed partition identity.
+- **`DECISION_RULE_VERSION = "phase10-decision-rule-v1"`**, a frozen
+  Phase-10 protocol constant hashed into `analysis_plan_id`. It is protocol
+  authority, not a worker-local choice. Any future change to the scientific
+  decision semantics (§11.2) requires a new decision-rule version, and the
+  v1 string never silently acquires new semantics.
+- **`dataset_contract`** is accepted with exactly the fields already frozen
+  by the §6.4 footprint audit contract (`security_map_hash`,
+  `market_series_map_hash`, `variable_map_hash`, `calendar_hash`) plus
+  `derivation_rules_version`. There are no worker-chosen fields.
 
 `MemberContract`:
 
@@ -1239,16 +1325,35 @@ reconstructed read-only:
     model identity);
   - `included` refs to DERIVED records for exactly the items in the
     generator-visible history at that snapshot.
-- **Development-evidence footprints (conservative):**
-  - fold metrics (IS/OOS/WF) → the SOF expansion (§6.3 rules) of the fold's
-    signals and forward returns over its universe;
-  - **robustness, subperiod, parameter and universe aggregates → the whole
-    evaluation range, including the holdout** (the FIX-B-compensating
-    over-approximation, §2.2).
+- **Development-evidence footprints (conservative; reconciled with §5.2
+  before Wave-3 integration):**
+  - Every development DERIVED record (fold metric, or robustness, subperiod,
+    parameter or universe aggregate) carries **exactly the union of its
+    parents' footprints** (§5.2). Fold-level DERIVED records are **not**
+    narrowed to a fold-only footprint.
+  - The fold may still be identified in the record's semantic
+    payload/metadata (e.g. `derivation_kind`), but that semantic scope never
+    narrows the exposure footprint. This conservatism is intentional, and
+    P10-D must be able to verify the equality from K records alone.
+  - Robustness, subperiod, parameter and universe aggregates keep the
+    whole-evaluation-range footprint, including the holdout (the
+    FIX-B-compensating over-approximation, §2.2).
+  - Any helper that expands a fold's footprint obeys sealed Phase-7
+    half-open semantics `[start, end)`. The fold's exclusive `end` session is
+    never included as a formation date, and the last valid session before
+    `end` is included.
 - **Unreconstructable visible history:**
   - If the registry order is reconstructable, `included` over-approximates
     to all EvaluationRecords registered before the event (determinable).
-  - Otherwise the GENERATOR_INPUT is undeterminable → UNKNOWN_EXPOSURE.
+  - If some included record lacks a footprint, the GENERATOR_INPUT footprint
+    is undeterminable → UNKNOWN_EXPOSURE.
+  - If the identities of the included inputs cannot be determined at all,
+    an actually-attempted generation event is **still durably appended** as
+    a GENERATOR_INPUT with `refs.included = []` and an undeterminable
+    footprint whose `unresolved` contains `generator_input_included_unknown`
+    (the §5.2 exception). It is never silently omitted, and empty `included`
+    is never read as zero exposure. Adapter rejection is not the only
+    durable outcome.
 - **Registered evaluations:** every Phase-8-registered `EvaluationRecord`
   of a program → a DERIVED record with channel PROGRAM, whose footprint is
   the **entire** evaluation including the holdout (the judge and humans may
