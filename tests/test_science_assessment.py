@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 from datetime import date
 from typing import Any
 
@@ -191,6 +192,7 @@ def _prereg(
     alpha_study: float = 0.05,
     estimand_policy_record: str | None = None,
     confirmation: P.ConfirmationDesign | None = None,
+    registry_snapshot_ref: dict[str, Any] | None = None,
 ) -> P.PreRegistration:
     members = tuple(members)
     return P.PreRegistration(
@@ -201,6 +203,14 @@ def _prereg(
         power_disclosure={
             member.hypothesis_id: {"unavailable_reason": "not computed in v1"}
             for member in members
+        },
+        # The section 7.2 registry binding.  Tests use the replay-path bare
+        # ref (a frozen key set) rather than a sealed RegistrySnapshot.
+        registry_snapshot_ref=registry_snapshot_ref
+        or {
+            "snapshot_hash": _sha("registry-snapshot"),
+            "experiment_count": 0,
+            "decision_count": 0,
         },
     )
 
@@ -917,6 +927,34 @@ def test_assessment_content_hash_is_stable_and_content_sensitive():
 
 DAY6 = SESSIONS[6]
 
+#: The exactly-23 section 11.1 material fields, spelled out independently of
+#: the implementation so the test cannot silently track a drifted constant.
+MATERIAL_FIELDS = (
+    "protocol_version",
+    "study_id",
+    "prereg_id",
+    "analysis_plan_id",
+    "hypothesis_id",
+    "artifact_record_hash",
+    "footprint_id",
+    "evidence_role",
+    "evidence_grade",
+    "residual_disclosures",
+    "governance_validity",
+    "state",
+    "economic_state",
+    "reason_codes",
+    "flags",
+    "inference",
+    "primary_null_rejected",
+    "sesoi_excluded_by_upper_bound",
+    "effect_size_qualification",
+    "multiplicity",
+    "not_supported_scope",
+    "series_identical_group",
+    "production_readiness",
+)
+
 
 def _g1_family(
     entries: list[tuple[str, str]],
@@ -984,6 +1022,13 @@ def _assess_family(
     )
 
 
+def _supported_member() -> A.ScientificAssessment:
+    """A single-member SUPPORTED assessment with a full inference summary."""
+    scenario = _g1_family([(HYP, DAY5)])
+    family = _assess_family(scenario, {HYP: (0.01, 0.2)})
+    return family.for_hypothesis(HYP)
+
+
 def _persist(chain: _Chain, tmp_path) -> K.KnowledgeLog:
     path = tmp_path / "knowledge.jsonl"
     fixtures.write_knowledge_log(path, [record.to_dict() for record in chain.records])
@@ -995,6 +1040,7 @@ def _wrap_assessment(
     assessment: A.ScientificAssessment,
     artifact_record_hash: str,
 ) -> K.KnowledgeRecord:
+    """Simulate P10-H persisting one assessment as a DERIVED record."""
     return chain.append(
         kind=RecordKind.DERIVED,
         channel=Channel.SYSTEM,
@@ -1021,13 +1067,112 @@ def _wrap_family(
     }
 
 
+def _late_exposed_declaration(scenario: dict[str, Any]) -> None:
+    """Downgrade H-1 (DAY5 artifact) to DEVELOPMENT without touching H-2."""
+    _add_declaration(
+        scenario["chain"],
+        channel=Channel.HUMAN,
+        footprint=_fp(start=DAY5),
+        exposed=True,
+        exposure_event_date="2019-01-01",
+        hypothesis_ids=("H-1",),
+    )
+
+
+def _sibling_case(tmp_path, *, p1: float = 0.01, p2: float = 0.03):
+    """The m=2 H1/H2 case, with H-1 made inadmissible; returns (family, log)."""
+    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
+    family = _assess_family(scenario, {"H-1": (p1, 0.2), "H-2": (p2, 0.2)})
+    _wrap_family(scenario, family)
+    _late_exposed_declaration(scenario)
+    return family, _persist(scenario["chain"], tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# material_change -- the frozen 23-field comparison
+# ---------------------------------------------------------------------------
+
+
+def test_material_change_constant_is_exactly_the_23_frozen_fields():
+    assert A._MATERIAL_FIELDS == MATERIAL_FIELDS
+    assert len(MATERIAL_FIELDS) == 23
+
+
+def test_material_change_ignores_knowledge_snapshot():
+    original = _supported_member()
+    modified = dataclasses.replace(
+        original,
+        knowledge_snapshot=K.KnowledgeSnapshot(
+            length=original.knowledge_snapshot.length + 5,
+            head_hash=_sha("other-head"),
+        ),
+    )
+    assert A.material_change(modified, original) is False
+    assert A.material_change(original, modified) is False
+    # The derived identity does change; it never participates.
+    assert modified.assessment_id != original.assessment_id
+
+
+def test_material_change_ignores_provenance():
+    original = _supported_member()
+    modified = dataclasses.replace(
+        original,
+        provenance={
+            **dict(original.provenance),
+            "series_record_hash": _sha("other-series"),
+        },
+    )
+    assert A.material_change(modified, original) is False
+    assert A.material_change(original, modified) is False
+    assert modified.assessment_id != original.assessment_id
+
+
+def test_material_change_detects_each_of_the_23_fields_individually():
+    original = _supported_member()
+    replacements: dict[str, Any] = {
+        "protocol_version": "phase10-v2",
+        "study_id": "study-other",
+        "prereg_id": _sha("other-prereg"),
+        "analysis_plan_id": _sha("other-plan"),
+        "hypothesis_id": "H-other",
+        "artifact_record_hash": _sha("other-artifact"),
+        "footprint_id": _sha("other-footprint"),
+        "evidence_role": EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED,
+        "evidence_grade": EvidenceGrade.G3,
+        "residual_disclosures": None,
+        "governance_validity": A.GovernanceValidity.INVALID,
+        "state": AssessmentState.INCONCLUSIVE,
+        "economic_state": AssessmentState.NOT_ASSESSED,
+        "reason_codes": (ReasonCode.INFERENCE_INVALID,),
+        "flags": (InformationalFlag.DECLARATION_DEPENDENT,),
+        "inference": None,
+        "primary_null_rejected": False,
+        "sesoi_excluded_by_upper_bound": True,
+        "effect_size_qualification": EffectSizeQualification.NOT_APPLICABLE,
+        "multiplicity": {**dict(original.multiplicity), "holm_rank": 2},
+        "not_supported_scope": "FAMILY_WISE",
+        "series_identical_group": ("H-other",),
+        "production_readiness": "CERTIFIED",
+    }
+    assert set(replacements) == set(MATERIAL_FIELDS)
+    for field, value in replacements.items():
+        modified = dataclasses.replace(original, **{field: value})
+        assert A.material_change(modified, original) is True, field
+        assert A.material_change(original, modified) is True, field
+
+
+# ---------------------------------------------------------------------------
+# family-wide mechanics
+# ---------------------------------------------------------------------------
+
+
 def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
     # m=1: a late exposure declaration downgrades the only member.
     scenario = _g1_family([(HYP, DAY5)])
     family = _assess_family(scenario, {HYP: (0.01, 0.2)})
     original = family.for_hypothesis(HYP)
     assert original.state is AssessmentState.SUPPORTED
-    wrapped = _wrap_family(scenario, family)
+    _wrap_family(scenario, family)
 
     _add_declaration(
         scenario["chain"],
@@ -1041,7 +1186,6 @@ def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
     before = len(log.read())
     new_family = A.reassess(family, log, calendar=CALENDAR)
 
-    assert new_family is not None
     new = new_family.for_hypothesis(HYP)
     assert new.state is AssessmentState.NOT_ASSESSED
     assert new.evidence_role is EvidenceRole.DEVELOPMENT
@@ -1049,74 +1193,56 @@ def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
     assert ReasonCode.ROLE_DEVELOPMENT in new.reason_codes
     assert new.primary_null_rejected is None
     assert new.sesoi_excluded_by_upper_bound is None
-    assert new.assessment_id != original.assessment_id
     records = log.read()
     assert len(records) == before + 1
     appended = records[-1]
     assert appended.kind is RecordKind.DERIVED
-    assert appended.payload["content_hash"] == new.assessment_id
-    assert appended.refs["derived_from"] == (wrapped[HYP].record_hash,)
+    assert appended.payload == {
+        "derivation_kind": "confirmation_assessment_reassessment",
+        "content_hash": new.assessment_id,
+    }
+    # The reassessment descends directly from the member's ARTIFACT root.
+    assert appended.refs["derived_from"] == (
+        scenario["artifacts"][HYP].record_hash,
+    )
     # The original is never mutated.
     assert original.state is AssessmentState.SUPPORTED
 
 
-def test_reassess_no_change_returns_none(tmp_path):
+def test_reassess_no_change_returns_the_same_family_and_no_record(tmp_path):
     scenario = _g1_family([(HYP, DAY5)])
     family = _assess_family(scenario, {HYP: (0.01, 0.2)})
     _wrap_family(scenario, family)
     log = _persist(scenario["chain"], tmp_path)
     before = len(log.read())
 
-    assert A.reassess(family, log, calendar=CALENDAR) is None
+    result = A.reassess(family, log, calendar=CALENDAR)
+    assert result is family
     assert len(log.read()) == before
 
 
-def test_family_wide_reassessment_uses_r3_placeholder_and_downgrades_siblings(tmp_path):
-    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
-    family = _assess_family(scenario, {"H-1": (0.01, 0.2), "H-2": (0.03, 0.2)})
-    # Both members are Holm-rejected and SUPPORTED.
+def test_family_wide_reassessment_sibling_case(tmp_path):
+    family, log = _sibling_case(tmp_path)
+    # Both members are Holm-rejected and SUPPORTED before reassessment.
     assert family.for_hypothesis("H-1").state is AssessmentState.SUPPORTED
     assert family.for_hypothesis("H-2").state is AssessmentState.SUPPORTED
-    assert family.holm.for_hypothesis("H-2").holm_rejected is True
-    _wrap_family(scenario, family)
-
-    # H-1 becomes inadmissible; H-2 does not.
-    _add_declaration(
-        scenario["chain"],
-        channel=Channel.HUMAN,
-        footprint=_fp(start=DAY5),
-        exposed=True,
-        exposure_event_date="2019-01-01",
-        hypothesis_ids=("H-1",),
-    )
-    log = _persist(scenario["chain"], tmp_path)
     before = len(log.read())
-    new_family = A.reassess(family, log, calendar=CALENDAR)
 
-    assert new_family is not None
-    # Membership and m are unchanged.
-    assert new_family.holm.m == 2
-    assert {a.hypothesis_id for a in new_family.assessments} == {"H-1", "H-2"}
-    assert new_family.holm.alpha_study == 0.05
+    new_family = A.reassess(family, log, calendar=CALENDAR)
 
     h1 = new_family.for_hypothesis("H-1")
     h2 = new_family.for_hypothesis("H-2")
     assert h1.state is AssessmentState.NOT_ASSESSED
     assert h1.evidence_role is EvidenceRole.DEVELOPMENT
     # H-2 was SUPPORTED (Holm-rejected).  With H-1 entering at the R-3
-    # placeholder 1, the frozen m=2 Holm no longer rejects H-2 (adjusted p
-    # 2 * 0.03 = 0.06 > 0.05), so H-2 is re-derived as INCONCLUSIVE.
+    # placeholder 1, the frozen m=2 Holm no longer rejects H-2.
     assert h2.primary_null_rejected is False
     assert h2.state is AssessmentState.INCONCLUSIVE
     assert new_family.holm.for_hypothesis("H-2").holm_adjusted_p > 0.05
     assert new_family.holm.for_hypothesis("H-2").holm_rejected is False
-    # The placeholder is an internal multiplicity input, never an empirical
-    # p-value: it is not persisted, and H-1 keeps its original empirical p.
-    assert new_family.holm.for_hypothesis("H-1").effective_p == 1.0
-    assert new_family.holm.for_hypothesis("H-1").p_value is None
-    assert h1.inference["p_one_sided"] == 0.01
-    assert h1.inference["p_one_sided"] != 1.0
-    # Both members materially changed -> exactly two reassessment records.
+
+    # E: the sibling changed only through the family-wide Holm and got a
+    # record; both changed members got one.
     records = log.read()
     assert len(records) == before + 2
     appended = [
@@ -1129,14 +1255,17 @@ def test_family_wide_reassessment_uses_r3_placeholder_and_downgrades_siblings(tm
         h1.assessment_id,
         h2.assessment_id,
     }
+    # J: the placeholder is an internal multiplicity input, never an
+    # empirical p-value.
+    assert new_family.holm.for_hypothesis("H-1").effective_p == 1.0
+    assert new_family.holm.for_hypothesis("H-1").p_value is None
+    assert h1.inference["p_one_sided"] == 0.01
     for record in appended:
-        # No empirical p-value -- and no placeholder represented as one -- is
-        # written into K; the record carries only the content hash.
         assert "p_one_sided" not in record.payload
         assert "p_value" not in record.payload
 
 
-def test_family_wide_reassessment_unaffected_member_gets_no_record(tmp_path):
+def test_family_wide_reassessment_unaffected_sibling_gets_no_record(tmp_path):
     # H-2 has the smallest p and its rank/adjusted p do not change when H-1
     # becomes inadmissible, so only H-1 gets a reassessment record.
     scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
@@ -1144,69 +1273,51 @@ def test_family_wide_reassessment_unaffected_member_gets_no_record(tmp_path):
     h2_before = family.for_hypothesis("H-2")
     assert h2_before.state is AssessmentState.INCONCLUSIVE
     _wrap_family(scenario, family)
-
-    _add_declaration(
-        scenario["chain"],
-        channel=Channel.HUMAN,
-        footprint=_fp(start=DAY5),
-        exposed=True,
-        exposure_event_date="2019-01-01",
-        hypothesis_ids=("H-1",),
-    )
+    _late_exposed_declaration(scenario)
     log = _persist(scenario["chain"], tmp_path)
     before = len(log.read())
+
     new_family = A.reassess(family, log, calendar=CALENDAR)
 
-    assert new_family is not None
     h1 = new_family.for_hypothesis("H-1")
     h2 = new_family.for_hypothesis("H-2")
     assert h1.state is AssessmentState.NOT_ASSESSED
-    # The unaffected member is carried forward unchanged and gets no record.
+    # F: the unaffected sibling is carried forward unchanged, no record.
     assert h2.assessment_id == h2_before.assessment_id
     records = log.read()
     assert len(records) == before + 1
     assert records[-1].payload["content_hash"] == h1.assessment_id
 
 
-def test_family_wide_reassessment_is_idempotent(tmp_path):
-    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
-    family = _assess_family(scenario, {"H-1": (0.01, 0.2), "H-2": (0.03, 0.2)})
-    _wrap_family(scenario, family)
-    _add_declaration(
-        scenario["chain"],
-        channel=Channel.HUMAN,
-        footprint=_fp(start=DAY5),
-        exposed=True,
-        exposure_event_date="2019-01-01",
-        hypothesis_ids=("H-1",),
-    )
-    log = _persist(scenario["chain"], tmp_path)
+def test_family_wide_reassessment_membership_and_m_unchanged(tmp_path):
+    family, log = _sibling_case(tmp_path)
+    new_family = A.reassess(family, log, calendar=CALENDAR)
+    assert new_family.holm.m == 2
+    assert new_family.holm.alpha_study == 0.05
+    assert {a.hypothesis_id for a in new_family.assessments} == {"H-1", "H-2"}
 
-    first = A.reassess(family, log, calendar=CALENDAR)
-    assert first is not None
-    after_first = len(log.read())
-    # Re-running against the same K_now appends no further records.
-    second = A.reassess(family, log, calendar=CALENDAR)
-    assert second is not None
-    assert len(log.read()) == after_first
-    # Re-running on the already-reassessed family is a no-op.
-    assert A.reassess(second, log, calendar=CALENDAR) is None
-    assert len(log.read()) == after_first
-    # Deterministic: the two recomputations agree on every semantic field
-    # (the snapshot/provenance advance with K, but the meaning is stable).
-    for hid in ("H-1", "H-2"):
-        first_member = first.for_hypothesis(hid)
-        second_member = second.for_hypothesis(hid)
-        assert first_member.state is second_member.state
-        assert first_member.evidence_role is second_member.evidence_role
-        assert first_member.evidence_grade is second_member.evidence_grade
-        assert (
-            first_member.primary_null_rejected
-            == second_member.primary_null_rejected
-        )
-        assert dict(first_member.multiplicity) == dict(
-            second_member.multiplicity
-        )
+
+def test_family_wide_reassessment_does_not_re_run_inference(tmp_path, monkeypatch):
+    import smart_beta.science.inference as inference_module
+
+    family, log = _sibling_case(tmp_path)
+    original_h2 = family.for_hypothesis("H-2")
+
+    def _boom(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("reassess must not re-run inference")
+
+    monkeypatch.setattr(inference_module, "run_inference", _boom)
+    new_family = A.reassess(family, log, calendar=CALENDAR)
+
+    h2 = new_family.for_hypothesis("H-2")
+    # I: the existing InferenceResult (result hash, p, bound) is reused.
+    assert h2.inference["result_hash"] == original_h2.inference["result_hash"]
+    assert (
+        h2.inference["p_one_sided"] == original_h2.inference["p_one_sided"]
+    )
+    assert h2.inference["upper_bound_theta_prime"] == (
+        original_h2.inference["upper_bound_theta_prime"]
+    )
 
 
 def test_reassess_refuses_an_upgrade_and_appends_nothing(tmp_path):
@@ -1240,6 +1351,97 @@ def test_reassess_requires_a_knowledge_log_and_a_family():
         A.reassess(family, list(scenario["chain"].records))
     with pytest.raises(A.AssessmentContractError):
         A.reassess(family.for_hypothesis(HYP), scenario["chain"])  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# idempotence is input-relative only (no log-wide semantic scan)
+# ---------------------------------------------------------------------------
+
+
+def test_idempotent_same_know_now_and_latest_family_appends_zero(tmp_path):
+    family, log = _sibling_case(tmp_path)
+    first = A.reassess(family, log, calendar=CALENDAR)
+    after_first = len(log.read())
+
+    # A: same K_now + latest returned family -> identical result, zero records.
+    second = A.reassess(first, log, calendar=CALENDAR)
+    assert second is first
+    assert len(log.read()) == after_first
+
+
+def test_no_global_semantic_deduplication_across_k(tmp_path):
+    # The comparison is relative to the *supplied* family, not to K: a stale
+    # family re-appends.  This is the frozen "not global deduplication" rule.
+    family, log = _sibling_case(tmp_path)
+    first = A.reassess(family, log, calendar=CALENDAR)
+    after_first = len(log.read())
+    assert first is not family
+
+    A.reassess(family, log, calendar=CALENDAR)  # stale input
+    assert len(log.read()) > after_first
+
+
+# ---------------------------------------------------------------------------
+# no semantic_hash / no equivalent replacement hash
+# ---------------------------------------------------------------------------
+
+
+def test_no_semantic_hash_anywhere_in_the_output_contract(tmp_path):
+    family, log = _sibling_case(tmp_path)
+    new_family = A.reassess(family, log, calendar=CALENDAR)
+
+    assert "semantic_hash" not in json.dumps(new_family.to_content())
+    for assessment in new_family.assessments:
+        assert "semantic_hash" not in json.dumps(assessment.to_content())
+    for record in log.read():
+        assert "semantic_hash" not in record.payload
+    assert not hasattr(A, "semantic_hash")
+    assert "semantic_hash" not in A.__all__
+    assert "semantic_hash" not in {
+        field.name for field in dataclasses.fields(A.ScientificAssessment)
+    }
+
+
+def test_no_equivalent_replacement_hash_is_introduced(tmp_path):
+    family, log = _sibling_case(tmp_path)
+    A.reassess(family, log, calendar=CALENDAR)
+    appended = [
+        record
+        for record in log.read()
+        if record.payload.get("derivation_kind")
+        == "confirmation_assessment_reassessment"
+    ]
+    assert appended
+    for record in appended:
+        # L: the DERIVED payload is exactly {derivation_kind, content_hash}.
+        assert set(record.payload) == {"derivation_kind", "content_hash"}
+    for forbidden in (
+        "semantic_id",
+        "assessment_hash",
+        "state_hash",
+        "dedup_hash",
+        "material_hash",
+    ):
+        assert not hasattr(A, forbidden)
+        assert forbidden not in A.__all__
+
+
+def test_no_log_wide_semantic_scan_in_the_reassessment_source():
+    import inspect
+
+    source = inspect.getsource(A)
+    for forbidden in (
+        "semantic_hash",
+        "semantic_id",
+        "assessment_hash",
+        "state_hash",
+        "dedup_hash",
+        "material_hash",
+        "existing_semantic",
+        "existing_hashes",
+        "_find_assessment_record",
+    ):
+        assert forbidden not in source, forbidden
 
 
 # ===========================================================================

@@ -78,10 +78,11 @@ p-value (inadmissible :class:`HolmMember` s carry ``p_value=None`` and
 ``effective_p=1.0``).  Membership and ``m`` are unchanged, no inference is
 re-run, every member is re-derived through the section 11.2 mapping, and only
 members whose assessment meaning materially changes get a new DERIVED
-reassessment record.  Upgrades are refused fail-closed.  Reassessment records
-carry a ``semantic_hash`` (the snapshot/provenance-independent identity of the
-assessment meaning) so that repeated reassessment under the same ``K_now`` is
-idempotent.
+reassessment record.  Upgrades are refused fail-closed.  ``material_change``
+is the frozen comparison over exactly the 23 section 11.1 fields, so a
+difference only in ``knowledge_snapshot`` or ``provenance`` never produces a
+record and the predicate is always relative to the family passed to
+:func:`reassess` (K is never scanned for an equivalent or latest assessment).
 """
 
 from __future__ import annotations
@@ -132,6 +133,7 @@ __all__ = [
     "ScientificAssessment",
     "AssessmentFamily",
     "assess",
+    "material_change",
     "reassess",
 ]
 
@@ -954,34 +956,60 @@ def _map_determinations(
 # ---------------------------------------------------------------------------
 
 
-def _find_assessment_record(
-    records: Sequence[KnowledgeRecord], assessment_id: str
-) -> KnowledgeRecord | None:
-    for record in reversed(records):
-        if record.kind is not RecordKind.DERIVED:
-            continue
-        if record.payload.get("content_hash") == assessment_id:
-            return record
-    return None
+#: The exactly-23 section 11.1 fields that participate in material change.
+#: ``knowledge_snapshot`` and ``provenance`` are positional metadata and
+#: ``assessment_id`` is a derived identity over the whole record including
+#: them; none of the three participates.
+_MATERIAL_FIELDS: tuple[str, ...] = (
+    "protocol_version",
+    "study_id",
+    "prereg_id",
+    "analysis_plan_id",
+    "hypothesis_id",
+    "artifact_record_hash",
+    "footprint_id",
+    "evidence_role",
+    "evidence_grade",
+    "residual_disclosures",
+    "governance_validity",
+    "state",
+    "economic_state",
+    "reason_codes",
+    "flags",
+    "inference",
+    "primary_null_rejected",
+    "sesoi_excluded_by_upper_bound",
+    "effect_size_qualification",
+    "multiplicity",
+    "not_supported_scope",
+    "series_identical_group",
+    "production_readiness",
+)
 
 
-def _semantic_content(assessment: ScientificAssessment) -> dict[str, Any]:
-    """The meaning of an assessment, excluding its snapshot and provenance.
+def material_change(
+    new_assessment: ScientificAssessment, current_assessment: ScientificAssessment
+) -> bool:
+    """Section 11.3 material-change predicate (frozen before Barrier 4).
 
-    Section 11.3 appends a record only for members whose assessment
-    **materially changes**.  Every reassessment necessarily advances the
-    ``knowledge_snapshot`` and ``provenance``; those are positional metadata,
-    not a change of meaning, so they are excluded from the comparison.
+    True iff the two assessments differ in one or more of exactly the 23
+    :data:`_MATERIAL_FIELDS` section 11.1 fields.  ``knowledge_snapshot``,
+    ``provenance`` and the derived ``assessment_id`` never participate, so a
+    snapshot/provenance-only difference is not a material change.  The
+    comparison is between the two supplied assessments only; K is never
+    consulted.
     """
-    content = dict(assessment.to_content())
-    content.pop("knowledge_snapshot", None)
-    content.pop("provenance", None)
-    return content
-
-
-def _semantic_hash(assessment: ScientificAssessment) -> str:
-    """Snapshot-independent identity of an assessment's meaning."""
-    return content_hash(_semantic_content(assessment))
+    if not isinstance(new_assessment, ScientificAssessment) or not isinstance(
+        current_assessment, ScientificAssessment
+    ):
+        raise AssessmentContractError(
+            "material_change requires two ScientificAssessment values"
+        )
+    new_content = new_assessment.to_content()
+    current_content = current_assessment.to_content()
+    return any(
+        new_content[field] != current_content[field] for field in _MATERIAL_FIELDS
+    )
 
 
 def _assessment_is_upgrade(
@@ -1000,13 +1028,13 @@ def reassess(
     knowledge: Any,
     *,
     calendar: Any = None,
-) -> AssessmentFamily | None:
+) -> AssessmentFamily:
     """Family-wide, downgrade-only section 11.3 reassessment against ``K_now``.
 
-    ``family`` is an :class:`AssessmentFamily` produced by :func:`assess` for
-    one frozen family.  Roles are recomputed for **every** frozen member from
-    the frozen rule order.  If any member becomes inadmissible, the frozen
-    Holm step-down is recomputed over all ``m`` members with
+    ``family`` is an :class:`AssessmentFamily` produced by :func:`assess` (or
+    by a previous reassessment).  Roles are recomputed for **every** frozen
+    member from the frozen rule order.  If any member becomes inadmissible,
+    the frozen Holm step-down is recomputed over all ``m`` members with
 
     ``p_i* = the original preregistered p_i`` if member ``i`` remains
     admissible under ``K_now``, else the R-3 placeholder ``1`` (a multiplicity
@@ -1016,13 +1044,15 @@ def reassess(
     inference is re-run.  Every member is re-derived through the section 11.2
     mapping from the recomputed Holm result and its existing evidence/bound.
     A new DERIVED reassessment record is appended **only** for members whose
-    assessment meaning materially changes (and only once).  A recomputation
-    that would upgrade any member is refused fail-closed with
+    assessment materially changes relative to the corresponding member of the
+    supplied ``family`` (:func:`material_change`).  A recomputation that would
+    upgrade any member is refused fail-closed with
     :class:`ReassessmentUpgradeError` and nothing is appended.  The original
-    family is never mutated, the result is deterministic, and applying it
-    again under the same ``K_now`` is idempotent.
+    family is never mutated.
 
-    ``knowledge`` must be a
+    Idempotence is input-relative: given the same ``K_now`` and the family
+    returned by the previous reassessment, this returns that same family and
+    appends zero records.  ``knowledge`` must be a
     :class:`~smart_beta.science.knowledge.KnowledgeLog` because a downgrade is
     durably recorded.
     """
@@ -1162,11 +1192,7 @@ def reassess(
             else AssessmentState.NOT_ASSESSED
         )
 
-        parent = _find_assessment_record(records, original.assessment_id)
         provenance = dict(original.provenance)
-        provenance["source_assessment_record_hash"] = (
-            parent.record_hash if parent is not None else None
-        )
 
         new_by_id[hid] = ScientificAssessment(
             protocol_version=original.protocol_version,
@@ -1216,44 +1242,30 @@ def reassess(
                 f"family-wide reassessment would upgrade member {hid!r}"
             )
 
-    # -- material change + idempotence -------------------------------------
-    existing_hashes = {
-        record.payload.get("content_hash")
-        for record in records
-        if record.kind is RecordKind.DERIVED
-    }
-    existing_semantic = {
-        record.payload.get("semantic_hash")
-        for record in records
-        if record.kind is RecordKind.DERIVED
-    }
+    # -- material change against the supplied family (input-relative) ------
     changed = [
         hid
         for hid in frozen_ids
-        if _semantic_content(new_by_id[hid])
-        != _semantic_content(original_by_id[hid])
+        if material_change(new_by_id[hid], original_by_id[hid])
     ]
     if not changed:
-        return None
+        # Deterministic fixpoint: no material change, so the same family is
+        # returned and no record is appended.
+        return family
 
     final_by_id = dict(original_by_id)
     pending: list[tuple[ScientificAssessment, KnowledgeRecord]] = []
     for hid in changed:
         new_assessment = new_by_id[hid]
         final_by_id[hid] = new_assessment
-        if (
-            new_assessment.assessment_id in existing_hashes
-            or _semantic_hash(new_assessment) in existing_semantic
-        ):
-            # Already durably recorded: repeated reassessment is idempotent.
-            continue
-        parent = _find_assessment_record(records, original_by_id[hid].assessment_id)
-        if parent is None:
-            parent = index.get(original_by_id[hid].artifact_record_hash)
+        # The reassessment record descends directly from the member's
+        # pristine ARTIFACT root (an exact-hash lookup, not a K scan).
+        parent = index.get(original_by_id[hid].artifact_record_hash)
         if parent is None or parent.footprint is None:
             # Fail closed before writing anything (atomic refusal).
             raise AssessmentContractError(
-                "the reassessment parent record carries no envelope footprint"
+                "the reassessment parent artifact record carries no envelope "
+                "footprint"
             )
         pending.append((new_assessment, parent))
 
@@ -1263,7 +1275,6 @@ def reassess(
             payload={
                 "derivation_kind": "confirmation_assessment_reassessment",
                 "content_hash": new_assessment.assessment_id,
-                "semantic_hash": _semantic_hash(new_assessment),
             },
             refs={"derived_from": (parent.record_hash,)},
             footprint=parent.footprint,
