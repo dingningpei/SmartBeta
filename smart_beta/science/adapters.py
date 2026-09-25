@@ -23,18 +23,33 @@ timestamps (``recorded_at``, ``available_from``, an event's ``timestamp``) are
 metadata only and never determine membership, ordering or a footprint. Every
 helper here is a pure function of its arguments plus the verified K prefix.
 
-Conservative footprints (plan section 12.3)
--------------------------------------------
+Conservative footprints (plan sections 5.2 / 12.3)
+--------------------------------------------------
 
-* a fold metric (IS/OOS/WF) expands to the source-observation footprint (SOF)
-  of that fold's signals and forward returns over its universe;
-* robustness / subperiod / parameter / universe aggregates expand to the
-  **whole evaluation range, including the holdout** -- the FIX-B-compensating
-  over-approximation (plan section 2.2). It makes any such exposure detectable
-  and fail-closed; it does not prevent the development composition leak;
+* every ``DERIVED`` record's footprint is **exactly the canonical union of its
+  parents' footprints**. Phase-10 v1 never narrows a ``DERIVED`` footprint; a
+  fold metric's fold is metadata only (``derivation_kind`` / ``fold_key``), so
+  its exposure is the full parent union. P10-D re-verifies this equality at
+  read time, and a mismatch is ``UNKNOWN_EXPOSURE``;
+* the helper that expands a fold obeys the sealed Phase-7 half-open window
+  ``[start, end)``: the exclusive ``end`` session is never a formation date
+  and the last session before ``end`` is. ``aggregate_footprint`` expands the
+  whole evaluation ``[min(fold.start), max(fold.end))``, **including the
+  holdout** -- the FIX-B-compensating over-approximation (plan section 2.2);
+* because a ``DERIVED`` record cannot introduce a footprint its parents do not
+  already carry, the whole-evaluation exposure has a footprint-bearing root:
+  :func:`record_evaluation_artifact` appends the ``ARTIFACT`` root carrying
+  the whole-evaluation footprint, and the ``PROGRAM``-channel
+  registered-evaluation record and the generator-visible development records
+  derive from it;
 * a registered Phase-8 ``EvaluationRecord`` becomes a ``PROGRAM``-channel
   ``DERIVED`` record whose footprint is the entire evaluation (judge and
-  humans may have seen it).
+  humans may have seen it);
+* if the identities of a generation event's included inputs cannot be
+  determined (including an empty ``included`` set), the attempted event is
+  still durably appended with ``refs.included = []`` and an undeterminable
+  footprint carrying ``generator_input_included_unknown`` -- never zero
+  exposure (plan section 5.2, the single ``GENERATOR_INPUT`` exception).
 
 Sibling ownership
 -----------------
@@ -73,6 +88,7 @@ from smart_beta.science.footprint import (
     union,
 )
 from smart_beta.science.knowledge import (
+    GENERATOR_INPUT_INCLUDED_UNKNOWN,
     KnowledgeLog,
     KnowledgeRecord,
     read_records,
@@ -81,7 +97,6 @@ from smart_beta.science.knowledge import (
 __all__ = [
     # errors
     "AdapterError",
-    "UndeterminableExposureError",
     # Phase-8 governance provenance (plan section 12.2)
     "GovernanceValidity",
     "GovernanceProvenance",
@@ -90,6 +105,7 @@ __all__ = [
     "DevelopmentDataset",
     "fold_footprint",
     "aggregate_footprint",
+    "record_evaluation_artifact",
     "record_registered_evaluation",
     "record_development_evidence",
     "record_generation_input",
@@ -115,22 +131,6 @@ __all__ = [
 
 class AdapterError(ValueError):
     """A Phase-10 adapter input is malformed or contract-incompatible."""
-
-
-class UndeterminableExposureError(AdapterError):
-    """A generator input's visible history cannot be reconstructed.
-
-    Fail closed: the affected ``GENERATOR_INPUT`` is undeterminable, so the
-    role rule (plan section 5.4, rule 2) yields ``UNKNOWN_EXPOSURE``. No
-    record is fabricated and no evidence is assumed fresh.
-    """
-
-    def __init__(self, generation_event_id: str, reason: str) -> None:
-        super().__init__(
-            f"generator input {generation_event_id!r} is undeterminable: {reason}"
-        )
-        self.generation_event_id = generation_event_id
-        self.reason = reason
 
 
 # ---------------------------------------------------------------------------
@@ -445,11 +445,17 @@ def _calendar_sessions(calendar: Any) -> tuple[Any, ...]:
 
 
 def _dates_between(calendar: Any, start: Any, end: Any) -> tuple[Any, ...]:
+    """Sessions in the sealed half-open window ``[start, end)``.
+
+    Sealed Phase-7 partition semantics are half-open: the exclusive ``end``
+    session is never a formation date, and the last valid session strictly
+    before ``end`` is included (plan section 12.3).
+    """
     sessions = _calendar_sessions(calendar)
     return tuple(
         session
         for session in sessions
-        if session.date() >= start and session.date() <= end
+        if session.date() >= start and session.date() < end
     )
 
 
@@ -468,9 +474,15 @@ def fold_footprint(
 ) -> Footprint:
     """The SOF of one fold's signals + forward returns over its universe.
 
-    ``fold_key`` identifies the frozen ``FoldBoundary``. The expansion uses
-    exactly the fold's inclusive session window; a holdout fold is expanded
-    like any other development fold only when explicitly requested.
+    ``fold_key`` identifies the frozen ``FoldBoundary``. Expansion obeys the
+    sealed Phase-7 half-open window ``[start, end)``: the exclusive ``end``
+    session is never a formation date and the last session before ``end`` is
+    (plan section 12.3).
+
+    This helper computes the fold's *semantic* scope. Under the reconciled
+    section 5.2 rule it never narrows a DERIVED record's exposure footprint:
+    a fold-level DERIVED record's footprint is the exact union of its parents'
+    footprints and the fold is identified in metadata only.
     """
     _require_text(fold_key, field_name="fold_key")
     boundary = next(
@@ -494,7 +506,8 @@ def aggregate_footprint(
     This is the FIX-B-compensating over-approximation (plan section 2.2): a
     robustness / subperiod / parameter / universe aggregate is expanded to the
     complete evaluation range so the potential development composition leak is
-    detectable and fail-closed.
+    detectable and fail-closed. The range is the sealed half-open window
+    ``[min(fold.start), max(fold.end))``.
     """
     folds = _fold_boundaries(evaluation_record)
     start = min(fold.start for fold in folds)
@@ -520,35 +533,147 @@ def _require_prior(log: KnowledgeLog, record_hash: str, *, field_name: str) -> N
         )
 
 
+def _coerce_parent_hashes(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(value)
+    raise AdapterError(f"{field_name} must be a hash or a sequence of hashes")
+
+
+def _footprint_of_record(
+    record: KnowledgeRecord, *, calendar: Any
+) -> Footprint | None:
+    """Rebuild a record's footprint, or ``None`` if it has none."""
+    if record.footprint is None:
+        return None
+    return footprint_from_body(record.footprint, calendar=calendar)
+
+
+def _union_of_parents(
+    log: KnowledgeLog,
+    parent_hashes: Sequence[str],
+    *,
+    calendar: Any,
+    field_name: str,
+) -> Footprint:
+    """The canonical union of the parents' footprints (plan section 5.2).
+
+    Every parent must exist and carry a determinable footprint; otherwise the
+    union is unverifiable and this fails closed rather than fabricating an
+    empty or narrowed exposure.
+    """
+    parents = tuple(parent_hashes)
+    if not parents:
+        raise AdapterError(f"{field_name} must be non-empty")
+    by_hash = {record.record_hash: record for record in log.read()}
+    footprints: list[Footprint] = []
+    for record_hash in parents:
+        _require_sha256_hex(record_hash, field_name=field_name)
+        record = by_hash.get(record_hash)
+        if record is None:
+            raise AdapterError(
+                f"{field_name} names an unknown or forward record: {record_hash}"
+            )
+        footprint = _footprint_of_record(record, calendar=calendar)
+        if footprint is None:
+            raise AdapterError(
+                f"{field_name} parent {record_hash} has no footprint"
+            )
+        if not footprint.determinable:
+            raise AdapterError(
+                f"{field_name} parent {record_hash} has an undeterminable footprint"
+            )
+        footprints.append(footprint)
+    combined = union(*footprints)
+    if not combined.determinable:
+        raise AdapterError(
+            f"{field_name} parent union is undeterminable"
+        )
+    return combined
+
+
+def record_evaluation_artifact(
+    log: KnowledgeLog,
+    *,
+    evaluation_record: Any,
+    dataset: DevelopmentDataset,
+    program_id: str | None = None,
+    available_from: str | None = None,
+) -> KnowledgeRecord:
+    """Append the whole-evaluation ``ARTIFACT`` root of a Phase-7 evaluation.
+
+    The artifact carries the entire-evaluation footprint (including the
+    holdout). A DERIVED record cannot carry a footprint that is not the exact
+    union of its parents' footprints (plan section 5.2), so a whole-evaluation
+    exposure needs a footprint-bearing root. This artifact is that root, and
+    the ``PROGRAM``-channel registered-evaluation record and the
+    generator-visible development records derive from it.
+
+    ``available_from`` defaults to the last fold's ``end`` date; it is
+    attested metadata only. ``packaging_hash`` is the ``EvaluationRecord``
+    content hash (metadata only, not identity).
+    """
+    log = _require_log(log)
+    content_hash_value = _require_sha256_hex(
+        getattr(evaluation_record, "content_hash", None),
+        field_name="evaluation_record.content_hash",
+    )
+    folds = _fold_boundaries(evaluation_record)
+    default_available_from = max(fold.end for fold in folds).isoformat()
+    return log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        program_id=program_id,
+        footprint=aggregate_footprint(evaluation_record, dataset).body,
+        payload={
+            "packaging_hash": content_hash_value,
+            "sealed": True,
+            "available_from": available_from or default_available_from,
+            "source_label": "phase7-evaluation",
+        },
+    )
+
+
 def record_registered_evaluation(
     log: KnowledgeLog,
     *,
     evaluation_record: Any,
     experiment_id: str,
-    parent_record_hash: str,
+    parents: str | Sequence[str],
     dataset: DevelopmentDataset,
     derivation_kind: str = PHASE7_EVALUATION_DERIVATION_KIND,
     program_id: str | None = None,
 ) -> KnowledgeRecord:
     """Append the ``PROGRAM``-channel ``DERIVED`` record of an evaluation.
 
-    The footprint is the **entire** evaluation including the holdout (plan
-    section 12.3): the judge and humans may have seen it. The payload carries
-    only the ``EvaluationRecord`` content hash -- never a metric value.
+    The footprint is **exactly the union of the parents' footprints** (plan
+    section 5.2) and must equal the whole-evaluation aggregate including the
+    holdout (plan section 12.3). This fails closed if the parents carry a
+    different footprint. The payload carries only the ``EvaluationRecord``
+    content hash -- never a metric value.
     """
     log = _require_log(log)
     _require_text(experiment_id, field_name="experiment_id")
     _require_text(derivation_kind, field_name="derivation_kind")
-    _require_prior(log, parent_record_hash, field_name="parent_record_hash")
+    parent_hashes = _coerce_parent_hashes(parents, field_name="parents")
     record_hash = _require_sha256_hex(
         evaluation_record.content_hash, field_name="evaluation_record.content_hash"
     )
-    footprint = aggregate_footprint(evaluation_record, dataset)
+    footprint = _union_of_parents(
+        log, parent_hashes, calendar=dataset.calendar, field_name="parents"
+    )
+    expected = aggregate_footprint(evaluation_record, dataset)
+    if expected.determinable and footprint.footprint_id != expected.footprint_id:
+        raise AdapterError(
+            "registered-evaluation DERIVED footprint must equal the whole "
+            "evaluation including the holdout (plan section 12.3)"
+        )
     return log.append(
         kind=RecordKind.DERIVED,
         channel=Channel.PROGRAM,
         program_id=program_id,
-        refs={"derived_from": (parent_record_hash,)},
+        refs={"derived_from": parent_hashes},
         footprint=footprint.body,
         payload={
             "derivation_kind": derivation_kind,
@@ -562,36 +687,46 @@ def record_development_evidence(
     log: KnowledgeLog,
     *,
     evidence_content_hash: str,
-    parent_record_hash: str,
-    footprint: Footprint,
+    parents: str | Sequence[str],
     derivation_kind: str,
+    calendar: Any = None,
+    fold_key: str | None = None,
     program_id: str | None = None,
 ) -> KnowledgeRecord:
     """Append a generator-visible development-evidence ``DERIVED`` record.
 
-    The caller supplies the conservative footprint (a :func:`fold_footprint`
-    for a fold metric, or an :func:`aggregate_footprint` for a robustness /
-    subperiod / parameter / universe aggregate). Only the evidence content
-    hash is stored.
+    The footprint is **exactly the canonical union of the parents'
+    footprints** (plan section 5.2). A fold metric is never narrowed to a
+    fold-only footprint: the fold is identified only in metadata
+    (``derivation_kind`` and the optional ``fold_key`` payload field). Only the
+    evidence content hash is stored -- never an outcome value.
+
+    ``calendar`` supplies the session context needed to rebuild the parents'
+    footprints from their canonical bodies; without it the union is
+    unverifiable and this fails closed.
     """
     log = _require_log(log)
     _require_text(derivation_kind, field_name="derivation_kind")
     _require_sha256_hex(
         evidence_content_hash, field_name="evidence_content_hash"
     )
-    _require_prior(log, parent_record_hash, field_name="parent_record_hash")
-    if not isinstance(footprint, Footprint):
-        raise AdapterError("footprint must be a Footprint")
+    parent_hashes = _coerce_parent_hashes(parents, field_name="parents")
+    footprint = _union_of_parents(
+        log, parent_hashes, calendar=calendar, field_name="parents"
+    )
+    payload: dict[str, Any] = {
+        "derivation_kind": derivation_kind,
+        "content_hash": evidence_content_hash,
+    }
+    if fold_key is not None:
+        payload["fold_key"] = _require_text(fold_key, field_name="fold_key")
     return log.append(
         kind=RecordKind.DERIVED,
         channel=Channel.PROGRAM,
         program_id=program_id,
-        refs={"derived_from": (parent_record_hash,)},
+        refs={"derived_from": parent_hashes},
         footprint=footprint.body,
-        payload={
-            "derivation_kind": derivation_kind,
-            "content_hash": evidence_content_hash,
-        },
+        payload=payload,
     )
 
 
@@ -657,10 +792,14 @@ def record_generation_input(
     :func:`over_approximated_inclusion` instead.
 
     The envelope footprint is the canonical union of the included records'
-    footprints (plan section 5.2). An empty ``included`` set is undeterminable
-    -- there is no admissible machine channel to record, so the call fails
-    closed with :class:`UndeterminableExposureError` rather than fabricating a
-    record that masks the exposure.
+    footprints (plan section 5.2). The single frozen exception applies when the
+    identities of the included empirical inputs cannot be determined at all
+    (including an empty ``included`` set): the attempted event is **still
+    durably appended** with ``refs.included = []`` and an undeterminable
+    footprint whose ``unresolved`` contains
+    :data:`smart_beta.science.knowledge.GENERATOR_INPUT_INCLUDED_UNKNOWN`. It
+    is never read as zero exposure and downstream classification fails closed
+    (plan sections 5.2 / 12.3).
     """
     log = _require_log(log)
     generation_event_id = _require_text(
@@ -668,30 +807,33 @@ def record_generation_input(
         field_name="generation_event.event_id",
     )
     included = tuple(included)
-    if not included:
-        raise UndeterminableExposureError(
-            generation_event_id, "no reconstructable generator-visible history"
-        )
     by_hash = {record.record_hash: record for record in log.read()}
     included_footprints: list[Footprint] = []
     reasons: list[str] = []
-    for record_hash in included:
-        _require_sha256_hex(record_hash, field_name="included hash")
-        record = by_hash.get(record_hash)
-        if record is None:
-            raise AdapterError(
-                f"included names an unknown or forward record: {record_hash}"
-            )
-        if record.footprint is None:
-            reasons.append(f"missing_footprint:{record_hash}")
-            continue
-        included_footprints.append(
-            footprint_from_body(record.footprint, calendar=calendar)
+    if not included:
+        # The declared-unknown exception: durable, undeterminable, never empty
+        # determinate exposure.
+        footprint = _undeterminable_footprint(
+            (GENERATOR_INPUT_INCLUDED_UNKNOWN,), calendar
         )
-    if reasons:
-        footprint = _undeterminable_footprint(reasons, calendar)
     else:
-        footprint = union(*included_footprints)
+        for record_hash in included:
+            _require_sha256_hex(record_hash, field_name="included hash")
+            record = by_hash.get(record_hash)
+            if record is None:
+                raise AdapterError(
+                    f"included names an unknown or forward record: {record_hash}"
+                )
+            if record.footprint is None:
+                reasons.append(f"missing_footprint:{record_hash}")
+                continue
+            included_footprints.append(
+                footprint_from_body(record.footprint, calendar=calendar)
+            )
+        if reasons:
+            footprint = _undeterminable_footprint(reasons, calendar)
+        else:
+            footprint = union(*included_footprints)
     history_snapshot_hash = _require_sha256_hex(
         getattr(generation_event, "history_snapshot_hash", None),
         field_name="generation_event.history_snapshot_hash",
@@ -719,26 +861,30 @@ def ingest_development_history(
     *,
     visible_history: Any,
     evaluation_record_by_experiment: Mapping[str, Any],
-    parent_record_hash: str,
     dataset: DevelopmentDataset,
     program_id: str | None = None,
+    available_from: str | None = None,
 ) -> tuple[KnowledgeRecord, ...]:
     """Reconstruct a Phase-9 visible history into K development-evidence records.
 
     For every allowlisted ``VisibleExperiment`` (its folds only -- a holdout
-    fold is structurally unrepresentable in a ``DevelopmentFoldRole``), a fold
-    ``DERIVED`` record carries that fold's conservative SOF. If the experiment
-    carries robustness / subperiod / parameter / universe tables, one
-    whole-evaluation-range aggregate ``DERIVED`` record is appended. The
-    returned record hashes are exactly the ``included`` set for the event's
+    fold is structurally unrepresentable in a ``DevelopmentFoldRole``), the
+    adapter appends a whole-evaluation ``ARTIFACT`` root (:func:`fold_footprint`
+    and :func:`aggregate_footprint` are *semantic* helpers; the root records
+    the entire-evaluation exposure). One ``DERIVED`` record per allowlisted
+    development fold and, when the experiment carries robustness / subperiod /
+    parameter / universe tables, one aggregate ``DERIVED`` record derive from
+    that root, so every development record's footprint is **exactly the union
+    of its parents' footprints** (plan section 5.2). Fold identity lives only
+    in ``derivation_kind`` / the ``fold_key`` payload metadata. The returned
+    record hashes are exactly the ``included`` set for the event's
     ``GENERATOR_INPUT``.
 
     ``evaluation_record_by_experiment`` maps ``experiment_id`` to the Phase-7
-    ``EvaluationRecord`` used to expand the footprint; a missing entry fails
-    closed (the visible history deliberately carries no evidence hash).
+    ``EvaluationRecord`` used to build the root footprint; a missing entry
+    fails closed (the visible history deliberately carries no evidence hash).
     """
     log = _require_log(log)
-    _require_prior(log, parent_record_hash, field_name="parent_record_hash")
     experiments = getattr(visible_history, "experiments", None)
     if experiments is None:
         raise AdapterError(
@@ -760,7 +906,18 @@ def ingest_development_history(
                 f"no EvaluationRecord supplied for visible experiment "
                 f"{experiment_id}"
             )
-        for evidence in getattr(experiment, "fold_evidence", ()):
+        fold_evidence = tuple(getattr(experiment, "fold_evidence", ()))
+        robustness_tables = getattr(experiment, "robustness_tables", ())
+        if not fold_evidence and not robustness_tables:
+            continue
+        root = record_evaluation_artifact(
+            log,
+            evaluation_record=evaluation_record,
+            dataset=dataset,
+            program_id=program_id,
+            available_from=available_from,
+        )
+        for evidence in fold_evidence:
             fold_key = _require_text(
                 getattr(evidence, "fold_key", None), field_name="fold_key"
             )
@@ -770,15 +927,13 @@ def ingest_development_history(
                 record_development_evidence(
                     log,
                     evidence_content_hash=content_hash(evidence.to_dict()),
-                    parent_record_hash=parent_record_hash,
-                    footprint=fold_footprint(
-                        evaluation_record, dataset, fold_key=fold_key
-                    ),
+                    parents=(root.record_hash,),
                     derivation_kind=f"development_fold:{role_value}",
+                    calendar=dataset.calendar,
+                    fold_key=fold_key,
                     program_id=program_id,
                 )
             )
-        robustness_tables = getattr(experiment, "robustness_tables", ())
         if robustness_tables:
             table_content = content_hash(
                 {
@@ -790,9 +945,9 @@ def ingest_development_history(
                 record_development_evidence(
                     log,
                     evidence_content_hash=table_content,
-                    parent_record_hash=parent_record_hash,
-                    footprint=aggregate_footprint(evaluation_record, dataset),
+                    parents=(root.record_hash,),
                     derivation_kind="development_aggregate",
+                    calendar=dataset.calendar,
                     program_id=program_id,
                 )
             )

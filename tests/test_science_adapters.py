@@ -67,7 +67,6 @@ from smart_beta.science.adapters import (
     DevelopmentDataset,
     FirewallAuditReport,
     GovernanceValidity,
-    UndeterminableExposureError,
     aggregate_footprint,
     audit_generator_inputs,
     fold_footprint,
@@ -75,6 +74,7 @@ from smart_beta.science.adapters import (
     ingest_development_history,
     over_approximated_inclusion,
     record_development_evidence,
+    record_evaluation_artifact,
     record_generation_input,
     record_hypothesis_freeze,
     record_program_freeze,
@@ -93,8 +93,10 @@ from smart_beta.science.footprint import (
     SourceObservation,
     footprint_from_body,
     overlap,
+    union,
 )
 from smart_beta.science.knowledge import (
+    GENERATOR_INPUT_INCLUDED_UNKNOWN,
     GENESIS_PREV_HASH,
     KnowledgeLog,
     KnowledgeRecord,
@@ -264,6 +266,62 @@ def _new_log(tmp_path: pathlib.Path) -> KnowledgeLog:
     return KnowledgeLog(tmp_path / "k.jsonl")
 
 
+def _root(
+    log: KnowledgeLog,
+    record: EvaluationRecord,
+    dataset: DevelopmentDataset | None = None,
+) -> KnowledgeRecord:
+    """The whole-evaluation ARTIFACT root every P10-I DERIVED record derives from."""
+    return record_evaluation_artifact(
+        log,
+        evaluation_record=record,
+        dataset=dataset or _dataset(),
+        program_id=PROGRAM_ID,
+    )
+
+
+def _half_open_dataset() -> DevelopmentDataset:
+    """A dataset whose signal SOF is distinguishable from its forward returns.
+
+    ``PRICE_FIELD`` expands to ``PRICE_LEVEL`` on the formation date, while
+    ``FWD_RETURN`` expands to ``PRICE_CHANGE``. This lets the half-open
+    ``[start, end)`` formation window be observed directly.
+    """
+    return DevelopmentDataset(
+        calendar=CALENDAR,
+        subjects=SUBJECTS,
+        signal_requirements=(
+            {"derived_variable": "PRICE_FIELD", "params": {}},
+        ),
+        signal_lookback=0,
+        forward_return_horizon=1,
+    )
+
+
+def _last_session_before(end: dt.date) -> dt.date:
+    previous = [d.date() for d in CALENDAR.dates if d.date() < end]
+    assert previous, "no calendar session precedes the fold end"
+    return previous[-1]
+
+
+def _recompute_parent_union(
+    log: KnowledgeLog, record: KnowledgeRecord
+) -> object:
+    """Recompute a DERIVED/GENERATOR_INPUT footprint as the exact parent union.
+
+    This is the section 5.2 equality rule that ``roles.py`` implements as
+    ``_ancestry_footprints_verifiable`` (roles.py is not on this branch).
+    """
+    by_hash = {item.record_hash: item for item in log.read()}
+    ref_name = "derived_from" if record.kind is RecordKind.DERIVED else "included"
+    parents = []
+    for reference in record.refs[ref_name]:
+        parent = by_hash[reference]
+        parents.append(footprint_from_body(parent.footprint, calendar=CALENDAR))
+    combined = union(*parents)
+    return combined.footprint_id
+
+
 # ---------------------------------------------------------------------------
 # footprint conservatism (plan section 12.3)
 # ---------------------------------------------------------------------------
@@ -315,14 +373,14 @@ def test_aggregate_overlaps_a_holdout_fold_footprint():
 
 def test_record_registered_evaluation_uses_whole_range_footprint(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
+    root = _root(log, record)
     entry = ExperimentRegistry().register(record, family_id=FAMILY_A)
     derived = record_registered_evaluation(
         log,
         evaluation_record=record,
         experiment_id=entry.experiment_id,
-        parent_record_hash=program.record_hash,
+        parents=(root.record_hash,),
         dataset=_dataset(),
         program_id=PROGRAM_ID,
     )
@@ -339,37 +397,174 @@ def test_record_registered_evaluation_uses_whole_range_footprint(tmp_path):
     assert str(HOLDOUT_SENTINEL) not in _all_payload_text(derived)
 
 
-def test_development_evidence_aggregate_records_whole_range(tmp_path):
+# ---------------------------------------------------------------------------
+# reconciliation: DERIVED footprint == exact parent union (plan sections 5.2 / 12.3)
+# ---------------------------------------------------------------------------
+
+
+def test_p10i_derived_footprint_equals_exact_parent_union(tmp_path):
+    """Mandatory (1): every P10-I DERIVED footprint == exact parent union.
+
+    ``roles.py`` implements this as ``_ancestry_footprints_verifiable``; it is
+    not on this branch, so the section 5.2 equality rule is asserted directly.
+    """
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
     dataset = _dataset()
-    aggregate = record_development_evidence(
-        log,
-        evidence_content_hash="9" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=aggregate_footprint(record, dataset),
-        derivation_kind="robustness_aggregate",
-    )
+    root = _root(log, record)
+    derived_records = [
+        record_registered_evaluation(
+            log,
+            evaluation_record=record,
+            experiment_id="a" * 64,
+            parents=(root.record_hash,),
+            dataset=dataset,
+            program_id=PROGRAM_ID,
+        ),
+        record_development_evidence(
+            log,
+            evidence_content_hash="1" * 64,
+            parents=(root.record_hash,),
+            derivation_kind="development_fold:is",
+            calendar=CALENDAR,
+            fold_key="is",
+            program_id=PROGRAM_ID,
+        ),
+        record_development_evidence(
+            log,
+            evidence_content_hash="2" * 64,
+            parents=(root.record_hash,),
+            derivation_kind="development_aggregate",
+            calendar=CALENDAR,
+            program_id=PROGRAM_ID,
+        ),
+    ]
+    for derived in derived_records:
+        stored = footprint_from_body(derived.footprint, calendar=CALENDAR)
+        assert stored.footprint_id == _recompute_parent_union(log, derived)
+
+
+def test_fold_metric_metadata_identifies_fold_but_exposure_is_parent_union(tmp_path):
+    """Mandatory (2): fold identity is metadata; exposure is the parent union."""
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    dataset = _dataset()
+    root = _root(log, record)
     fold = record_development_evidence(
         log,
-        evidence_content_hash="8" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=fold_footprint(record, dataset, fold_key="is"),
-        derivation_kind="fold_metric",
+        evidence_content_hash="3" * 64,
+        parents=(root.record_hash,),
+        derivation_kind="development_fold:is",
+        calendar=CALENDAR,
+        fold_key="is",
+        program_id=PROGRAM_ID,
     )
-    aggregate_fp = footprint_from_body(aggregate.footprint, calendar=CALENDAR)
-    fold_fp = footprint_from_body(fold.footprint, calendar=CALENDAR)
-    assert aggregate_fp != fold_fp
-    assert aggregate_fp.source_observations is not None
-    assert fold_fp.source_observations is not None
+    # Metadata identifies the fold ...
+    assert fold.payload["derivation_kind"] == "development_fold:is"
+    assert fold.payload["fold_key"] == "is"
+    # ... but the exposure is the whole-evaluation parent union, not the fold.
+    stored = footprint_from_body(fold.footprint, calendar=CALENDAR)
+    root_fp = footprint_from_body(root.footprint, calendar=CALENDAR)
+    assert stored.footprint_id == root_fp.footprint_id
+    assert stored.source_observations is not None
     assert (
         SourceObservation(SUBJECT_A, ObservationKind.PRICE_CHANGE, HOLDOUT_SESSION)
-        in aggregate_fp.source_observations
+        in stored.source_observations
     )
+    fold_only = fold_footprint(record, dataset, fold_key="is")
     assert (
         SourceObservation(SUBJECT_A, ObservationKind.PRICE_CHANGE, HOLDOUT_SESSION)
-        not in fold_fp.source_observations
+        not in fold_only.source_observations
+    )
+
+
+def test_p10i_records_pass_section_5_2_equality(tmp_path):
+    """Mandatory (3): all P10-I records satisfy the read-time section 5.2 rule.
+
+    Cross-module surrogate for ``roles._ancestry_footprints_verifiable`` (roles.py
+    is absent on this branch). Every DERIVED record's footprint must equal the
+    canonical union of its ``derived_from`` parents; every GENERATOR_INPUT with
+    a non-empty ``included`` must equal the union of its ``included`` records.
+    """
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    dataset = _dataset()
+    root = _root(log, record)
+    fold = record_development_evidence(
+        log,
+        evidence_content_hash="4" * 64,
+        parents=(root.record_hash,),
+        derivation_kind="development_fold:is",
+        calendar=CALENDAR,
+        fold_key="is",
+        program_id=PROGRAM_ID,
+    )
+    aggregate = record_development_evidence(
+        log,
+        evidence_content_hash="5" * 64,
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
+        program_id=PROGRAM_ID,
+    )
+    gi = record_generation_input(
+        log,
+        generation_event=_generation_event(index=30),
+        included=(fold.record_hash, aggregate.record_hash),
+        calendar=CALENDAR,
+        program_id=PROGRAM_ID,
+    )
+    checked = 0
+    for item in log.read():
+        if item.kind is RecordKind.DERIVED:
+            assert (
+                footprint_from_body(item.footprint, calendar=CALENDAR).footprint_id
+                == _recompute_parent_union(log, item)
+            )
+            checked += 1
+        elif item.kind is RecordKind.GENERATOR_INPUT and item.refs["included"]:
+            assert (
+                footprint_from_body(item.footprint, calendar=CALENDAR).footprint_id
+                == _recompute_parent_union(log, item)
+            )
+            checked += 1
+    assert checked >= 3
+    # The generator input unions its two included development records.
+    assert (
+        footprint_from_body(gi.footprint, calendar=CALENDAR).footprint_id
+        == footprint_from_body(aggregate.footprint, calendar=CALENDAR).footprint_id
+    )
+
+
+# ---------------------------------------------------------------------------
+# half-open fold semantics (plan section 12.3)
+# ---------------------------------------------------------------------------
+
+
+def test_fold_end_excluded():
+    """Mandatory (6): the exclusive fold ``end`` session is not a formation date."""
+    record = _evaluation_record()
+    dataset = _half_open_dataset()
+    boundary = next(f for f in record.partition.folds if f.fold_key == "is")
+    fp = fold_footprint(record, dataset, fold_key="is")
+    assert fp.source_observations is not None
+    assert (
+        SourceObservation(SUBJECT_A, ObservationKind.PRICE_LEVEL, boundary.end)
+        not in fp.source_observations
+    )
+
+
+def test_last_valid_session_before_end_included():
+    """Mandatory (7): the last session strictly before ``end`` is included."""
+    record = _evaluation_record()
+    dataset = _half_open_dataset()
+    boundary = next(f for f in record.partition.folds if f.fold_key == "is")
+    last = _last_session_before(boundary.end)
+    fp = fold_footprint(record, dataset, fold_key="is")
+    assert fp.source_observations is not None
+    assert (
+        SourceObservation(SUBJECT_A, ObservationKind.PRICE_LEVEL, last)
+        in fp.source_observations
     )
 
 
@@ -380,15 +575,15 @@ def test_development_evidence_aggregate_records_whole_range(tmp_path):
 
 def test_generation_input_unions_included_footprints(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
-    dataset = _dataset()
+    root = _root(log, record)
     prior = record_development_evidence(
         log,
         evidence_content_hash="7" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=fold_footprint(record, dataset, fold_key="is"),
-        derivation_kind="fold_metric",
+        parents=(root.record_hash,),
+        derivation_kind="development_fold:is",
+        calendar=CALENDAR,
+        fold_key="is",
     )
     event = _generation_event(index=1)
     gi = record_generation_input(
@@ -408,14 +603,14 @@ def test_generation_input_unions_included_footprints(tmp_path):
 
 def test_hypothesis_freeze_is_influenced_by_its_generation_input(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
+    root = _root(log, record)
     prior = record_development_evidence(
         log,
         evidence_content_hash="6" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=aggregate_footprint(record, _dataset()),
-        derivation_kind="robustness_aggregate",
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
     )
     gi = record_generation_input(
         log,
@@ -438,7 +633,6 @@ def test_hypothesis_freeze_is_influenced_by_its_generation_input(tmp_path):
 def test_ingest_development_history_reconstructs_visible_loop_run(tmp_path):
     """A synthetic Phase-9 visible history maps to the expected K records."""
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
     registry = ExperimentRegistry()
     entry = registry.register(record, family_id=FAMILY_A)
@@ -464,21 +658,20 @@ def test_ingest_development_history_reconstructs_visible_loop_run(tmp_path):
         log,
         visible_history=visible,
         evaluation_record_by_experiment={entry.experiment_id: record},
-        parent_record_hash=program.record_hash,
         dataset=_dataset(),
         program_id=PROGRAM_ID,
     )
     kinds = [item.payload["derivation_kind"] for item in included]
     assert kinds == ["development_fold:is", "development_aggregate"]
-    # The fold record is restricted, the aggregate covers the whole range.
+    # Both records carry the whole-evaluation parent union (fold is metadata).
     fold_fp = footprint_from_body(included[0].footprint, calendar=CALENDAR)
     aggregate_fp = footprint_from_body(included[1].footprint, calendar=CALENDAR)
+    assert fold_fp.footprint_id == aggregate_fp.footprint_id
+    assert included[0].payload["fold_key"] == "is"
     assert fold_fp.source_observations is not None
-    assert aggregate_fp.source_observations is not None
-    assert aggregate_fp.source_observations > fold_fp.source_observations
     assert (
         SourceObservation(SUBJECT_A, ObservationKind.PRICE_CHANGE, HOLDOUT_SESSION)
-        in aggregate_fp.source_observations
+        in fold_fp.source_observations
     )
     # The generator input consumes exactly those records.
     gi = record_generation_input(
@@ -492,7 +685,6 @@ def test_ingest_development_history_reconstructs_visible_loop_run(tmp_path):
 
 def test_ingest_development_history_fails_closed_on_missing_evidence(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     visible = GeneratorVisibleResearchHistory(
         experiments=(
             VisibleExperiment(
@@ -507,22 +699,21 @@ def test_ingest_development_history_fails_closed_on_missing_evidence(tmp_path):
             log,
             visible_history=visible,
             evaluation_record_by_experiment={},
-            parent_record_hash=program.record_hash,
             dataset=_dataset(),
         )
 
 
 def test_generation_input_over_approximates_unreconstructable_history(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
+    root = _root(log, record)
     registry = ExperimentRegistry()
     entry = registry.register(record, family_id=FAMILY_A)
     program_eval = record_registered_evaluation(
         log,
         evaluation_record=record,
         experiment_id=entry.experiment_id,
-        parent_record_hash=program.record_hash,
+        parents=(root.record_hash,),
         dataset=_dataset(),
     )
     # The exact visible history is unknown, but the registry order is
@@ -545,15 +736,15 @@ def test_generation_input_over_approximates_unreconstructable_history(tmp_path):
 
 def test_generation_input_over_approximation_includes_prior_program_evals(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
+    root = _root(log, record)
     registry = ExperimentRegistry()
     entry = registry.register(record, family_id=FAMILY_A)
     program_eval = record_registered_evaluation(
         log,
         evaluation_record=record,
         experiment_id=entry.experiment_id,
-        parent_record_hash=program.record_hash,
+        parents=(root.record_hash,),
         dataset=_dataset(),
     )
     ahead = registered_evaluation_records(log)
@@ -563,15 +754,37 @@ def test_generation_input_over_approximation_includes_prior_program_evals(tmp_pa
     )
 
 
-def test_generation_input_fails_closed_without_any_visible_history(tmp_path):
+def test_unknown_generator_input_durably_appended_and_fails_closed(tmp_path):
+    """Mandatory (4): an unknown-included event is durable and undeterminable."""
     log = _new_log(tmp_path)
     event = _generation_event(index=4)
-    with pytest.raises(UndeterminableExposureError) as excinfo:
-        record_generation_input(
-            log, generation_event=event, included=(), calendar=CALENDAR
-        )
-    assert excinfo.value.generation_event_id == event.event_id
-    assert log.read() == ()  # no record fabricated
+    gi = record_generation_input(
+        log, generation_event=event, included=(), calendar=CALENDAR
+    )
+    # Durable: the attempted event is appended, not rejected.
+    assert log.read()[-1].record_hash == gi.record_hash
+    assert gi.kind is RecordKind.GENERATOR_INPUT
+    assert gi.refs["included"] == ()
+    assert gi.payload["generation_event_id"] == event.event_id
+    # Undeterminable, and it carries the exact protocol reason.
+    assert gi.footprint["determinable"] is False
+    assert GENERATOR_INPUT_INCLUDED_UNKNOWN in gi.footprint["unresolved"]
+
+
+def test_empty_included_is_not_determinate_empty_exposure(tmp_path):
+    """Mandatory (5): empty included is unknown, never zero exposure."""
+    log = _new_log(tmp_path)
+    gi = record_generation_input(
+        log,
+        generation_event=_generation_event(index=6),
+        included=(),
+        calendar=CALENDAR,
+    )
+    stored = footprint_from_body(gi.footprint, calendar=CALENDAR)
+    assert not stored.determinable
+    # It is not a determinable empty footprint (which would read as fresh).
+    assert stored.unresolved
+    assert GENERATOR_INPUT_INCLUDED_UNKNOWN in stored.unresolved
 
 
 def test_unknown_included_reference_is_rejected(tmp_path):
@@ -758,15 +971,15 @@ def _preregistration(log: KnowledgeLog, *, parent: str) -> KnowledgeRecord:
 
 def test_audit_clean_when_no_consumption_or_confirmation_descent(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
     dataset = _dataset()
+    root = _root(log, record, dataset)
     evidence = record_development_evidence(
         log,
         evidence_content_hash="c" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=aggregate_footprint(record, dataset),
-        derivation_kind="robustness_aggregate",
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
     )
     record_generation_input(
         log,
@@ -786,12 +999,13 @@ def test_audit_flags_generator_input_overlapping_a_consumption(tmp_path):
     program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
     dataset = _dataset()
+    root = _root(log, record, dataset)
     evidence = record_development_evidence(
         log,
         evidence_content_hash="c" * 64,
-        parent_record_hash=program.record_hash,
-        footprint=aggregate_footprint(record, dataset),
-        derivation_kind="robustness_aggregate",
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
     )
     gi = record_generation_input(
         log,
@@ -799,12 +1013,12 @@ def test_audit_flags_generator_input_overlapping_a_consumption(tmp_path):
         included=(evidence.record_hash,),
         calendar=CALENDAR,
     )
-    artifact = _artifact(log, footprint=aggregate_footprint(record, dataset).body, label="confirmation")
+    artifact = _artifact(log, footprint=root.footprint, label="confirmation")
     prereg = _preregistration(log, parent=program.record_hash)
     log.append(
         kind=RecordKind.CONSUMPTION,
         channel=Channel.SYSTEM,
-        footprint=aggregate_footprint(record, dataset).body,
+        footprint=root.footprint,
         payload={
             "study_id": "synthetic-study",
             "prereg_record_hash": prereg.record_hash,
@@ -827,12 +1041,13 @@ def test_audit_flags_confirmation_derived_record_in_included_closure(tmp_path):
     program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record()
     dataset = _dataset()
-    artifact = _artifact(log, footprint=aggregate_footprint(record, dataset).body, label="confirmation")
+    root = _root(log, record, dataset)
+    artifact = _artifact(log, footprint=root.footprint, label="confirmation")
     prereg = _preregistration(log, parent=program.record_hash)
     consumption = log.append(
         kind=RecordKind.CONSUMPTION,
         channel=Channel.SYSTEM,
-        footprint=aggregate_footprint(record, dataset).body,
+        footprint=root.footprint,
         payload={
             "study_id": "synthetic-study",
             "prereg_record_hash": prereg.record_hash,
@@ -846,7 +1061,7 @@ def test_audit_flags_confirmation_derived_record_in_included_closure(tmp_path):
         kind=RecordKind.DERIVED,
         channel=Channel.PROGRAM,
         refs={"derived_from": (consumption.record_hash,)},
-        footprint=aggregate_footprint(record, dataset).body,
+        footprint=root.footprint,
         payload={
             "derivation_kind": "confirmation_assessment",
             "content_hash": "1" * 64,
@@ -857,7 +1072,7 @@ def test_audit_flags_confirmation_derived_record_in_included_closure(tmp_path):
         kind=RecordKind.DERIVED,
         channel=Channel.PROGRAM,
         refs={"derived_from": (consumption.record_hash,)},
-        footprint=aggregate_footprint(record, dataset).body,
+        footprint=root.footprint,
         payload={
             "derivation_kind": "confirmation_assessment",
             "content_hash": "2" * 64,
@@ -903,24 +1118,24 @@ def _all_payload_text(record: KnowledgeRecord) -> str:
 
 def test_no_holdout_metric_value_appears_in_any_k_payload(tmp_path):
     log = _new_log(tmp_path)
-    program = record_program_freeze(log, program_id=PROGRAM_ID)
     record = _evaluation_record(holdout_metric=HOLDOUT_SENTINEL)
     dataset = _dataset()
+    root = _root(log, record, dataset)
     registry = ExperimentRegistry()
     entry = registry.register(record, family_id=FAMILY_A)
     program_eval = record_registered_evaluation(
         log,
         evaluation_record=record,
         experiment_id=entry.experiment_id,
-        parent_record_hash=program.record_hash,
+        parents=(root.record_hash,),
         dataset=dataset,
     )
     evidence = record_development_evidence(
         log,
         evidence_content_hash="3" * 64,
-        parent_record_hash=program_eval.record_hash,
-        footprint=aggregate_footprint(record, dataset),
-        derivation_kind="robustness_aggregate",
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
     )
     record_generation_input(
         log,
@@ -934,6 +1149,7 @@ def test_no_holdout_metric_value_appears_in_any_k_payload(tmp_path):
         text = str(record.to_dict())
         assert sentinel not in text
         assert "sharpe" not in text  # no metric name either
+    assert program_eval.kind is RecordKind.DERIVED
 
 
 def test_footprints_and_hashes_are_timestamp_independent(tmp_path):
@@ -941,14 +1157,14 @@ def test_footprints_and_hashes_are_timestamp_independent(tmp_path):
     # footprints and the same semantic hashes for the same inputs.
     def build(clock_value: str, path: pathlib.Path):
         log = KnowledgeLog(path, clock=lambda: clock_value)
-        program = record_program_freeze(log, program_id=PROGRAM_ID)
         record = _evaluation_record()
+        root = _root(log, record)
         evidence = record_development_evidence(
             log,
             evidence_content_hash="4" * 64,
-            parent_record_hash=program.record_hash,
-            footprint=aggregate_footprint(record, _dataset()),
-            derivation_kind="robustness_aggregate",
+            parents=(root.record_hash,),
+            derivation_kind="development_aggregate",
+            calendar=CALENDAR,
         )
         gi = record_generation_input(
             log,
