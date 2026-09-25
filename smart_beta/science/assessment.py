@@ -64,6 +64,24 @@ false            false                       ``INCONCLUSIVE``   ``NOT_APPLICABLE
 
 ``NOT_ASSESSED`` (any section 11.2 reason) has both booleans ``null`` and
 ``effect_size_qualification = NOT_APPLICABLE``.
+
+Family-wide reassessment (section 11.3, clarified before Barrier 4)
+-------------------------------------------------------------------
+
+:func:`reassess` operates at the **frozen-family** level.  If any frozen
+member becomes inadmissible under ``K_now``, the frozen Holm step-down is
+recomputed over all ``m`` members with ``p_i*`` equal to the original
+preregistered p-value for members that remain admissible and the frozen R-3
+placeholder ``1`` for inadmissible ones.  The placeholder is an internal
+multiplicity input only: it is never persisted or represented as an empirical
+p-value (inadmissible :class:`HolmMember` s carry ``p_value=None`` and
+``effective_p=1.0``).  Membership and ``m`` are unchanged, no inference is
+re-run, every member is re-derived through the section 11.2 mapping, and only
+members whose assessment meaning materially changes get a new DERIVED
+reassessment record.  Upgrades are refused fail-closed.  Reassessment records
+carry a ``semantic_hash`` (the snapshot/provenance-independent identity of the
+assessment meaning) so that repeated reassessment under the same ``K_now`` is
+idempotent.
 """
 
 from __future__ import annotations
@@ -102,6 +120,7 @@ __all__ = [
     "AssessmentError",
     "AssessmentContractError",
     "HolmFamilyMismatchError",
+    "ReassessmentUpgradeError",
     # governance mirror (section 12.2)
     "GovernanceValidity",
     # Holm (section 10)
@@ -136,6 +155,15 @@ class HolmFamilyMismatchError(AssessmentError):
     Raised when the members supplied to the step-down are not exactly the
     frozen ``prereg.members`` (an extra or missing member).  No assessment is
     produced.
+    """
+
+
+class ReassessmentUpgradeError(AssessmentError):
+    """A family-wide reassessment would upgrade a member (section 11.3).
+
+    Downgrade-only is enforced explicitly, not assumed from Holm
+    monotonicity: a recomputation that would imply an upgrade for any member
+    is refused fail-closed and no record is appended.
     """
 
 
@@ -188,6 +216,13 @@ _ADMISSIBLE_ROLES = frozenset(
         EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED,
     }
 )
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    number = float(value)
+    return number == number and number not in (float("inf"), float("-inf"))
 
 
 def _is_finite_unit(value: Any) -> bool:
@@ -619,6 +654,7 @@ def _inference_summary(
         "dependence_design_id": member.dependence_design_id,
         "n": inference.n,
         "estimate_theta_prime": inference.estimate_theta_prime,
+        "p_one_sided": inference.p_one_sided,
         "upper_bound_theta_prime": inference.upper_bound_theta_prime,
     }
 
@@ -929,160 +965,311 @@ def _find_assessment_record(
     return None
 
 
+def _semantic_content(assessment: ScientificAssessment) -> dict[str, Any]:
+    """The meaning of an assessment, excluding its snapshot and provenance.
+
+    Section 11.3 appends a record only for members whose assessment
+    **materially changes**.  Every reassessment necessarily advances the
+    ``knowledge_snapshot`` and ``provenance``; those are positional metadata,
+    not a change of meaning, so they are excluded from the comparison.
+    """
+    content = dict(assessment.to_content())
+    content.pop("knowledge_snapshot", None)
+    content.pop("provenance", None)
+    return content
+
+
+def _semantic_hash(assessment: ScientificAssessment) -> str:
+    """Snapshot-independent identity of an assessment's meaning."""
+    return content_hash(_semantic_content(assessment))
+
+
+def _assessment_is_upgrade(
+    old: ScientificAssessment, new: ScientificAssessment
+) -> bool:
+    """Whether ``new`` would strengthen ``old`` (section 11.3, fail closed)."""
+    if new.evidence_role.strength > old.evidence_role.strength:
+        return True
+    if new.primary_null_rejected is True and old.primary_null_rejected is not True:
+        return True
+    return False
+
+
 def reassess(
-    assessment: ScientificAssessment,
+    family: AssessmentFamily,
     knowledge: Any,
     *,
     calendar: Any = None,
-) -> ScientificAssessment | None:
-    """Downgrade-only section 11.3 reassessment against ``K_now``.
+) -> AssessmentFamily | None:
+    """Family-wide, downgrade-only section 11.3 reassessment against ``K_now``.
 
-    Recomputes the evidence role from the frozen rule order.  If the role did
-    not weaken, ``None`` is returned and nothing is appended.  If it weakened,
-    a **new** DERIVED reassessment record is appended to the
-    :class:`~smart_beta.science.knowledge.KnowledgeLog` ``knowledge`` and the
-    new assessment is returned; the original is never mutated and a
-    reassessment can never upgrade.  ``knowledge`` must be a ``KnowledgeLog``
-    because a downgrade is durably recorded.
+    ``family`` is an :class:`AssessmentFamily` produced by :func:`assess` for
+    one frozen family.  Roles are recomputed for **every** frozen member from
+    the frozen rule order.  If any member becomes inadmissible, the frozen
+    Holm step-down is recomputed over all ``m`` members with
+
+    ``p_i* = the original preregistered p_i`` if member ``i`` remains
+    admissible under ``K_now``, else the R-3 placeholder ``1`` (a multiplicity
+    placeholder, never persisted or represented as an empirical p-value).
+
+    Membership and ``m`` are unchanged; no p-value is re-estimated and no
+    inference is re-run.  Every member is re-derived through the section 11.2
+    mapping from the recomputed Holm result and its existing evidence/bound.
+    A new DERIVED reassessment record is appended **only** for members whose
+    assessment meaning materially changes (and only once).  A recomputation
+    that would upgrade any member is refused fail-closed with
+    :class:`ReassessmentUpgradeError` and nothing is appended.  The original
+    family is never mutated, the result is deterministic, and applying it
+    again under the same ``K_now`` is idempotent.
+
+    ``knowledge`` must be a
+    :class:`~smart_beta.science.knowledge.KnowledgeLog` because a downgrade is
+    durably recorded.
     """
-    if not isinstance(assessment, ScientificAssessment):
-        raise AssessmentContractError("assessment must be a ScientificAssessment")
+    if not isinstance(family, AssessmentFamily):
+        raise AssessmentContractError(
+            "reassess requires the AssessmentFamily produced by assess"
+        )
     if not isinstance(knowledge, K.KnowledgeLog):
         raise AssessmentContractError(
-            "reassess requires a KnowledgeLog so the reassessment record is "
+            "reassess requires a KnowledgeLog so reassessment records are "
             "durably appended"
+        )
+    assessments = family.assessments
+    if not assessments:
+        raise AssessmentContractError("the assessment family is empty")
+    study_ids = {assessment.study_id for assessment in assessments}
+    prereg_hashes = {
+        assessment.provenance.get("prereg_record_hash")
+        for assessment in assessments
+    }
+    if len(study_ids) != 1 or len(prereg_hashes) != 1 or None in prereg_hashes:
+        raise AssessmentContractError(
+            "every assessment in a family must share one study_id and one "
+            "preregistration record"
         )
 
     records = knowledge.read()
     index = _index(records)
-    prereg_hash = assessment.provenance.get("prereg_record_hash")
-    prereg_record = index.get(prereg_hash) if isinstance(prereg_hash, str) else None
+    prereg_record = index.get(next(iter(prereg_hashes)))
     if prereg_record is None or prereg_record.kind is not RecordKind.PREREGISTRATION:
         raise AssessmentContractError(
             "the reassessment preregistration record is absent from K_now"
         )
-    prereg = PreRegistration.from_content(
-        prereg_record.payload["preregistration"]
-    )
-    member = next(
-        (
-            candidate
-            for candidate in prereg.members
-            if candidate.hypothesis_id == assessment.hypothesis_id
-        ),
-        None,
-    )
-    if member is None:
+    prereg = PreRegistration.from_content(prereg_record.payload["preregistration"])
+    frozen_ids = tuple(member.hypothesis_id for member in prereg.members)
+    original_by_id = {assessment.hypothesis_id: assessment for assessment in assessments}
+    if set(frozen_ids) != set(original_by_id):
         raise AssessmentContractError(
-            "the assessment hypothesis is not a frozen member of its "
-            "preregistration"
+            "the assessment family does not match the frozen members"
         )
-    artifact_record = index.get(assessment.artifact_record_hash)
-    freeze_record = index.get(member.hypothesis_freeze_record)
-    if (
-        artifact_record is None
-        or artifact_record.kind is not RecordKind.ARTIFACT
-        or freeze_record is None
-        or freeze_record.kind is not RecordKind.HYPOTHESIS_FREEZE
-    ):
-        raise AssessmentContractError(
-            "the reassessment requires the member's ARTIFACT and "
-            "HYPOTHESIS_FREEZE records in K_now"
+    member_by_id = {member.hypothesis_id: member for member in prereg.members}
+
+    # -- recompute every member's role and the frozen-family p_i* ----------
+    new_roles: dict[str, EvidenceRole] = {}
+    new_admissible: dict[str, bool] = {}
+    p_star: dict[str, float] = {}
+    for hid in frozen_ids:
+        member = member_by_id[hid]
+        original = original_by_id[hid]
+        artifact_record = index.get(original.artifact_record_hash)
+        freeze_record = index.get(member.hypothesis_freeze_record)
+        if (
+            artifact_record is not None
+            and artifact_record.kind is RecordKind.ARTIFACT
+            and freeze_record is not None
+            and freeze_record.kind is RecordKind.HYPOTHESIS_FREEZE
+        ):
+            role = R.evidence_role(
+                artifact_record.record_hash,
+                freeze_record.record_hash,
+                prereg_record.record_hash,
+                records,
+                calendar=calendar,
+            )
+        else:
+            role = EvidenceRole.UNKNOWN_EXPOSURE
+        new_roles[hid] = role
+        is_admissible = original.admissible and role in _ADMISSIBLE_ROLES
+        new_admissible[hid] = is_admissible
+        if is_admissible:
+            p_value = original.inference.get("p_one_sided") if original.inference else None
+            if not _is_finite_unit(p_value):
+                raise AssessmentContractError(
+                    f"member {hid!r} remains admissible but its original "
+                    "preregistered p-value is unavailable"
+                )
+            p_star[hid] = float(p_value)
+        else:
+            # The frozen R-3 placeholder: an internal multiplicity input, not
+            # an empirical p-value.
+            p_star[hid] = 1.0
+
+    holm = compute_holm(prereg, p_star, admissible=new_admissible)
+    snapshot = snapshot_of_records(records)
+
+    # -- re-derive every member through the section 11.2 mapping -----------
+    new_by_id: dict[str, ScientificAssessment] = {}
+    for hid in frozen_ids:
+        member = member_by_id[hid]
+        original = original_by_id[hid]
+        role = new_roles[hid]
+        grade = R.grade_for_role(role)
+        is_admissible = new_admissible[hid]
+        holm_member = holm.for_hypothesis(hid)
+        artifact_record = index.get(original.artifact_record_hash)
+        freeze_record = index.get(member.hypothesis_freeze_record)
+
+        if is_admissible:
+            primary: bool | None = bool(holm_member.holm_rejected)
+            upper_bound = (
+                original.inference.get("upper_bound_theta_prime")
+                if original.inference
+                else None
+            )
+            if not _is_finite_number(upper_bound):
+                raise AssessmentContractError(
+                    f"member {hid!r} remains admissible but its original "
+                    "upper bound is unavailable"
+                )
+            sesoi_excluded: bool | None = (
+                float(upper_bound) < float(member.sesoi)
+            )
+            state, qualification = _map_determinations(
+                bool(primary), bool(sesoi_excluded)
+            )
+            reasons: tuple[ReasonCode, ...] = original.reason_codes
+        else:
+            primary = None
+            sesoi_excluded = None
+            state = AssessmentState.NOT_ASSESSED
+            qualification = EffectSizeQualification.NOT_APPLICABLE
+            reason_set: set[ReasonCode] = set(original.reason_codes)
+            role_reason = _ROLE_REASONS.get(role)
+            if role_reason is not None:
+                reason_set.add(role_reason)
+            reasons = tuple(sorted(reason_set, key=lambda code: code.value))
+
+        flags: set[InformationalFlag] = set()
+        if grade is EvidenceGrade.G3:
+            flags.add(InformationalFlag.DECLARATION_DEPENDENT)
+        if original.series_identical_group:
+            flags.add(InformationalFlag.SERIES_IDENTICAL_GROUP)
+
+        economic_state = (
+            state
+            if member.estimand_kind.value == "MEAN_NET_LONG_SHORT"
+            else AssessmentState.NOT_ASSESSED
         )
 
-    new_role = R.evidence_role(
-        artifact_record.record_hash,
-        freeze_record.record_hash,
-        prereg_record.record_hash,
-        records,
-        calendar=calendar,
-    )
-    if new_role.strength >= assessment.evidence_role.strength:
+        parent = _find_assessment_record(records, original.assessment_id)
+        provenance = dict(original.provenance)
+        provenance["source_assessment_record_hash"] = (
+            parent.record_hash if parent is not None else None
+        )
+
+        new_by_id[hid] = ScientificAssessment(
+            protocol_version=original.protocol_version,
+            study_id=original.study_id,
+            prereg_id=original.prereg_id,
+            analysis_plan_id=original.analysis_plan_id,
+            hypothesis_id=hid,
+            artifact_record_hash=original.artifact_record_hash,
+            footprint_id=original.footprint_id,
+            knowledge_snapshot=snapshot,
+            evidence_role=role,
+            evidence_grade=grade,
+            residual_disclosures=_residual_plain(
+                prereg_record,
+                freeze_record,
+                artifact_record,
+                records,
+                calendar=calendar,
+            ),
+            governance_validity=original.governance_validity,
+            state=state,
+            economic_state=economic_state,
+            reason_codes=reasons,
+            flags=tuple(sorted(flags, key=lambda flag: flag.value)),
+            inference=original.inference,
+            primary_null_rejected=primary,
+            sesoi_excluded_by_upper_bound=sesoi_excluded,
+            effect_size_qualification=qualification,
+            multiplicity={
+                "family_id": holm.family_id,
+                "m": holm.m,
+                "alpha_study": holm.alpha_study,
+                "holm_rank": holm_member.holm_rank,
+                "holm_adjusted_p": holm_member.holm_adjusted_p,
+                "holm_rejected": holm_member.holm_rejected,
+            },
+            series_identical_group=original.series_identical_group,
+            provenance=provenance,
+            not_supported_scope=original.not_supported_scope,
+            production_readiness=original.production_readiness,
+        )
+
+    # -- explicit downgrade-only enforcement (fail closed) -----------------
+    for hid in frozen_ids:
+        if _assessment_is_upgrade(original_by_id[hid], new_by_id[hid]):
+            raise ReassessmentUpgradeError(
+                f"family-wide reassessment would upgrade member {hid!r}"
+            )
+
+    # -- material change + idempotence -------------------------------------
+    existing_hashes = {
+        record.payload.get("content_hash")
+        for record in records
+        if record.kind is RecordKind.DERIVED
+    }
+    existing_semantic = {
+        record.payload.get("semantic_hash")
+        for record in records
+        if record.kind is RecordKind.DERIVED
+    }
+    changed = [
+        hid
+        for hid in frozen_ids
+        if _semantic_content(new_by_id[hid])
+        != _semantic_content(original_by_id[hid])
+    ]
+    if not changed:
         return None
 
-    new_grade = R.grade_for_role(new_role)
-    reasons: set[ReasonCode] = set()
-    role_reason = _ROLE_REASONS.get(new_role)
-    if role_reason is not None:
-        reasons.add(role_reason)
+    final_by_id = dict(original_by_id)
+    pending: list[tuple[ScientificAssessment, KnowledgeRecord]] = []
+    for hid in changed:
+        new_assessment = new_by_id[hid]
+        final_by_id[hid] = new_assessment
+        if (
+            new_assessment.assessment_id in existing_hashes
+            or _semantic_hash(new_assessment) in existing_semantic
+        ):
+            # Already durably recorded: repeated reassessment is idempotent.
+            continue
+        parent = _find_assessment_record(records, original_by_id[hid].assessment_id)
+        if parent is None:
+            parent = index.get(original_by_id[hid].artifact_record_hash)
+        if parent is None or parent.footprint is None:
+            # Fail closed before writing anything (atomic refusal).
+            raise AssessmentContractError(
+                "the reassessment parent record carries no envelope footprint"
+            )
+        pending.append((new_assessment, parent))
 
-    if new_role in _ADMISSIBLE_ROLES:
-        state = assessment.state
-        primary = assessment.primary_null_rejected
-        sesoi_excluded = assessment.sesoi_excluded_by_upper_bound
-        qualification = assessment.effect_size_qualification
-    else:
-        state = AssessmentState.NOT_ASSESSED
-        primary = None
-        sesoi_excluded = None
-        qualification = EffectSizeQualification.NOT_APPLICABLE
-
-    economic_state = (
-        state
-        if member.estimand_kind.value == "MEAN_NET_LONG_SHORT"
-        else AssessmentState.NOT_ASSESSED
-    )
-
-    flags: set[InformationalFlag] = set()
-    if new_grade is EvidenceGrade.G3:
-        flags.add(InformationalFlag.DECLARATION_DEPENDENT)
-    if assessment.series_identical_group:
-        flags.add(InformationalFlag.SERIES_IDENTICAL_GROUP)
-
-    parent = _find_assessment_record(records, assessment.assessment_id)
-    if parent is None:
-        parent = artifact_record
-    provenance = dict(assessment.provenance)
-    provenance["source_assessment_record_hash"] = (
-        parent.record_hash if parent is not artifact_record else None
-    )
-
-    snapshot = snapshot_of_records(records)
-    new_assessment = ScientificAssessment(
-        protocol_version=assessment.protocol_version,
-        study_id=assessment.study_id,
-        prereg_id=assessment.prereg_id,
-        analysis_plan_id=assessment.analysis_plan_id,
-        hypothesis_id=assessment.hypothesis_id,
-        artifact_record_hash=assessment.artifact_record_hash,
-        footprint_id=assessment.footprint_id,
-        knowledge_snapshot=snapshot,
-        evidence_role=new_role,
-        evidence_grade=new_grade,
-        residual_disclosures=_residual_plain(
-            prereg_record,
-            freeze_record,
-            artifact_record,
-            records,
-            calendar=calendar,
-        ),
-        governance_validity=assessment.governance_validity,
-        state=state,
-        economic_state=economic_state,
-        reason_codes=tuple(sorted(reasons, key=lambda code: code.value)),
-        flags=tuple(sorted(flags, key=lambda flag: flag.value)),
-        inference=assessment.inference,
-        primary_null_rejected=primary,
-        sesoi_excluded_by_upper_bound=sesoi_excluded,
-        effect_size_qualification=qualification,
-        multiplicity=assessment.multiplicity,
-        series_identical_group=assessment.series_identical_group,
-        provenance=provenance,
-        not_supported_scope=assessment.not_supported_scope,
-        production_readiness=assessment.production_readiness,
-    )
-
-    if parent.footprint is None:
-        raise AssessmentContractError(
-            "the reassessment parent record carries no envelope footprint"
+    for new_assessment, parent in pending:
+        knowledge.append(
+            kind=RecordKind.DERIVED,
+            payload={
+                "derivation_kind": "confirmation_assessment_reassessment",
+                "content_hash": new_assessment.assessment_id,
+                "semantic_hash": _semantic_hash(new_assessment),
+            },
+            refs={"derived_from": (parent.record_hash,)},
+            footprint=parent.footprint,
         )
-    knowledge.append(
-        kind=RecordKind.DERIVED,
-        payload={
-            "derivation_kind": "confirmation_assessment_reassessment",
-            "content_hash": new_assessment.assessment_id,
-        },
-        refs={"derived_from": (parent.record_hash,)},
-        footprint=parent.footprint,
+
+    return AssessmentFamily(
+        holm=holm,
+        assessments=tuple(final_by_id[hid] for hid in frozen_ids),
     )
-    return new_assessment

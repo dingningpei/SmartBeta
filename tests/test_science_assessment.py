@@ -911,8 +911,77 @@ def test_assessment_content_hash_is_stable_and_content_sensitive():
 
 
 # ===========================================================================
-# reassessment (section 11.3)
+# family-wide reassessment (section 11.3)
 # ===========================================================================
+
+
+DAY6 = SESSIONS[6]
+
+
+def _g1_family(
+    entries: list[tuple[str, str]],
+    *,
+    estimand_kind: EstimandKind = EstimandKind.MEAN_NET_LONG_SHORT,
+    sesoi: float = 0.05,
+) -> dict[str, Any]:
+    """A prospective G1 study with one artifact per member.
+
+    ``entries`` is a list of ``(hypothesis_id, artifact_start)`` pairs; each
+    artifact is recorded after ``tau_P`` with a post-``tau_P`` footprint, so
+    every member is CONFIRMATION_PROSPECTIVE.  Distinct artifact dates let a
+    late declaration downgrade one member without touching another.
+    """
+    chain = _Chain()
+    decision = _decision(chain)
+    freezes = [_freeze(chain, hid, [decision.record_hash]) for hid, _ in entries]
+    members = tuple(
+        _member_contract(
+            hid,
+            freeze_record=freeze.record_hash,
+            estimand_kind=estimand_kind,
+            sesoi=sesoi,
+        )
+        for (hid, _), freeze in zip(entries, freezes)
+    )
+    prereg = _prereg(members, estimand_policy_record=decision.record_hash)
+    prereg_record = _append_prereg(chain, prereg, freezes)
+    artifacts = {
+        hid: _artifact(
+            chain,
+            footprint=_fp(start=start, end=start),
+            available_from=start,
+        )
+        for hid, start in entries
+    }
+    return {
+        "chain": chain,
+        "prereg": prereg,
+        "prereg_record": prereg_record,
+        "artifacts": artifacts,
+        "freezes": freezes,
+    }
+
+
+def _assess_family(
+    scenario: dict[str, Any],
+    results: dict[str, tuple[float, float]],
+) -> A.AssessmentFamily:
+    inputs = [
+        _input(
+            hid,
+            scenario["artifacts"][hid].record_hash,
+            inference=_valid_result(p=p, ub=ub),
+        )
+        for hid, (p, ub) in results.items()
+    ]
+    return A.assess(
+        scenario["prereg"],
+        inputs,
+        study_id="study-1",
+        knowledge=scenario["chain"].records,
+        prereg_record_hash=scenario["prereg_record"].record_hash,
+        calendar=CALENDAR,
+    )
 
 
 def _persist(chain: _Chain, tmp_path) -> K.KnowledgeLog:
@@ -939,31 +1008,41 @@ def _wrap_assessment(
     )
 
 
-def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
-    scenario = _g1_study((HYP,))
-    artifact_hash = scenario["artifact"].record_hash
-    original = _assess(
-        scenario,
-        [_input(HYP, artifact_hash, inference=_valid_result(p=0.01, ub=0.2))],
-    ).for_hypothesis(HYP)
-    assert original.state is AssessmentState.SUPPORTED
+def _wrap_family(
+    scenario: dict[str, Any], family: A.AssessmentFamily
+) -> dict[str, K.KnowledgeRecord]:
+    return {
+        assessment.hypothesis_id: _wrap_assessment(
+            scenario["chain"],
+            assessment,
+            scenario["artifacts"][assessment.hypothesis_id].record_hash,
+        )
+        for assessment in family.assessments
+    }
 
-    wrapped = _wrap_assessment(scenario["chain"], original, artifact_hash)
-    # A late HUMAN EXPOSED declaration with an event time before tau_P joins
-    # ExposedFP and downgrades the role to DEVELOPMENT (rule 1b).
+
+def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
+    # m=1: a late exposure declaration downgrades the only member.
+    scenario = _g1_family([(HYP, DAY5)])
+    family = _assess_family(scenario, {HYP: (0.01, 0.2)})
+    original = family.for_hypothesis(HYP)
+    assert original.state is AssessmentState.SUPPORTED
+    wrapped = _wrap_family(scenario, family)
+
     _add_declaration(
         scenario["chain"],
         channel=Channel.HUMAN,
-        footprint=_fp(),
+        footprint=_fp(start=DAY5),
         exposed=True,
         exposure_event_date="2019-01-01",
+        hypothesis_ids=(HYP,),
     )
-
     log = _persist(scenario["chain"], tmp_path)
     before = len(log.read())
-    new = A.reassess(original, log, calendar=CALENDAR)
+    new_family = A.reassess(family, log, calendar=CALENDAR)
 
-    assert new is not None
+    assert new_family is not None
+    new = new_family.for_hypothesis(HYP)
     assert new.state is AssessmentState.NOT_ASSESSED
     assert new.evidence_role is EvidenceRole.DEVELOPMENT
     assert new.evidence_grade is EvidenceGrade.G4
@@ -976,47 +1055,169 @@ def test_reassess_downgrade_appends_a_new_derived_record(tmp_path):
     appended = records[-1]
     assert appended.kind is RecordKind.DERIVED
     assert appended.payload["content_hash"] == new.assessment_id
-    assert appended.refs["derived_from"] == (wrapped.record_hash,)
+    assert appended.refs["derived_from"] == (wrapped[HYP].record_hash,)
     # The original is never mutated.
     assert original.state is AssessmentState.SUPPORTED
 
 
 def test_reassess_no_change_returns_none(tmp_path):
-    scenario = _g1_study((HYP,))
-    original = _assess(
-        scenario,
-        [
-            _input(
-                HYP,
-                scenario["artifact"].record_hash,
-                inference=_valid_result(p=0.01, ub=0.2),
-            )
-        ],
-    ).for_hypothesis(HYP)
-    _wrap_assessment(scenario["chain"], original, scenario["artifact"].record_hash)
+    scenario = _g1_family([(HYP, DAY5)])
+    family = _assess_family(scenario, {HYP: (0.01, 0.2)})
+    _wrap_family(scenario, family)
     log = _persist(scenario["chain"], tmp_path)
     before = len(log.read())
 
-    assert A.reassess(original, log, calendar=CALENDAR) is None
+    assert A.reassess(family, log, calendar=CALENDAR) is None
     assert len(log.read()) == before
 
 
-def test_reassess_never_upgrades(tmp_path):
-    scenario = _g1_study((HYP,))
-    original = _assess(
-        scenario,
-        [
-            _input(
-                HYP,
-                scenario["artifact"].record_hash,
-                inference=_valid_result(p=0.01, ub=0.2),
-            )
-        ],
-    ).for_hypothesis(HYP)
-    _wrap_assessment(scenario["chain"], original, scenario["artifact"].record_hash)
+def test_family_wide_reassessment_uses_r3_placeholder_and_downgrades_siblings(tmp_path):
+    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
+    family = _assess_family(scenario, {"H-1": (0.01, 0.2), "H-2": (0.03, 0.2)})
+    # Both members are Holm-rejected and SUPPORTED.
+    assert family.for_hypothesis("H-1").state is AssessmentState.SUPPORTED
+    assert family.for_hypothesis("H-2").state is AssessmentState.SUPPORTED
+    assert family.holm.for_hypothesis("H-2").holm_rejected is True
+    _wrap_family(scenario, family)
+
+    # H-1 becomes inadmissible; H-2 does not.
+    _add_declaration(
+        scenario["chain"],
+        channel=Channel.HUMAN,
+        footprint=_fp(start=DAY5),
+        exposed=True,
+        exposure_event_date="2019-01-01",
+        hypothesis_ids=("H-1",),
+    )
+    log = _persist(scenario["chain"], tmp_path)
+    before = len(log.read())
+    new_family = A.reassess(family, log, calendar=CALENDAR)
+
+    assert new_family is not None
+    # Membership and m are unchanged.
+    assert new_family.holm.m == 2
+    assert {a.hypothesis_id for a in new_family.assessments} == {"H-1", "H-2"}
+    assert new_family.holm.alpha_study == 0.05
+
+    h1 = new_family.for_hypothesis("H-1")
+    h2 = new_family.for_hypothesis("H-2")
+    assert h1.state is AssessmentState.NOT_ASSESSED
+    assert h1.evidence_role is EvidenceRole.DEVELOPMENT
+    # H-2 was SUPPORTED (Holm-rejected).  With H-1 entering at the R-3
+    # placeholder 1, the frozen m=2 Holm no longer rejects H-2 (adjusted p
+    # 2 * 0.03 = 0.06 > 0.05), so H-2 is re-derived as INCONCLUSIVE.
+    assert h2.primary_null_rejected is False
+    assert h2.state is AssessmentState.INCONCLUSIVE
+    assert new_family.holm.for_hypothesis("H-2").holm_adjusted_p > 0.05
+    assert new_family.holm.for_hypothesis("H-2").holm_rejected is False
+    # The placeholder is an internal multiplicity input, never an empirical
+    # p-value: it is not persisted, and H-1 keeps its original empirical p.
+    assert new_family.holm.for_hypothesis("H-1").effective_p == 1.0
+    assert new_family.holm.for_hypothesis("H-1").p_value is None
+    assert h1.inference["p_one_sided"] == 0.01
+    assert h1.inference["p_one_sided"] != 1.0
+    # Both members materially changed -> exactly two reassessment records.
+    records = log.read()
+    assert len(records) == before + 2
+    appended = [
+        record
+        for record in records
+        if record.payload.get("derivation_kind")
+        == "confirmation_assessment_reassessment"
+    ]
+    assert {record.payload["content_hash"] for record in appended} == {
+        h1.assessment_id,
+        h2.assessment_id,
+    }
+    for record in appended:
+        # No empirical p-value -- and no placeholder represented as one -- is
+        # written into K; the record carries only the content hash.
+        assert "p_one_sided" not in record.payload
+        assert "p_value" not in record.payload
+
+
+def test_family_wide_reassessment_unaffected_member_gets_no_record(tmp_path):
+    # H-2 has the smallest p and its rank/adjusted p do not change when H-1
+    # becomes inadmissible, so only H-1 gets a reassessment record.
+    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
+    family = _assess_family(scenario, {"H-1": (0.5, 0.2), "H-2": (0.03, 0.2)})
+    h2_before = family.for_hypothesis("H-2")
+    assert h2_before.state is AssessmentState.INCONCLUSIVE
+    _wrap_family(scenario, family)
+
+    _add_declaration(
+        scenario["chain"],
+        channel=Channel.HUMAN,
+        footprint=_fp(start=DAY5),
+        exposed=True,
+        exposure_event_date="2019-01-01",
+        hypothesis_ids=("H-1",),
+    )
+    log = _persist(scenario["chain"], tmp_path)
+    before = len(log.read())
+    new_family = A.reassess(family, log, calendar=CALENDAR)
+
+    assert new_family is not None
+    h1 = new_family.for_hypothesis("H-1")
+    h2 = new_family.for_hypothesis("H-2")
+    assert h1.state is AssessmentState.NOT_ASSESSED
+    # The unaffected member is carried forward unchanged and gets no record.
+    assert h2.assessment_id == h2_before.assessment_id
+    records = log.read()
+    assert len(records) == before + 1
+    assert records[-1].payload["content_hash"] == h1.assessment_id
+
+
+def test_family_wide_reassessment_is_idempotent(tmp_path):
+    scenario = _g1_family([("H-1", DAY5), ("H-2", DAY6)])
+    family = _assess_family(scenario, {"H-1": (0.01, 0.2), "H-2": (0.03, 0.2)})
+    _wrap_family(scenario, family)
+    _add_declaration(
+        scenario["chain"],
+        channel=Channel.HUMAN,
+        footprint=_fp(start=DAY5),
+        exposed=True,
+        exposure_event_date="2019-01-01",
+        hypothesis_ids=("H-1",),
+    )
     log = _persist(scenario["chain"], tmp_path)
 
-    # Pretend the stored record is weaker than the role K_now recomputes.
+    first = A.reassess(family, log, calendar=CALENDAR)
+    assert first is not None
+    after_first = len(log.read())
+    # Re-running against the same K_now appends no further records.
+    second = A.reassess(family, log, calendar=CALENDAR)
+    assert second is not None
+    assert len(log.read()) == after_first
+    # Re-running on the already-reassessed family is a no-op.
+    assert A.reassess(second, log, calendar=CALENDAR) is None
+    assert len(log.read()) == after_first
+    # Deterministic: the two recomputations agree on every semantic field
+    # (the snapshot/provenance advance with K, but the meaning is stable).
+    for hid in ("H-1", "H-2"):
+        first_member = first.for_hypothesis(hid)
+        second_member = second.for_hypothesis(hid)
+        assert first_member.state is second_member.state
+        assert first_member.evidence_role is second_member.evidence_role
+        assert first_member.evidence_grade is second_member.evidence_grade
+        assert (
+            first_member.primary_null_rejected
+            == second_member.primary_null_rejected
+        )
+        assert dict(first_member.multiplicity) == dict(
+            second_member.multiplicity
+        )
+
+
+def test_reassess_refuses_an_upgrade_and_appends_nothing(tmp_path):
+    scenario = _g1_family([(HYP, DAY5)])
+    family = _assess_family(scenario, {HYP: (0.01, 0.2)})
+    original = family.for_hypothesis(HYP)
+    _wrap_family(scenario, family)
+    log = _persist(scenario["chain"], tmp_path)
+    before = len(log.read())
+
+    # A stored record weaker than the role K_now recomputes would upgrade it.
     weaker = dataclasses.replace(
         original,
         evidence_role=EvidenceRole.DEVELOPMENT,
@@ -1026,25 +1227,19 @@ def test_reassess_never_upgrades(tmp_path):
         sesoi_excluded_by_upper_bound=None,
         effect_size_qualification=EffectSizeQualification.NOT_APPLICABLE,
     )
-    before = len(log.read())
-    assert A.reassess(weaker, log, calendar=CALENDAR) is None
+    weaker_family = A.AssessmentFamily(holm=family.holm, assessments=(weaker,))
+    with pytest.raises(A.ReassessmentUpgradeError):
+        A.reassess(weaker_family, log, calendar=CALENDAR)
     assert len(log.read()) == before
 
 
-def test_reassess_requires_a_knowledge_log():
-    scenario = _g1_study((HYP,))
-    original = _assess(
-        scenario,
-        [
-            _input(
-                HYP,
-                scenario["artifact"].record_hash,
-                inference=_valid_result(p=0.01, ub=0.2),
-            )
-        ],
-    ).for_hypothesis(HYP)
+def test_reassess_requires_a_knowledge_log_and_a_family():
+    scenario = _g1_family([(HYP, DAY5)])
+    family = _assess_family(scenario, {HYP: (0.01, 0.2)})
     with pytest.raises(A.AssessmentContractError):
-        A.reassess(original, list(scenario["chain"].records))
+        A.reassess(family, list(scenario["chain"].records))
+    with pytest.raises(A.AssessmentContractError):
+        A.reassess(family.for_hypothesis(HYP), scenario["chain"])  # type: ignore[arg-type]
 
 
 # ===========================================================================
