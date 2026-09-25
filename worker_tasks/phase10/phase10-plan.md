@@ -547,6 +547,13 @@ cross-kind linkage exists in the MDV.
   outcomes). w_end is the last realization date.
 - **Conditioning footprint:** SOF observations dated ≤ w₀, used only as
   look-back.
+  - **Clarified before Wave 5 (§13.2a).** Signal or fundamental look-back
+    observations dated ≤ w₀ are conditioning, **not** confirmation
+    consumption. Restricting a structural confirmation footprint to (w₀,
+    w_end] with the P10-C `restrict` interval semantics is therefore
+    intended; it is not a truncation.
+  - Look-back observations dated after w₀ stay included wherever the
+    derivation rules require them.
 
 With `PRICE_CHANGE` atoms, a development return realized at or before w₀ and
 a confirmation forward return formed at w₀ share **no** observation. A
@@ -645,6 +652,21 @@ failure does produce overlap and is caught (§18).
 - At consumption, the artifact's computed confirmation SOF must be ⊆ the
   declared footprint; otherwise `FOOTPRINT_MISMATCH`.
 - Carving never happens after data access.
+- **Confirmation consumption (clarified before Wave 5; scope: P10-H
+  confirmation execution only).** Three footprints are distinct:
+  - the **artifact provenance SOF** (`footprint_from_panel`; the ARTIFACT
+    record's footprint), which describes the artifact and stays its
+    provenance;
+  - the **conditioning footprint** (§6.3), which is never consumed;
+  - the **confirmation consumption SOF** (`consumption_fp`), which is built
+    **structurally before any empirical read** from the frozen study
+    definition (§13.2a).
+
+  For a confirmation study the "computed confirmation SOF" in the carving
+  rule above is `consumption_fp`. It must be covered by the declared
+  footprint (`covers(declared_footprint, consumption_fp)`); otherwise
+  `FOOTPRINT_MISMATCH`. Missing empirical rows never reduce
+  `consumption_fp`. Carving for other Phase-10 operations is unchanged.
 
 ### 6.7 What the MDV can and cannot detect
 
@@ -1526,8 +1548,13 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
    - P10-H may additionally record the execution-time registry identity for
      audit; it never replaces the preregistered ref.
 3. **Write-ahead:** append `CONSUMPTION`, then `ACCESS`, **before** any
-   outcome value is read.
-4. Derive alignments once (P7-B). Per member, create a fresh single-use
+   outcome value is read. **Clarified before Wave 5 (§13.2a):** this means
+   before **any** empirical confirmation-data read, including reads of
+   factor inputs; the ACCESS component is exactly
+   `confirmation-study:<study_id>`.
+4. Construct the Phase-6 `EngineResult` and the confirmation
+   `EvaluationSpec` from the confirmation data (after step 3; §13.2a.6).
+   Derive alignments once (P7-B). Per member, create a fresh single-use
    `FoldTraceCollector` and run `evaluate(..., alignments_by_horizon=...,
    fold_trace_sink=collector)` (a fresh Phase-7 in-memory holdout token per
    call). Then run `build_inferential_series(record, collector)` (§12.1(d)).
@@ -1539,6 +1566,185 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
    execution-snapshot prefix. Run inference per member through the single
    dispatch → DERIVED records.
 6. Run Holm and the assessments → DERIVED records. The study is ASSESSED.
+
+### 13.2a Pre-launch orchestration freeze (approved before Wave 5)
+
+This section freezes the P10-H orchestration contracts that §13.2 left open.
+It adds no schema, no hash or identity domain, no record kind and no reason
+code, and changes no sealed Phase-7/8/9 code. R-1…R-8, §11.2, Holm, the
+§21 statement and the Barrier-4 result are unchanged.
+
+**1. Execution boundary.**
+- **Stage A (pre-consumption)** may use only objects whose construction
+  requires no empirical confirmation data.
+- **Stage B (post-ACCESS)** may use confirmation-data-derived objects.
+- The Phase-6 `EngineResult` is confirmation-data-derived, because its
+  `content_hash` covers the evaluated factor-panel values. The
+  confirmation `EvaluationSpec` is too, because its
+  `factor_provenance_hash` is that `content_hash`.
+- Stage A therefore never requires any of: the `EngineResult` or its hash,
+  that `EvaluationSpec`, the `EvaluationRecord`, the
+  `InferentialSeriesBundle`, P10-S `bound`, or any observed confirmation
+  factor value, return or outcome.
+
+**2. Pre-read order.** Every item below is checked before the point of no
+return:
+- verify the preregistration;
+- verify the exact bound RegistrySnapshot (step 2a);
+- verify registry-ingestion completeness (step 2a);
+- run Stage-A binding (item 3);
+- construct the expected formation index (item 4);
+- construct `consumption_fp` structurally (item 5);
+- verify declared coverage (item 5);
+- run the step-2 role, grade, governance and one-use/freshness checks.
+
+The one-use check applies P10-C `overlap(consumption_fp, prior CONSUMPTION
+footprint)`: OVERLAP → `FOOTPRINT_ALREADY_CONSUMED`; UNDETERMINABLE →
+`FOOTPRINT_OVERLAP_UNDETERMINABLE`.
+
+The procedure gate keeps its committed position, step 5, via
+`run_inference` (§9.3 temporal authority). P10-H has no local pre-read
+admission or revocation re-implementation. A preregistered admission
+revoked before execution is therefore found at step 5 and yields
+NOT_ASSESSED with `PROCEDURE_REVOKED`, after consumption (§18).
+
+**3. Stage A — data-independent member binding.** Per member, P10-H
+receives the sealed Phase-6 `FactorSpec` body and the runtime Phase-7
+`Partition`, and requires:
+- `factor_spec_hash(factor_spec) == member.factor_spec_hash`, using sealed
+  `smart_beta.spec.factor_spec` authority;
+- `factor_spec.missing_policy.value ==
+  construction.factor_missing_policy`, by exact string equality with no
+  normalization, alias or case folding. The sealed values are `"propagate"`
+  and `"drop"`, so `"PROPAGATE"` fails;
+- `smart_beta.evaluation.engine._partition_ref(partition).to_dict() ==
+  preregistration.partition_spec`. This is authorized read-only reuse of
+  the sealed projection the engine itself uses. It is never copied or
+  reimplemented, and it creates no second partition identity.
+
+These are the only Stage-A binding checks. A failure is a pre-execution
+refusal with reason `SERIES_BINDING_FAILURE` for the failing member, and the
+whole study is REFUSED (step 2). The same reason in Stage B is told apart by
+execution phase and durable side effects, not by a new reason code.
+The earlier "α+" pre-read construction/metric checks are **superseded**.
+P10-H never builds a preliminary `EvaluationSpec`, never duplicates the
+primary-point rule, and has no pre-read execution-config schema. A
+configuration mismatch that is detectable only in Stage B may consume the
+footprint; that is an accepted consequence.
+
+**4. Expected HOLDOUT formation index `I_expected`.** Use the calendar
+verified by `dataset_contract.calendar_hash` (P10-C `calendar_hash`), the
+bound runtime `Partition`, and the preregistered horizon h. A session t is
+in `I_expected` iff all of the following hold:
+- t lies in the HOLDOUT fold under the sealed partition boundary
+  convention;
+- r(t,h), the h-th calendar session strictly after t, exists;
+- the sealed `Partition.classify_interval(t, r(t,h))` places the whole
+  interval inside the HOLDOUT fold.
+
+`I_expected` never depends on observed data. It is the COMPLETE_REQUIRED
+index passed to P10-F as `expected_fold_index` for every member. An
+observed missing or non-finite value on it gives NOT_ASSESSED with
+`MISSINGNESS_PATTERN_UNSUPPORTED`, after consumption. Observed data never
+shrink `I_expected`, `consumption_fp` or the consumed evidence.
+
+**Empty `I_expected`** means no legal formation date exists, so w_end is
+undefined, `consumption_fp` cannot be built and coverage cannot be
+established. It is a pre-execution refusal: NOT_ASSESSED with
+`FOOTPRINT_MISMATCH`, never `MISSINGNESS_PATTERN_UNSUPPORTED`.
+
+**5. Structural consumption footprint.**
+- `w_end = max r(t,h)` over `I_expected`.
+- **Outcome side:** `expand("FWD_RETURN", {"h": h}, I_expected, subjects,
+  calendar=…)`, with the preregistered `confirmation.subjects`.
+- **Input side (conservative envelope):** the VariableMap is verified
+  against `dataset_contract.variable_map_hash` (P10-C
+  `content_hash(dict(variable_map))`). **Every** entry is expanded with
+  `expand(entry["derived_variable"], entry.get("params"), sessions,
+  subjects, calendar=…)`. `sessions` is every calendar session in (w₀,
+  w_end], and `subjects` is every preregistered subject; the P10-C contract
+  has no per-entry applicability rule. Entries are never selected by
+  observed rows, observed values, missingness or post-read dependency
+  discovery.
+- `consumption_fp = restrict(union(input_fp, outcome_fp), (w₀, w_end])`,
+  using P10-C canonical union and interval semantics. Observations dated
+  ≤ w₀ are the §6.3 conditioning footprint.
+- **Coverage:** `covers(declared_footprint, consumption_fp)` must be true.
+  The preregistered `declared_footprint` is the permission envelope, and
+  `consumption_fp` is what is consumed.
+- **Coverage failure:** coverage false, or `consumption_fp` undeterminable
+  (a VariableMap hash mismatch, an entry that cannot be expanded, missing
+  params, a calendar gap, and similar), is a pre-execution refusal with
+  `FOOTPRINT_MISMATCH`. Here the reason means "the declared-coverage
+  contract could not be established"; `FOOTPRINT_OVERLAP_UNDETERMINABLE`
+  keeps its freshness/overlap meaning.
+- The CONSUMPTION record's `footprint` is exactly `consumption_fp`, never
+  the whole declared envelope.
+
+**6. Point of no return and first read.**
+- Once every pre-read check passes, append `CONSUMPTION` durably, then
+  `ACCESS` durably, with component exactly `confirmation-study:<study_id>`
+  (distinct from P10-I's `phase7-evaluation:<experiment_id>`).
+- Only after both writes may the first empirical confirmation-data read
+  occur. There is no factor-input exemption: every read used to build the
+  `EngineResult`, the factor panel, returns, the `EvaluationSpec`, the
+  `EvaluationRecord` or the bundle comes after both writes.
+- The empirical read goes through an injectable reader (the instrumented
+  reader of §16 P10-H), with no new production schema.
+- Tests must prove all three cases mechanically, with a reader that checks
+  durable K at its first call:
+  - a read before CONSUMPTION fails;
+  - a read after CONSUMPTION but before ACCESS fails;
+  - a read after both succeeds.
+
+**7. Stage B — authoritative execution binding (after the read).** For each
+member, require all of the following:
+- `EngineResult.evaluation.factor_version == member.factor_spec_hash`;
+- `EngineResult.evaluation.missing_policy ==
+  construction.factor_missing_policy` (exact);
+- `EvaluationSpec.factor_provenance_hash == engine_hash(EngineResult) ==
+  EvaluationRecord.factor_provenance_hash`;
+- `EvaluationRecord.spec_hash == EvaluationSpec.spec_hash`;
+- the §12.1(c)4 metric for the member's estimand is in
+  `EvaluationSpec.metrics`;
+- `bundle.primary` horizon, n_groups, winsorization and
+  transaction_cost_bps equal the member's horizon and construction
+  (n_groups, winsorization, cost_bps);
+- `bundle.partition_ref_hash == preregistration.partition_ref_hash`;
+- P10-S `bound[metric]` is true, plus every other frozen series-binding
+  requirement.
+
+Any failure makes that member NOT_ASSESSED with `SERIES_BINDING_FAILURE`,
+with effective p := 1 in Holm (the R-3 placeholder, never persisted as a
+p-value). CONSUMPTION and ACCESS remain, and nothing is rolled back.
+
+**8. Knowledge-PIT outputs (DERIVED kinds and parents).** Only the three
+frozen confirmation kinds are used:
+- `confirmation_series` (payload `content_hash` = bundle `content_hash`),
+  with `derived_from` = (the confirmation ARTIFACT);
+- `confirmation_inference` (payload `content_hash` = `result_hash`), with
+  `derived_from` = (that member's `confirmation_series` record);
+- `confirmation_assessment` (payload `content_hash` = `assessment_id`),
+  with `derived_from` = (the confirmation ARTIFACT), the P10-G parent
+  authority.
+
+In every case the footprint is the exact canonical union of the parents'
+footprints (§5.2). The `EvaluationRecord` and the Holm table are
+**study-store only**; the bundle's `evaluation_record_hash` binds the
+EvaluationRecord, and the Holm content lives in each assessment's
+`multiplicity`.
+
+**9. Refusal vs interruption.**
+- **Pre-execution refusal** covers any failure before the point of no
+  return, including an empty `I_expected`. The NOT_ASSESSED family (built
+  through P10-G `assess` with the refusal reasons) is persisted in the
+  study store only. There are **zero** Knowledge-PIT appends: no
+  CONSUMPTION, no confirmation ACCESS and no confirmation DERIVED.
+- **Post-CONSUMPTION failure or interruption** follows §13.3.
+  CONSUMPTION and ACCESS are irreversible and freshness is never restored.
+  K is never deleted, mutated or rolled back. `STUDY_INTERRUPTED` applies
+  where §13.3 says so. A post-consumption outcome is never presented as if
+  the study had not started.
 
 ### 13.3 Crash rules
 
