@@ -1187,6 +1187,41 @@ determination is suppressed by the other.
     monotonicity. A recomputation that would imply an upgrade for any member
     is refused (fail closed), and no upgrading record is appended. Repeated
     reassessment under the same K_now is deterministic and idempotent.
+- **Material change (frozen before Barrier 4).**
+  `material_change(new_assessment, current_assessment)` is true iff the two
+  differ in one or more of exactly these 23 §11.1 fields:
+  - `protocol_version`, `study_id`, `prereg_id`, `analysis_plan_id`,
+    `hypothesis_id`, `artifact_record_hash`, `footprint_id`;
+  - `evidence_role`, `evidence_grade`, `residual_disclosures`,
+    `governance_validity`;
+  - `state`, `economic_state`, `reason_codes`, `flags`, `inference`;
+  - `primary_null_rejected`, `sesoi_excluded_by_upper_bound`,
+    `effect_size_qualification`, `multiplicity`;
+  - `not_supported_scope`, `series_identical_group`,
+    `production_readiness`.
+
+  Clarifications:
+  - **Excluded:** `knowledge_snapshot` and `provenance`, which are
+    positional metadata; and `assessment_id`, a derived content hash over
+    the whole record *including* those two. It is an identity, not a
+    scientific field, and never a material-equality substitute. No other
+    field and no future field participates implicitly.
+  - **Comparison authority:** the corresponding member of the assessment
+    family **passed to `reassess()`**. K is not scanned for an "equivalent"
+    or "latest" assessment. No semantic identity or deduplication hash
+    exists (e.g. no `semantic_hash`), and `record_hash` never substitutes
+    for material equality. The caller supplies its current (latest)
+    assessment family.
+  - **Trigger vs change:** a member whose own role is unchanged can still
+    change materially through the family-wide Holm recomputation (e.g. a
+    sibling going SUPPORTED → INCONCLUSIVE). Such a member gets a
+    reassessment record. A change only in K_now, `knowledge_snapshot` or
+    `provenance` produces none.
+  - **Idempotence (input-relative only):** given the same K_now and the
+    latest family returned by the previous reassessment, repeating
+    `reassess()` deterministically returns the same assessments and
+    appends **zero** new DERIVED reassessment records. This is not global
+    semantic deduplication across K.
 
 ---
 

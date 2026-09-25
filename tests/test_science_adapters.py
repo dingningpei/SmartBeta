@@ -30,6 +30,8 @@ import pathlib
 
 import pytest
 
+import phase10_fixtures as fixtures
+
 from smart_beta.evaluation.spec import (
     EvaluationRecord,
     EvidenceTable,
@@ -63,15 +65,20 @@ from smart_beta.research.history import (
 )
 from smart_beta.research.policy import GenerationMethod
 from smart_beta.science.adapters import (
+    PHASE7_EVALUATION_DERIVATION_KIND,
     AdapterError,
     DevelopmentDataset,
     FirewallAuditReport,
     GovernanceValidity,
+    RegistryIngestionReport,
+    access_component_for_evaluation,
     aggregate_footprint,
     audit_generator_inputs,
     fold_footprint,
     governance_provenance,
     ingest_development_history,
+    ingest_registered_evaluation,
+    ingest_registry_snapshot,
     over_approximated_inclusion,
     record_development_evidence,
     record_evaluation_artifact,
@@ -80,12 +87,18 @@ from smart_beta.science.adapters import (
     record_program_freeze,
     record_registered_evaluation,
     registered_evaluation_records,
+    registry_ingestion_completeness,
+    validate_evaluation_ingestion_identity,
 )
+from smart_beta.science import roles as R
 from smart_beta.science.contracts import (
     DERIVATION_RULES_VERSION,
     EVIDENCE_FOOTPRINT_SCHEMA,
     Channel,
+    EvidenceGrade,
+    EvidenceRole,
     ObservationKind,
+    ReasonCode,
     RecordKind,
 )
 from smart_beta.science.footprint import (
@@ -1144,6 +1157,583 @@ def test_audit_is_ignorant_of_a_hypothesis_with_no_provenance(tmp_path):
     report = audit_generator_inputs(())
     assert report.ok
     assert report.generator_inputs_audited == 0
+
+
+# ---------------------------------------------------------------------------
+# registered-evaluation ingestion + section 13.2 completeness gate
+# ---------------------------------------------------------------------------
+
+
+PROGRAM_B = "program-synthetic-b"
+HYPOTHESIS_B = "H2-synthetic"
+
+
+def _registry_with(record, family_id: str = FAMILY_A):
+    registry = ExperimentRegistry()
+    entry = registry.register(record, family_id=family_id)
+    return registry, entry
+
+
+def _ingest(log: KnowledgeLog, entry, record) -> tuple[KnowledgeRecord, ...]:
+    return ingest_registered_evaluation(
+        log,
+        experiment_entry=entry,
+        evaluation_record=record,
+        dataset=_dataset(),
+        program_id=PROGRAM_ID,
+    )
+
+
+def test_ingest_registered_evaluation_appends_artifact_access_derived(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    appended = _ingest(log, entry, record)
+    assert [item.kind for item in appended] == [
+        RecordKind.ARTIFACT,
+        RecordKind.ACCESS,
+        RecordKind.DERIVED,
+    ]
+    artifact, access, derived = appended
+    # The ARTIFACT schema has no identity field (plan section 12.3).
+    assert set(artifact.payload) == {
+        "packaging_hash",
+        "sealed",
+        "available_from",
+        "source_label",
+    }
+    # The ACCESS references the evaluation ARTIFACT root by Phase-10 hash with
+    # the frozen component and inherits its complete footprint.
+    assert access.payload["artifact_record_hash"] == artifact.record_hash
+    assert access.payload["component"] == access_component_for_evaluation(
+        entry.experiment_id
+    )
+    assert access.payload["component"] == f"phase7-evaluation:{entry.experiment_id}"
+    assert access.footprint == artifact.footprint
+    # The DERIVED carries exactly the sealed ExperimentEntry identity.
+    assert derived.refs["derived_from"] == (artifact.record_hash,)
+    assert derived.payload["derivation_kind"] == PHASE7_EVALUATION_DERIVATION_KIND
+    assert derived.payload["experiment_id"] == entry.experiment_id
+    assert derived.payload["content_hash"] == entry.evaluation_record_hash
+    assert derived.payload["content_hash"] == record.content_hash
+    # The root footprint is the whole evaluation, including the holdout.
+    stored = footprint_from_body(artifact.footprint, calendar=CALENDAR)
+    assert stored.source_observations is not None
+    assert (
+        SourceObservation(SUBJECT_A, ObservationKind.PRICE_CHANGE, HOLDOUT_SESSION)
+        in stored.source_observations
+    )
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert isinstance(report, RegistryIngestionReport)
+    assert report.complete and bool(report)
+    assert report.reason is None
+    assert report.entries_checked == 1
+
+
+def test_ingest_registry_snapshot_ingests_every_registered_evaluation(tmp_path):
+    log = _new_log(tmp_path)
+    registry = ExperimentRegistry()
+    records: dict[str, object] = {}
+    for spec_hash in (SPEC_HASH, SPEC_HASH_ALT):
+        record = _evaluation_record(spec_hash=spec_hash)
+        entry = registry.register(record, family_id=FAMILY_A)
+        records[entry.experiment_id] = record
+    snapshot = registry.snapshot()
+    appended = ingest_registry_snapshot(
+        log,
+        registry_snapshot=snapshot,
+        evaluation_record_by_experiment=records,
+        dataset=_dataset(),
+        program_id=PROGRAM_ID,
+    )
+    assert len(appended) == 3 * len(snapshot.experiments)
+    report = registry_ingestion_completeness(log, snapshot)
+    assert report.complete
+    assert report.entries_checked == len(snapshot.experiments)
+    # Fully idempotent across the whole snapshot.
+    assert (
+        ingest_registry_snapshot(
+            log,
+            registry_snapshot=snapshot,
+            evaluation_record_by_experiment=records,
+            dataset=_dataset(),
+            program_id=PROGRAM_ID,
+        )
+        == ()
+    )
+
+
+def test_idempotent_re_ingestion_appends_nothing_and_keeps_access(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    assert len(_ingest(log, entry, record)) == 3
+    access_hashes = {
+        item.record_hash for item in log.read() if item.kind is RecordKind.ACCESS
+    }
+    assert _ingest(log, entry, record) == ()
+    assert len(log.read()) == 3
+    assert {
+        item.record_hash for item in log.read() if item.kind is RecordKind.ACCESS
+    } == access_hashes
+    assert registry_ingestion_completeness(log, registry.snapshot()).complete
+
+
+def test_repair_appends_access_after_older_derived(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    # An older DERIVED with no ACCESS: the repair appends the ACCESS after it.
+    root = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    record_registered_evaluation(
+        log,
+        evaluation_record=record,
+        experiment_id=entry.experiment_id,
+        parents=(root.record_hash,),
+        dataset=_dataset(),
+        program_id=PROGRAM_ID,
+    )
+    before = registry_ingestion_completeness(log, registry.snapshot())
+    assert not before.complete
+    assert [issue.component for issue in before.issues] == ["ACCESS"]
+    appended = _ingest(log, entry, record)
+    assert [item.kind for item in appended] == [RecordKind.ACCESS]
+    assert appended[0].payload["artifact_record_hash"] == root.record_hash
+    after = registry_ingestion_completeness(log, registry.snapshot())
+    assert after.complete
+    # The older DERIVED was reused, not duplicated: linkage, not order.
+    assert sum(1 for item in log.read() if item.kind is RecordKind.DERIVED) == 1
+
+
+def test_crash_after_artifact_leaves_orphan_and_is_incomplete(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    # The crash boundary: only an orphan ARTIFACT_0 is durable (no ACCESS or
+    # DERIVED). The ARTIFACT schema carries no identity field.
+    orphan = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    assert set(orphan.payload) == {
+        "packaging_hash",
+        "sealed",
+        "available_from",
+        "source_label",
+    }
+    incomplete = registry_ingestion_completeness(log, registry.snapshot())
+    assert not incomplete.complete
+    assert incomplete.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+    assert any(issue.component == "DERIVED" for issue in incomplete.issues)
+
+
+def test_recovery_appends_fresh_chain_and_orphan_remains(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    orphan = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    appended = _ingest(log, entry, record)
+    # Recovery appends a FRESH complete chain; the orphan stays immutable.
+    assert [item.kind for item in appended] == [
+        RecordKind.ARTIFACT,
+        RecordKind.ACCESS,
+        RecordKind.DERIVED,
+    ]
+    fresh_artifact, fresh_access, fresh_derived = appended
+    assert fresh_artifact.record_hash != orphan.record_hash
+    artifacts = [item for item in log.read() if item.kind is RecordKind.ARTIFACT]
+    assert [item.record_hash for item in artifacts] == [
+        orphan.record_hash,
+        fresh_artifact.record_hash,
+    ]
+    # ACCESS and DERIVED bind the same FRESH root.
+    assert fresh_access.payload["artifact_record_hash"] == fresh_artifact.record_hash
+    assert fresh_derived.refs["derived_from"] == (fresh_artifact.record_hash,)
+    assert fresh_derived.payload["experiment_id"] == entry.experiment_id
+    assert fresh_derived.payload["content_hash"] == entry.evaluation_record_hash
+    # The ACCESS inherits the full whole-evaluation footprint and component.
+    assert fresh_access.footprint == fresh_artifact.footprint
+    assert fresh_access.payload["component"] == (
+        f"phase7-evaluation:{entry.experiment_id}"
+    )
+    # Completeness is established only via the fresh chain.
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert report.complete
+    assert report.reason is None
+
+
+def test_second_re_ingestion_adds_no_duplicate_logical_ingestion(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    _ingest(log, entry, record)
+    before = tuple(item.record_hash for item in log.read())
+    assert _ingest(log, entry, record) == ()
+    assert tuple(item.record_hash for item in log.read()) == before
+    assert registry_ingestion_completeness(log, registry.snapshot()).complete
+
+
+def test_orphan_with_a_payload_experiment_id_is_never_joined(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    # Even a bogus orphan carrying the entry's id in its payload is never
+    # joined: the ingestion appends a fresh chain and leaves the orphan alone.
+    fp = aggregate_footprint(record, _dataset()).body
+    orphan = log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        program_id=PROGRAM_ID,
+        footprint=fp,
+        payload={
+            "packaging_hash": entry.evaluation_record_hash,
+            "sealed": False,
+            "available_from": "2021-12-31",
+            "source_label": "phase7-evaluation",
+            "experiment_id": entry.experiment_id,
+        },
+    )
+    appended = _ingest(log, entry, record)
+    fresh_artifact = appended[0]
+    assert fresh_artifact.record_hash != orphan.record_hash
+    assert appended[2].refs["derived_from"] == (fresh_artifact.record_hash,)
+    # The orphan still exists, unmodified.
+    assert any(item.record_hash == orphan.record_hash for item in log.read())
+    assert registry_ingestion_completeness(log, registry.snapshot()).complete
+
+
+def test_registry_ingestion_reason_uses_registered_reason_code(tmp_path):
+    from smart_beta.science import adapters as adapters_module
+
+    # No local duplicate reason constant in the adapter module.
+    assert not hasattr(adapters_module, "REGISTRY_INGESTION_INCOMPLETE")
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, _ = _registry_with(record)
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert not report.complete
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+    assert report.to_dict()["reason"] == "REGISTRY_INGESTION_INCOMPLETE"
+
+
+def test_snapshot_entry_missing_access_fails_predicate(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    root = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    record_registered_evaluation(
+        log,
+        evaluation_record=record,
+        experiment_id=entry.experiment_id,
+        parents=(root.record_hash,),
+        dataset=_dataset(),
+        program_id=PROGRAM_ID,
+    )
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert not report.complete
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+    assert [issue.component for issue in report.issues] == ["ACCESS"]
+
+
+def test_snapshot_entry_missing_artifact_fails_predicate(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    root = record_evaluation_artifact(
+        log, evaluation_record=record, dataset=_dataset(), program_id=PROGRAM_ID
+    )
+    # A phase7_evaluation DERIVED whose "parent" is not an ARTIFACT.
+    intermediate = record_development_evidence(
+        log,
+        evidence_content_hash="a" * 64,
+        parents=(root.record_hash,),
+        derivation_kind="development_aggregate",
+        calendar=CALENDAR,
+    )
+    log.append(
+        kind=RecordKind.DERIVED,
+        channel=Channel.PROGRAM,
+        refs={"derived_from": (intermediate.record_hash,)},
+        footprint=intermediate.footprint,
+        payload={
+            "derivation_kind": PHASE7_EVALUATION_DERIVATION_KIND,
+            "content_hash": entry.evaluation_record_hash,
+            "experiment_id": entry.experiment_id,
+        },
+    )
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert not report.complete
+    assert any(issue.component == "ARTIFACT" for issue in report.issues)
+
+
+def test_completeness_predicate_never_raises_into_a_pass_on_truncated_log(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    _ingest(log, entry, record)
+    # A crash mid-append leaves a truncated final line (P10-B TruncatedTail).
+    with log.path.open("a", encoding="utf-8") as handle:
+        handle.write('{"seq": 3, "prev_hash": "')
+    report = registry_ingestion_completeness(log.path, registry.snapshot())
+    assert not report.complete
+    assert report.reason is ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+
+
+def test_mismatched_experiment_id_or_evaluation_record_hash_rejected(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    with pytest.raises(AdapterError):
+        validate_evaluation_ingestion_identity(
+            experiment_id="f" * 64,
+            content_hash=entry.evaluation_record_hash,
+            experiment_entry=entry,
+        )
+    with pytest.raises(AdapterError):
+        validate_evaluation_ingestion_identity(
+            experiment_id=entry.experiment_id,
+            content_hash="f" * 64,
+            experiment_entry=entry,
+        )
+    # Ingestion refuses an EvaluationRecord that disagrees with the entry.
+    other = _evaluation_record(holdout_metric=HOLDOUT_SENTINEL + 1.0)
+    assert other.content_hash != entry.evaluation_record_hash
+    with pytest.raises(AdapterError):
+        _ingest(log, entry, other)
+    assert log.read() == ()
+
+
+def test_no_packaging_hash_join_key_or_cross_domain_equality(tmp_path):
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    registry, entry = _registry_with(record)
+    experiment_id = entry.experiment_id
+    entry_hash = entry.evaluation_record_hash
+    fp = aggregate_footprint(record, _dataset()).body
+    component = access_component_for_evaluation(experiment_id)
+    # artifact_A's packaging_hash is set to the Phase-8 evaluation_record_hash
+    # and it carries the ACCESS...
+    artifact_a = log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        footprint=fp,
+        payload={
+            "packaging_hash": entry_hash,
+            "sealed": False,
+            "available_from": "2021-12-31",
+            "source_label": "phase7-evaluation",
+        },
+    )
+    log.append(
+        kind=RecordKind.ACCESS,
+        channel=Channel.SYSTEM,
+        footprint=fp,
+        payload={
+            "artifact_record_hash": artifact_a.record_hash,
+            "component": component,
+        },
+    )
+    # ...but the DERIVED actually links to artifact_B, which has no ACCESS. A
+    # packaging_hash join would wrongly report complete; the reference-based
+    # predicate must follow derived_from and report the missing ACCESS.
+    artifact_b = log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        footprint=fp,
+        payload={
+            "packaging_hash": "b" * 64,
+            "sealed": False,
+            "available_from": "2021-12-31",
+            "source_label": "phase7-evaluation",
+        },
+    )
+    log.append(
+        kind=RecordKind.DERIVED,
+        channel=Channel.PROGRAM,
+        refs={"derived_from": (artifact_b.record_hash,)},
+        footprint=fp,
+        payload={
+            "derivation_kind": PHASE7_EVALUATION_DERIVATION_KIND,
+            "content_hash": entry_hash,
+            "experiment_id": experiment_id,
+        },
+    )
+    report = registry_ingestion_completeness(log, registry.snapshot())
+    assert not report.complete
+    assert [issue.component for issue in report.issues] == ["ACCESS"]
+    # The two hash domains are distinct and never compared for equality.
+    assert artifact_a.record_hash != entry_hash
+    assert artifact_b.record_hash != entry_hash
+
+
+def _append_human_not_exposed(
+    log: KnowledgeLog, *, footprint: dict, hypothesis_id: str, program_id: str
+) -> KnowledgeRecord:
+    payload = fixtures.not_exposed_declaration(
+        footprint=footprint,
+        basis_hash="a" * 64,
+        knowledge_snapshot_ref=log.snapshot().to_dict(),
+        program_ids=(program_id,),
+        hypothesis_ids=(hypothesis_id,),
+    )
+    return log.append(
+        kind=RecordKind.EXPOSURE_DECLARATION,
+        channel=Channel.HUMAN,
+        footprint=footprint,
+        payload=payload,
+    )
+
+
+def _append_public_not_class_match(
+    log: KnowledgeLog, *, footprint: dict, hypothesis_id: str, program_id: str
+) -> KnowledgeRecord:
+    payload = fixtures.exposure_declaration(
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        exposure_event_date="2019-01-01",
+        basis_hash="b" * 64,
+        knowledge_snapshot_ref=log.snapshot().to_dict(),
+        program_ids=(program_id,),
+        hypothesis_ids=(hypothesis_id,),
+    )
+    payload["reference"] = "synthetic-public-record"
+    payload["class_match"] = False
+    return log.append(
+        kind=RecordKind.EXPOSURE_DECLARATION,
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        payload=payload,
+    )
+
+
+def _narrow_consulted_study(
+    log: KnowledgeLog, *, ingested: bool
+) -> tuple[KnowledgeRecord, KnowledgeRecord, KnowledgeRecord]:
+    """Program B's narrow-consulted historical study.
+
+    Returns ``(hypothesis_freeze, preregistration, confirmation_artifact)``.
+    When ``ingested`` a program-A registered evaluation (with its ACCESS) is in
+    the K prefix; otherwise the chain is otherwise identical. Absent the
+    ACCESS the study is G2, so the test isolates the global ACCESS rule.
+    """
+    record = _evaluation_record()
+    _, entry = _registry_with(record)
+    decision0 = log.append(
+        kind=RecordKind.HUMAN_DECISION,
+        channel=Channel.HUMAN,
+        program_id=PROGRAM_B,
+        payload={
+            "decision_kind": "OTHER",
+            "actor_role": "operator",
+            "consulted_all_prior": True,
+        },
+    )
+    if ingested:
+        _ingest(log, entry, record)
+    program_freeze = log.append(
+        kind=RecordKind.HUMAN_DECISION,
+        channel=Channel.HUMAN,
+        program_id=PROGRAM_B,
+        refs={"consulted": (decision0.record_hash,)},
+        payload={"decision_kind": "PROGRAM_FREEZE", "actor_role": "operator"},
+    )
+    freeze = log.append(
+        kind=RecordKind.HYPOTHESIS_FREEZE,
+        channel=Channel.GENERATOR,
+        program_id=PROGRAM_B,
+        refs={"influenced_by": (program_freeze.record_hash,)},
+        payload={"hypothesis_id": HYPOTHESIS_B, "factor_spec_hash": "2" * 64},
+    )
+    fp_eval = aggregate_footprint(record, _dataset())
+    confirmation = log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.PROGRAM,
+        program_id=PROGRAM_B,
+        footprint=fp_eval.body,
+        payload={
+            "packaging_hash": "4" * 64,
+            "sealed": True,
+            "available_from": "2021-12-31",
+            "source_label": "confirmation-e",
+        },
+    )
+    _append_human_not_exposed(
+        log, footprint=fp_eval.body, hypothesis_id=HYPOTHESIS_B, program_id=PROGRAM_B
+    )
+    _append_public_not_class_match(
+        log, footprint=fp_eval.body, hypothesis_id=HYPOTHESIS_B, program_id=PROGRAM_B
+    )
+    prereg = log.append(
+        kind=RecordKind.PREREGISTRATION,
+        channel=Channel.HUMAN,
+        program_id=PROGRAM_B,
+        refs={
+            "influenced_by": (freeze.record_hash,),
+            "consulted": (program_freeze.record_hash,),
+        },
+        payload={
+            "preregistration": {
+                "members": [
+                    {
+                        "hypothesis_id": HYPOTHESIS_B,
+                        "hypothesis_freeze_record": freeze.record_hash,
+                    }
+                ],
+                "confirmation": {"window": ["2020-02-01", "2020-12-31"]},
+            },
+            "preregistration_hash": "3" * 64,
+        },
+    )
+    return freeze, prereg, confirmation
+
+
+def test_global_access_rule_blocks_narrow_consulted_ancestry(tmp_path):
+    log = _new_log(tmp_path)
+    freeze, prereg, confirmation = _narrow_consulted_study(log, ingested=True)
+    records = log.read()
+    role = R.evidence_role(
+        confirmation.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        records,
+        calendar=CALENDAR,
+    )
+    # A's pre-tau_P ACCESS is found globally and fails the study closed.
+    assert role is EvidenceRole.UNKNOWN_EXPOSURE
+    assert R.grade_for_role(role) is EvidenceGrade.G5
+    # The narrow consulted ancestry genuinely excludes A's DERIVED; the ACCESS
+    # is what makes the difference, not an ancestry edge.
+    ancestry = {item.record_hash for item in R.influence_ancestry(freeze.record_hash, prereg.record_hash, records)}
+    ingested_derived = [
+        item
+        for item in records
+        if item.kind is RecordKind.DERIVED
+        and item.payload.get("derivation_kind") == PHASE7_EVALUATION_DERIVATION_KIND
+    ]
+    assert ingested_derived
+    assert ingested_derived[0].record_hash not in ancestry
+    # Control: the identical chain without the ingested ACCESS is G2.
+    control_log = _new_log(tmp_path / "control")
+    control_freeze, control_prereg, control_confirmation = _narrow_consulted_study(
+        control_log, ingested=False
+    )
+    control_role = R.evidence_role(
+        control_confirmation.record_hash,
+        control_freeze.record_hash,
+        control_prereg.record_hash,
+        control_log.read(),
+        calendar=CALENDAR,
+    )
+    assert control_role is EvidenceRole.CONFIRMATION_HISTORICAL_RECORDED
+    assert R.grade_for_role(control_role) is EvidenceGrade.G2
 
 
 # ---------------------------------------------------------------------------

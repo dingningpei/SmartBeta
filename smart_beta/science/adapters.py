@@ -51,6 +51,39 @@ Conservative footprints (plan sections 5.2 / 12.3)
   footprint carrying ``generator_input_included_unknown`` -- never zero
   exposure (plan section 5.2, the single ``GENERATOR_INPUT`` exception).
 
+Registered-evaluation ingestion and the completeness gate
+---------------------------------------------------------
+
+Every registered Phase-8 ``EvaluationRecord`` is ingested as
+``ARTIFACT -> ACCESS -> DERIVED`` (plan section 12.3, frozen before Wave 5):
+
+* the ``ARTIFACT`` root carries the whole-evaluation footprint
+  (``sealed = false``);
+* the ``ACCESS`` references that root by its Phase-10 ``record_hash`` and has
+  component ``phase7-evaluation:<experiment_id>``, inheriting the root's
+  complete footprint with no narrowing; it participates in the global
+  section 5.4 rule 2 regardless of the consulted ancestry;
+* the ``DERIVED`` record has ``derivation_kind = "phase7_evaluation"``,
+  ``refs.derived_from`` naming the root, and a payload ``experiment_id`` /
+  ``content_hash`` validated against the sealed ``ExperimentEntry``
+  (``entry.evaluation_record_hash == evaluation_record.content_hash``).
+
+The Phase-7/8 hash domain (``evaluation_record_hash``, ``content_hash``,
+``packaging_hash``) and the Phase-10 ``record_hash`` domain are distinct and
+are never compared across. ``packaging_hash`` is metadata and is never used
+as a join key: the artifact is located through the ``DERIVED``'s
+``derived_from`` reference and the ``ACCESS``'s ``artifact_record_hash``
+reference only. The ARTIFACT schema carries no identity field. Re-ingestion
+is idempotent: it appends only what a valid chain is missing and never
+rewrites K; a crash that left only an orphan ARTIFACT is repaired by
+appending a fresh complete chain, leaving the orphan immutable.
+
+:func:`registry_ingestion_completeness` is the pure, fail-closed completeness
+predicate the section 13.2 gate uses: over K plus a sealed
+``RegistrySnapshot`` it reports an entry incomplete whenever its ``DERIVED``,
+``ARTIFACT`` or ``ACCESS`` linkage is missing or mismatched, and it never
+raises into a pass.
+
 Sibling ownership
 -----------------
 
@@ -114,6 +147,15 @@ __all__ = [
     "ingest_development_history",
     "registered_evaluation_records",
     "over_approximated_inclusion",
+    # registered-evaluation ingestion + completeness gate
+    # (plan sections 12.3 / 13.2)
+    "access_component_for_evaluation",
+    "validate_evaluation_ingestion_identity",
+    "ingest_registered_evaluation",
+    "ingest_registry_snapshot",
+    "RegistryIngestionIssue",
+    "RegistryIngestionReport",
+    "registry_ingestion_completeness",
     # firewall audit (plan section 14.2)
     "FirewallViolation",
     "FirewallAuditReport",
@@ -121,6 +163,7 @@ __all__ = [
     # constants
     "CONFIRMATION_DERIVATION_KINDS",
     "PHASE7_EVALUATION_DERIVATION_KIND",
+    "EVALUATION_INGESTION_COMPONENTS",
 ]
 
 
@@ -354,6 +397,9 @@ CONFIRMATION_DERIVATION_KINDS = frozenset(
         "confirmation_assessment",
     }
 )
+
+#: The three links every registered evaluation must have in K (section 13.2).
+EVALUATION_INGESTION_COMPONENTS: tuple[str, ...] = ("DERIVED", "ARTIFACT", "ACCESS")
 
 
 @dataclass(frozen=True)
@@ -612,7 +658,9 @@ def record_evaluation_artifact(
 
     ``available_from`` defaults to the last fold's ``end`` date; it is
     attested metadata only. ``packaging_hash`` is the ``EvaluationRecord``
-    content hash (metadata only, not identity).
+    content hash (metadata only, not identity). The ARTIFACT schema carries
+    no identity field (plan section 12.3): an evaluation's identity is
+    established only by its DERIVED/ACCESS chain, never by the artifact.
 
     ``sealed`` is **False**. Plan section 5.4 rule 4's ``sealed = true`` means
     the data were hash-sealed at ingestion and never read before the
@@ -687,6 +735,483 @@ def record_registered_evaluation(
             "experiment_id": experiment_id,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# registered-evaluation ingestion + section 13.2 completeness gate
+# ---------------------------------------------------------------------------
+
+
+def access_component_for_evaluation(experiment_id: str) -> str:
+    """The frozen ACCESS component for a registered Phase-8 evaluation.
+
+    ``phase7-evaluation:<experiment_id>`` where ``experiment_id`` is the
+    Phase-8 ``ExperimentEntry.experiment_id`` (plan section 5.2).
+    """
+    return "phase7-evaluation:" + _require_sha256_hex(
+        experiment_id, field_name="experiment_id"
+    )
+
+
+def validate_evaluation_ingestion_identity(
+    *,
+    experiment_id: str,
+    content_hash: str,
+    experiment_entry: Any,
+) -> None:
+    """Reject a DERIVED identity that disagrees with its sealed entry.
+
+    ``experiment_id`` and ``content_hash`` are the values written into the
+    ``DERIVED`` payload; the sealed ``ExperimentEntry`` is the authority
+    (plan section 12.3). A mismatch in either is an adapter error, never a
+    silent re-identification.
+    """
+    from smart_beta.experiment.registry import ExperimentEntry
+
+    if not isinstance(experiment_entry, ExperimentEntry):
+        raise AdapterError(
+            "experiment_entry must be a sealed ExperimentEntry, got "
+            f"{type(experiment_entry).__name__}"
+        )
+    resolved_id = _require_sha256_hex(experiment_id, field_name="experiment_id")
+    resolved_hash = _require_sha256_hex(content_hash, field_name="content_hash")
+    if resolved_id != experiment_entry.experiment_id:
+        raise AdapterError(
+            "DERIVED payload.experiment_id does not match the ExperimentEntry"
+        )
+    if resolved_hash != experiment_entry.evaluation_record_hash:
+        raise AdapterError(
+            "DERIVED payload.content_hash does not match the ExperimentEntry "
+            "evaluation_record_hash"
+        )
+
+
+def _phase7_evaluation_derived(
+    records: Sequence[KnowledgeRecord], experiment_id: str
+) -> KnowledgeRecord | None:
+    matches = tuple(
+        record
+        for record in records
+        if record.kind is RecordKind.DERIVED
+        and record.payload.get("derivation_kind")
+        == PHASE7_EVALUATION_DERIVATION_KIND
+        and record.payload.get("experiment_id") == experiment_id
+    )
+    if len(matches) > 1:
+        raise AdapterError(
+            "multiple phase7_evaluation DERIVED records for experiment "
+            f"{experiment_id}"
+        )
+    return matches[0] if matches else None
+
+
+def _artifact_parent_hash(
+    derived: KnowledgeRecord, by_hash: Mapping[str, KnowledgeRecord]
+) -> str | None:
+    parents = tuple(derived.refs.get("derived_from", ()))
+    artifacts = tuple(
+        parent
+        for parent in parents
+        if parent in by_hash and by_hash[parent].kind is RecordKind.ARTIFACT
+    )
+    if len(artifacts) > 1:
+        raise AdapterError(
+            "phase7_evaluation DERIVED must reference exactly one ARTIFACT"
+        )
+    return artifacts[0] if artifacts else None
+
+
+def _access_for_component(
+    records: Sequence[KnowledgeRecord],
+    *,
+    component: str,
+    artifact_hash: str | None = None,
+) -> KnowledgeRecord | None:
+    matches = tuple(
+        record
+        for record in records
+        if record.kind is RecordKind.ACCESS
+        and record.payload.get("component") == component
+        and (
+            artifact_hash is None
+            or record.payload.get("artifact_record_hash") == artifact_hash
+        )
+    )
+    if len(matches) > 1:
+        raise AdapterError(
+            f"multiple ACCESS records for component {component!r}"
+        )
+    return matches[0] if matches else None
+
+
+def ingest_registered_evaluation(
+    log: KnowledgeLog,
+    *,
+    experiment_entry: Any,
+    evaluation_record: Any,
+    dataset: DevelopmentDataset,
+    program_id: str | None = None,
+    available_from: str | None = None,
+) -> tuple[KnowledgeRecord, ...]:
+    """Idempotently ingest one registered evaluation as ARTIFACT -> ACCESS -> DERIVED.
+
+    The sealed ``ExperimentEntry`` supplies ``experiment_id`` and
+    ``evaluation_record_hash``; ``evaluation_record.content_hash`` must equal
+    the latter. The ``DERIVED`` payload carries exactly those two Phase-8/7
+    identities and the ``ACCESS`` component is
+    ``phase7-evaluation:<experiment_id>`` (plan section 12.3).
+
+    The chain's root is located through K ``record_hash`` references only:
+    the ``DERIVED``'s ``derived_from`` names the ARTIFACT, and the ACCESS must
+    name that same ARTIFACT. The ARTIFACT payload carries no identity field.
+    ``packaging_hash`` is never a join key and no Phase-10 ``record_hash`` is
+    ever compared with a Phase-7/8 hash. Re-ingestion is idempotent: if a
+    valid complete chain already exists nothing is appended; a DERIVED that
+    links its ARTIFACT but lacks its ACCESS gets the ACCESS appended to that
+    same root; and a crash that left only an orphan ARTIFACT (no DERIVED)
+    appends a fresh ARTIFACT -> ACCESS -> DERIVED chain, leaving the orphan
+    immutable. Returns the appended records in order.
+    """
+    log = _require_log(log)
+    from smart_beta.experiment.registry import ExperimentEntry
+
+    if not isinstance(experiment_entry, ExperimentEntry):
+        raise AdapterError(
+            "experiment_entry must be a sealed ExperimentEntry, got "
+            f"{type(experiment_entry).__name__}"
+        )
+    experiment_id = _require_sha256_hex(
+        experiment_entry.experiment_id, field_name="experiment_entry.experiment_id"
+    )
+    entry_hash = _require_sha256_hex(
+        experiment_entry.evaluation_record_hash,
+        field_name="experiment_entry.evaluation_record_hash",
+    )
+    record_hash = _require_sha256_hex(
+        getattr(evaluation_record, "content_hash", None),
+        field_name="evaluation_record.content_hash",
+    )
+    validate_evaluation_ingestion_identity(
+        experiment_id=experiment_id,
+        content_hash=record_hash,
+        experiment_entry=experiment_entry,
+    )
+    component = access_component_for_evaluation(experiment_id)
+
+    appended: list[KnowledgeRecord] = []
+    records = log.read()
+    by_hash = {record.record_hash: record for record in records}
+
+    derived = _phase7_evaluation_derived(records, experiment_id)
+    if derived is not None:
+        if derived.payload.get("content_hash") != entry_hash:
+            raise AdapterError(
+                "existing phase7_evaluation DERIVED content_hash conflicts "
+                "with the ExperimentEntry evaluation_record_hash"
+            )
+        artifact_hash = _artifact_parent_hash(derived, by_hash)
+        if artifact_hash is None:
+            raise AdapterError(
+                "existing phase7_evaluation DERIVED has no ARTIFACT parent; "
+                "refusing to guess a root"
+            )
+        artifact_record = by_hash[artifact_hash]
+        if artifact_record.footprint is None:
+            raise AdapterError(
+                "phase7-evaluation ARTIFACT root carries no footprint"
+            )
+        # A valid complete chain is the DERIVED plus its linked ARTIFACT plus
+        # an ACCESS naming that same ARTIFACT. If the ACCESS is missing (a
+        # legacy DERIVED) the repair appends it to that root; otherwise the
+        # ingestion is already complete and appends nothing.
+        if (
+            _access_for_component(
+                records, component=component, artifact_hash=artifact_hash
+            )
+            is None
+        ):
+            appended.append(
+                log.append(
+                    kind=RecordKind.ACCESS,
+                    channel=Channel.SYSTEM,
+                    program_id=program_id,
+                    footprint=artifact_record.footprint,
+                    payload={
+                        "artifact_record_hash": artifact_hash,
+                        "component": component,
+                    },
+                )
+            )
+        return tuple(appended)
+
+    # No DERIVED: the registry-owned pair has no chain. Any ARTIFACT already in
+    # K is an orphan: it establishes no identity and is never reused or
+    # reverse-looked-up. Append a fresh ARTIFACT_1 -> ACCESS_1 -> DERIVED_1
+    # chain; the orphan stays immutable.
+    root = record_evaluation_artifact(
+        log,
+        evaluation_record=evaluation_record,
+        dataset=dataset,
+        program_id=program_id,
+        available_from=available_from,
+    )
+    appended.append(root)
+    appended.append(
+        log.append(
+            kind=RecordKind.ACCESS,
+            channel=Channel.SYSTEM,
+            program_id=program_id,
+            footprint=root.footprint,
+            payload={
+                "artifact_record_hash": root.record_hash,
+                "component": component,
+            },
+        )
+    )
+    appended.append(
+        log.append(
+            kind=RecordKind.DERIVED,
+            channel=Channel.PROGRAM,
+            program_id=program_id,
+            refs={"derived_from": (root.record_hash,)},
+            footprint=root.footprint,
+            payload={
+                "derivation_kind": PHASE7_EVALUATION_DERIVATION_KIND,
+                "content_hash": entry_hash,
+                "experiment_id": experiment_id,
+            },
+        )
+    )
+    return tuple(appended)
+
+
+def ingest_registry_snapshot(
+    log: KnowledgeLog,
+    *,
+    registry_snapshot: Any,
+    evaluation_record_by_experiment: Mapping[str, Any],
+    dataset: DevelopmentDataset,
+    program_id: str | None = None,
+    available_from: str | None = None,
+) -> tuple[KnowledgeRecord, ...]:
+    """Ingest every evaluation of a sealed ``RegistrySnapshot`` (section 12.3)."""
+    from smart_beta.experiment.registry import RegistrySnapshot
+
+    log = _require_log(log)
+    if not isinstance(registry_snapshot, RegistrySnapshot):
+        raise AdapterError(
+            "registry_snapshot must be a sealed RegistrySnapshot, got "
+            f"{type(registry_snapshot).__name__}"
+        )
+    if not isinstance(evaluation_record_by_experiment, Mapping):
+        raise AdapterError("evaluation_record_by_experiment must be a mapping")
+    appended: list[KnowledgeRecord] = []
+    for entry in registry_snapshot.experiments:
+        evaluation_record = evaluation_record_by_experiment.get(
+            entry.experiment_id
+        )
+        if evaluation_record is None:
+            raise AdapterError(
+                "no EvaluationRecord supplied for registered experiment "
+                f"{entry.experiment_id}"
+            )
+        appended.extend(
+            ingest_registered_evaluation(
+                log,
+                experiment_entry=entry,
+                evaluation_record=evaluation_record,
+                dataset=dataset,
+                program_id=program_id,
+                available_from=available_from,
+            )
+        )
+    return tuple(appended)
+
+
+@dataclass(frozen=True)
+class RegistryIngestionIssue:
+    """One missing or mismatched link in a registered evaluation's ingestion."""
+
+    experiment_id: str
+    component: str
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experiment_id": self.experiment_id,
+            "component": self.component,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class RegistryIngestionReport:
+    """The fail-closed result of :func:`registry_ingestion_completeness`."""
+
+    complete: bool
+    entries_checked: int = 0
+    issues: tuple[RegistryIngestionIssue, ...] = ()
+
+    @property
+    def reason(self) -> ReasonCode | None:
+        """``REGISTRY_INGESTION_INCOMPLETE`` iff any link is missing."""
+        return None if self.complete else ReasonCode.REGISTRY_INGESTION_INCOMPLETE
+
+    def __bool__(self) -> bool:
+        return self.complete
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "complete": self.complete,
+            "reason": None if self.reason is None else self.reason.value,
+            "entries_checked": self.entries_checked,
+            "issues": [issue.to_dict() for issue in self.issues],
+        }
+
+
+def _entry_ingestion_issues(
+    entry: Any,
+    records: Sequence[KnowledgeRecord],
+    by_hash: Mapping[str, KnowledgeRecord],
+) -> list[RegistryIngestionIssue]:
+    experiment_id = entry.experiment_id
+    entry_hash = entry.evaluation_record_hash
+    component = access_component_for_evaluation(experiment_id)
+    issues: list[RegistryIngestionIssue] = []
+
+    derived_records = tuple(
+        record
+        for record in records
+        if record.kind is RecordKind.DERIVED
+        and record.payload.get("derivation_kind")
+        == PHASE7_EVALUATION_DERIVATION_KIND
+        and record.payload.get("experiment_id") == experiment_id
+    )
+    artifact_hash: str | None = None
+    if not derived_records:
+        issues.append(RegistryIngestionIssue(experiment_id, "DERIVED", "missing"))
+    elif len(derived_records) > 1:
+        issues.append(
+            RegistryIngestionIssue(experiment_id, "DERIVED", "duplicate")
+        )
+    else:
+        derived = derived_records[0]
+        if derived.payload.get("content_hash") != entry_hash:
+            issues.append(
+                RegistryIngestionIssue(
+                    experiment_id, "DERIVED", "content_hash mismatch"
+                )
+            )
+        parents = tuple(derived.refs.get("derived_from", ()))
+        artifacts = tuple(
+            parent
+            for parent in parents
+            if parent in by_hash and by_hash[parent].kind is RecordKind.ARTIFACT
+        )
+        if not artifacts:
+            issues.append(
+                RegistryIngestionIssue(
+                    experiment_id, "ARTIFACT", "not linked from DERIVED"
+                )
+            )
+        elif len(artifacts) > 1:
+            issues.append(
+                RegistryIngestionIssue(
+                    experiment_id, "ARTIFACT", "multiple ARTIFACT parents"
+                )
+            )
+        else:
+            artifact_hash = artifacts[0]
+
+    access_records = tuple(
+        record
+        for record in records
+        if record.kind is RecordKind.ACCESS
+        and record.payload.get("component") == component
+    )
+    if artifact_hash is not None:
+        linked = tuple(
+            record
+            for record in access_records
+            if record.payload.get("artifact_record_hash") == artifact_hash
+        )
+        if not linked:
+            issues.append(
+                RegistryIngestionIssue(experiment_id, "ACCESS", "missing")
+            )
+        elif len(linked) > 1:
+            issues.append(
+                RegistryIngestionIssue(experiment_id, "ACCESS", "duplicate")
+            )
+    elif len(access_records) > 1:
+        issues.append(
+            RegistryIngestionIssue(experiment_id, "ACCESS", "duplicate")
+        )
+    return issues
+
+
+def registry_ingestion_completeness(
+    source: KnowledgeLog | str | Path | Sequence[KnowledgeRecord],
+    registry_snapshot: Any,
+) -> RegistryIngestionReport:
+    """Pure completeness predicate over K plus a sealed ``RegistrySnapshot``.
+
+    Returns a :class:`RegistryIngestionReport` whose ``complete`` flag is
+    ``True`` exactly when every ``ExperimentEntry`` has a matching
+    ``phase7_evaluation`` ``DERIVED`` record, an ``ARTIFACT`` named by that
+    record's ``derived_from``, and an ``ACCESS`` naming that artifact with
+    component ``phase7-evaluation:<experiment_id>`` (plan section 13.2).
+
+    It is fail-closed and side-effect free: a malformed log, a truncated tail
+    or any unexpected error yields ``complete = False`` -- it never raises
+    into a pass. The K records are inspected only through Phase-10
+    ``record_hash`` references; ``packaging_hash`` and the Phase-7/8 hash
+    domain are never used as join keys.
+    """
+    try:
+        from smart_beta.experiment.registry import RegistrySnapshot
+
+        if not isinstance(registry_snapshot, RegistrySnapshot):
+            return RegistryIngestionReport(
+                complete=False,
+                issues=(
+                    RegistryIngestionIssue(
+                        "<snapshot>",
+                        "SNAPSHOT",
+                        "not a sealed RegistrySnapshot",
+                    ),
+                ),
+            )
+        records = _load_records(source)
+        by_hash: dict[str, KnowledgeRecord] = {}
+        for record in records:
+            if record.record_hash in by_hash:
+                return RegistryIngestionReport(
+                    complete=False,
+                    issues=(
+                        RegistryIngestionIssue(
+                            "<log>", "K", "duplicate record_hash"
+                        ),
+                    ),
+                )
+            by_hash[record.record_hash] = record
+        issues: list[RegistryIngestionIssue] = []
+        for entry in registry_snapshot.experiments:
+            issues.extend(_entry_ingestion_issues(entry, records, by_hash))
+        return RegistryIngestionReport(
+            complete=not issues,
+            entries_checked=len(registry_snapshot.experiments),
+            issues=tuple(issues),
+        )
+    except Exception as exc:  # fail closed: never raise into a pass
+        return RegistryIngestionReport(
+            complete=False,
+            issues=(
+                RegistryIngestionIssue(
+                    "<unknown>", "K", f"{type(exc).__name__}: {exc}"
+                ),
+            ),
+        )
 
 
 def record_development_evidence(
