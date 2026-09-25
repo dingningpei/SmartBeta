@@ -1757,6 +1757,106 @@ EvaluationRecord, and the Holm content lives in each assessment's
 - **Same study_id with a different preregistration or artifact hash:** hard
   error.
 
+### 13.3a Family refusal, interruption and persistence resume (approved before Wave 5)
+
+No schema, hash, record kind, reason code or scientific state is added.
+
+**1. Atomic pre-execution family refusal.**
+- When the §13.2 admission refuses the whole frozen family because one or
+  more members fail a pre-execution gate, compute each member's frozen
+  refusal reasons R_i. Then take R_study = the canonical union of R_1…R_m,
+  ordered by the existing closed `ReasonCode` canonical ordering and
+  serialization, independent of member iteration order.
+- **Every** member is persisted, in the study store, as NOT_ASSESSED with
+  reasons = R_study, supplied to P10-G `assess` as
+  `inadmissibility_reasons`. A healthy member therefore never falls through
+  to a false `INFERENCE_INVALID`.
+- **Scope:** pre-execution family refusal only. A member-specific
+  post-read failure (e.g. one member's Stage-B `SERIES_BINDING_FAILURE`) is
+  **not** propagated to its siblings.
+
+**2. Step-4 evidence is family-atomic.**
+- "Evidence persisted" (§13.3) holds only if the required step-4 outputs of
+  **every** frozen member exist in the study store and satisfy their exact
+  bindings.
+- CONSUMPTION durable without complete family step-4 evidence, including
+  when only some members' evidence exists → the family is terminal
+  `STUDY_INTERRUPTED`.
+- There is no empirical re-read and no reconstruction from the
+  confirmation source. Existing K records stay immutable, with no rollback,
+  no deletion and no freshness restoration.
+
+**3. Interruption persistence.**
+- The `STUDY_INTERRUPTED` conclusion is persisted in the **study store
+  only**. No new `confirmation_assessment` (or any other) DERIVED record
+  is appended merely to represent a recovery or controller conclusion;
+  `confirmation_assessment` is reserved for the scientific assessment
+  object.
+- Existing CONSUMPTION, ACCESS and already-authorized DERIVED records
+  remain.
+- Irreversibility means existing durable writes remain and the evidence
+  stays consumed. It does not mean every recovery state creates a new K
+  record.
+
+**4. Write order.** Following §13.2 step 4 ("persist …, and append
+DERIVED"), each object is written atomically to the study store **before**
+its DERIVED record is appended. A DERIVED record whose store object is
+absent is store-integrity damage: `StudyStoreIntegrityError` (§13.4), a
+hard error.
+
+**5. Steps 5–6 persistence resume (exact identity, not semantic
+dedup).**
+- For an already-determined object that must be persisted as a DERIVED
+  record, the exact lookup matches on all of:
+  - kind `DERIVED`;
+  - the expected frozen `derivation_kind`;
+  - `payload.content_hash` equal to the object's existing frozen content
+    hash;
+  - `refs.derived_from` equal to the expected exact parent set.
+- There is no new hash and no P10-H semantic hash. Neither the parent
+  identity nor any of the other fields may be omitted.
+- **Outcomes:**
+  - zero exact matches → append exactly once;
+  - one exact match → reuse it and append nothing;
+  - more than one exact match → fail closed: append nothing and make no
+    state transition (the recovery/integrity conflict).
+- A record with the same `content_hash` but a different `derivation_kind`
+  or different parents is **not** a match and is never adopted.
+
+**6. No empirical recomputation for recovery.**
+- Resume may continue **persistence**, and the §13.3 steps 5–6 computation
+  from already-persisted study evidence (e.g. inference from the persisted
+  bundle when no InferenceResult was persisted yet).
+- It never re-reads confirmation data, never reruns Phase-6/7 confirmation
+  evaluation, and never recomputes an object that is already persisted
+  merely to regenerate a content hash.
+- An object that cannot be reconstructed from persisted study evidence
+  makes the family terminal `STUDY_INTERRUPTED`.
+
+**7. Crash matrix (binding P10-H tests).**
+
+| Case | Expected |
+|---|---|
+| A. crash before CONSUMPTION | an ordinary pre-execution state; nothing consumed |
+| B. CONSUMPTION only | terminal `STUDY_INTERRUPTED`; no re-read; consumption remains |
+| C. CONSUMPTION + ACCESS, step-4 evidence incomplete | terminal `STUDY_INTERRUPTED`; no re-read; both records remain |
+| D. partial family step-4 evidence | terminal `STUDY_INTERRUPTED`; existing records remain; no missing-member re-read; no interruption DERIVED record |
+| E. complete step-4 evidence, crash before inference persisted | continue steps 5–6 from persisted evidence only; no re-read |
+| F. inference already persisted once | exact lookup reuses it; no duplicate |
+| G. assessment already persisted once | exact lookup reuses it; no duplicate |
+| H. expected object absent | appended once, only if reconstructible without an empirical re-read |
+| I. more than one exact match | fail closed; no further duplicate |
+| J. same content hash, wrong parents | not reusable |
+| K. same content hash, wrong derivation kind | not reusable |
+
+**8. Ownership.**
+- The **study store** owns operational and terminal state: pre-execution
+  refusals, the `STUDY_INTERRUPTED` conclusion, the EvaluationRecord, the
+  Holm table, and the other authorized study artifacts.
+- **Knowledge-PIT** holds only the evidence and provenance records already
+  authorized by the Phase-10 contract. No K record is created merely
+  because the study store holds a terminal orchestration state.
+
 ### 13.4 Replay
 
 `replay_study(K, store, study_id)` recomputes the roles (at the recorded
