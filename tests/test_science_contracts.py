@@ -332,6 +332,7 @@ EXPECTED_VOCABULARIES: dict[type, set[str]] = {
         "STUDY_INTERRUPTED",
         "ESTIMAND_POLICY_VIOLATION",
         "FIREWALL_VIOLATION",
+        "REGISTRY_INGESTION_INCOMPLETE",
     },
     InformationalFlag: {"DECLARATION_DEPENDENT", "SERIES_IDENTICAL_GROUP"},
 }
@@ -355,7 +356,24 @@ def test_reason_code_and_flag_vocabularies_are_distinct() -> None:
     flags = {member.value for member in InformationalFlag}
     assert flags == {"DECLARATION_DEPENDENT", "SERIES_IDENTICAL_GROUP"}
     assert reasons.isdisjoint(flags)
-    assert len(reasons) == 24
+    assert len(reasons) == 25
+
+
+def test_registry_ingestion_incomplete_reason_is_present() -> None:
+    # P10-A-R2: the section 13.2 step 2a completeness-gate reason is a member.
+    assert (
+        ReasonCode.REGISTRY_INGESTION_INCOMPLETE.value
+        == "REGISTRY_INGESTION_INCOMPLETE"
+    )
+
+
+def test_registry_ingestion_addition_leaves_golden_hashes_unchanged() -> None:
+    # P10-A-R2: the new closed ReasonCode member must not perturb any frozen
+    # golden hash (canonical serialization / content hashing are unchanged).
+    assert len(GOLDEN_HASHES) == 5
+    for label, payload, expected_json, expected_hash in GOLDEN_HASHES:
+        assert canonical_json(payload) == expected_json, label
+        assert content_hash(payload) == expected_hash, label
 
 
 def test_evidence_role_order_and_strength() -> None:
