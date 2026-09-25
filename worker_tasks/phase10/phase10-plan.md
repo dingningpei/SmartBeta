@@ -173,7 +173,9 @@ and hashing.
   `PROCEDURE_NOT_ADMITTED`, `PROCEDURE_IDENTITY_MISMATCH`,
   `PROCEDURE_REVOKED`, `PROCEDURE_ESTIMAND_UNSUPPORTED`,
   `PROCEDURE_PARAMS_INVALID`, `INFERENCE_INVALID`, `STUDY_INTERRUPTED`,
-  `ESTIMAND_POLICY_VIOLATION`, `FIREWALL_VIOLATION`.
+  `ESTIMAND_POLICY_VIOLATION`, `FIREWALL_VIOLATION`,
+  `REGISTRY_INGESTION_INCOMPLETE` (added before Wave 5; the §13.2
+  completeness-gate refusal).
 - Informational flags (not reasons): `DECLARATION_DEPENDENT`,
   `SERIES_IDENTICAL_GROUP`. The effect-size qualification is a dedicated
   field, not a flag (§11).
@@ -261,7 +263,7 @@ and hashing.
 | `GENERATOR_INPUT` | the exact machine channel into hypotheses | `refs.included` (the records the generator saw); payload: `generation_event_id`, `history_snapshot_hash`, generator/model identity; `footprint` = union over `included` (verified). **Single, GENERATOR_INPUT-only exception (frozen):** `refs.included` may be empty **if and only if** `footprint.determinable == false` **and** `footprint.unresolved` contains the exact protocol reason `generator_input_included_unknown`; other frozen unresolved reasons may coexist and are preserved. An empty `included` then means "the identities of the included empirical inputs cannot be determined", **never** "zero empirical inputs". The union rule does not apply to this state, and the footprint stays UNDETERMINABLE, so downstream exposure classification fails closed (§5.4 rule 2). Any other empty-included GENERATOR_INPUT is invalid, and the non-empty path is unchanged. This exception does **not** extend to DERIVED or any other record type. |
 | `HUMAN_DECISION` | program, prompt, policy and estimand-policy acts and family selection | `refs.consulted`, **or** `payload.consulted_all_prior = true` (the conservative default, meaning every record with a smaller seq); payload: `decision_kind` ∈ {`PROGRAM_FREEZE`, `PROMPT_CHANGE`, `POLICY_CHANGE`, `ESTIMAND_POLICY`, `FAMILY_SELECTION`, `PROCEDURE_ADMISSION`, `PROCEDURE_REVOCATION`, `OTHER`}, `actor_role`; the admission and revocation payloads are fixed in §9.3 |
 | `EXPOSURE_DECLARATION` | unobservable channels, declared | the full `ExposureDeclaration` contract in §5.2a; `event_time` = `claim.exposure_event_date` (required iff EXPOSED) |
-| `ACCESS` | a machine read of an artifact | payload: `artifact_record_hash`, `component` |
+| `ACCESS` | a machine read of an artifact | payload: `artifact_record_hash`, `component`. **Writers (frozen before Wave 5):** P10-H, write-ahead, for a confirmation study's own read (§13.2); and **P10-I at ingestion** for every registered Phase-8 evaluation (§12.3). The ingestion ACCESS references that evaluation's ARTIFACT root, has component `phase7-evaluation:<experiment_id>` (the Phase-8 `experiment_id`), and inherits the ARTIFACT's complete footprint, with no fold, program, lineage or metric narrowing. It is **not** a pre-evaluation write-ahead event: it is mechanically recorded evidence that the already-performed Phase-8 evaluation accessed those observations. Once in the K prefix before a later preregistration freeze, it participates in the global §5.4 rule 2. |
 | `HYPOTHESIS_FREEZE` | τ(H) | payload: `hypothesis_id` (Phase 8), `proposal_id` (Phase 9, optional), `factor_spec_hash`; `refs.influenced_by` (generator inputs and human decisions) |
 | `PREREGISTRATION` | τ_P; freezes the family | payload: full canonical `PreRegistration` body (§7) + its hash; `refs.influenced_by` = the members' `HYPOTHESIS_FREEZE` records + the `ESTIMAND_POLICY` record; `refs.consulted` (or `consulted_all_prior`) |
 | `CONSUMPTION` | one-use governance | payload: `study_id`, `prereg_record_hash`, `artifact_record_hash`; `footprint` = the confirmation footprint consumed |
@@ -706,6 +708,7 @@ StudyProtocol.
 | `members` | a tuple, sorted by `hypothesis_id`, of `MemberContract` |
 | `alpha_study` | α for Holm, in (0, 0.5) |
 | `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the canonical sealed Phase-7 PartitionRef representation with HOLDOUT = window; see "Frozen identity details" below), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
+| `registry_snapshot_ref` | `{snapshot_hash, experiment_count, decision_count}` of the sealed Phase-8 `RegistrySnapshot` visible at preregistration freeze, **derived and validated only through sealed `RegistrySnapshot` authority** (its `snapshot_hash`, canonical serialization and contiguous registration-index prefix semantics); no other registry hash exists. The hash binds the canonical identity, the counts bind the shape, and the ref is part of `prereg_id`. Later registry mutation cannot rewrite it. P10-H persists the exact `RegistrySnapshot.to_dict()` body for replay and verifies it against this ref (§13.2). |
 | `partition_ref_hash` | the §4.1 canonical SHA-256 identity of the canonical `partition_spec`, i.e. `content_hash(PartitionRef.to_dict())`. Semantics are identical to the frozen P10-S `InferentialSeriesBundle.partition_ref_hash` (§12.1(b)). |
 | `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, DECISION_RULE_VERSION, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
 | `power_disclosure` | per member `{mde, sigma_lr, T_conf, source_record}` or `{unavailable_reason}`. Disclosure is mandatory; **there is no gate** (SD §7.4, §12). |
@@ -1112,6 +1115,8 @@ Phase-8 `DecisionRecord`. It carries no reference to a DecisionOutcome.
   - INVALID inference;
   - study interrupted;
   - estimand-policy violation;
+  - registry-ingestion incompleteness (`REGISTRY_INGESTION_INCOMPLETE`,
+    §13.2 step 2a);
   - a firewall violation affecting the member.
 - In that case both booleans below are `null`, and
   `effect_size_qualification = NOT_APPLICABLE`.
@@ -1358,6 +1363,26 @@ reconstructed read-only:
   of a program → a DERIVED record with channel PROGRAM, whose footprint is
   the **entire** evaluation including the holdout (the judge and humans may
   have seen it).
+- **Ingestion order and identity (frozen before Wave 5).** Each registered
+  evaluation is ingested as **ARTIFACT → ACCESS → DERIVED**:
+  - the ARTIFACT root carries the whole-evaluation footprint (`sealed = false`);
+  - the ACCESS references that root (§5.2);
+  - the DERIVED record has `derivation_kind = "phase7_evaluation"`,
+    `refs.derived_from` containing the ARTIFACT, `payload.experiment_id` =
+    the Phase-8 `ExperimentEntry.experiment_id`, and `payload.content_hash`
+    = the Phase-7 `EvaluationRecord.content_hash`, which Phase 8 records as
+    `ExperimentEntry.evaluation_record_hash`.
+  - The adapter validates `experiment_id` and `evaluation_record_hash`
+    against the supplied `ExperimentEntry`.
+  - **Identity domains:** Phase-7/8 evaluation hashes and Phase-10
+    `record_hash`es are distinct domains and are never compared across. The
+    ARTIFACT `packaging_hash` is metadata, never a join key.
+  - **Idempotence and crash:** re-ingestion is idempotent. It appends only
+    the missing ARTIFACT, ACCESS or DERIVED record for an entry and never
+    rewrites K. A repair may therefore append ACCESS after an older DERIVED;
+    completeness depends on existence and linkage, not relative order. A
+    crash after ARTIFACT and before ACCESS leaves a mechanically detectable
+    incomplete ingestion, which the §13.2 gate refuses.
 - **Hypotheses:** `HYPOTHESIS_FREEZE` per admitted proposal/experiment, with
   `influenced_by` = its GenerationEvent's GENERATOR_INPUT.
 - **Program freezes:** each `ResearchProgram` freeze → a `HUMAN_DECISION
@@ -1409,6 +1434,25 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
      partial families.
    - After consumption, a member can become NOT_ASSESSED only through
      series or inference failure (then p := 1, §10).
+2a. **Registry-ingestion completeness gate (frozen before Wave 5; runs
+   before any CONSUMPTION, confirmation empirical read or inference).**
+   - Reconstruct the exact preregistered registry snapshot. Persist its
+     `RegistrySnapshot.to_dict()` body and verify it against
+     `registry_snapshot_ref` (hash and counts).
+   - For **every** `ExperimentEntry` in it, require:
+     - a DERIVED record (`derivation_kind = "phase7_evaluation"`) with
+       `payload.experiment_id == entry.experiment_id` and
+       `payload.content_hash == entry.evaluation_record_hash`;
+     - an ARTIFACT in that DERIVED record's `refs.derived_from`;
+     - an ACCESS with `artifact_record_hash` equal to that ARTIFACT's
+       `record_hash` and component `phase7-evaluation:<experiment_id>`.
+   - Anything missing, mismatched, unverifiable or left incomplete after a
+     crash → the study is **REFUSED**: every member is persisted as
+     **NOT_ASSESSED** with reason **`REGISTRY_INGESTION_INCOMPLETE`**, with
+     no CONSUMPTION, no confirmation read and no inference. The role
+     classifier is not used to reinterpret this as `ROLE_UNKNOWN_EXPOSURE`.
+   - P10-H may additionally record the execution-time registry identity for
+     audit; it never replaces the preregistered ref.
 3. **Write-ahead:** append `CONSUMPTION`, then `ACCESS`, **before** any
    outcome value is read.
 4. Derive alignments once (P7-B). Per member, create a fresh single-use
@@ -1522,9 +1566,9 @@ Dependencies:
 | F | A, S |
 | D | B, C |
 | E | A, B, C |
-| G | A, E, F |
+| G | A, B, D, E, F (corrected before Wave 4: §11.3 reassessment recomputes EvidenceRole from K, so it depends on P10-B and P10-D) |
 | I | B, C |
-| H | B–G, I, S |
+| H | B–G, I, S; plus the pre-Wave-5 recovery tasks P10-A-R2, P10-I-R and P10-E-R |
 | Z | A–I, S, V (not P) |
 | P | A, F, S; PA-0 authorization |
 
@@ -2101,6 +2145,11 @@ Phase 10 does **not** claim:
 - that complete panels are scientifically necessary. `COMPLETE_REQUIRED` is a
   v1 implementation limitation;
 - the authenticity of declarant identities (no cryptographic signatures);
+- complete reconstruction of historical access. **Absence of an ACCESS
+  record is not proof that no machine or human read ever occurred.** G2/G3
+  express separation relative to the recorded Knowledge-PIT and declaration
+  evidence governed by the protocol. Reads outside the mechanically ingested
+  Phase-8 registry remain declaration-dependent;
 - family-wise error control for NOT_SUPPORTED;
 - that Holm corrects the adaptive exploration history, validates individual
   p-values, or controls error across studies;
