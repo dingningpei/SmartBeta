@@ -336,23 +336,72 @@ For a preregistration P at τ_P and a member H (with program lineage L(H)):
    - `HYPOTHESIS_FREEZE(H)` and the refs of `PREREGISTRATION(P)`.
    - **Program-scope conservatism:** every record with channel ∈
      {GENERATOR, PROGRAM, HUMAN}, seq < τ_P, and `program_id` ∈ L(H).
+   - **`consulted_all_prior` seeding (clarified before Wave-3 integration).**
+     Explicit influence/reference edges are always seeds. For **every**
+     record whose ancestry is constructed, **including the PREREGISTRATION
+     P itself**, `consulted_all_prior = true` additionally seeds every
+     eligible record with seq strictly smaller than that record's own seq,
+     subject to the rules above.
+     - A preregistration's `consulted_all_prior = true` is **not** ignored.
+     - Ordering authority is K sequence and prefix membership, never
+       wall-clock timestamps.
 2. **Closure.** Follow `refs` (all four lists) transitively.
    `consulted_all_prior = true` adds every record with a smaller seq than
    that decision.
 3. **Anc(H, P, K)** = the closure, restricted to seq < τ_P (automatic,
    because refs point backwards).
-4. **ExposedFP(H, P, K)** = ∪ footprints of Anc members ∪ footprints of
-   every `EXPOSURE_DECLARATION` with channel HUMAN and polarity EXPOSED for
-   which either holds:
-   - it was recorded at seq < τ_P;
-   - **or** its `event_time` < date(`recorded_at` of P).
+4. **ExposedFP(H, P, K) = ObservedFP ∪ DeclaredExposedFP.** Influence
+   ancestry and empirical exposure are **distinct** concepts: membership in
+   Anc does not by itself mean a record embodies an observation of data.
+   - **ObservedFP** = ∪ footprint(r) for r ∈ Anc with record type ∈
+     {**DERIVED**, **GENERATOR_INPUT**}. In Phase-10 v1, only these two
+     record types embody empirical observation.
+   - **Descriptor and governance records contribute no footprint merely by
+     being in Anc:** `ARTIFACT`, `CONSUMPTION` and `EXPOSURE_DECLARATION`.
+     They are not inert; they act only through their dedicated frozen
+     rules:
+     - declaration `EXPOSED` → the DeclaredExposedFP rule below;
+     - declaration `NOT_EXPOSED` → coverage in §5.4 rules 4–5;
+     - PRETRAINING/PUBLIC → the residual and class-match cap rules;
+     - `ACCESS` → the dedicated pre-freeze ACCESS rule (§5.4 rule 2);
+     - `CONSUMPTION` → ROBUSTNESS (rule 1a) and one-use governance
+       (§6.8).
+   - **Self-exposure is excluded.** A study's own sealed ARTIFACT that is
+     in Anc (e.g. via `consulted_all_prior`) never makes the study
+     DEVELOPMENT by carrying the study's evidence footprint.
+   - **DeclaredExposedFP (dedicated declaration rule, unchanged)** = ∪
+     footprints of every `EXPOSURE_DECLARATION` with channel HUMAN and
+     polarity EXPOSED for which either holds, whether or not it is in Anc:
+     - it was recorded at seq < τ_P;
+     - **or** its `event_time` < date(`recorded_at` of P).
 
-   The second case means a *late* declaration of an *earlier* exposure
-   still counts, so it downgrades.
+     The second case means a *late* declaration of an *earlier* exposure
+     still counts, so it downgrades.
+   - **Fail-closed rules are unchanged:** undeterminable overlap,
+     unverifiable ancestry footprints, missing required declarations,
+     pre-freeze ACCESS and unknown provenance still yield UNKNOWN_EXPOSURE
+     (§5.4 rule 2) or NOT_ASSESSED.
 5. **Residual declarations** (never role-raising):
    - PRETRAINING declarations for every generator model identity appearing
      in Anc;
    - PUBLIC declarations overlapping footprint(E).
+6. **Mandatory P10-D regression cases for this clarification:**
+   1. **Implicit prior empirical exposure:** a prior DERIVED record from
+      another program, whose footprint overlaps E, recorded at seq < τ_P
+      and not listed in `refs.consulted`, while P has `consulted_all_prior
+      = true` → **DEVELOPMENT** (never G2).
+   2. **ARTIFACT self-exposure protection:** the study's own sealed ARTIFACT
+      is in Anc via `consulted_all_prior`. Its footprint contributes nothing
+      to ExposedFP, and there is no downgrade from that fact alone.
+   3. **NOT_EXPOSED declaration:** an `EXPOSURE_DECLARATION(NOT_EXPOSED)`
+      in Anc is **not** unioned into ExposedFP; it acts only through
+      coverage.
+   4. **EXPOSED declaration path separation:** a HUMAN
+      `EXPOSURE_DECLARATION(EXPOSED)` overlapping E downgrades through
+      DeclaredExposedFP, **not** through ObservedFP. This is made
+      observable, e.g. ObservedFP ∩ fp(E) = ∅ while the role is
+      DEVELOPMENT, and a late EXPOSED declaration outside Anc still
+      downgrades.
 
 ### 5.4 EvidenceRole(E, H, P, K) — frozen rule order (first match wins)
 
@@ -656,9 +705,46 @@ StudyProtocol.
 | `estimand_policy_record` | `record_hash` of the ESTIMAND_POLICY decision |
 | `members` | a tuple, sorted by `hypothesis_id`, of `MemberContract` |
 | `alpha_study` | α for Holm, in (0, 0.5) |
-| `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the Phase-7 partition with HOLDOUT = window), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
-| `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, decision-rule version, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
+| `confirmation` | `{window: [w0, w1], realization_bound_days, subjects: subject-key set, observation_kinds, declared_footprint (canonical calendar-day SOF body, §6.4), partition_spec (the canonical sealed Phase-7 PartitionRef representation with HOLDOUT = window; see "Frozen identity details" below), dataset_contract: VariableMap + SecurityMap + MarketSeriesMap + calendar hashes + DERIVATION_RULES_VERSION}` |
+| `partition_ref_hash` | the §4.1 canonical SHA-256 identity of the canonical `partition_spec`, i.e. `content_hash(PartitionRef.to_dict())`. Semantics are identical to the frozen P10-S `InferentialSeriesBundle.partition_ref_hash` (§12.1(b)). |
+| `analysis_plan_id` | `content_hash` of `{PROTOCOL_VERSION, DECISION_RULE_VERSION, per-member (estimator_id, procedure_ref, params, missingness_policy, bound_alpha)}` |
 | `power_disclosure` | per member `{mde, sigma_lr, T_conf, source_record}` or `{unavailable_reason}`. Disclosure is mandatory; **there is no gate** (SD §7.4, §12). |
+
+**Frozen identity details (clarified before Wave-3 integration, after the
+P10-E review):**
+- **Partition authority.**
+  - `partition_spec` is the canonical persisted representation of the
+    sealed Phase-7 `PartitionRef`.
+  - Runtime `Partition` / `Partition.partition_id` is **not** the Phase-10
+    preregistration identity, and there are never two competing partition
+    identities.
+  - Canonical path: input → `PartitionRef.from_dict(input)` →
+    `PartitionRef.to_dict()`. The supplied representation must **already
+    equal** that result, or the preregistration is **refused**.
+  - A non-canonical caller representation is never silently normalized.
+  - Validation authority is the sealed `PartitionRef`. P10-E does not
+    reproduce its rules locally.
+- **`partition_ref_hash`** = §4.1 `content_hash(PartitionRef.to_dict())`,
+  the same frozen serialization and hash semantics as P10-S.
+  - Separate call sites (P10-E via `smart_beta.science.contracts`, P10-S via
+    its local §4.1 implementation) must produce identical values, and
+    cross-module equality is tested. No second, divergent hash algorithm
+    exists.
+- **Cross-phase binding (future P10-H requirement):**
+  `preregistration.partition_ref_hash ==
+  inferential_series_bundle.partition_ref_hash`.
+  - A mismatch fails closed.
+  - There is no fallback to `Partition.partition_id`, to date-window
+    equality alone, or to a locally reconstructed partition identity.
+- **`DECISION_RULE_VERSION = "phase10-decision-rule-v1"`**, a frozen
+  Phase-10 protocol constant hashed into `analysis_plan_id`. It is protocol
+  authority, not a worker-local choice. Any future change to the scientific
+  decision semantics (§11.2) requires a new decision-rule version, and the
+  v1 string never silently acquires new semantics.
+- **`dataset_contract`** is accepted with exactly the fields already frozen
+  by the §6.4 footprint audit contract (`security_map_hash`,
+  `market_series_map_hash`, `variable_map_hash`, `calendar_hash`) plus
+  `derivation_rules_version`. There are no worker-chosen fields.
 
 `MemberContract`:
 
