@@ -51,6 +51,28 @@ rule         condition
 6            ``UNKNOWN_EXPOSURE``: fail-closed catch-all
 ===========  =========================================================
 
+Influence ancestry vs. empirical exposure (plan section 5.3, clarified)
+----------------------------------------------------------------------
+
+``Anc`` and ``ExposedFP`` are distinct. Membership in ``Anc`` alone does
+not mean a record embodies an observation of data:
+
+* ``ObservedFP`` = the union of the footprints of the ``DERIVED`` and
+  ``GENERATOR_INPUT`` records in ``Anc`` -- in Phase-10 v1 only those two
+  types embody empirical observation;
+* ``DeclaredExposedFP`` = the unchanged dedicated rule: every ``HUMAN``
+  ``EXPOSURE_DECLARATION(EXPOSED)`` that is either recorded at ``seq <
+  tau_P`` or whose ``event_time < date(recorded_at(P))``, whether or not it
+  is in ``Anc``;
+* ``ExposedFP = ObservedFP union DeclaredExposedFP``.
+
+``ARTIFACT``, ``CONSUMPTION`` and ``EXPOSURE_DECLARATION`` records
+contribute **no** footprint merely by being in ``Anc``. They act only
+through their dedicated frozen rules (ROBUSTNESS, coverage,
+class-match/residual, the pre-freeze ACCESS rule). In particular a study's
+own sealed ARTIFACT in ``Anc`` (e.g. via ``consulted_all_prior``) never
+exposes the study to its own evidence footprint.
+
 Program-lineage note
 --------------------
 
@@ -63,6 +85,16 @@ The mechanically available, fail-closed interpretation is therefore
 transitive ``refs`` closure, so the program-scope rule is a supplementary
 over-approximation over the same program, never the only exposure path.
 See :func:`program_lineage`.
+
+``consulted_all_prior`` note
+----------------------------
+
+Section 5.3 seeds every eligible record with a strictly smaller ``seq`` for
+**every** record whose ancestry is constructed, including the
+``PREREGISTRATION`` P itself. A preregistration's own
+``consulted_all_prior = true`` is therefore never ignored. K sequence and
+prefix membership are the only ordering authority; wall-clock timestamps
+never establish ancestry order.
 """
 
 from __future__ import annotations
@@ -104,6 +136,8 @@ __all__ = [
     "RoleDerivationError",
     "program_lineage",
     "influence_ancestry",
+    "observed_footprint",
+    "declared_exposed_footprint",
     "exposed_footprint",
     "evidence_role",
     "grade_for_role",
@@ -127,6 +161,12 @@ _REQUIRED_FOOTPRINT_KINDS = frozenset(
 #: Seed-set channels for the program-scope conservatism (plan section 5.3).
 _PROGRAM_SCOPE_CHANNELS = frozenset(
     {Channel.GENERATOR, Channel.PROGRAM, Channel.HUMAN}
+)
+
+#: Record types that embody an empirical observation (plan section 5.3 step 4).
+#: Only these contribute a footprint to ``ObservedFP`` by ancestry membership.
+_OBSERVED_FOOTPRINT_KINDS = frozenset(
+    {RecordKind.DERIVED, RecordKind.GENERATOR_INPUT}
 )
 
 #: The literal residual text required by plan section 8 for G1/G2.
@@ -166,7 +206,8 @@ class RoleDerivationError(RoleError):
     :func:`evidence_role` does **not** raise this: per plan section 5.4 a
     missing ``HYPOTHESIS_FREEZE`` / ``PREREGISTRATION`` / ``ARTIFACT`` record
     yields ``UNKNOWN_EXPOSURE``. The standalone helpers
-    (:func:`influence_ancestry`, :func:`exposed_footprint`,
+    (:func:`influence_ancestry`, :func:`observed_footprint`,
+    :func:`declared_exposed_footprint`, :func:`exposed_footprint`,
     :func:`residual_disclosures`) require their inputs and raise this.
     """
 
@@ -465,6 +506,14 @@ def _influence_ancestry_hashes(
             continue
         if record.program_id is not None and record.program_id in lineage:
             seed.add(record.record_hash)
+    # A PREREGISTRATION's own consulted_all_prior is not ignored: it seeds
+    # every eligible record with a strictly smaller seq. K sequence and
+    # prefix membership are the only ordering authority; timestamps never
+    # establish ancestry order.
+    if preregistration.payload.get("consulted_all_prior") is True:
+        seed.update(
+            record.record_hash for record in records if record.seq < tau_p
+        )
 
     ancestors: set[str] = set()
     queue: list[str] = list(seed)
@@ -494,10 +543,12 @@ def influence_ancestry(
 
     The seed set is ``HYPOTHESIS_FREEZE(H)``, the references of
     ``PREREGISTRATION(P)`` and every pre-``tau_P`` ``GENERATOR``/``PROGRAM``/
-    ``HUMAN`` record whose ``program_id`` is in ``L(H)``. The set is closed
-    over all four reference lists and over ``consulted_all_prior`` records,
-    restricted to ``seq < tau_P``. Raises :class:`RoleDerivationError` if
-    ``H`` or ``P`` is absent.
+    ``HUMAN`` record whose ``program_id`` is in ``L(H)``. If ``P`` carries
+    ``consulted_all_prior = true`` it additionally seeds every record with a
+    strictly smaller ``seq`` (its own flag is never ignored). The set is
+    closed over all four reference lists and over every ancestry record's
+    ``consulted_all_prior``, restricted to ``seq < tau_P``. Raises
+    :class:`RoleDerivationError` if ``H`` or ``P`` is absent.
     """
     records = _verified_records(knowledge)
     index = _index(records)
@@ -522,53 +573,47 @@ def influence_ancestry(
 # ---------------------------------------------------------------------------
 
 
-def exposed_footprint(
-    hypothesis: Any,
-    preregistration: Any,
-    knowledge: Any,
-    *,
-    calendar: Any = None,
-) -> Footprint:
-    """``ExposedFP(H, P, K)`` (plan section 5.3 step 4).
-
-    The union of every ancestry record's footprint and every active
-    ``HUMAN`` ``EXPOSED`` declaration covering the same. Missing/undeterminable
-    operands make the union undeterminable (fail closed). Raises
-    :class:`RoleDerivationError` if ``H`` or ``P`` is absent.
-    """
-    records = _verified_records(knowledge)
-    index = _index(records)
-    freeze = _resolve_record(hypothesis, index, RecordKind.HYPOTHESIS_FREEZE)
-    if freeze is None:
-        raise RoleDerivationError("HYPOTHESIS_FREEZE(H) is absent from K")
-    preregistration_record = _resolve_record(
-        preregistration, index, RecordKind.PREREGISTRATION
-    )
-    if preregistration_record is None:
-        raise RoleDerivationError("PREREGISTRATION(P) is absent from K")
-    return _exposed_footprint(
-        freeze, preregistration_record, records, index, calendar
-    )
-
-
-def _exposed_footprint(
-    freeze: KnowledgeRecord,
-    preregistration: KnowledgeRecord,
-    records: Sequence[KnowledgeRecord],
+def _observed_footprint_list(
+    ancestor_hashes: frozenset[str],
     index: Mapping[str, KnowledgeRecord],
     calendar: Any,
-) -> Footprint:
+) -> list[Footprint]:
+    """``ObservedFP`` operands: only ``DERIVED``/``GENERATOR_INPUT`` in Anc.
+
+    Membership in ``Anc`` alone does not imply empirical exposure. In
+    Phase-10 v1 only these two record types embody an empirical observation
+    (plan section 5.3 step 4); ``ARTIFACT``, ``CONSUMPTION`` and
+    ``EXPOSURE_DECLARATION`` contribute no footprint by ancestry membership.
+    """
+    footprints: list[Footprint] = []
+    for target in ancestor_hashes:
+        record = index[target]
+        if record.kind not in _OBSERVED_FOOTPRINT_KINDS:
+            continue
+        if record.footprint is None:
+            continue
+        footprints.append(
+            footprint_from_body(record.footprint, calendar=calendar)
+        )
+    return footprints
+
+
+def _declared_exposed_footprint_list(
+    records: Sequence[KnowledgeRecord],
+    preregistration: KnowledgeRecord,
+    calendar: Any,
+) -> list[Footprint]:
+    """``DeclaredExposedFP`` operands: the dedicated HUMAN EXPOSED rule.
+
+    Every ``HUMAN`` ``EXPOSURE_DECLARATION(EXPOSED)`` counts when it was
+    recorded at ``seq < tau_P`` or its ``event_time < date(recorded_at(P))``,
+    whether or not it is in ``Anc`` (a late declaration of earlier exposure
+    downgrades). This is unchanged from the frozen section 5.3 step 4 rule
+    and is separate from ``ObservedFP``.
+    """
     tau_p = preregistration.seq
     prereg_date = _coerce_date(preregistration.recorded_at)
-    ancestor_hashes = _influence_ancestry_hashes(
-        freeze, preregistration, records, index
-    )
     footprints: list[Footprint] = []
-    for record in records:
-        if record.record_hash in ancestor_hashes and record.footprint is not None:
-            footprints.append(
-                footprint_from_body(record.footprint, calendar=calendar)
-            )
     for record in records:
         if record.kind != RecordKind.EXPOSURE_DECLARATION:
             continue
@@ -582,9 +627,134 @@ def _exposed_footprint(
             footprints.append(
                 footprint_from_body(record.footprint, calendar=calendar)
             )
-    if not footprints:
+    return footprints
+
+
+def _union_or_empty(
+    footprints: Sequence[Footprint], calendar: Any
+) -> Footprint:
+    material = list(footprints)
+    if not material:
         return _empty_sof_footprint(calendar)
-    return union(*footprints)
+    return union(*material)
+
+
+def _observed_footprint(
+    ancestor_hashes: frozenset[str],
+    index: Mapping[str, KnowledgeRecord],
+    calendar: Any,
+) -> Footprint:
+    return _union_or_empty(
+        _observed_footprint_list(ancestor_hashes, index, calendar), calendar
+    )
+
+
+def _declared_exposed_footprint(
+    records: Sequence[KnowledgeRecord],
+    preregistration: KnowledgeRecord,
+    calendar: Any,
+) -> Footprint:
+    return _union_or_empty(
+        _declared_exposed_footprint_list(records, preregistration, calendar),
+        calendar,
+    )
+
+
+def _exposed_footprint(
+    ancestor_hashes: frozenset[str],
+    preregistration: KnowledgeRecord,
+    records: Sequence[KnowledgeRecord],
+    index: Mapping[str, KnowledgeRecord],
+    calendar: Any,
+) -> Footprint:
+    operands = _observed_footprint_list(ancestor_hashes, index, calendar)
+    operands.extend(
+        _declared_exposed_footprint_list(records, preregistration, calendar)
+    )
+    return _union_or_empty(operands, calendar)
+
+
+def _resolve_freeze_prereg(
+    hypothesis: Any, preregistration: Any, knowledge: Any
+) -> tuple[
+    tuple[KnowledgeRecord, ...],
+    Mapping[str, KnowledgeRecord],
+    KnowledgeRecord,
+    KnowledgeRecord,
+]:
+    records = _verified_records(knowledge)
+    index = _index(records)
+    freeze = _resolve_record(hypothesis, index, RecordKind.HYPOTHESIS_FREEZE)
+    if freeze is None:
+        raise RoleDerivationError("HYPOTHESIS_FREEZE(H) is absent from K")
+    preregistration_record = _resolve_record(
+        preregistration, index, RecordKind.PREREGISTRATION
+    )
+    if preregistration_record is None:
+        raise RoleDerivationError("PREREGISTRATION(P) is absent from K")
+    return records, index, freeze, preregistration_record
+
+
+def observed_footprint(
+    hypothesis: Any,
+    preregistration: Any,
+    knowledge: Any,
+    *,
+    calendar: Any = None,
+) -> Footprint:
+    """``ObservedFP(H, P, K)`` (plan section 5.3 step 4).
+
+    The union of the footprints of the ``DERIVED`` and ``GENERATOR_INPUT``
+    records in ``Anc(H, P, K)``. No other record type contributes by
+    ancestry membership. Raises :class:`RoleDerivationError` if ``H`` or
+    ``P`` is absent.
+    """
+    records, index, freeze, prereg = _resolve_freeze_prereg(
+        hypothesis, preregistration, knowledge
+    )
+    ancestor_hashes = _influence_ancestry_hashes(freeze, prereg, records, index)
+    return _observed_footprint(ancestor_hashes, index, calendar)
+
+
+def declared_exposed_footprint(
+    hypothesis: Any,
+    preregistration: Any,
+    knowledge: Any,
+    *,
+    calendar: Any = None,
+) -> Footprint:
+    """``DeclaredExposedFP(H, P, K)`` (plan section 5.3 step 4).
+
+    The dedicated ``HUMAN`` ``EXPOSED`` declaration rule: declarations
+    recorded at ``seq < tau_P`` or whose ``event_time <
+    date(recorded_at(P))``, whether or not they are in ``Anc``. Raises
+    :class:`RoleDerivationError` if ``H`` or ``P`` is absent.
+    """
+    records, _index, _freeze, prereg = _resolve_freeze_prereg(
+        hypothesis, preregistration, knowledge
+    )
+    return _declared_exposed_footprint(records, prereg, calendar)
+
+
+def exposed_footprint(
+    hypothesis: Any,
+    preregistration: Any,
+    knowledge: Any,
+    *,
+    calendar: Any = None,
+) -> Footprint:
+    """``ExposedFP(H, P, K) = ObservedFP union DeclaredExposedFP`` (5.3.4).
+
+    Missing/undeterminable operands make the union undeterminable (fail
+    closed). Raises :class:`RoleDerivationError` if ``H`` or ``P`` is absent.
+    """
+    records, index, freeze, prereg = _resolve_freeze_prereg(
+        hypothesis, preregistration, knowledge
+    )
+    ancestor_hashes = _influence_ancestry_hashes(freeze, prereg, records, index)
+    return _exposed_footprint(
+        ancestor_hashes, prereg, records, index, calendar
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -808,6 +978,7 @@ def evidence_role(
     artifact_footprint = _footprint_of(artifact_record, calendar)
     if artifact_footprint is None:
         return EvidenceRole.UNKNOWN_EXPOSURE
+    ancestor_hashes = _influence_ancestry_hashes(freeze, prereg, records, index)
 
     # -- rule 1a: ROBUSTNESS -------------------------------------------------
     undeterminable = False
@@ -830,7 +1001,9 @@ def evidence_role(
                 undeterminable = True
 
     # -- rule 1b: DEVELOPMENT ------------------------------------------------
-    exposed = _exposed_footprint(freeze, prereg, records, index, calendar)
+    exposed = _exposed_footprint(
+        ancestor_hashes, prereg, records, index, calendar
+    )
     development_overlap = _overlap(artifact_footprint, exposed)
     if development_overlap == FootprintOverlap.OVERLAP:
         return EvidenceRole.DEVELOPMENT
@@ -838,7 +1011,6 @@ def evidence_role(
         undeterminable = True
 
     # -- rule 2: UNKNOWN_EXPOSURE --------------------------------------------
-    ancestor_hashes = _influence_ancestry_hashes(freeze, prereg, records, index)
     if undeterminable:
         return EvidenceRole.UNKNOWN_EXPOSURE
     if not _ancestry_footprints_verifiable(ancestor_hashes, index, calendar):

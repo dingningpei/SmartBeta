@@ -263,6 +263,7 @@ def _preregistration(
     *,
     members: list[dict[str, Any]] | None = None,
     window: list[str] | None = None,
+    consulted_all_prior: bool = True,
 ):
     body = {
         "members": members
@@ -275,15 +276,21 @@ def _preregistration(
         ],
         "confirmation": {"window": list(window or CONFIRMATION_WINDOW)},
     }
+    payload: dict[str, Any] = {
+        "preregistration": body,
+        "preregistration_hash": _sha("prereg"),
+    }
+    refs: dict[str, list[str]] = {"influenced_by": [freeze.record_hash]}
+    if consulted_all_prior:
+        payload["consulted_all_prior"] = True
+    else:
+        # A preregistration must carry refs.consulted or consulted_all_prior.
+        refs["consulted"] = [freeze.record_hash]
     return dict(
         kind=RecordKind.PREREGISTRATION,
         program_id=freeze.program_id,
-        payload={
-            "preregistration": body,
-            "preregistration_hash": _sha("prereg"),
-            "consulted_all_prior": True,
-        },
-        refs={"influenced_by": [freeze.record_hash]},
+        payload=payload,
+        refs=refs,
     )
 
 
@@ -599,7 +606,11 @@ def test_rule_1b_program_scope_conservatism() -> None:
         )
     )
     freeze = chain.append(**_freeze([decision.record_hash]))
-    prereg = chain.append(**_preregistration(freeze))
+    # consulted_all_prior is disabled so the *only* path that pulls the
+    # un-referenced PROGRAM record into Anc is program-scope conservatism.
+    prereg = chain.append(
+        **_preregistration(freeze, consulted_all_prior=False)
+    )
     artifact = chain.append(
         **_artifact(_fp(subject=SUBJECT_B, start=DAY10), available_from=DAY10)
     )
@@ -621,8 +632,16 @@ def test_rule_1b_purge_failure_overlapping_returns_is_development() -> None:
     development_return = chain.append(
         **_artifact(_fp(subject=SUBJECT_A, start=DAY1))
     )
+    # The development *metric* (a DERIVED record) is what embodies the
+    # empirical observation; the ARTIFACT alone is only a descriptor.
+    development_metric = chain.append(
+        **_derived(
+            [development_return.record_hash],
+            _fp(subject=SUBJECT_A, start=DAY1),
+        )
+    )
     freeze = chain.append(
-        **_freeze([decision.record_hash, development_return.record_hash])
+        **_freeze([decision.record_hash, development_metric.record_hash])
     )
     prereg = chain.append(**_preregistration(freeze))
     # The confirmation forward return realizes on the same shared session.
@@ -1255,33 +1274,358 @@ def test_influence_ancestry_missing_inputs_raise() -> None:
         R.influence_ancestry(freeze.record_hash, _sha("absent"), chain.read())
 
 
-def test_exposed_footprint_is_the_ancestry_union() -> None:
+def test_observed_footprint_is_only_derived_and_generator_input() -> None:
     chain = _Chain()
     decision = chain.append(**_decision())
     window = chain.append(
         **_artifact(_fp(subject=SUBJECT_B, start=DAY0, end=DAY1))
     )
+    derived = chain.append(
+        **_derived([window.record_hash], _fp(subject=SUBJECT_B, start=DAY0, end=DAY1))
+    )
     freeze = chain.append(
-        **_freeze([decision.record_hash, window.record_hash])
+        **_freeze([decision.record_hash, window.record_hash, derived.record_hash])
     )
     prereg = chain.append(**_preregistration(freeze))
-    first = R.exposed_footprint(
+    observed = R.observed_footprint(
         freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
     )
-    second = R.exposed_footprint(
+    exposed = R.exposed_footprint(
         freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
     )
-    assert first.footprint_id == second.footprint_id
-    assert first.blocks
+    # The ARTIFACT contributes nothing by ancestry membership, only the
+    # DERIVED metric does; the two unions therefore agree here.
+    assert observed.footprint_id == exposed.footprint_id
+    assert observed.blocks
     assert (
         fpm.overlap(
-            first,
+            observed,
             fpm.footprint_from_body(
                 _fp(subject=SUBJECT_B, start=DAY1), calendar=CALENDAR
             ),
         )
         == fpm.FootprintOverlap.OVERLAP
     )
+
+
+# ---------------------------------------------------------------------------
+# section 5.3 item 6 mandatory regression cases (clarified ancestry)
+# ---------------------------------------------------------------------------
+
+
+def test_item6_1_implicit_prior_derived_from_another_program_is_development() -> None:
+    chain = _Chain()
+    footprint = _fp(subject=SUBJECT_B, start=DAY1)
+    decision = chain.append(**_decision())
+    other_artifact = chain.append(
+        **_artifact(footprint, program_id=PROGRAM_ALT)
+    )
+    # A prior DERIVED metric from another program, not listed in the
+    # preregistration's refs.consulted and outside H's program scope.
+    other_derived = chain.append(
+        **_derived(
+            [other_artifact.record_hash],
+            footprint,
+            channel=Channel.PROGRAM,
+            program_id=PROGRAM_ALT,
+        )
+    )
+    artifact = chain.append(**_artifact(footprint))
+    _add_declaration(
+        chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+    )
+    _add_declaration(
+        chain,
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        exposed=True,
+        extras={"reference": "public-record", "class_match": False},
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    # P's own consulted_all_prior seeds other_derived (K order, seq < tau_P):
+    # DEVELOPMENT, never G2.
+    assert role == EvidenceRole.DEVELOPMENT
+    assert (
+        fpm.overlap(
+            observed,
+            fpm.footprint_from_body(footprint, calendar=CALENDAR),
+        )
+        == fpm.FootprintOverlap.OVERLAP
+    )
+    assert other_derived.record_hash in {
+        record.record_hash
+        for record in R.influence_ancestry(
+            freeze.record_hash, prereg.record_hash, chain.read()
+        )
+    }
+
+
+def test_item6_2_own_sealed_artifact_is_not_self_exposure() -> None:
+    chain = _Chain()
+    footprint = _fp()
+    decision = chain.append(**_decision())
+    artifact = chain.append(**_artifact(footprint))
+    _add_declaration(
+        chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+    )
+    _add_declaration(
+        chain,
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        exposed=True,
+        extras={"reference": "public-record", "class_match": False},
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    # The study's own ARTIFACT is in Anc (via P's consulted_all_prior) but
+    # contributes nothing to ExposedFP.
+    ancestry = {
+        record.record_hash
+        for record in R.influence_ancestry(
+            freeze.record_hash, prereg.record_hash, chain.read()
+        )
+    }
+    assert artifact.record_hash in ancestry
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert role == EvidenceRole.CONFIRMATION_HISTORICAL_RECORDED
+    assert not observed.blocks
+
+
+def test_item6_3_not_exposed_declaration_not_in_exposed_footprint() -> None:
+    chain = _Chain()
+    footprint = _fp()
+    decision = chain.append(**_decision())
+    artifact = chain.append(**_artifact(footprint))
+    declaration = _add_declaration(
+        chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    assert declaration.record_hash in {
+        record.record_hash
+        for record in R.influence_ancestry(
+            freeze.record_hash, prereg.record_hash, chain.read()
+        )
+    }
+    exposed = R.exposed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    # The declaration acts only through coverage: it is not unioned and,
+    # without the PUBLIC half, the role is still UNKNOWN.
+    assert not exposed.blocks
+
+    assert (
+        R.evidence_role(
+            artifact.record_hash,
+            freeze.record_hash,
+            prereg.record_hash,
+            chain.read(),
+            calendar=CALENDAR,
+        )
+        == EvidenceRole.UNKNOWN_EXPOSURE
+    )
+
+
+def test_item6_4_exposed_declaration_uses_declared_not_observed() -> None:
+    chain = _Chain()
+    footprint = _fp()
+    decision = chain.append(**_decision())
+    artifact = chain.append(**_artifact(footprint))
+    _add_declaration(
+        chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+    )
+    _add_declaration(
+        chain,
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        exposed=True,
+        extras={"reference": "public-record", "class_match": False},
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    before = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert before == EvidenceRole.CONFIRMATION_HISTORICAL_RECORDED
+    # A late HUMAN EXPOSED declaration (recorded after tau_P, so outside Anc)
+    # with an early event_time still downgrades, through DeclaredExposedFP.
+    _add_declaration(
+        chain,
+        channel=Channel.HUMAN,
+        footprint=footprint,
+        exposed=True,
+        exposure_event_date="2019-01-01",
+    )
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    declared = R.declared_exposed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    after = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert after == EvidenceRole.DEVELOPMENT
+    assert not observed.blocks
+    assert (
+        fpm.overlap(
+            declared,
+            fpm.footprint_from_body(footprint, calendar=CALENDAR),
+        )
+        == fpm.FootprintOverlap.OVERLAP
+    )
+
+
+def test_item6_4b_pre_tau_p_exposed_is_declared_not_observed() -> None:
+    chain = _Chain()
+    footprint = _fp()
+    decision = chain.append(**_decision())
+    artifact = chain.append(**_artifact(footprint))
+    _add_declaration(
+        chain,
+        channel=Channel.HUMAN,
+        footprint=footprint,
+        exposed=True,
+        exposure_event_date="2019-01-01",
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    declared = R.declared_exposed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert role == EvidenceRole.DEVELOPMENT
+    assert not observed.blocks
+    assert (
+        fpm.overlap(
+            declared,
+            fpm.footprint_from_body(footprint, calendar=CALENDAR),
+        )
+        == fpm.FootprintOverlap.OVERLAP
+    )
+
+
+def test_item6_5_generator_input_in_ancestry_is_observed_exposure() -> None:
+    chain = _Chain()
+    footprint = _fp(subject=SUBJECT_B, start=DAY1)
+    decision = chain.append(**_decision())
+    included = chain.append(**_artifact(footprint))
+    generator = chain.append(
+        **_generator_input([included.record_hash], footprint)
+    )
+    artifact = chain.append(**_artifact(footprint))
+    freeze = chain.append(
+        **_freeze([decision.record_hash, generator.record_hash])
+    )
+    prereg = chain.append(
+        **_preregistration(freeze, consulted_all_prior=False)
+    )
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    assert role == EvidenceRole.DEVELOPMENT
+    assert (
+        fpm.overlap(
+            observed,
+            fpm.footprint_from_body(footprint, calendar=CALENDAR),
+        )
+        == fpm.FootprintOverlap.OVERLAP
+    )
+
+
+def test_item6_6_consumption_in_ancestry_is_not_observed_exposure() -> None:
+    chain = _Chain()
+    footprint = _fp()
+    decision = chain.append(**_decision())
+    other_freeze = chain.append(
+        **_freeze([decision.record_hash], hypothesis_id=HYP_ALT)
+    )
+    other_prereg = chain.append(**_preregistration(other_freeze))
+    other_artifact = chain.append(
+        **_artifact(footprint, program_id=PROGRAM_ALT)
+    )
+    consumption = chain.append(
+        **_consumption(
+            other_prereg, other_artifact, footprint, program_id=PROGRAM_ALT
+        )
+    )
+    artifact = chain.append(**_artifact(footprint))
+    _add_declaration(
+        chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+    )
+    _add_declaration(
+        chain,
+        channel=Channel.PUBLIC,
+        footprint=footprint,
+        exposed=True,
+        extras={"reference": "public-record", "class_match": False},
+    )
+    freeze = chain.append(**_freeze([decision.record_hash]))
+    prereg = chain.append(**_preregistration(freeze))
+    assert consumption.record_hash in {
+        record.record_hash
+        for record in R.influence_ancestry(
+            freeze.record_hash, prereg.record_hash, chain.read()
+        )
+    }
+    observed = R.observed_footprint(
+        freeze.record_hash, prereg.record_hash, chain.read(), calendar=CALENDAR
+    )
+    role = R.evidence_role(
+        artifact.record_hash,
+        freeze.record_hash,
+        prereg.record_hash,
+        chain.read(),
+        calendar=CALENDAR,
+    )
+    # The CONSUMPTION is in Anc but its footprint is not ObservedFP, and its
+    # preregistration does not contain H, so rule 1a does not fire either.
+    assert role == EvidenceRole.CONFIRMATION_HISTORICAL_RECORDED
+    assert not observed.blocks
 
 
 # ---------------------------------------------------------------------------
@@ -1630,6 +1974,8 @@ def test_no_persisted_role_field_or_setter() -> None:
     for name in (
         "evidence_role",
         "influence_ancestry",
+        "observed_footprint",
+        "declared_exposed_footprint",
         "exposed_footprint",
         "residual_disclosures",
         "program_lineage",
