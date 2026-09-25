@@ -613,6 +613,12 @@ def record_evaluation_artifact(
     ``available_from`` defaults to the last fold's ``end`` date; it is
     attested metadata only. ``packaging_hash`` is the ``EvaluationRecord``
     content hash (metadata only, not identity).
+
+    ``sealed`` is **False**. Plan section 5.4 rule 4's ``sealed = true`` means
+    the data were hash-sealed at ingestion and never read before the
+    preregistration freeze. A Phase-7 evaluation's data were read by the
+    evaluation itself, so this artifact is not sealed and can never satisfy
+    rule 4's sealed condition.
     """
     log = _require_log(log)
     content_hash_value = _require_sha256_hex(
@@ -628,7 +634,7 @@ def record_evaluation_artifact(
         footprint=aggregate_footprint(evaluation_record, dataset).body,
         payload={
             "packaging_hash": content_hash_value,
-            "sealed": True,
+            "sealed": False,
             "available_from": available_from or default_available_from,
             "source_label": "phase7-evaluation",
         },

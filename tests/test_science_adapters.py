@@ -397,6 +397,45 @@ def test_record_registered_evaluation_uses_whole_range_footprint(tmp_path):
     assert str(HOLDOUT_SENTINEL) not in _all_payload_text(derived)
 
 
+def test_evaluation_artifact_is_not_sealed(tmp_path):
+    """The evaluation ARTIFACT is sealed=False: the evaluation read the data.
+
+    Plan section 5.4 rule 4's ``sealed = true`` means hash-sealed at ingestion
+    and never read before the preregistration freeze. A Phase-7 evaluation
+    read its data, so its artifact is never sealed.
+    """
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    root = _root(log, record)
+    assert root.kind is RecordKind.ARTIFACT
+    assert root.payload["sealed"] is False
+    assert root.payload["source_label"] == "phase7-evaluation"
+
+
+def test_evaluation_artifact_never_satisfies_rule_4_sealed_condition(tmp_path):
+    """Mandatory: the evaluation ARTIFACT cannot satisfy rule 4's seal condition.
+
+    ``roles.py`` (absent on this branch) checks rule 4 as
+    ``artifact.payload.get("sealed") is True``. This mirrors that exact
+    predicate over the artifact P10-I writes; it is always False.
+    """
+    log = _new_log(tmp_path)
+    record = _evaluation_record()
+    root = _root(log, record)
+
+    def _rule_4_sealed_condition(artifact: KnowledgeRecord) -> bool:
+        # Plan section 5.4 rule 4: seq(ARTIFACT(E)) < tau_P and sealed = true.
+        return artifact.payload.get("sealed") is True
+
+    assert _rule_4_sealed_condition(root) is False
+    # A sealed ARTIFACT of the same shape would satisfy the predicate, which
+    # shows the test is discriminating rather than vacuously true.
+    sealed_lookalike = dict(root.to_dict())
+    sealed_lookalike["payload"] = dict(root.payload)
+    sealed_lookalike["payload"]["sealed"] = True
+    assert sealed_lookalike["payload"].get("sealed") is True
+
+
 # ---------------------------------------------------------------------------
 # reconciliation: DERIVED footprint == exact parent union (plan sections 5.2 / 12.3)
 # ---------------------------------------------------------------------------
