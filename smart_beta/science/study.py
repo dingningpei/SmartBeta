@@ -88,6 +88,7 @@ from smart_beta.science.footprint import (
     Footprint,
     FootprintOverlap,
     covers,
+    empty_footprint,
     expand,
     footprint_from_body,
     footprint_from_panel,
@@ -154,8 +155,6 @@ _ESTIMAND_METRIC = {
     EstimandKind.MEAN_PEARSON_IC: MetricKey.IC,
     EstimandKind.MEAN_NET_LONG_SHORT: MetricKey.TURNOVER_COST_ADJUSTED,
 }
-
-_REASON_ORDER = {code: index for index, code in enumerate(ReasonCode)}
 
 _REASON_ORDER = {code: index for index, code in enumerate(ReasonCode)}
 
@@ -582,21 +581,27 @@ def _dataset_contract_reasons(
 ) -> set[ReasonCode]:
     """Verify every frozen section 6.4 dataset_contract authority (F3).
 
-    Uses the existing P10-C/P10-A canonical/hash authorities (the same
-    ``P10-C`` ``_audit_hashes`` inputs); there is no local replacement
-    canonicalization. A mismatch is a pre-consumption ``FOOTPRINT_MISMATCH``.
+    The four audit hashes are read from the existing **public P10-C
+    authority** :func:`smart_beta.science.footprint.empty_footprint` (its
+    ``security_map_hash`` / ``market_series_map_hash`` / ``variable_map_hash``
+    / ``calendar_hash``). study.py computes no audit hash itself and holds no
+    second canonicalization authority. ``derivation_rules_version`` is checked
+    against its existing frozen P10-A constant, not hashed. A mismatch is a
+    pre-consumption ``FOOTPRINT_MISMATCH``.
     """
     contract = prereg.confirmation.dataset_contract
     try:
+        audit = empty_footprint(
+            context.calendar,
+            security_map=context.security_map,
+            market_series_map=context.market_series_map,
+            variable_map=context.variable_map,
+        ).body
         expected = {
-            "security_map_hash": content_hash(dict(context.security_map or {})),
-            "market_series_map_hash": content_hash(
-                dict(context.market_series_map or {})
-            ),
-            "variable_map_hash": content_hash(dict(context.variable_map or {})),
-            "calendar_hash": content_hash(
-                [ts.date().isoformat() for ts in context.calendar.dates]
-            ),
+            "security_map_hash": audit["security_map_hash"],
+            "market_series_map_hash": audit["market_series_map_hash"],
+            "variable_map_hash": audit["variable_map_hash"],
+            "calendar_hash": audit["calendar_hash"],
             "derivation_rules_version": DERIVATION_RULES_VERSION,
         }
     except Exception:  # noqa: BLE001 - fail closed

@@ -26,6 +26,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -81,7 +82,7 @@ from smart_beta.science.contracts import (
     RecordKind,
     content_hash,
 )
-from smart_beta.science.footprint import footprint_from_panel
+from smart_beta.science.footprint import empty_footprint, footprint_from_panel
 from smart_beta.science.inference import (
     InferenceProcedure,
     InferenceProcedureContract,
@@ -258,7 +259,11 @@ def _engine_result(member: P.MemberContract, panel: pd.DataFrame) -> EngineResul
 
 
 def _evaluation_spec(
-    member: P.MemberContract, engine_result: EngineResult, partition: Partition
+    member: P.MemberContract,
+    engine_result: EngineResult,
+    partition: Partition,
+    *,
+    cost_mode: CostMode = CostMode.ONE_WAY,
 ) -> EvaluationSpec:
     """The reader/execution boundary's COMPLETE confirmation EvaluationSpec.
 
@@ -308,7 +313,7 @@ def _evaluation_spec(
         universe_variants=("all",),
         cost_model=CostModel(
             transaction_cost_bps=float(construction["cost_bps"]),
-            mode=CostMode.ONE_WAY,
+            mode=cost_mode,
         ),
         benchmark=BenchmarkRef(kind=BenchmarkKind.NAMED, key="zero"),
         factor_provenance_hash=engine_result.content_hash,
@@ -625,6 +630,9 @@ def _build_study(
     declared_body: dict[str, Any] | None = None,
     context_registry_snapshot: Any = None,
     prior_salt: str = "",
+    estimand_kind: EstimandKind = EstimandKind.MEAN_RANK_IC,
+    reader_cost_mode: CostMode = CostMode.ONE_WAY,
+    reader_periods_per_year: int = 252,
 ) -> _Study:
     """Build a synthetic confirmation study with a valid K prefix."""
     log = _log(tmp_path)
@@ -657,7 +665,7 @@ def _build_study(
         log,
         P.EstimandPolicy(
             program_id=PROGRAM,
-            estimand_kind=EstimandKind.MEAN_RANK_IC,
+            estimand_kind=estimand_kind,
             horizon=HORIZON,
             construction=dict(CONSTRUCTION),
             sesoi=0.05,
@@ -731,7 +739,7 @@ def _build_study(
             factor_spec_hash=overrides.get(
                 hypothesis_id, factor_specs[index].version
             ),
-            estimand_kind=EstimandKind.MEAN_RANK_IC,
+            estimand_kind=estimand_kind,
             horizon=HORIZON,
             construction=dict(CONSTRUCTION),
             direction=Direction.POSITIVE,
@@ -798,7 +806,13 @@ def _build_study(
         )
 
     store = study.StudyStore(tmp_path / "study")
-    reader = _Reader(_factor_panel(), _returns_panel(), _partition())
+    reader = _Reader(
+        _factor_panel(),
+        _returns_panel(),
+        _partition(),
+        cost_mode=reader_cost_mode,
+        periods_per_year=reader_periods_per_year,
+    )
     reader.bind(log)
     context = study.StudyContext(
         study_id="study-1",
@@ -852,12 +866,24 @@ def _build_study(
 class _Reader(study.ConfirmationDataReader):
     """Instrumented reader: records calls and asserts the write-ahead order."""
 
-    def __init__(self, factor_panel, realized, partition) -> None:
+    def __init__(
+        self,
+        factor_panel,
+        realized,
+        partition,
+        *,
+        cost_mode: CostMode = CostMode.ONE_WAY,
+        periods_per_year: int = 252,
+    ) -> None:
         self.factor_panel = factor_panel
         self.realized = realized
         self.partition = partition
+        self.cost_mode = cost_mode
+        self.periods_per_year = periods_per_year
         self.calls: list[str] = []
         self._log: K.KnowledgeLog | None = None
+        self.last_spec: EvaluationSpec | None = None
+        self.last_engine_result: EngineResult | None = None
 
     def bind(self, log: K.KnowledgeLog) -> None:
         self._log = log
@@ -876,13 +902,19 @@ class _Reader(study.ConfirmationDataReader):
             for record in records
         ), "a read occurred before the durable ACCESS"
         engine_result = _engine_result(member, self.factor_panel)
+        specification = _evaluation_spec(
+            member,
+            engine_result,
+            self.partition,
+            cost_mode=self.cost_mode,
+        )
+        self.last_spec = specification
+        self.last_engine_result = engine_result
         return study.ConfirmationMemberData(
             engine_result=engine_result,
-            evaluation_spec=_evaluation_spec(
-                member, engine_result, self.partition
-            ),
+            evaluation_spec=specification,
             realized_returns=self.realized,
-            periods_per_year=252,
+            periods_per_year=self.periods_per_year,
         )
 
 
@@ -1796,3 +1828,151 @@ def test_f5_alignment_field_is_absent_and_evaluate_gets_none(tmp_path, monkeypat
     assert seen == [None]
     fields = {field.name for field in dataclasses.fields(study.ConfirmationMemberData)}
     assert "alignments_by_horizon" not in fields
+
+
+# ===========================================================================
+# SECOND CORRECTION — F1 behavioral EvaluationSpec authority
+# ===========================================================================
+
+
+def test_f1_reader_spec_passed_through_unchanged(tmp_path, monkeypatch):
+    """The exact reader-supplied spec reaches sealed Phase-7, unmutated."""
+    import smart_beta.evaluation.engine as engine_mod
+
+    captured: dict[str, Any] = {}
+    original = engine_mod.evaluate
+
+    def spy(*args, **kwargs):
+        captured["spec"] = args[1]
+        captured["periods_per_year"] = kwargs.get("periods_per_year")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "evaluate", spy)
+    s = _build_study(
+        tmp_path,
+        reader_cost_mode=CostMode.ROUND_TRIP,
+        reader_periods_per_year=365,
+    )
+    s.context.reader.bind(s.log)
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "assessed"
+
+    supplied = s.context.reader.last_spec
+    assert supplied is not None
+    # Values differ from the old P10-H synthesized defaults (ONE_WAY / 252).
+    assert supplied.cost_model.mode is CostMode.ROUND_TRIP
+    # The object the sealed engine received is the reader's own object.
+    assert captured["spec"] is supplied
+    assert captured["spec"].cost_model.mode is CostMode.ROUND_TRIP
+    assert captured["periods_per_year"] == 365
+
+    state = s.store.read_state()
+    entry = state["members"][s.member_ids[0]]
+    record = EvaluationRecord.from_dict(
+        s.store.read_object(entry["evaluation_record_hash"])
+    )
+    assert record.spec_hash == supplied.spec_hash
+
+
+def test_f1_net_long_short_passes_without_mode_binding(tmp_path):
+    """MEAN_NET_LONG_SHORT is not refused for an unbound declarative mode."""
+    contract = _contract(
+        supported_estimands=frozenset({EstimandKind.MEAN_NET_LONG_SHORT})
+    )
+    s = _build_study(
+        tmp_path,
+        estimand_kind=EstimandKind.MEAN_NET_LONG_SHORT,
+        contract=contract,
+        reader_cost_mode=CostMode.ROUND_TRIP,
+    )
+    s.context.reader.bind(s.log)
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "assessed"
+    assessment = result.for_hypothesis(s.member_ids[0])
+    assert assessment.state.value != "NOT_ASSESSED"
+    assert ReasonCode.ESTIMAND_POLICY_VIOLATION not in assessment.reason_codes
+    assert s.context.reader.last_spec.cost_model.mode is CostMode.ROUND_TRIP
+
+
+# ===========================================================================
+# SECOND CORRECTION — F2 isolated count-binding tests
+# ===========================================================================
+
+
+def test_f2_experiment_count_binding(tmp_path):
+    """A ref claiming one more experiment than the snapshot must be refused."""
+    s = _build_study(tmp_path)
+    ref = dict(s.prereg.registry_snapshot_ref)
+    ref["experiment_count"] = ref["experiment_count"] + 1
+    # The snapshot hash is the real, matching hash: only the count differs.
+    assert study._reconstruct_registry_prefix(s.registry_snapshot, ref) is None
+
+
+def test_f2_decision_count_binding(tmp_path):
+    """A ref claiming one more decision than the snapshot must be refused."""
+    s = _build_study(tmp_path)
+    ref = dict(s.prereg.registry_snapshot_ref)
+    ref["decision_count"] = ref["decision_count"] + 1
+    assert study._reconstruct_registry_prefix(s.registry_snapshot, ref) is None
+
+
+def test_f2_count_mismatch_refused_and_body_not_persisted(tmp_path):
+    """An incomplete current snapshot is refused; its body is not persisted."""
+    s = _build_study(tmp_path)
+    incomplete = RegistrySnapshot(experiments=(), decisions=())
+    context = dataclasses.replace(s.context, registry_snapshot=incomplete)
+    result = study.execute("study-1", context=context)
+    assert result.phase == "refused"
+    assert ReasonCode.REGISTRY_INGESTION_INCOMPLETE in result.reason_codes
+    assert s.context.reader.calls == []
+    assert not s.store.has_object(incomplete.snapshot_hash)
+    assert s.store.read_state()["consumption_record_hash"] is None
+
+
+# ===========================================================================
+# SECOND CORRECTION — F3 derivation_rules_version
+# ===========================================================================
+
+
+def test_f3_derivation_rules_version_unit():
+    """The version check rejects a contract with the right hashes but wrong version."""
+    audit = empty_footprint(
+        CALENDAR,
+        security_map=SECURITY_MAP,
+        market_series_map=MARKET_SERIES_MAP,
+        variable_map=VARIABLE_MAP,
+    ).body
+    contract = {
+        "security_map_hash": audit["security_map_hash"],
+        "market_series_map_hash": audit["market_series_map_hash"],
+        "variable_map_hash": audit["variable_map_hash"],
+        "calendar_hash": audit["calendar_hash"],
+        "derivation_rules_version": "not-the-frozen-version",
+    }
+    prereg = SimpleNamespace(
+        confirmation=SimpleNamespace(dataset_contract=contract)
+    )
+    context = SimpleNamespace(
+        calendar=CALENDAR,
+        security_map=SECURITY_MAP,
+        market_series_map=MARKET_SERIES_MAP,
+        variable_map=VARIABLE_MAP,
+    )
+    assert study._dataset_contract_reasons(prereg, context) == {
+        ReasonCode.FOOTPRINT_MISMATCH
+    }
+
+
+def test_f3_derivation_rules_version_mismatch_refused(tmp_path, monkeypatch):
+    """The execution gate refuses pre-consumption on a version mismatch."""
+    s = _build_study(tmp_path)
+    monkeypatch.setattr(study, "DERIVATION_RULES_VERSION", "not-the-frozen-version")
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "refused"
+    assert ReasonCode.FOOTPRINT_MISMATCH in result.reason_codes
+    assert s.context.reader.calls == []
+    assert _study_consumptions(s.log) == []
+    assert _study_access_records(s.log) == []
+    assert _count(s.log, RecordKind.DERIVED, "confirmation_series") == 0
+    assert _count(s.log, RecordKind.DERIVED, "confirmation_inference") == 0
+    assert _count(s.log, RecordKind.DERIVED, "confirmation_assessment") == 0
