@@ -69,6 +69,7 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
 
+from smart_beta.evaluation.spec import FoldRole, PartitionRef
 from smart_beta.science.contracts import (
     DERIVATION_RULES_VERSION,
     NULL_HYPOTHESIS,
@@ -104,8 +105,6 @@ __all__ = [
     "DECISION_RULE_VERSION",
     "CONSTRUCTION_KEYS",
     "DATASET_CONTRACT_KEYS",
-    "PARTITION_SPEC_KEYS",
-    "FOLD_ROLES",
     "PROCEDURE_ADMISSION",
     "PROCEDURE_REVOCATION",
     "ESTIMAND_POLICY",
@@ -121,6 +120,7 @@ __all__ = [
     "estimand_policy_content",
     "estimand_policy_from_record",
     "append_estimand_policy",
+    "analysis_plan_id_for",
     "validate_preregistration",
     "append_preregistration",
     "preregistration_from_record",
@@ -155,12 +155,6 @@ DATASET_CONTRACT_KEYS: tuple[str, ...] = (
     "calendar_hash",
     "derivation_rules_version",
 )
-
-#: The persisted Phase-7 ``PartitionRef`` keys (plan section 12.1).
-PARTITION_SPEC_KEYS: tuple[str, ...] = ("folds", "holdout_key")
-
-#: The Phase-7 fold-role vocabulary (``smart_beta.evaluation.partition``).
-FOLD_ROLES: tuple[str, ...] = ("IS", "OOS", "WALK_FORWARD", "HOLDOUT")
 
 #: ``HUMAN_DECISION`` ``decision_kind`` values owned by this module.
 PROCEDURE_ADMISSION = "PROCEDURE_ADMISSION"
@@ -569,87 +563,64 @@ def append_estimand_policy(
 # ---------------------------------------------------------------------------
 
 
-def _normalize_partition_spec(
+def _canonical_partition_spec(
     value: Any, *, window: tuple[str, str]
 ) -> Mapping[str, Any]:
-    """Validate the persisted Phase-7 ``PartitionRef`` and the HOLDOUT window.
+    """Return the canonical sealed Phase-7 ``PartitionRef`` representation.
 
-    The ``PartitionRef`` carries the P7-A boundary verbatim as a half-open
-    ``[start, end)`` interval (``engine._partition_ref``); the containment
-    reading used here is the direct ``start <= w0 and w1 <= end`` translation
-    of the plan's "``partition_spec`` places the whole window in the HOLDOUT
-    fold" (section 7.3 check 4).
+    Validation authority is the sealed
+    :class:`smart_beta.evaluation.spec.PartitionRef`: the supplied mapping is
+    parsed with ``PartitionRef.from_dict`` and must already equal the
+    resulting ``PartitionRef.to_dict()`` (compared through the frozen
+    section 4.1 canonical JSON, so the persisted JSON representation is
+    what is compared). A non-canonical caller representation is **refused**,
+    never silently normalized; P10-E reproduces none of the sealed rules.
+
+    The persisted boundary is the half-open ``[start, end)`` interval
+    carried verbatim by ``engine._partition_ref``; the \"whole window in the
+    HOLDOUT fold\" check uses the direct ``start <= w0 and w1 <= end``
+    translation (section 7.3 check 4). ``Partition.partition_id`` is never
+    consulted.
     """
-    if not isinstance(value, Mapping) or set(value.keys()) != set(
-        PARTITION_SPEC_KEYS
-    ):
+    if not isinstance(value, Mapping):
+        raise PreregistrationError("partition_spec must be a mapping")
+    try:
+        partition_ref = PartitionRef.from_dict(value)
+    except Exception as exc:  # noqa: BLE001 - sealed authority fails closed
         raise PreregistrationError(
-            "partition_spec keys must be exactly "
-            f"{sorted(PARTITION_SPEC_KEYS)}"
+            f"partition_spec is not a valid sealed Phase-7 PartitionRef: {exc}"
+        ) from exc
+    canonical = partition_ref.to_dict()
+    try:
+        supplied_json = canonical_json(_plain(value))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        raise PreregistrationError(
+            f"partition_spec is not canonical JSON: {exc}"
+        ) from exc
+    if supplied_json != canonical_json(canonical):
+        raise PreregistrationError(
+            "partition_spec must already be the canonical PartitionRef "
+            "representation (PartitionRef.from_dict(...).to_dict()); a "
+            "non-canonical representation is refused, never normalized"
         )
-    holdout_key = _expect_non_empty_str(
-        value["holdout_key"], where="partition_spec.holdout_key"
-    )
-    folds = value["folds"]
-    if isinstance(folds, (str, bytes)) or not isinstance(folds, Sequence) or not folds:
-        raise PreregistrationError("partition_spec.folds must be a non-empty sequence")
-    normalized_folds: list[dict[str, Any]] = []
-    holdouts: list[tuple[str, str]] = []
-    for position, fold in enumerate(folds):
-        if not isinstance(fold, Mapping) or set(fold.keys()) != {
-            "fold_key",
-            "role",
-            "index",
-            "start",
-            "end",
-        }:
-            raise PreregistrationError(
-                f"partition_spec fold {position} must have keys "
-                "['end', 'fold_key', 'index', 'role', 'start']"
-            )
-        role = fold["role"]
-        if hasattr(role, "value"):
-            role = role.value
-        if role not in FOLD_ROLES:
-            raise PreregistrationError(
-                f"partition_spec fold {position} role {role!r} is not closed"
-            )
-        start = _expect_iso_date(fold["start"], where=f"partition_spec fold {position}.start")
-        end = _expect_iso_date(fold["end"], where=f"partition_spec fold {position}.end")
-        if start > end:
-            raise PreregistrationError(
-                f"partition_spec fold {position} starts after it ends"
-            )
-        _expect_int(fold["index"], where=f"partition_spec fold {position}.index", minimum=0)
-        _expect_non_empty_str(
-            fold["fold_key"], where=f"partition_spec fold {position}.fold_key"
-        )
-        normalized_folds.append(
-            {
-                "fold_key": fold["fold_key"],
-                "role": role,
-                "index": fold["index"],
-                "start": start,
-                "end": end,
-            }
-        )
-        if role == "HOLDOUT":
-            holdouts.append((start, end))
+    holdouts = [
+        fold for fold in partition_ref.folds if fold.role is FoldRole.HOLDOUT
+    ]
     if len(holdouts) != 1:
         raise PreregistrationError(
             "partition_spec must define exactly one HOLDOUT fold"
         )
-    holdout_start, holdout_end = holdouts[0]
-    w0, w1 = window
-    if not (holdout_start <= w0 and w1 <= holdout_end):
+    holdout = holdouts[0]
+    w0 = date.fromisoformat(window[0])
+    w1 = date.fromisoformat(window[1])
+    if not (holdout.start <= w0 and w1 <= holdout.end):
         raise PreregistrationError(
             "partition_spec must place the whole confirmation window in the "
-            f"HOLDOUT fold: window=[{w0}, {w1}] holdout=[{holdout_start}, "
-            f"{holdout_end}]"
+            f"HOLDOUT fold: window=[{window[0]}, {window[1]}] "
+            f"holdout=[{holdout.start.isoformat()}, "
+            f"{holdout.end.isoformat()}]"
         )
-    return _freeze(
-        {"folds": tuple(normalized_folds), "holdout_key": holdout_key}
-    )
+    return _freeze(canonical)
 
 
 def _normalize_dataset_contract(value: Any, *, footprint: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -768,7 +739,7 @@ class ConfirmationDesign:
         object.__setattr__(
             self,
             "partition_spec",
-            _normalize_partition_spec(self.partition_spec, window=(w0, w1)),
+            _canonical_partition_spec(self.partition_spec, window=(w0, w1)),
         )
         object.__setattr__(
             self,
@@ -777,6 +748,16 @@ class ConfirmationDesign:
                 self.dataset_contract, footprint=footprint
             ),
         )
+
+    @property
+    def partition_ref_hash(self) -> str:
+        """Frozen section 4.1 identity of the canonical ``PartitionRef``.
+
+        ``content_hash(PartitionRef.to_dict())`` -- the same value P10-S
+        computes for ``InferentialSeriesBundle.partition_ref_hash``. It is
+        never derived from ``Partition.partition_id``.
+        """
+        return content_hash(PartitionRef.from_dict(self.partition_spec).to_dict())
 
     def to_content(self) -> dict[str, Any]:
         return {
@@ -992,10 +973,14 @@ class MemberContract:
         )
 
 
-def _analysis_plan_content(members: Sequence[MemberContract]) -> dict[str, Any]:
+def _analysis_plan_content(
+    members: Sequence[MemberContract],
+    *,
+    decision_rule_version: str = DECISION_RULE_VERSION,
+) -> dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "decision_rule_version": DECISION_RULE_VERSION,
+        "decision_rule_version": decision_rule_version,
         "members": [
             {
                 "estimator_id": member.estimator_id,
@@ -1007,6 +992,25 @@ def _analysis_plan_content(members: Sequence[MemberContract]) -> dict[str, Any]:
             for member in members
         ],
     }
+
+
+def analysis_plan_id_for(
+    members: Sequence[MemberContract],
+    *,
+    decision_rule_version: str = DECISION_RULE_VERSION,
+) -> str:
+    """The section 7.2 ``analysis_plan_id`` content hash.
+
+    ``PreRegistration.analysis_plan_id`` always calls this with the frozen
+    module constant :data:`DECISION_RULE_VERSION`; the keyword exists so a
+    test can mechanically show that a different decision-rule version changes
+    the id while the frozen v1 string is unchanged.
+    """
+    return content_hash(
+        _analysis_plan_content(
+            members, decision_rule_version=decision_rule_version
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1025,7 @@ _PREREG_BODY_KEYS = frozenset(
         "members",
         "alpha_study",
         "confirmation",
+        "partition_ref_hash",
         "analysis_plan_id",
         "power_disclosure",
     }
@@ -1163,8 +1168,20 @@ class PreRegistration:
 
     @property
     def analysis_plan_id(self) -> str:
-        """``content_hash`` of the section 7.2 analysis-plan content."""
-        return content_hash(_analysis_plan_content(self.members))
+        """``content_hash`` of the section 7.2 analysis-plan content.
+
+        Always uses the frozen :data:`DECISION_RULE_VERSION` constant.
+        """
+        return analysis_plan_id_for(self.members)
+
+    @property
+    def partition_ref_hash(self) -> str:
+        """Frozen section 4.1 identity of the canonical ``partition_spec``.
+
+        Equal to the P10-S ``InferentialSeriesBundle.partition_ref_hash`` for
+        the same ``PartitionRef``; never ``Partition.partition_id``.
+        """
+        return self.confirmation.partition_ref_hash
 
     @property
     def prereg_id(self) -> str:
@@ -1182,6 +1199,7 @@ class PreRegistration:
             "members": [member.to_content() for member in self.members],
             "alpha_study": self.alpha_study,
             "confirmation": self.confirmation.to_content(),
+            "partition_ref_hash": self.partition_ref_hash,
             "analysis_plan_id": self.analysis_plan_id,
             "power_disclosure": {
                 member.hypothesis_id: _plain(
@@ -1216,6 +1234,7 @@ class PreRegistration:
                 "members",
                 "alpha_study",
                 "confirmation",
+                "partition_ref_hash",
                 "analysis_plan_id",
                 "power_disclosure",
             )
@@ -1242,6 +1261,10 @@ class PreRegistration:
         if prereg.analysis_plan_id != mapping["analysis_plan_id"]:
             raise PreregistrationError(
                 "analysis_plan_id does not match the member analysis plan"
+            )
+        if prereg.partition_ref_hash != mapping["partition_ref_hash"]:
+            raise PreregistrationError(
+                "partition_ref_hash does not match the canonical PartitionRef"
             )
         if prereg.to_content() != _plain(mapping):
             raise PreregistrationError(

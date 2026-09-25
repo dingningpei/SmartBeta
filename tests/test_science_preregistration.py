@@ -300,14 +300,14 @@ def _partition_spec(
         "folds": [
             {
                 "fold_key": "is",
-                "role": "IS",
+                "role": "is",
                 "index": 0,
                 "start": "2020-01-01",
                 "end": "2021-06-30",
             },
             {
                 "fold_key": "holdout",
-                "role": "HOLDOUT",
+                "role": "holdout",
                 "index": 1,
                 "start": holdout_start,
                 "end": holdout_end,
@@ -1247,3 +1247,209 @@ def test_family_membership_changed_after_access_is_refused(tmp_path):
     assert original.prereg_id == P.preregistration_from_record(
         original_record
     ).prereg_id
+
+
+# ===========================================================================
+# frozen identity details (post-review): PartitionRef authority and the
+# decision-rule constant
+# ===========================================================================
+
+
+def _canonical_partition_ref():
+    from smart_beta.evaluation.spec import PartitionRef
+
+    return PartitionRef.from_dict(_partition_spec())
+
+
+def test_canonical_partition_ref_to_dict_input_accepted(tmp_path):
+    # (1) The canonical sealed `PartitionRef.to_dict()` representation is the
+    # only accepted input, and it is accepted unchanged.
+    ref = _canonical_partition_ref()
+    canonical_spec = ref.to_dict()
+    confirmation = _confirmation(partition_spec=canonical_spec)
+    assert confirmation.to_content()["partition_spec"] == canonical_spec
+    assert confirmation.partition_ref_hash == content_hash(canonical_spec)
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup, confirmation=confirmation)
+    P.validate_preregistration(
+        prereg, prefix=setup["log"].read(), registry=setup["registry"]
+    )
+
+
+def test_non_round_tripping_partition_spec_refused_not_normalized(tmp_path):
+    # (2) A hand-built mapping whose round-trip `to_dict()` differs (folds out
+    # of canonical order) is refused, never silently normalized.
+    spec = _partition_spec()
+    non_canonical = {
+        "folds": list(reversed(spec["folds"])),
+        "holdout_key": spec["holdout_key"],
+    }
+    with pytest.raises(P.PreregistrationError) as excinfo:
+        _confirmation(partition_spec=non_canonical)
+    assert "never normalized" in str(excinfo.value)
+    # No record may be written for such an input.
+    setup = _setup(tmp_path)
+    with pytest.raises(P.PreregistrationError):
+        _prereg(setup, confirmation=_confirmation(partition_spec=non_canonical))
+
+
+def test_invalid_partition_spec_refused_by_sealed_authority(tmp_path):
+    # (3) A structurally invalid PartitionRef is rejected by the sealed
+    # authority (`PartitionRef.from_dict`), not by local re-implementation.
+    spec = _partition_spec()
+    with pytest.raises(P.PreregistrationError):
+        _confirmation(partition_spec={"folds": spec["folds"]})  # no holdout_key
+    bad_fold = {
+        "fold_key": "holdout",
+        "role": "holdout",
+        "index": 1,
+        "start": "2021-12-31",
+        "end": "2021-07-01",
+    }
+    with pytest.raises(P.PreregistrationError):
+        _confirmation(
+            partition_spec={"folds": [bad_fold], "holdout_key": "b" * 64}
+        )
+
+
+def test_partition_ref_hash_matches_p10s_inferential_series_bundle(tmp_path):
+    # (4) The P10-E identity equals P10-S's bundle identity for the same
+    # PartitionRef (cross-module equality; no second hash algorithm).
+    import test_evaluation_inferential_series as p10s
+    from smart_beta.evaluation.inferential_series import build_inferential_series
+
+    _, _, record, collector = p10s._record_and_collector()
+    bundle = build_inferential_series(record, collector)
+    confirmation = _confirmation(
+        footprint=_footprint_body(date_range=("2020-07-01", "2020-07-05")),
+        window=("2020-07-01", "2020-08-31"),
+        partition_spec=record.partition.to_dict(),
+    )
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup, confirmation=confirmation)
+    assert prereg.partition_ref_hash == bundle.partition_ref_hash
+    assert prereg.to_content()["partition_ref_hash"] == bundle.partition_ref_hash
+
+
+def test_partition_ref_hash_mismatch_is_detectable(tmp_path):
+    # (5) A partition identity mismatch is detectable: distinct PartitionRefs
+    # differ, and a tampered stored hash fails closed.
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup)
+    other = dataclasses.replace(
+        prereg,
+        confirmation=_confirmation(
+            footprint=_footprint_body(date_range=("2021-08-01", "2021-08-05")),
+            window=("2021-08-01", "2021-08-31"),
+            partition_spec=_partition_spec(
+                holdout_start="2021-08-01", holdout_end="2021-12-31"
+            ),
+        ),
+    )
+    assert other.partition_ref_hash != prereg.partition_ref_hash
+    tampered = prereg.to_content()
+    tampered["partition_ref_hash"] = "0" * 64
+    with pytest.raises(P.PreregistrationError):
+        P.PreRegistration.from_content(tampered)
+
+
+def test_no_partition_id_substitute(tmp_path):
+    # (6) The preregistration identity is the sealed PartitionRef, never
+    # `Partition.partition_id`; no partition_id alias exists anywhere.
+    import ast
+    import pathlib
+
+    import test_evaluation_inferential_series as p10s
+
+    tree = ast.parse(pathlib.Path(P.__file__).read_text(encoding="utf-8"))
+    accesses = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "partition_id"
+    ]
+    assert accesses == []
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup)
+    assert "partition_id" not in prereg.to_content()
+    assert "partition_id" not in prereg.confirmation.to_content()
+    assert not hasattr(P.ConfirmationDesign, "partition_id")
+    assert not hasattr(P.PreRegistration, "partition_id")
+    # For the very partition P10-S persists, the runtime partition id differs.
+    bundle_dict, _, record, _ = p10s._record_and_collector()
+    runtime_partition = bundle_dict["partition"]
+    assert runtime_partition.partition_id != content_hash(record.partition.to_dict())
+
+
+def test_decision_rule_version_is_frozen():
+    # (7) The decision-rule version is a frozen protocol constant.
+    assert P.DECISION_RULE_VERSION == "phase10-decision-rule-v1"
+
+
+def test_analysis_plan_id_changes_with_decision_rule_version(tmp_path):
+    # (8) A different decision-rule version changes analysis_plan_id, while the
+    # frozen v1 constant (and the preregistration's id) stays unchanged.
+    setup = _setup(tmp_path)
+    prereg = _prereg(setup)
+    members = prereg.members
+    v1 = P.analysis_plan_id_for(members)
+    assert prereg.analysis_plan_id == v1
+    v2 = P.analysis_plan_id_for(
+        members, decision_rule_version="phase10-decision-rule-v2"
+    )
+    assert v2 != v1
+    assert P.DECISION_RULE_VERSION == "phase10-decision-rule-v1"
+    assert prereg.analysis_plan_id == v1
+
+
+def test_admission_must_be_in_freeze_prefix_and_retrospective_refused(tmp_path):
+    # (9) Admission ordering: an admission inside the freeze prefix is
+    # admissible; one created after the freeze snapshot is refused, and the
+    # refusal is not repaired by the later record.
+    setup = _setup(tmp_path)
+    prefix_before = setup["log"].read()
+    new_contract = _contract(procedure_id="retro-proc", version="1.0.0")
+    new_admission = setup["log"].append(
+        kind=RecordKind.HUMAN_DECISION,
+        program_id=setup["policy"].program_id,
+        payload=_admission_payload(new_contract),
+        refs={},
+    )
+    member = _member(
+        setup["freezes"][0], new_contract, new_admission, setup["policy"]
+    )
+    prereg = _prereg(setup, members=(member,))
+    with pytest.raises(P.PreregistrationRefused) as excinfo:
+        P.validate_preregistration(
+            prereg, prefix=prefix_before, registry=_registry(new_contract)
+        )
+    assert excinfo.value.reason is ReasonCode.PROCEDURE_NOT_ADMITTED
+    # Once it is genuinely in the prefix, the same body is admissible.
+    record = P.append_preregistration(
+        setup["log"], prereg, registry=_registry(new_contract)
+    )
+    assert record.kind is RecordKind.PREREGISTRATION
+
+
+def test_forged_timestamps_cannot_substitute_for_k_sequence(tmp_path):
+    # (10) Sequence/prefix membership is authority; a forged early recorded_at
+    # never establishes admission-before-freeze.
+    clock = _SequenceClock(
+        "2030-01-01T00:00:00Z",  # policy
+        "2030-01-02T00:00:00Z",  # freeze
+        "2020-01-01T00:00:00Z",  # admission: forged early timestamp
+    )
+    setup = _setup(tmp_path, clock=clock)
+    prefix_before_admission = setup["log"].read()[:-1]
+    admission = setup["admission_record"]
+    assert admission.recorded_at < setup["freezes"][0].recorded_at
+    prereg = _prereg(setup)
+    with pytest.raises(P.PreregistrationRefused) as excinfo:
+        P.validate_preregistration(
+            prereg,
+            prefix=prefix_before_admission,
+            registry=setup["registry"],
+        )
+    assert excinfo.value.reason is ReasonCode.PROCEDURE_NOT_ADMITTED
+    P.validate_preregistration(
+        prereg, prefix=setup["log"].read(), registry=setup["registry"]
+    )
