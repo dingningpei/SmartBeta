@@ -62,7 +62,7 @@ from smart_beta.experiment.policy import (
     SearchProcedure,
     TrialUnit,
 )
-from smart_beta.experiment.registry import ExperimentRegistry
+from smart_beta.experiment.registry import ExperimentRegistry, RegistrySnapshot
 from smart_beta.experiment.search import SearchLedger
 from smart_beta.pit.calendar import TradingCalendar
 from smart_beta.science import adapters as A
@@ -257,6 +257,64 @@ def _engine_result(member: P.MemberContract, panel: pd.DataFrame) -> EngineResul
     )
 
 
+def _evaluation_spec(
+    member: P.MemberContract, engine_result: EngineResult, partition: Partition
+) -> EvaluationSpec:
+    """The reader/execution boundary's COMPLETE confirmation EvaluationSpec.
+
+    F1a: this is constructed by the reader boundary, never by P10-H. The
+    factor provenance hash binds it to the reader-supplied ``EngineResult``.
+    """
+    construction = member.construction
+    point = ParameterPoint(
+        n_groups=int(construction["n_groups"]),
+        horizon=int(member.horizon),
+        cost_bps=float(construction["cost_bps"]),
+        winsorization=float(construction["winsorization"]),
+    )
+    is_fold = next(fold for fold in partition.folds if fold.role.value == "is")
+    oos_fold = next(
+        (fold for fold in partition.folds if fold.role.value == "oos"), None
+    )
+    is_start = is_fold.start.date()
+    is_end = (is_fold.end - timedelta(days=1)).date()
+    if oos_fold is not None:
+        oos_start = oos_fold.start.date()
+        oos_end = (oos_fold.end - timedelta(days=1)).date()
+    else:
+        oos_start = is_end + timedelta(days=1)
+        oos_end = oos_start
+    boundaries = [fold.start.date() for fold in partition.folds]
+    boundaries.append(partition.folds[-1].end.date())
+    return EvaluationSpec(
+        metrics=(
+            MetricKey.IC,
+            MetricKey.RANK_IC,
+            MetricKey.LONG_SHORT,
+            MetricKey.TURNOVER_COST_ADJUSTED,
+        ),
+        horizons=(int(member.horizon),),
+        split_rule=SplitRule(
+            is_start=is_start,
+            is_end=is_end,
+            oos_start=oos_start,
+            oos_end=oos_end,
+            walk_forward_folds=0,
+            walk_forward_fold_length=1,
+            holdout_length=1,
+        ),
+        subperiod_rule=SubperiodRule(boundaries=tuple(boundaries)),
+        parameter_grid=(point,),
+        universe_variants=("all",),
+        cost_model=CostModel(
+            transaction_cost_bps=float(construction["cost_bps"]),
+            mode=CostMode.ONE_WAY,
+        ),
+        benchmark=BenchmarkRef(kind=BenchmarkKind.NAMED, key="zero"),
+        factor_provenance_hash=engine_result.content_hash,
+    )
+
+
 # ===========================================================================
 # partition / footprint / artifact fixtures
 # ===========================================================================
@@ -360,7 +418,7 @@ def _dataset_contract(body: dict[str, Any], fallback: dict[str, Any]) -> dict[st
 # ===========================================================================
 
 
-def _prior_evaluation_record(index: int = 0) -> EvaluationRecord:
+def _prior_evaluation_record(index: int = 0, *, salt: str = "") -> EvaluationRecord:
     partition = PartitionRef(
         folds=(
             FoldBoundary(
@@ -379,8 +437,8 @@ def _prior_evaluation_record(index: int = 0) -> EvaluationRecord:
         holdout_key="prior-2019",
     )
     return EvaluationRecord(
-        spec_hash=_sha(f"prior-spec-{index}"),
-        factor_provenance_hash=_sha(f"prior-provenance-{index}"),
+        spec_hash=_sha(f"prior-spec-{index}-{salt}"),
+        factor_provenance_hash=_sha(f"prior-provenance-{index}-{salt}"),
         partition=partition,
         fold_results=(
             FoldResult(
@@ -440,7 +498,7 @@ def _prior_dataset() -> A.DevelopmentDataset:
     )
 
 
-def _registry_and_ledger(num_members: int):
+def _registry_and_ledger(num_members: int, *, salt: str = ""):
     registry = ExperimentRegistry()
     policy = SearchPolicy(
         family_id=FAMILY,
@@ -456,7 +514,7 @@ def _registry_and_ledger(num_members: int):
     entries = []
     records = []
     for index in range(num_members):
-        record = _prior_evaluation_record(index)
+        record = _prior_evaluation_record(index, salt=salt)
         entry = registry.register(record, family_id=FAMILY)
         ledger.adjudicate(policy, entry)
         entries.append(entry)
@@ -547,6 +605,7 @@ class _Study:
     contract: InferenceProcedureContract
     registry_snapshot: Any
     member_ids: list[str]
+    registry: Any = None
 
 
 def _build_study(
@@ -564,6 +623,8 @@ def _build_study(
     search_ledger: Any = None,
     member_factor_spec_hash: dict[str, str] | None = None,
     declared_body: dict[str, Any] | None = None,
+    context_registry_snapshot: Any = None,
+    prior_salt: str = "",
 ) -> _Study:
     """Build a synthetic confirmation study with a valid K prefix."""
     log = _log(tmp_path)
@@ -572,7 +633,9 @@ def _build_study(
     procedure_registry = InferenceProcedureRegistry(production=False)
     procedure_registry.register(_FixtureProcedure(contract))
 
-    registry, entries, prior_records, ledger = _registry_and_ledger(num_members)
+    registry, entries, prior_records, ledger = _registry_and_ledger(
+        num_members, salt=prior_salt
+    )
     for entry, prior_record in zip(entries, prior_records):
         if ingestion_complete:
             A.ingest_registered_evaluation(
@@ -735,14 +798,18 @@ def _build_study(
         )
 
     store = study.StudyStore(tmp_path / "study")
-    reader = _Reader(_factor_panel(), _returns_panel())
+    reader = _Reader(_factor_panel(), _returns_panel(), _partition())
     reader.bind(log)
     context = study.StudyContext(
         study_id="study-1",
         prereg_record_hash=prereg_record.record_hash,
         log=log,
         store=store,
-        registry_snapshot=snapshot,
+        registry_snapshot=(
+            snapshot
+            if context_registry_snapshot is None
+            else context_registry_snapshot
+        ),
         registry=procedure_registry,
         partition=_partition(),
         factor_spec_by_hypothesis={
@@ -778,15 +845,17 @@ def _build_study(
         contract=contract,
         registry_snapshot=snapshot,
         member_ids=member_ids,
+        registry=registry,
     )
 
 
 class _Reader(study.ConfirmationDataReader):
     """Instrumented reader: records calls and asserts the write-ahead order."""
 
-    def __init__(self, factor_panel, realized) -> None:
+    def __init__(self, factor_panel, realized, partition) -> None:
         self.factor_panel = factor_panel
         self.realized = realized
+        self.partition = partition
         self.calls: list[str] = []
         self._log: K.KnowledgeLog | None = None
 
@@ -806,9 +875,14 @@ class _Reader(study.ConfirmationDataReader):
             == study.CONFIRMATION_STUDY_ACCESS_PREFIX + "study-1"
             for record in records
         ), "a read occurred before the durable ACCESS"
+        engine_result = _engine_result(member, self.factor_panel)
         return study.ConfirmationMemberData(
+            engine_result=engine_result,
+            evaluation_spec=_evaluation_spec(
+                member, engine_result, self.partition
+            ),
             realized_returns=self.realized,
-            engine_result=_engine_result(member, self.factor_panel),
+            periods_per_year=252,
         )
 
 
@@ -1485,3 +1559,240 @@ def test_no_inference_path_bypasses_run_inference(tmp_path, monkeypatch):
     monkeypatch.setattr(study, "run_inference", spy)
     study.execute("study-1", context=s.context)
     assert len(calls) == 1
+
+
+# ===========================================================================
+# F1a — no P10-H-created EvaluationSpec design
+# ===========================================================================
+
+
+def test_f1a_p10h_constructs_no_evaluation_spec_design():
+    for name in (
+        "_evaluation_spec",
+        "_split_rule_from_partition",
+        "_subperiod_rule_from_partition",
+        "_engine_result_for",
+    ):
+        assert not hasattr(study, name), name
+    fields = {field.name for field in dataclasses.fields(study.ConfirmationMemberData)}
+    assert "evaluation_spec" in fields
+    assert "engine_result" in fields
+    assert "alignments_by_horizon" not in fields
+    assert "factor_inputs" not in fields
+
+
+# ===========================================================================
+# F2 — exact preregistered RegistrySnapshot prefix
+# ===========================================================================
+
+
+def _grow_registry(s, salt: str):
+    record = _prior_evaluation_record(99, salt=salt)
+    entry = s.registry.register(record, family_id=FAMILY)
+    A.ingest_registered_evaluation(
+        s.log,
+        experiment_entry=entry,
+        evaluation_record=record,
+        dataset=_prior_dataset(),
+        program_id=PROGRAM,
+    )
+    return s.registry.snapshot()
+
+
+def test_f2_exact_registry_prefix_accepted(tmp_path):
+    s = _build_study(tmp_path)
+    ref = s.prereg.registry_snapshot_ref
+    assert not s.store.has_object(ref["snapshot_hash"])
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "assessed"
+    # Only the verified exact prefix body is persisted.
+    assert s.store.has_object(ref["snapshot_hash"])
+
+
+def test_f2_grown_registry_prefix_accepted(tmp_path):
+    s = _build_study(tmp_path)
+    ref = s.prereg.registry_snapshot_ref
+    grown = _grow_registry(s, "grown")
+    assert grown.snapshot_hash != ref["snapshot_hash"]
+    context = dataclasses.replace(s.context, registry_snapshot=grown)
+    result = study.execute("study-1", context=context)
+    assert result.phase == "assessed"
+    # The verified frozen prefix is persisted; the grown body is not.
+    assert s.store.has_object(ref["snapshot_hash"])
+    assert not s.store.has_object(grown.snapshot_hash)
+
+
+def test_f2_hash_mismatch_refused(tmp_path):
+    s = _build_study(tmp_path)
+    other = _build_study(tmp_path / "other", prior_salt="other")
+    context = dataclasses.replace(
+        s.context, registry_snapshot=other.registry_snapshot
+    )
+    result = study.execute("study-1", context=context)
+    assert result.phase == "refused"
+    assert ReasonCode.REGISTRY_INGESTION_INCOMPLETE in result.reason_codes
+    assert s.context.reader.calls == []
+    # The caller body was never persisted (no persistence before verification).
+    assert not s.store.has_object(other.registry_snapshot.snapshot_hash)
+
+
+def test_f2_incomplete_prefix_refused(tmp_path):
+    s = _build_study(tmp_path)
+    incomplete = RegistrySnapshot(experiments=(), decisions=())
+    context = dataclasses.replace(s.context, registry_snapshot=incomplete)
+    result = study.execute("study-1", context=context)
+    assert result.phase == "refused"
+    assert ReasonCode.REGISTRY_INGESTION_INCOMPLETE in result.reason_codes
+    assert s.context.reader.calls == []
+
+
+def test_f2_non_prefix_mutation_refused(tmp_path):
+    s = _build_study(tmp_path)
+    mutated_entry = dataclasses.replace(
+        s.registry_snapshot.experiments[0], evaluation_record_hash="f" * 64
+    )
+    mutated = RegistrySnapshot(experiments=(mutated_entry,), decisions=())
+    assert mutated.snapshot_hash != s.prereg.registry_snapshot_ref["snapshot_hash"]
+    context = dataclasses.replace(s.context, registry_snapshot=mutated)
+    result = study.execute("study-1", context=context)
+    assert result.phase == "refused"
+    assert ReasonCode.REGISTRY_INGESTION_INCOMPLETE in result.reason_codes
+    assert not s.store.has_object(mutated.snapshot_hash)
+
+
+# ===========================================================================
+# F3 — complete dataset_contract authority
+# ===========================================================================
+
+
+def _assert_refused_footprint_mismatch(s, context):
+    result = study.execute("study-1", context=context)
+    assert result.phase == "refused"
+    assert ReasonCode.FOOTPRINT_MISMATCH in result.reason_codes
+    assert s.context.reader.calls == []
+    assert _study_consumptions(s.log) == []
+    assert _study_access_records(s.log) == []
+
+
+def test_f3_security_map_hash_mismatch_refused(tmp_path):
+    s = _build_study(tmp_path)
+    context = dataclasses.replace(
+        s.context,
+        security_map={**SECURITY_MAP, "tiingo:999999": "SEC:CN:999999"},
+    )
+    _assert_refused_footprint_mismatch(s, context)
+
+
+def test_f3_market_series_map_hash_mismatch_refused(tmp_path):
+    s = _build_study(tmp_path)
+    context = dataclasses.replace(
+        s.context, market_series_map={"tiingo:rf": "MKT:rf"}
+    )
+    _assert_refused_footprint_mismatch(s, context)
+
+
+def test_f3_variable_map_hash_mismatch_refused(tmp_path):
+    s = _build_study(tmp_path)
+    context = dataclasses.replace(
+        s.context,
+        variable_map={
+            **VARIABLE_MAP,
+            "extra": {"derived_variable": "RETURN_1D", "params": {}},
+        },
+    )
+    _assert_refused_footprint_mismatch(s, context)
+
+
+def test_f3_calendar_hash_mismatch_refused(tmp_path):
+    s = _build_study(tmp_path)
+    other_calendar = TradingCalendar(list(_sessions(date(2020, 1, 1), 300)))
+    context = dataclasses.replace(s.context, calendar=other_calendar)
+    _assert_refused_footprint_mismatch(s, context)
+
+
+# ===========================================================================
+# F4 — K-authoritative recovery (fault injection between K append and store)
+# ===========================================================================
+
+
+def test_f4_crash_between_consumption_append_and_store_write(tmp_path):
+    s = _build_study(tmp_path)
+    s.context.reader.bind(s.log)
+    with pytest.raises(_Crash):
+        study.execute(
+            "study-1", context=s.context, crash=_crash_at("consumption_appended")
+        )
+    # The store state is stale: no CONSUMPTION hash was recorded.
+    assert s.store.read_state()["consumption_record_hash"] is None
+    consumption = _study_consumptions(s.log)[0]
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "interrupted"
+    assert s.context.reader.calls == []
+    assert s.store.read_state()["k_exec"]["length"] == consumption.seq + 1
+    assert _study_access_records(s.log) == []
+
+
+def test_f4_crash_between_access_append_and_store_write(tmp_path):
+    s = _build_study(tmp_path)
+    s.context.reader.bind(s.log)
+    with pytest.raises(_Crash):
+        study.execute(
+            "study-1", context=s.context, crash=_crash_at("access_appended")
+        )
+    # The store state is stale: the ACCESS hash was not recorded.
+    assert s.store.read_state()["access_record_hash"] is None
+    access = _study_access_records(s.log)[0]
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "interrupted"
+    assert s.context.reader.calls == []
+    # Exactly one ACCESS: no duplicate append, K_exec through ACCESS.
+    assert [record.record_hash for record in _study_access_records(s.log)] == [
+        access.record_hash
+    ]
+    assert s.store.read_state()["k_exec"]["length"] == access.seq + 1
+
+
+def test_f4_duplicate_study_consumption_fails_closed(tmp_path):
+    s = _build_study(tmp_path)
+    s.context.reader.bind(s.log)
+    study.execute("study-1", context=s.context)
+    s.log.append(
+        kind=RecordKind.CONSUMPTION,
+        program_id=PROGRAM,
+        payload={
+            "study_id": "study-1",
+            "prereg_record_hash": s.prereg_record.record_hash,
+            "artifact_record_hash": s.artifact.record_hash,
+        },
+        footprint=s.artifact.footprint,
+    )
+    with pytest.raises(K.KnowledgeIntegrityError):
+        study.execute("study-1", context=s.context)
+    with pytest.raises(K.KnowledgeIntegrityError):
+        study.replay_study(s.log, s.store, "study-1", context=s.context)
+
+
+# ===========================================================================
+# F5 — sealed P7-B alignment authority (no caller alignment bypass)
+# ===========================================================================
+
+
+def test_f5_alignment_field_is_absent_and_evaluate_gets_none(tmp_path, monkeypatch):
+    import smart_beta.evaluation.engine as engine_mod
+
+    seen: list[Any] = []
+    original = engine_mod.evaluate
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("alignments_by_horizon", "MISSING"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "evaluate", spy)
+    s = _build_study(tmp_path)
+    s.context.reader.bind(s.log)
+    result = study.execute("study-1", context=s.context)
+    assert result.phase == "assessed"
+    # P10-H never accepted a caller alignment: the sealed P7-B derivation ran.
+    assert seen == [None]
+    fields = {field.name for field in dataclasses.fields(study.ConfirmationMemberData)}
+    assert "alignments_by_horizon" not in fields

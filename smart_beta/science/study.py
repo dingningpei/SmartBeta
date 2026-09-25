@@ -52,20 +52,13 @@ from smart_beta.evaluation.inferential_series import (
     build_inferential_series,
 )
 from smart_beta.evaluation.spec import (
-    BenchmarkKind,
-    BenchmarkRef,
-    CostMode,
-    CostModel,
     EvaluationRecord,
     EvaluationSpec,
     FoldRole,
     MetricKey,
-    ParameterPoint,
     Series,
-    SplitRule,
-    SubperiodRule,
 )
-from smart_beta.spec.engine import EngineResult, evaluate_factor
+from smart_beta.spec.engine import EngineResult
 from smart_beta.spec.factor_spec import FactorSpec, factor_spec_hash
 from smart_beta.science import adapters as _adapters
 from smart_beta.science import preregistration as _P
@@ -81,6 +74,7 @@ from smart_beta.science.assessment import (
 )
 from smart_beta.science.contracts import (
     AssessmentState,
+    DERIVATION_RULES_VERSION,
     EffectSizeQualification,
     EvidenceGrade,
     EvidenceRole,
@@ -163,14 +157,7 @@ _ESTIMAND_METRIC = {
 
 _REASON_ORDER = {code: index for index, code in enumerate(ReasonCode)}
 
-#: The runtime Phase-7 metrics selected for a confirmation evaluation. The
-#: member's own estimand metric is always present (section 13.2a item 7).
-_ALL_CONFIRMATION_METRICS = (
-    MetricKey.IC,
-    MetricKey.RANK_IC,
-    MetricKey.LONG_SHORT,
-    MetricKey.TURNOVER_COST_ADJUSTED,
-)
+_REASON_ORDER = {code: index for index, code in enumerate(ReasonCode)}
 
 
 # ===========================================================================
@@ -292,22 +279,25 @@ class StudyStore:
 
 @dataclass(frozen=True)
 class ConfirmationMemberData:
-    """The empirical confirmation data for one member.
+    """The empirical confirmation data for one member (plan section 13.2a item 7a).
 
-    Either ``factor_inputs`` feeds the sealed Phase-6 ``evaluate_factor``
-    facade, or ``engine_result`` is the already-constructed Phase-6 result.
-    ``realized_returns`` and the optional ``*_by_horizon`` feed the sealed
-    Phase-7 ``evaluate`` call. The object is produced only by
-    :class:`ConfirmationDataReader`.
+    The post-ACCESS execution boundary supplies the sealed Phase-6
+    ``engine_result`` and the **complete** confirmation ``evaluation_spec``;
+    P10-H constructs, defaults or infers none of the spec's design. It also
+    supplies the Phase-7 call data (``realized_returns``, ``periods_per_year``
+    and the optional ``benchmark_series``/``universe_variants``/
+    ``accepted_factors``). Alignment is never supplied: P10-H passes
+    ``alignments_by_horizon=None`` so the sealed P7-B derivation runs
+    (section 13.2 step 4).
     """
 
+    engine_result: EngineResult
+    evaluation_spec: EvaluationSpec
     realized_returns: Any
-    factor_inputs: Mapping[str, Any] | None = None
-    engine_result: EngineResult | None = None
+    periods_per_year: int
     benchmark_series: Any = None
     universe_variants: Any = None
     accepted_factors: Any = None
-    alignments_by_horizon: Any = None
 
 
 class ConfirmationDataReader:
@@ -347,7 +337,6 @@ class StudyContext:
     variable_map: Mapping[str, Any]
     reader: ConfirmationDataReader
     search_ledger: Any = None
-    periods_per_year: int = 252
     program_id: str | None = None
 
 
@@ -547,19 +536,73 @@ class _PreRead:
     governance_by_hypothesis: dict[str, Any]
     consumption_fp: Footprint
     expected_index: tuple[date, ...]
+    registry_prefix: Any = None
 
 
-def _registry_snapshot_binding(
-    prereg: _P.PreRegistration, registry_snapshot: Any
+def _reconstruct_registry_prefix(registry_snapshot: Any, ref: Mapping[str, Any]) -> Any:
+    """Reconstruct the exact preregistered RegistrySnapshot prefix (F2).
+
+    Sealed Phase-8 prefix/order authority: the frozen snapshot is the ordered
+    prefix of the current registry. A legitimately grown current registry is
+    accepted exactly when its first ``experiment_count`` contiguous
+    experiments and first ``decision_count`` contiguous decisions rebuild a
+    ``RegistrySnapshot`` whose ``snapshot_hash`` equals the frozen ref. A
+    reordered, mutated or incomplete prefix rebuilds a different hash and is
+    refused. Returns ``None`` on any mismatch; nothing is persisted here.
+    """
+    try:
+        from smart_beta.experiment.registry import RegistrySnapshot
+
+        if registry_snapshot is None:
+            return None
+        experiment_count = ref["experiment_count"]
+        decision_count = ref["decision_count"]
+        experiments = tuple(
+            entry
+            for entry in registry_snapshot.experiments
+            if entry.registration_index < experiment_count
+        )
+        decisions = tuple(
+            entry
+            for entry in registry_snapshot.decisions
+            if entry.registration_index < decision_count
+        )
+        if len(experiments) != experiment_count or len(decisions) != decision_count:
+            return None
+        prefix = RegistrySnapshot(experiments=experiments, decisions=decisions)
+        if prefix.snapshot_hash != ref["snapshot_hash"]:
+            return None
+        return prefix
+    except Exception:  # noqa: BLE001 - fail closed
+        return None
+
+
+def _dataset_contract_reasons(
+    prereg: _P.PreRegistration, context: StudyContext
 ) -> set[ReasonCode]:
-    ref = prereg.registry_snapshot_ref
-    if (
-        registry_snapshot is None
-        or getattr(registry_snapshot, "snapshot_hash", None) != ref["snapshot_hash"]
-        or len(registry_snapshot.experiments) != ref["experiment_count"]
-        or len(registry_snapshot.decisions) != ref["decision_count"]
-    ):
-        return {ReasonCode.REGISTRY_INGESTION_INCOMPLETE}
+    """Verify every frozen section 6.4 dataset_contract authority (F3).
+
+    Uses the existing P10-C/P10-A canonical/hash authorities (the same
+    ``P10-C`` ``_audit_hashes`` inputs); there is no local replacement
+    canonicalization. A mismatch is a pre-consumption ``FOOTPRINT_MISMATCH``.
+    """
+    contract = prereg.confirmation.dataset_contract
+    try:
+        expected = {
+            "security_map_hash": content_hash(dict(context.security_map or {})),
+            "market_series_map_hash": content_hash(
+                dict(context.market_series_map or {})
+            ),
+            "variable_map_hash": content_hash(dict(context.variable_map or {})),
+            "calendar_hash": content_hash(
+                [ts.date().isoformat() for ts in context.calendar.dates]
+            ),
+            "derivation_rules_version": DERIVATION_RULES_VERSION,
+        }
+    except Exception:  # noqa: BLE001 - fail closed
+        return {ReasonCode.FOOTPRINT_MISMATCH}
+    if any(contract.get(key) != value for key, value in expected.items()):
+        return {ReasonCode.FOOTPRINT_MISMATCH}
     return set()
 
 
@@ -575,13 +618,22 @@ def _pre_read(
     }
     governance_by_hypothesis: dict[str, Any] = {}
 
-    snapshot_reasons = _registry_snapshot_binding(prereg, context.registry_snapshot)
-    if snapshot_reasons:
+    # -- F3: every frozen dataset_contract authority -----------------------
+    dataset_reasons = _dataset_contract_reasons(prereg, context)
+    if dataset_reasons:
         for reasons in reasons_by_hypothesis.values():
-            reasons.update(snapshot_reasons)
+            reasons.update(dataset_reasons)
+
+    # -- F2: exact preregistered RegistrySnapshot prefix -------------------
+    registry_prefix = _reconstruct_registry_prefix(
+        context.registry_snapshot, prereg.registry_snapshot_ref
+    )
+    if registry_prefix is None:
+        for reasons in reasons_by_hypothesis.values():
+            reasons.add(ReasonCode.REGISTRY_INGESTION_INCOMPLETE)
     else:
         report = _adapters.registry_ingestion_completeness(
-            context.log, context.registry_snapshot
+            context.log, registry_prefix
         )
         if not report.complete:
             for reasons in reasons_by_hypothesis.values():
@@ -659,16 +711,17 @@ def _pre_read(
         if role_reason is not None:
             reasons.add(role_reason)
 
-        provenance = _adapters.governance_provenance(
-            member.hypothesis_id,
-            context.registry_snapshot,
-            context.search_ledger,
-        )
-        governance_by_hypothesis[member.hypothesis_id] = provenance.validity
-        if provenance.validity is _adapters.GovernanceValidity.MISSING:
-            reasons.add(ReasonCode.GOVERNANCE_PROVENANCE_MISSING)
-        elif provenance.validity is _adapters.GovernanceValidity.INVALID:
-            reasons.add(ReasonCode.GOVERNANCE_INVALID)
+        if registry_prefix is not None:
+            provenance = _adapters.governance_provenance(
+                member.hypothesis_id,
+                registry_prefix,
+                context.search_ledger,
+            )
+            governance_by_hypothesis[member.hypothesis_id] = provenance.validity
+            if provenance.validity is _adapters.GovernanceValidity.MISSING:
+                reasons.add(ReasonCode.GOVERNANCE_PROVENANCE_MISSING)
+            elif provenance.validity is _adapters.GovernanceValidity.INVALID:
+                reasons.add(ReasonCode.GOVERNANCE_INVALID)
 
     if consumption_fp.determinable:
         for record in records:
@@ -688,6 +741,7 @@ def _pre_read(
         governance_by_hypothesis=governance_by_hypothesis,
         consumption_fp=consumption_fp,
         expected_index=expected_index,
+        registry_prefix=registry_prefix,
     )
 
 
@@ -838,69 +892,22 @@ def _family_object_hash(family: AssessmentFamily) -> str:
 # Stage B helpers
 # ===========================================================================
 
-
-def _as_date(value: Any) -> date:
-    return value.date() if hasattr(value, "date") else value
-
-
-def _split_rule_from_partition(partition: Any) -> SplitRule:
-    folds = list(partition.folds)
-    is_fold = next(
-        fold for fold in folds if getattr(fold.role, "value", fold.role) == "is"
-    )
-    oos_fold = next(
-        (fold for fold in folds if getattr(fold.role, "value", fold.role) == "oos"),
-        None,
-    )
-    is_start = _as_date(is_fold.start)
-    is_end = _as_date(is_fold.end) - timedelta(days=1)
-    if oos_fold is not None:
-        oos_start = _as_date(oos_fold.start)
-        oos_end = _as_date(oos_fold.end) - timedelta(days=1)
-    else:
-        oos_start = is_end + timedelta(days=1)
-        oos_end = oos_start
-    return SplitRule(
-        is_start=is_start,
-        is_end=is_end,
-        oos_start=oos_start,
-        oos_end=oos_end,
-        walk_forward_folds=0,
-        walk_forward_fold_length=1,
-        holdout_length=1,
-    )
-
-
-def _subperiod_rule_from_partition(partition: Any) -> SubperiodRule:
-    boundaries = [_as_date(fold.start) for fold in partition.folds]
-    boundaries.append(_as_date(partition.folds[-1].end))
-    return SubperiodRule(boundaries=tuple(boundaries))
-
-
-def _evaluation_spec(
-    member: Any, engine_result: EngineResult, partition: Any
-) -> EvaluationSpec:
-    construction = member.construction
-    point = ParameterPoint(
-        n_groups=int(construction["n_groups"]),
-        horizon=int(member.horizon),
-        cost_bps=float(construction["cost_bps"]),
-        winsorization=float(construction["winsorization"]),
-    )
-    return EvaluationSpec(
-        metrics=_ALL_CONFIRMATION_METRICS,
-        horizons=(int(member.horizon),),
-        split_rule=_split_rule_from_partition(partition),
-        subperiod_rule=_subperiod_rule_from_partition(partition),
-        parameter_grid=(point,),
-        universe_variants=("all",),
-        cost_model=CostModel(
-            transaction_cost_bps=float(construction["cost_bps"]),
-            mode=CostMode.ONE_WAY,
-        ),
-        benchmark=BenchmarkRef(kind=BenchmarkKind.NAMED, key="zero"),
-        factor_provenance_hash=engine_result.content_hash,
-    )
+# F1a (plan section 13.2a item 7a): P10-H constructs NONE of the confirmation
+# ``EvaluationSpec`` design. The post-ACCESS reader/execution boundary supplies
+# the complete spec (and the Phase-6 ``EngineResult``); P10-H only validates
+# the frozen scientifically material Stage-B bindings of the primary HOLDOUT
+# estimand. No split rule, OOS range, walk-forward configuration, holdout
+# length, subperiod rule, universe variants, benchmark, periods_per_year,
+# ``CostModel.mode``, horizons or parameter grid is synthesized or defaulted
+# here.
+#
+# F1c (implementation-scoped fact): in the sealed Phase-7 implementation
+# ``CostModel.mode`` is declarative and is not read by the numerical
+# evaluation path; the applied cost is the sealed one-way application of
+# ``transaction_cost_bps`` against turnover. It is therefore not a Stage-B
+# scientific binding. Phase 10 does not certify that the mode label describes
+# the applied convention, and this must be revisited if a future sealed
+# Phase-7 implementation makes the mode numerically operative.
 
 
 def _holdout_fold(bundle: InferentialSeriesBundle) -> FoldSeries | None:
@@ -1236,10 +1243,48 @@ def execute(
     state = context.store.read_state()
     if state is None:
         raise ValueError("the study has no durable state; ingest the artifact first")
+
+    # Section 13.3b item 4: duplicated write-ahead records are K damage,
+    # detected before any terminal short-circuit.
+    records = context.log.read()
+    _assert_unique_write_ahead(records, study_id)
+
     if state.get("terminal"):
         return _terminal_result(context, state)
 
-    records = context.log.read()
+    # F4 (plan section 13.3b): Knowledge-PIT is authoritative for durable
+    # write-ahead state. Discover this study's own CONSUMPTION/ACCESS from K
+    # first, so a crash between a K append and the store-state write is
+    # recovered exactly and never double-appended.
+    k_consumption = next(
+        (
+            record
+            for record in records
+            if record.kind is RecordKind.CONSUMPTION
+            and record.payload.get("study_id") == study_id
+        ),
+        None,
+    )
+    k_access = next(
+        (
+            record
+            for record in records
+            if record.kind is RecordKind.ACCESS
+            and record.payload.get("component") == _access_component(study_id)
+        ),
+        None,
+    )
+    if k_access is not None:
+        state["access_record_hash"] = k_access.record_hash
+        if k_consumption is not None:
+            state["consumption_record_hash"] = k_consumption.record_hash
+        if state["phase"] in ("ingested", "consumed"):
+            state["phase"] = "access"
+    elif k_consumption is not None:
+        state["consumption_record_hash"] = k_consumption.record_hash
+        if state["phase"] == "ingested":
+            state["phase"] = "consumed"
+
     artifact = _record_by_hash(records, state["artifact_record_hash"])
     prereg_record = _record_by_hash(records, state["prereg_record_hash"])
     prereg = _P.preregistration_from_record(prereg_record)
@@ -1248,17 +1293,20 @@ def execute(
         content_hash_value=prereg.prereg_id,
         body=prereg.to_content(),
     )
-    context.store.write_object(
-        kind="registry_snapshot",
-        content_hash_value=context.registry_snapshot.snapshot_hash,
-        body=context.registry_snapshot.to_dict(),
-    )
 
     resumed = state["phase"] != "ingested"
 
     # -- Stage A (pre-consumption) ----------------------------------------
     if not resumed:
         pre_read = _pre_read(context, prereg, prereg_record, artifact)
+        if pre_read.registry_prefix is not None:
+            # F2: persist ONLY the verified exact bound prefix body, and only
+            # after its reconstruction matched the frozen ref.
+            context.store.write_object(
+                kind="registry_snapshot",
+                content_hash_value=pre_read.registry_prefix.snapshot_hash,
+                body=pre_read.registry_prefix.to_dict(),
+            )
         refusal_reasons: set[ReasonCode] = set()
         for reasons in pre_read.reasons_by_hypothesis.values():
             refusal_reasons.update(reasons)
@@ -1292,6 +1340,7 @@ def execute(
             },
             footprint=pre_read.consumption_fp.body,
         )
+        _emit(crash, "consumption_appended")
         state["consumption_record_hash"] = consumption.record_hash
         state["phase"] = "consumed"
         state["expected_index"] = [item.isoformat() for item in pre_read.expected_index]
@@ -1323,6 +1372,7 @@ def execute(
             },
             footprint=artifact.footprint,
         )
+        _emit(crash, "access_appended")
         state["access_record_hash"] = access.record_hash
         state["phase"] = "access"
         context.store.write_state(state)
@@ -1388,8 +1438,8 @@ def execute(
         for member in prereg.members:
             hid = member.hypothesis_id
             member_data = context.reader.read(member)
-            engine_result = _engine_result_for(context, member, member_data)
-            spec = _evaluation_spec(member, engine_result, context.partition)
+            engine_result = member_data.engine_result
+            spec = member_data.evaluation_spec
             collector = FoldTraceCollector()
             evaluation_record = _phase7_evaluate(
                 engine_result=engine_result,
@@ -1498,17 +1548,6 @@ def execute(
     return _persist_assessed(context, state, family, k_exec, crash)
 
 
-def _engine_result_for(
-    context: StudyContext, member: Any, member_data: ConfirmationMemberData
-) -> EngineResult:
-    if member_data.engine_result is not None:
-        return member_data.engine_result
-    if member_data.factor_inputs is None:
-        raise ValueError("the reader supplied neither factor inputs nor an EngineResult")
-    factor_spec = context.factor_spec_by_hypothesis[member.hypothesis_id]
-    return evaluate_factor(factor_spec, member_data.factor_inputs)
-
-
 def _phase7_evaluate(
     *,
     engine_result: EngineResult,
@@ -1517,7 +1556,13 @@ def _phase7_evaluate(
     context: StudyContext,
     collector: FoldTraceCollector,
 ) -> EvaluationRecord:
-    """The one sealed Phase-7 ``evaluate`` call per member (section 12.1(d))."""
+    """The one sealed Phase-7 ``evaluate`` call per member (section 12.1(d)).
+
+    F5 (plan section 13.2 step 4): alignment is derived through the sealed
+    Phase-7 P7-B path. ``alignments_by_horizon`` is always ``None``; P10-H
+    neither accepts a caller alignment nor constructs alignments or purge
+    logic locally.
+    """
     from smart_beta.evaluation.engine import evaluate
 
     return evaluate(
@@ -1525,9 +1570,9 @@ def _phase7_evaluate(
         spec,
         member_data.realized_returns,
         context.partition,
-        periods_per_year=context.periods_per_year,
+        periods_per_year=member_data.periods_per_year,
         benchmark_series=member_data.benchmark_series,
-        alignments_by_horizon=member_data.alignments_by_horizon,
+        alignments_by_horizon=None,
         universe_variants=member_data.universe_variants,
         accepted_factors=member_data.accepted_factors,
         fold_trace_sink=collector,
@@ -1812,13 +1857,29 @@ def replay_study(
     prereg = _P.preregistration_from_record(prereg_record)
     artifact = _record_by_hash(records, state["artifact_record_hash"])
 
-    # K_exec is recovered from the stored write-ahead boundary.
-    if state.get("access_record_hash") is not None:
-        access = _record_by_hash(records, state["access_record_hash"])
-        k_exec_records = records[: access.seq + 1]
-    elif state.get("consumption_record_hash") is not None:
-        consumption = _record_by_hash(records, state["consumption_record_hash"])
-        k_exec_records = records[: consumption.seq + 1]
+    # K_exec is recovered from K (the authority), not from stale store state.
+    k_consumption = next(
+        (
+            record
+            for record in records
+            if record.kind is RecordKind.CONSUMPTION
+            and record.payload.get("study_id") == study_id
+        ),
+        None,
+    )
+    k_access = next(
+        (
+            record
+            for record in records
+            if record.kind is RecordKind.ACCESS
+            and record.payload.get("component") == _access_component(study_id)
+        ),
+        None,
+    )
+    if k_access is not None:
+        k_exec_records = records[: k_access.seq + 1]
+    elif k_consumption is not None:
+        k_exec_records = records[: k_consumption.seq + 1]
     else:
         k_exec_records = records
     k_exec = snapshot_of_records(k_exec_records)
