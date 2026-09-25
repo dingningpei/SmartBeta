@@ -673,6 +673,7 @@ StudyProtocol.
 | `sesoi` | δ from the policy |
 | `estimator_id` | `"mean_per_date_v1"`: the arithmetic mean of the member's per-date series of `estimand_kind` on the HOLDOUT fold |
 | `procedure_ref` | `{procedure_id, version, contract_hash}` of an **admitted** InferenceProcedure (§9.3) |
+| `admission_record_hash` | `record_hash` of the exact `PROCEDURE_ADMISSION` record the preregistration relies on. It must lie in the preregistration-freeze Knowledge-PIT prefix (§7.3 check 4, §9.3), and is bound here for deterministic replay. |
 | `params` | valid under the procedure's `param_schema` |
 | `dependence_justification_hash` | why the procedure's dependence assumptions fit this estimand, horizon and overlap. `dependence_design_id = content_hash(procedure_ref, params, justification)`. |
 | `missingness_policy` | `MissingnessPolicy` (v1: `COMPLETE_REQUIRED`), which must be ∈ the procedure's `supported_missingness` |
@@ -688,11 +689,36 @@ StudyProtocol.
    `DISJOINT` from **every** prior `CONSUMPTION` footprint.
    - OVERLAP → `FOOTPRINT_ALREADY_CONSUMED`.
    - UNDETERMINABLE → `FOOTPRINT_OVERLAP_UNDETERMINABLE`.
-4. Each member's `procedure_ref` has a `PROCEDURE_ADMISSION` record with
-   seq < now, is not revoked, and supports the estimand and missingness
-   policy, and its `params` validate (§9.3). Otherwise the preregistration is
-   refused with the §9.3 reason code. `partition_spec` places the whole
-   window in the HOLDOUT fold.
+4. **Admission ordering — P10-E owns this check (clarified before
+   Wave 3).** For each member, the record named by `admission_record_hash`
+   must:
+   - belong to the **preregistration-freeze Knowledge-PIT prefix**, i.e.
+     the K prefix visible when the PREREGISTRATION record is appended. That
+     means seq < τ_P.
+   - be a `HUMAN_DECISION` record with `decision_kind =
+     PROCEDURE_ADMISSION`, whose `procedure_id`, `version` and
+     `contract_hash` equal the member's `procedure_ref`.
+
+   There must be no `PROCEDURE_REVOCATION` for that version in the same
+   prefix. The procedure must support the estimand and missingness policy,
+   and `params` must validate (§9.3).
+
+   **Mechanical binding:** every `admission_record_hash` is included in the
+   PREREGISTRATION record's `refs.consulted`. Because K rejects refs to
+   later or unknown records (§5.1), an admission created after the freeze
+   can never be referenced. **No retrospective admission can make an
+   already-frozen preregistration admissible.**
+
+   An admission that is absent from the prefix, later than it,
+   unverifiable, or mismatched to `procedure_ref` fails closed: the
+   preregistration is refused with `PROCEDURE_NOT_ADMITTED`, or
+   `PROCEDURE_IDENTITY_MISMATCH` for a contract mismatch.
+
+   **Authority:** record sequence and prefix membership are the only
+   authority for admission ordering. Wall-clock `recorded_at` timestamps
+   are metadata and never establish admission-before-freeze.
+
+   `partition_spec` places the whole window in the HOLDOUT fold.
 5. No retroactivity: τ_P = the append seq. No field references a record
    with seq ≥ τ_P. **Retrospective preregistration is impossible by
    construction.** "Backdating" is meaningless, because order is seq, and
@@ -796,6 +822,31 @@ NOT_ASSESSED; there is **never** a substitute procedure.
 
    A revocation recorded later **downgrades** existing assessments on
    reassessment (§11.3). It never upgrades them.
+
+**Temporal authority and component responsibilities (clarified before
+Wave 3; not a redesign).**
+- **Record sequence and Knowledge-PIT prefix membership are authority;
+  timestamps are metadata only.** Every ordering decision below is
+  replayable from immutable K sequence and prefix evidence.
+- **Preregistration (P10-E):** "was the procedure already admitted when the
+  study froze?" P10-E verifies and binds the exact admission record in the
+  preregistration-freeze prefix (§7.3 check 4).
+- **Execution (P10-H):** "is that exact admission still valid in the
+  execution snapshot?" P10-H owns the orchestration of historical records
+  and snapshots. For each member it:
+  - supplies `run_inference` with the **exact preregistered admission
+    record** (verified equal to `admission_record_hash`) plus **every**
+    `PROCEDURE_REVOCATION` record in the authorized execution-snapshot
+    prefix;
+  - records the snapshot `(length, head_hash)` in the assessment.
+
+  A revocation of that version in the execution snapshot yields
+  `PROCEDURE_REVOKED`.
+- **Dispatch (P10-F):** remains the single deterministic inference
+  dispatcher. It enforces its frozen admission, identity and refusal checks
+  on exactly the records supplied to it. It does **not** reconstruct
+  historical order. P10-H can never bypass P10-F: inference runs only
+  through `run_inference`.
 
 Reason codes: `PROCEDURE_NOT_ADMITTED`, `PROCEDURE_IDENTITY_MISMATCH`,
 `PROCEDURE_REVOKED`, `PROCEDURE_ESTIMAND_UNSUPPORTED`,
@@ -1261,8 +1312,11 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
    call). Then run `build_inferential_series(record, collector)` (§12.1(d)).
    Persist both, and append DERIVED records.
 5. Re-check each member's procedure admission, identity and revocation
-   against the current K snapshot (§9.3). Run inference per member through
-   the single dispatch → DERIVED records.
+   against the authorized execution K snapshot (§9.3 temporal authority).
+   Pass `run_inference` exactly the preregistered admission record (matching
+   `admission_record_hash`) and every `PROCEDURE_REVOCATION` in the
+   execution-snapshot prefix. Run inference per member through the single
+   dispatch → DERIVED records.
 6. Run Holm and the assessments → DERIVED records. The study is ASSESSED.
 
 ### 13.3 Crash rules
@@ -1579,9 +1633,19 @@ PA-0 authorization)
   - EstimandPolicy equality enforced;
   - `analysis_plan_id` composition;
   - appending produces a PREREGISTRATION record with correct refs.
-- **Adversarial:** the Preregistration section of §18; no retroactive
-  field; duplicate members; overlap with a consumed footprint at
-  preregistration.
+- **Adversarial:**
+  - the Preregistration section of §18;
+  - no retroactive field;
+  - duplicate members;
+  - overlap with a consumed footprint at preregistration;
+  - **admission ordering (§7.3 check 4):**
+    - an admission in the freeze prefix → admissible;
+    - an admission created after the freeze → refused;
+    - an unverifiable or missing admission reference → refused;
+    - a retrospective admission cannot repair a frozen preregistration;
+    - an admission contract mismatched to `procedure_ref` → refused;
+    - an admission revoked within the freeze prefix → refused;
+    - forged `recorded_at` timestamps cannot substitute for K ordering.
 
 **P10-G — assessment + Holm** (Wave 4)
 - **Owns:** `smart_beta/science/assessment.py`, `tests/test_science_assessment.py`.
@@ -1625,8 +1689,13 @@ PA-0 authorization)
   - crash injection at every state boundary;
   - resume;
   - replay equality.
-- **Adversarial:** the Replay, Footprint-integration and Pilot-1A sections
-  of §18.
+- **Adversarial:**
+  - the Replay, Footprint-integration and Pilot-1A sections of §18;
+  - **execution-time revocation (§9.3 temporal authority):**
+    - a preregistered admission revoked before execution → `PROCEDURE_REVOKED`;
+    - only the exact preregistered admission record is supplied to P10-F;
+    - timestamps cannot substitute for K ordering;
+    - no inference path bypasses `run_inference`.
 
 **P10-Z — certification & adversarial suite** (Wave 6)
 - **Owns:** `tests/test_phase10_certification.py`.
@@ -1698,6 +1767,11 @@ cleanup under `CLAUDE.md` §7.
 | non-finite output or contracted failure condition | INVALID → NOT_ASSESSED |
 | hidden fallback test | impossible (other procedures raise if called) |
 | preregistered but not admitted procedure | preregistration refused / NOT_ASSESSED (`PROCEDURE_NOT_ADMITTED`) |
+| admission in the preregistration-freeze K prefix | admissible |
+| admission created after the preregistration freeze (retrospective) | refused; it cannot be referenced (a forward ref) and cannot repair a frozen preregistration |
+| admission ordering unverifiable | refused (fail closed) |
+| preregistered admission revoked before execution (execution snapshot) | NOT_ASSESSED (`PROCEDURE_REVOKED`) |
+| wall-clock timestamp suggests admission-before-freeze, but K order says otherwise | refused (sequence/prefix is authority) |
 | admitted procedure whose source changed | `PROCEDURE_IDENTITY_MISMATCH` |
 | procedure revoked after the assessment | reassessment → NOT_ASSESSED (downgrade only) |
 | estimand not in `supported_estimands` | preregistration refused |
