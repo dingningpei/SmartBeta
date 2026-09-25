@@ -1579,8 +1579,9 @@ PREREGISTERED --(checks pass)--> CONSUMED --> EVIDENCE_PERSISTED --> INFERRED --
    before **any** empirical confirmation-data read, including reads of
    factor inputs; the ACCESS component is exactly
    `confirmation-study:<study_id>`.
-4. Construct the Phase-6 `EngineResult` and the confirmation
-   `EvaluationSpec` from the confirmation data (after step 3; §13.2a.6).
+4. Obtain the Phase-6 `EngineResult` and the **complete** confirmation
+   `EvaluationSpec` from the post-read execution boundary (after step 3;
+   §13.2a.6). P10-H constructs none of the spec's design (§13.2a item 7a).
    Derive alignments once (P7-B). Per member, create a fresh single-use
    `FoldTraceCollector` and run `evaluate(..., alignments_by_horizon=...,
    fold_trace_sink=collector)` (a fresh Phase-7 in-memory holdout token per
@@ -1744,6 +1745,52 @@ member, require all of the following:
 Any failure makes that member NOT_ASSESSED with `SERIES_BINDING_FAILURE`,
 with effective p := 1 in Holm (the R-3 placeholder, never persisted as a
 p-value). CONSUMPTION and ACCESS remain, and nothing is rolled back.
+
+**7a. EvaluationSpec authority (F1; approved after the first P10-H
+review).**
+- **Supply.** The complete confirmation `EvaluationSpec` is supplied only
+  after the authorized empirical read, by the reader/execution boundary. It
+  is data-derived post-ACCESS authority (item 1).
+- **P10-H constructs nothing.** P10-H never constructs, synthesizes,
+  defaults, infers, repairs or fills any `EvaluationSpec` design field.
+  This includes, without limitation: `metrics`, `split_rule`, OOS ranges,
+  walk-forward configuration, holdout length, `subperiod_rule`,
+  `universe_variants`, benchmark, `periods_per_year`, `CostModel.mode`,
+  `horizons` and `parameter_grid`.
+- **Supply is not certification.** Stage B (item 7) validates the frozen,
+  scientifically material bindings of the primary HOLDOUT estimand.
+  `EvaluationRecord.spec_hash` must equal the supplied spec's `spec_hash`.
+  P10-H never validates a field against a value it constructed itself.
+- **`CostModel.mode` (implementation-scoped fact).**
+  - In the current sealed Phase-7 implementation, `CostModel.mode` is
+    declarative and is not read by the numerical evaluation path
+    (`evaluation/spec.py` `CostMode`; `evaluation/engine.py` passes only
+    `cost_model.transaction_cost_bps`). The applied convention is the
+    sealed `evaluation/portfolio.py` one: `transaction_cost_bps` applied
+    one-way, exactly once, against turnover.
+  - Under this implementation `CostModel.mode` is therefore **not** an
+    additional scientifically material binding for the primary estimand.
+    The applied cost is bound through `bundle.primary.transaction_cost_bps
+    == construction.cost_bps`.
+  - P10-H never defaults, normalizes or infers the mode, never requires a
+    separate Phase-10 mode binding, and never refuses `MEAN_NET_LONG_SHORT`
+    merely because the mode is not separately preregistered.
+    `ESTIMAND_POLICY_VIOLATION` keeps its frozen §7.1 meaning and is not
+    used for this.
+- **Limitation (implementation-scoped; not generalized).**
+  - Phase 10 does not certify that the declarative `CostModel.mode` label
+    describes the cost convention the sealed Phase-7 numerical
+    implementation actually applies, which is currently one-way
+    application of `transaction_cost_bps` against turnover.
+  - If a future sealed Phase-7 implementation makes `CostModel.mode`
+    numerically operative, this binding must be revisited.
+- **Scope of certification.** Reader-supplied `EvaluationSpec` fields
+  outside the primary-estimand path are not certified. The audit at this
+  amendment found no other unbound `EvaluationSpec` field that changes the
+  primary per-date HOLDOUT series: `split_rule`, `subperiod_rule`,
+  `universe_variants`, benchmark and `periods_per_year` feed only
+  non-estimand outputs. If implementation later finds such a dependency:
+  STOP; no default, binding or reason code is invented.
 
 **8. Knowledge-PIT outputs (DERIVED kinds and parents).** Only the three
 frozen confirmation kinds are used:
