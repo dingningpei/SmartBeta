@@ -72,6 +72,7 @@ from smart_beta.science.contracts import (
 __all__ = [
     # constants
     "GENESIS_PREV_HASH",
+    "GENERATOR_INPUT_INCLUDED_UNKNOWN",
     "REF_NAMES",
     # errors
     "KnowledgeError",
@@ -94,6 +95,13 @@ __all__ = [
 
 #: The seq-0 ``prev_hash`` sentinel (plan section 5.1): 64 zeros.
 GENESIS_PREV_HASH = "0" * 64
+
+#: The frozen ``footprint.unresolved`` reason for the single, GENERATOR_INPUT-only
+#: exception to the non-empty ``refs.included`` rule (plan sections 5.2 and
+#: 12.3): an actually-attempted generation event whose included empirical
+#: inputs cannot be identified. It means "the identities of the included
+#: empirical inputs cannot be determined", never "zero empirical inputs".
+GENERATOR_INPUT_INCLUDED_UNKNOWN = "generator_input_included_unknown"
 
 #: The four reference lists of a record envelope (plan section 5.1).
 REF_NAMES: tuple[str, ...] = (
@@ -707,7 +715,10 @@ def _validate_kind_payload(record: KnowledgeRecord) -> None:
       footprint, plus a non-empty ``refs.derived_from``;
     * ``GENERATOR_INPUT`` -- ``generation_event_id``,
       ``history_snapshot_hash``, ``model_id`` and an envelope footprint,
-      plus a non-empty ``refs.included``;
+      plus a non-empty ``refs.included``. The single frozen exception
+      (sections 5.2 / 12.3) also accepts an empty ``refs.included`` iff the
+      envelope footprint is undeterminable and its ``unresolved`` list
+      contains :data:`GENERATOR_INPUT_INCLUDED_UNKNOWN`;
     * ``HUMAN_DECISION`` -- ``decision_kind`` (closed), ``actor_role``, plus
       ``refs.consulted`` or ``payload.consulted_all_prior = true``;
     * ``EXPOSURE_DECLARATION`` -- the full section 5.2a contract (see
@@ -762,9 +773,13 @@ def _validate_kind_payload(record: KnowledgeRecord) -> None:
         _expect_sha256(payload["content_hash"], where="DERIVED content_hash")
 
     elif kind == RecordKind.GENERATOR_INPUT:
-        if not record.refs["included"]:
+        if not record.refs["included"] and not (
+            _generator_input_empty_included_is_declared_unknown(record)
+        ):
             raise KnowledgeContractError(
-                "GENERATOR_INPUT requires a non-empty refs.included"
+                "GENERATOR_INPUT requires a non-empty refs.included unless "
+                "the footprint is undeterminable and its unresolved list "
+                f"contains the protocol reason {GENERATOR_INPUT_INCLUDED_UNKNOWN!r}"
             )
         _require_keys(
             payload,
@@ -898,6 +913,30 @@ def _validate_kind_payload(record: KnowledgeRecord) -> None:
 
     else:  # pragma: no cover - RecordKind is closed
         raise KnowledgeContractError(f"unhandled record kind {kind!r}")
+
+
+def _generator_input_empty_included_is_declared_unknown(
+    record: KnowledgeRecord,
+) -> bool:
+    """Whether an empty ``refs.included`` is the frozen 5.2 exception.
+
+    The single, GENERATOR_INPUT-only exception (plan sections 5.2 and 12.3)
+    permits ``refs.included == []`` **iff** the envelope footprint is
+    undeterminable (``determinable is False``) and its ``unresolved`` list
+    contains the exact protocol reason
+    :data:`GENERATOR_INPUT_INCLUDED_UNKNOWN`. Other unresolved reasons may
+    coexist and are preserved; the footprint stays undeterminable so
+    downstream exposure classification fails closed. This exception never
+    extends to ``DERIVED`` or any other record kind, and the non-empty
+    ``included`` path is untouched.
+    """
+    footprint = record.footprint
+    if footprint is None:
+        return False
+    if footprint.get("determinable") is not False:
+        return False
+    unresolved = footprint.get("unresolved", ())
+    return GENERATOR_INPUT_INCLUDED_UNKNOWN in unresolved
 
 
 def _validate_procedure_admission_payload(payload: Mapping[str, Any]) -> None:
