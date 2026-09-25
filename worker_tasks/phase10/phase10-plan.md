@@ -417,7 +417,7 @@ Preconditions:
 
 | # | Role | Condition |
 |---|---|---|
-| 1a | `ROBUSTNESS` | overlap(fp(E), fp(c)) = OVERLAP for some `CONSUMPTION` c whose preregistration contains H |
+| 1a | `ROBUSTNESS` | overlap(fp(E), fp(c)) = OVERLAP for some `CONSUMPTION` c whose preregistration contains H **and** `seq(c) < τ_P` (amended before Wave-5 resume; see note) |
 | 1b | `DEVELOPMENT` | overlap(fp(E), ExposedFP) = OVERLAP |
 | 2 | `UNKNOWN_EXPOSURE` | any of: overlap = UNDETERMINABLE; an Anc record lacks a required footprint or has an unverifiable one; a generator identity in Anc has no PRETRAINING declaration recorded before τ_P; an `ACCESS` record with seq < τ_P exists for **any** artifact whose footprint overlaps (or undeterminably overlaps) fp(E) |
 | 3 | `CONFIRMATION_PROSPECTIVE` | seq(ARTIFACT(E)) > τ_P **and** min date of fp(E) > date(`recorded_at` of P) **and** `available_from`(E) > date(`recorded_at` of P) |
@@ -426,6 +426,33 @@ Preconditions:
 | 6 | `UNKNOWN_EXPOSURE` | otherwise (fail-closed catch-all) |
 
 "Covering" is defined in §5.2a: scope contains H, and the declaration footprint ⊇ fp(E) as a source-observation footprint.
+
+**Rule 1a temporal amendment (P10-D-R2; approved before the Wave-5
+resume).**
+- **Defect.** As originally worded, rule 1a scanned every CONSUMPTION.
+  That included the study's own write-ahead CONSUMPTION (its preregistration
+  is P, which contains H, and its footprint overlaps fp(E) by
+  construction) and any later CONSUMPTION. Every executed study, and every
+  §11.3 reassessment against a K that holds its CONSUMPTION, therefore
+  became `ROBUSTNESS`.
+- **Discovery.** P10-H integration found this latent defect. Barriers 3
+  and 4 did not include the own-CONSUMPTION case, and this note does not
+  claim they failed.
+- **Rule.** Only CONSUMPTION records with `seq(c) < τ_P` are eligible,
+  where τ_P is the existing frozen boundary (the PREREGISTRATION seq):
+  - `seq(c) < τ_P` → eligible;
+  - `seq(c) ≥ τ_P` → not eligible. This covers the study's own CONSUMPTION
+    and every later one, including `seq(c) == τ_P`, which cannot occur in
+    practice.
+- **Temporal, not identity-based.** There is no special case by
+  `study_id`, `prereg_record_hash` equality, the current execution or
+  ACCESS identity.
+- **Scope.** The role function owns the rule, so it governs initial role
+  computation and §11.3 reassessment alike. A post-τ_P CONSUMPTION never
+  retroactively downgrades a role, and no caller passes a truncated K to
+  compensate.
+- **Unchanged:** rule 2, declaration semantics, ancestry, τ_P, and all
+  schemas.
 
 ### 5.5 Invariants (mechanically tested)
 
