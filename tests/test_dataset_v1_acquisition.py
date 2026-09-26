@@ -12,10 +12,13 @@ persisted.
 
 from __future__ import annotations
 
+import ast
 import gzip
 import hashlib
 import json
+import os
 import socket
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -225,8 +228,77 @@ def test_invalid_ticker_in_pool_fails_before_path(tmp_path: Path) -> None:
     assert not (tmp_path / "raw").exists()
 
 
-def test_does_not_import_d1() -> None:
-    assert "smart_beta.dataset_v1.candidate_pool" not in sys.modules
+def _imported_module_names(source: str) -> list[str]:
+    """Every dotted module name referenced by an import statement in source.
+
+    Handles ``import a.b``, ``from a.b import c`` and ``from . import c``, so
+    a relative D1 import cannot slip through the check.
+    """
+    tree = ast.parse(source)
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            names.append(base)
+            names.extend(
+                f"{base}.{alias.name}" if base else alias.name
+                for alias in node.names
+            )
+    return names
+
+
+def test_acquisition_source_does_not_import_d1() -> None:
+    """Static check: acquisition.py has no D1 import, order-independent."""
+    source = Path(acq.__file__).read_text("utf-8")
+    referenced = _imported_module_names(source)
+    assert referenced, "AST parse found no imports; the check is not meaningful"
+    offenders = [name for name in referenced if "candidate_pool" in name]
+    assert offenders == [], offenders
+
+
+def test_acquisition_import_does_not_pull_in_d1() -> None:
+    """Fresh-interpreter check: importing acquisition never loads D1.
+
+    A separate process is immune to collection order, so this stays valid
+    once D1 tests run earlier in the same pytest session.
+    """
+    repo_root = Path(acq.__file__).resolve().parents[2]
+    existing = os.environ.get("PYTHONPATH", "")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "TIINGO_API_KEY",
+            "TUSHARE_PROXY_TOKEN",
+            "TUSHARE_BASIC_PROXY_TOKEN",
+            "TUSHARE_API_TOKEN",
+            "DEEPSEEK_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+        }
+    }
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in [str(repo_root), existing] if part
+    )
+    code = (
+        "import sys\n"
+        "import smart_beta.dataset_v1.acquisition as a\n"
+        "assert 'smart_beta.dataset_v1.candidate_pool' not in sys.modules, \"D1 imported\"\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
 
 
 # ---------------------------------------------------------------------------
