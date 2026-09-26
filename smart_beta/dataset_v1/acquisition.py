@@ -63,6 +63,7 @@ __all__ = [
     "DatasetV1Error",
     "ExpectedPoolError",
     "TickerValidationError",
+    "UnrequestableIdentifierError",
     "TransportError",
     "ConfigError",
     "ManifestError",
@@ -77,6 +78,7 @@ __all__ = [
     "refetch",
     "classify_body",
     "validate_ticker",
+    "is_requestable_ticker",
     "eod_request_path",
     "eod_request_params",
     "make_live_transport",
@@ -106,6 +108,9 @@ API_KEY_ENV_VAR = "TIINGO_API_KEY"
 #: ``.`` or ``-`` but never starting with either.
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]*$")
 
+#: Reason code recorded for an identifier the request path cannot represent.
+REQUEST_PATTERN_MISMATCH = "REQUEST_PATTERN_MISMATCH"
+
 #: At most three attempts per request (contract §15).
 MAX_ATTEMPTS = 3
 
@@ -123,6 +128,8 @@ REQUIRED_EOD_KEYS = ("date", "close", "volume", "divCash", "splitFactor")
 AUTH_HEADER_NAME = "Authorization"
 
 #: Terminal ticker statuses (contract §15). ``PENDING`` is non-terminal.
+#: ``UNREQUESTABLE_IDENTIFIER`` is terminal for batch completion but is not a
+#: request, not OK, not EMPTY and not a provider failure.
 TERMINAL_STATUSES = frozenset(
     {
         "OK",
@@ -131,6 +138,7 @@ TERMINAL_STATUSES = frozenset(
         "ENTITLEMENT_ERROR",
         "RETRY_EXHAUSTED",
         "NONDETERMINISTIC",
+        "UNREQUESTABLE_IDENTIFIER",
     }
 )
 
@@ -163,6 +171,15 @@ class TickerValidationError(DatasetV1Error):
 
     Raised before any path is constructed, so an invalid ticker can never
     reach the filesystem.
+    """
+
+
+class UnrequestableIdentifierError(DatasetV1Error):
+    """A frozen D1 pool identifier the D2 request path cannot represent.
+
+    This is strictly a request-path limitation. It carries no security-type
+    meaning: it does not mean the identifier is invalid, non-common, a
+    warrant, preferred, note or ineligible.
     """
 
 
@@ -236,13 +253,22 @@ def utc_now() -> str:
 # ---------------------------------------------------------------------------
 # Ticker validation and request construction
 # ---------------------------------------------------------------------------
+def is_requestable_ticker(ticker: object) -> bool:
+    """True iff ``ticker`` can be safely represented on the request path.
+
+    Purely a lexical request-path check. A ``False`` result says nothing
+    about the identifier's security type, validity or eligibility.
+    """
+    return isinstance(ticker, str) and bool(TICKER_PATTERN.match(ticker))
+
+
 def validate_ticker(ticker: str) -> str:
     """Return ``ticker`` if it is well formed, else raise.
 
     This runs before any path is built, so a rejected ticker constructs no
     path and touches no filesystem entry.
     """
-    if not isinstance(ticker, str) or not TICKER_PATTERN.match(ticker):
+    if not is_requestable_ticker(ticker):
         raise TickerValidationError(
             f"invalid ticker {ticker!r}: must match {TICKER_PATTERN.pattern}"
         )
@@ -446,16 +472,30 @@ def _append_attempt(root: str | os.PathLike[str], batch_id: str, record: dict) -
 
 
 def _new_status(header: dict) -> dict:
+    """Initial status for every pool identifier (never drops a ticker).
+
+    A requestable identifier starts ``PENDING``. An unrequestable identifier
+    starts ``UNREQUESTABLE_IDENTIFIER`` with no response fields, because no
+    request will ever be made for it.
+    """
+    tickers: dict[str, dict] = {}
+    for entry in header["tickers"]:
+        if entry.get("requestable", True):
+            tickers[entry["ticker"]] = {"status": "PENDING", "attempts": 0}
+        else:
+            tickers[entry["ticker"]] = {
+                "status": "UNREQUESTABLE_IDENTIFIER",
+                "reason_code": REQUEST_PATTERN_MISMATCH,
+                "request_pattern": TICKER_PATTERN.pattern,
+                "attempts": 0,
+            }
     return {
         "batch_id": header["batch_id"],
         "manifest_schema_version": header["manifest_schema_version"],
         "contract_sha256": header["contract_sha256"],
         "C": header["C"],
         "batch_state": "RUNNING",
-        "tickers": {
-            entry["ticker"]: {"status": "PENDING", "attempts": 0}
-            for entry in header["tickers"]
-        },
+        "tickers": tickers,
     }
 
 
@@ -474,6 +514,11 @@ def create_batch(
     The ``batch_id`` is computed once from the contract/snapshot/pool hashes,
     ``C`` and the injectable clock, persisted in the header and reused on
     every resume. Returns the ``batch_id``.
+
+    Every pool identifier is kept verbatim and tagged with ``requestable``.
+    An identifier that fails :data:`TICKER_PATTERN` is recorded as
+    ``requestable: false`` and starts in the ``UNREQUESTABLE_IDENTIFIER``
+    terminal status; it never aborts the batch.
     """
     pool, _raw, pool_sha = read_expected_pool(
         pool_path, expected_pool_sha256=expected_pool_sha256
@@ -490,7 +535,7 @@ def create_batch(
 
     entries = []
     for row in pool.get("tickers", []):
-        ticker = validate_ticker(row["ticker"])
+        ticker = row["ticker"]
         intervals = row.get("listed_intervals", [])
         entries.append(
             {
@@ -498,6 +543,7 @@ def create_batch(
                 "security_keys": [
                     interval["security_key"] for interval in intervals
                 ],
+                "requestable": is_requestable_ticker(ticker),
             }
         )
     entries.sort(key=lambda entry: entry["ticker"])
@@ -978,6 +1024,11 @@ def refetch(
     for ticker in selected:
         if ticker not in status["tickers"]:
             raise ManifestError(f"ticker {ticker!r} is not in batch {batch_id}")
+        if status["tickers"][ticker].get("status") == "UNREQUESTABLE_IDENTIFIER":
+            raise UnrequestableIdentifierError(
+                f"ticker {ticker!r} is UNREQUESTABLE_IDENTIFIER and cannot be "
+                "requested; no state was changed"
+            )
         validate_ticker(ticker)
     return _run(
         batch_id,

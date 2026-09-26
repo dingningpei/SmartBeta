@@ -33,6 +33,11 @@ CONTRACT = acq.CONTRACT_SHA256
 FIXED_CLOCK = "2024-06-03T00:00:00Z"
 TICKERS = ["AAPL", "MSFT", "NVDA"]
 
+#: D2-C: provider identifiers the request path cannot represent. D1 keeps
+#: vendor identifiers verbatim, so these two shapes are real.
+UNREQUESTABLE_SPACE = "SO 6.75 08-01-22"
+UNREQUESTABLE_SLASH = "BC/PA"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -129,6 +134,31 @@ def make_batch(tmp_path: Path, clock: str = FIXED_CLOCK, **kwargs) -> str:
     return acq.create_batch(POOL_FIXTURE, tmp_path, fixed_clock(clock), **kwargs)
 
 
+def pool_with(*tickers: str) -> dict:
+    """A canonical expected-pool dict holding exactly ``tickers`` in order."""
+    pool = load_pool()
+    pool["tickers"] = [
+        {
+            "ticker": ticker,
+            "duplicate_ticker": False,
+            "listed_intervals": [
+                {
+                    "security_key": f"TIINGO:{ticker}:2000-01-01",
+                    "exchange": "NASDAQ",
+                    "startDate": "2000-01-01",
+                    "endDate": "2024-05-31",
+                }
+            ],
+        }
+        for ticker in tickers
+    ]
+    return pool
+
+
+def make_batch_from_pool(tmp_path: Path, pool: dict, clock: str = FIXED_CLOCK) -> str:
+    return acq.create_batch(write_pool(tmp_path, pool), tmp_path, fixed_clock(clock))
+
+
 def read_status(root: Path, batch_id: str) -> dict:
     return json.loads(
         (root / "manifest" / batch_id / "status.json").read_text("utf-8")
@@ -220,11 +250,17 @@ def test_non_canonical_pool_bytes_fail(tmp_path: Path) -> None:
         acq.create_batch(path, tmp_path, fixed_clock())
 
 
-def test_invalid_ticker_in_pool_fails_before_path(tmp_path: Path) -> None:
+def test_invalid_ticker_in_pool_is_unrequestable_not_fatal(tmp_path: Path) -> None:
+    """D2-C replaces the obsolete "invalid pool ticker raises" expectation.
+
+    An identifier D1 preserved verbatim but the request path cannot
+    represent must not abort the batch; it becomes UNREQUESTABLE_IDENTIFIER.
+    """
     pool = load_pool()
     pool["tickers"][0]["ticker"] = "bad ticker"
-    with pytest.raises(acq.TickerValidationError):
-        acq.create_batch(write_pool(tmp_path, pool), tmp_path, fixed_clock())
+    batch_id = make_batch_from_pool(tmp_path, pool)
+    status = read_status(tmp_path, batch_id)
+    assert status["tickers"]["bad ticker"]["status"] == "UNREQUESTABLE_IDENTIFIER"
     assert not (tmp_path / "raw").exists()
 
 
@@ -436,6 +472,221 @@ def test_raw_file_is_never_overwritten(tmp_path: Path) -> None:
         "MSFT.json.gz",
         "NVDA.json.gz",
     }
+
+
+# ---------------------------------------------------------------------------
+# D2-C — unrequestable-identifier handling
+# ---------------------------------------------------------------------------
+def test_space_identifier_is_unrequestable(tmp_path: Path) -> None:
+    """Item 1: a requestable id plus a spaced id; the spaced id is terminal."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    transport = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"][UNREQUESTABLE_SPACE]["status"] == "UNREQUESTABLE_IDENTIFIER"
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+
+
+def test_slash_identifier_is_unrequestable(tmp_path: Path) -> None:
+    """Item 2: a slash identifier is UNREQUESTABLE_IDENTIFIER."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with(UNREQUESTABLE_SLASH))
+    transport = FakeTransport(_explode)
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"][UNREQUESTABLE_SLASH]["status"] == "UNREQUESTABLE_IDENTIFIER"
+    assert transport.calls == []
+
+
+def test_header_lists_identifiers_with_requestable_flags(tmp_path: Path) -> None:
+    """Item 3: create_batch succeeds and tags each id's requestable flag."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    header = read_header(tmp_path, batch_id)
+    assert [e["ticker"] for e in header["tickers"]] == sorted(
+        ["AAPL", UNREQUESTABLE_SPACE]
+    )
+    flags = {e["ticker"]: e["requestable"] for e in header["tickers"]}
+    assert flags == {"AAPL": True, UNREQUESTABLE_SPACE: False}
+
+
+def test_unrequestable_status_record_exact_fields(tmp_path: Path) -> None:
+    """Item 4: the status record has exactly the specified fields."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with(UNREQUESTABLE_SPACE))
+    record = read_status(tmp_path, batch_id)["tickers"][UNREQUESTABLE_SPACE]
+    assert record == {
+        "status": "UNREQUESTABLE_IDENTIFIER",
+        "reason_code": "REQUEST_PATTERN_MISMATCH",
+        "request_pattern": acq.TICKER_PATTERN.pattern,
+        "attempts": 0,
+    }
+    for forbidden in (
+        "http_status",
+        "raw_file",
+        "raw_sha256",
+        "row_count",
+        "first_date",
+        "last_date",
+        "retrieved_at_utc",
+    ):
+        assert forbidden not in record
+
+
+def test_unrequestable_never_reaches_transport(tmp_path: Path) -> None:
+    """Items 3 and 5: zero transport calls and no attempt line for it."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    transport = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert UNREQUESTABLE_SPACE not in transport.counts
+    assert all(call["ticker"] != UNREQUESTABLE_SPACE for call in transport.calls)
+    assert transport.counts == {"AAPL": 1}
+    # Chosen attempts.jsonl semantics: no line at all for the unrequestable id.
+    assert all(
+        line["ticker"] != UNREQUESTABLE_SPACE
+        for line in read_attempts(tmp_path, batch_id)
+    )
+    assert len(read_attempts(tmp_path, batch_id)) == 1
+
+
+def test_no_raw_file_or_path_for_unrequestable(tmp_path: Path) -> None:
+    """Item 6: the raw directory holds only requestable files."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    transport = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert raw_files(tmp_path, batch_id) == ["AAPL.json.gz"]
+
+
+def test_expected_set_equals_status_set_and_complete(tmp_path: Path) -> None:
+    """Item 7: every id is present and COMPLETE includes unrequestable."""
+    batch_id = make_batch_from_pool(
+        tmp_path, pool_with("AAPL", "MSFT", UNREQUESTABLE_SPACE)
+    )
+    transport = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["batch_state"] == "COMPLETE"
+    assert set(summary["tickers"]) == {"AAPL", "MSFT", UNREQUESTABLE_SPACE}
+    assert summary["counts"] == {"OK": 2, "UNREQUESTABLE_IDENTIFIER": 1}
+    assert summary["requests_made"] == 2
+
+
+def test_resume_makes_zero_calls_and_record_byte_identical(tmp_path: Path) -> None:
+    """Item 8: a resume skips it entirely and changes nothing."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    first = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    status_path = tmp_path / "manifest" / batch_id / "status.json"
+    before_bytes = status_path.read_bytes()
+    before_attempts = read_attempts(tmp_path, batch_id)
+
+    second = FakeTransport(_explode)
+    summary = acq.run_batch(batch_id, tmp_path, second, SleepSpy(), fixed_clock())
+    assert second.calls == []
+    assert summary["requests_made"] == 0
+    assert status_path.read_bytes() == before_bytes
+    assert read_attempts(tmp_path, batch_id) == before_attempts
+    assert summary["tickers"][UNREQUESTABLE_SPACE]["status"] == "UNREQUESTABLE_IDENTIFIER"
+
+
+def test_mixed_batch_ok_empty_and_5xx_retry(tmp_path: Path) -> None:
+    """Item 9: requestable ids still take their normal paths."""
+    batch_id = make_batch_from_pool(
+        tmp_path, pool_with("AAPL", "MSFT", "NVDA", UNREQUESTABLE_SPACE)
+    )
+
+    def handler(ticker: str, n: int, path: str, params: dict):
+        if ticker == "MSFT":
+            return (200, EMPTY_BODY)
+        if ticker == "NVDA":
+            return (503, b"unavailable") if n == 1 else (200, ok_body())
+        return (200, ok_body())
+
+    transport = FakeTransport(handler)
+    sleep = SleepSpy()
+    summary = acq.run_batch(batch_id, tmp_path, transport, sleep, fixed_clock())
+    assert summary["batch_state"] == "COMPLETE"
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    assert summary["tickers"]["MSFT"]["status"] == "EMPTY"
+    assert summary["tickers"]["NVDA"]["status"] == "OK"
+    assert transport.counts["NVDA"] == 2
+    assert sleep.calls
+    assert UNREQUESTABLE_SPACE not in transport.counts
+
+
+def test_refetch_unrequestable_raises_before_call_and_ok_untouched(
+    tmp_path: Path,
+) -> None:
+    """Item 10: explicit refetch raises typed, before any call, no change."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    body = ok_body(2)
+    first = FakeTransport(lambda t, n, p, q: (200, body))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    status_path = tmp_path / "manifest" / batch_id / "status.json"
+    before_bytes = status_path.read_bytes()
+    before_attempts = read_attempts(tmp_path, batch_id)
+
+    second = FakeTransport(_explode)
+    with pytest.raises(acq.UnrequestableIdentifierError):
+        acq.refetch(
+            batch_id,
+            tmp_path,
+            second,
+            SleepSpy(),
+            fixed_clock(),
+            tickers=[UNREQUESTABLE_SPACE],
+        )
+    assert second.calls == []
+    assert status_path.read_bytes() == before_bytes
+    assert read_attempts(tmp_path, batch_id) == before_attempts
+    record = read_status(tmp_path, batch_id)["tickers"]["AAPL"]
+    assert record["status"] == "OK"
+    assert record["raw_sha256"] == acq.sha256_hex(body)
+
+
+def test_default_refetch_never_selects_unrequestable(tmp_path: Path) -> None:
+    """Item 5: the default (OK-only) refetch selection excludes it."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    first = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+
+    second = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    summary = acq.refetch(batch_id, tmp_path, second, SleepSpy(), fixed_clock())
+    assert set(second.counts) == {"AAPL"}
+    assert summary["tickers"][UNREQUESTABLE_SPACE]["status"] == "UNREQUESTABLE_IDENTIFIER"
+
+
+def test_identifier_string_preserved_exactly(tmp_path: Path) -> None:
+    """Item 11: spaces and slashes survive verbatim in header and status."""
+    batch_id = make_batch_from_pool(
+        tmp_path, pool_with(UNREQUESTABLE_SPACE, UNREQUESTABLE_SLASH)
+    )
+    header_tickers = {e["ticker"] for e in read_header(tmp_path, batch_id)["tickers"]}
+    assert header_tickers == {UNREQUESTABLE_SPACE, UNREQUESTABLE_SLASH}
+    assert set(read_status(tmp_path, batch_id)["tickers"]) == {
+        UNREQUESTABLE_SPACE,
+        UNREQUESTABLE_SLASH,
+    }
+
+
+def test_no_security_type_inference(tmp_path: Path) -> None:
+    """Item 12: no type/classification keys; reason code is exact."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with(UNREQUESTABLE_SPACE))
+    record = read_status(tmp_path, batch_id)["tickers"][UNREQUESTABLE_SPACE]
+    assert record["reason_code"] == "REQUEST_PATTERN_MISMATCH"
+    assert not any("type" in key or "class" in key for key in record)
+    assert not any(
+        key in record
+        for key in ("eligible", "common", "warrant", "preferred", "note")
+    )
+
+
+def test_all_unrequestable_pool_completes_with_zero_calls(tmp_path: Path) -> None:
+    """Adversarial: a pool of only unrequestable ids still completes."""
+    batch_id = make_batch_from_pool(
+        tmp_path, pool_with(UNREQUESTABLE_SPACE, UNREQUESTABLE_SLASH)
+    )
+    transport = FakeTransport(_explode)
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["batch_state"] == "COMPLETE"
+    assert summary["requests_made"] == 0
+    assert transport.calls == []
+    assert summary["counts"] == {"UNREQUESTABLE_IDENTIFIER": 2}
+    assert not (tmp_path / "raw" / batch_id).exists()
 
 
 # ---------------------------------------------------------------------------
