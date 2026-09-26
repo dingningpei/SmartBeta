@@ -642,6 +642,66 @@ def _historical_study(
     }
 
 
+def _not_exposed_timing_scenario(
+    *,
+    sealed: bool = True,
+    artifact_after_prereg: bool = True,
+) -> tuple[
+    _Chain,
+    dict[str, K.KnowledgeRecord],
+    _Chain,
+    dict[str, K.KnowledgeRecord],
+]:
+    """A G3-eligible historical fixture whose ONLY pre-tau_P gap is HUMAN NOT_EXPOSED.
+
+    Every other frozen G3 condition is satisfied before tau_P: a PUBLIC
+    declaration covering fp(E), the preregistration, and historical data whose
+    dates predate ``recorded_at(P)`` (so rule 3 cannot apply). The ARTIFACT is
+    either recorded after tau_P (so rule 4 fails on ``seq``) or recorded
+    before tau_P while ``sealed=False`` (so rule 4 fails on sealing): rule 5
+    is the only candidate. The control records the HUMAN ``NOT_EXPOSED``
+    before tau_P; the late variant appends it after tau_P. The pair therefore
+    isolates declaration timing as the sole causal difference.
+    """
+    footprint = _fp(start="2019-12-31")  # historical data, predates recorded_at(P)
+
+    def build(with_human_before: bool):
+        chain = _Chain()
+        decision = chain.append(**_decision())
+        freeze = chain.append(**_freeze([decision.record_hash]))
+        _add_declaration(
+            chain,
+            channel=Channel.PUBLIC,
+            footprint=footprint,
+            exposed=True,
+            extras={"reference": "public-record", "class_match": False},
+        )
+        if with_human_before:
+            _add_declaration(
+                chain, channel=Channel.HUMAN, footprint=footprint, exposed=False
+            )
+        artifact = None
+        if not artifact_after_prereg:
+            artifact = chain.append(
+                **_artifact(footprint, sealed=sealed, available_from=DAY0)
+            )
+        prereg = chain.append(**_preregistration(freeze))
+        if artifact_after_prereg:
+            artifact = chain.append(
+                **_artifact(footprint, sealed=sealed, available_from=DAY0)
+            )
+        return chain, {
+            "freeze": freeze,
+            "prereg": prereg,
+            "artifact": artifact,
+            "footprint": footprint,
+        }
+
+    control_chain, control = build(True)
+    late_chain, late = build(False)
+    return control_chain, control, late_chain, late
+
+
 def _role(scenario: dict[str, K.KnowledgeRecord], chain: _Chain) -> EvidenceRole:
     return ROLES.evidence_role(
         scenario["artifact"].record_hash,
@@ -2309,6 +2369,8 @@ class _CertReader(STUDY.ConfirmationDataReader):
         self._log: K.KnowledgeLog | None = None
         self.last_spec: EvaluationSpec | None = None
         self.last_engine_result: EngineResult | None = None
+        self.order_verified = False
+        self.durable_order: tuple[int, int, int] | None = None
 
     def bind(self, log: K.KnowledgeLog) -> None:
         self._log = log
@@ -2316,16 +2378,47 @@ class _CertReader(STUDY.ConfirmationDataReader):
     def read(self, member):
         self.calls.append(member.hypothesis_id)
         assert self._log is not None
+        # Prove the durable Knowledge-PIT ordering at the instant of the first
+        # empirical read, not merely from the final records after execution:
+        # PREREGISTRATION seq < CONSUMPTION seq < ACCESS seq.
         records = self._log.read()
-        assert any(record.kind is RecordKind.CONSUMPTION for record in records), (
-            "a read occurred before the durable CONSUMPTION"
-        )
-        assert any(
-            record.kind is RecordKind.ACCESS
+        prereg_records = [
+            record
+            for record in records
+            if record.kind is RecordKind.PREREGISTRATION
+        ]
+        consumption_records = [
+            record
+            for record in records
+            if record.kind is RecordKind.CONSUMPTION
+            and record.payload.get("study_id") == "study-1"
+        ]
+        access_records = [
+            record
+            for record in records
+            if record.kind is RecordKind.ACCESS
             and record.payload.get("component")
             == STUDY.CONFIRMATION_STUDY_ACCESS_PREFIX + "study-1"
-            for record in records
-        ), "a read occurred before the durable ACCESS"
+        ]
+        assert len(prereg_records) == 1, (
+            "a read occurred before the durable PREREGISTRATION"
+        )
+        assert len(consumption_records) == 1, (
+            "a read occurred before the durable CONSUMPTION"
+        )
+        assert len(access_records) == 1, (
+            "a read occurred before the durable ACCESS"
+        )
+        self.durable_order = (
+            prereg_records[0].seq,
+            consumption_records[0].seq,
+            access_records[0].seq,
+        )
+        assert self.durable_order[0] < self.durable_order[1] < self.durable_order[2], (
+            "PREREGISTRATION seq < CONSUMPTION seq < ACCESS seq must hold "
+            "before the first empirical read"
+        )
+        self.order_verified = True
         engine_result = _study_engine_result(member, self.factor_panel)
         specification = _study_evaluation_spec(
             member, engine_result, self.partition
@@ -2732,6 +2825,24 @@ def test_clause_02_deterministic_hypothesis_relative_evidence_roles() -> None:
     input_fields = {field.name for field in dataclasses.fields(ASSESS.MemberAssessmentInput)}
     assert "evidence_role" not in input_fields
     assert "role" not in input_fields
+    # The frozen temporal declaration rule is exercised directly: a
+    # pre-tau_P HUMAN NOT_EXPOSED completes the G3 conditions, while the same
+    # declaration appended only after tau_P cannot upgrade the role.
+    control_chain, control, late_chain, late = _not_exposed_timing_scenario(
+        sealed=True
+    )
+    assert (
+        _role(control, control_chain)
+        is EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED
+    )
+    assert _role(late, late_chain) is EvidenceRole.UNKNOWN_EXPOSURE
+    _add_declaration(
+        late_chain,
+        channel=Channel.HUMAN,
+        footprint=late["footprint"],
+        exposed=False,
+    )
+    assert _role(late, late_chain) is EvidenceRole.UNKNOWN_EXPOSURE
 
 
 def test_clause_03_fail_closed_unknown_exposure() -> None:
@@ -2765,14 +2876,14 @@ def test_clause_03_fail_closed_unknown_exposure() -> None:
 
 
 def test_clause_04_preregistration_before_confirmation_observation(tmp_path) -> None:
-    """Section 21 clause 4: every confirmatory read follows a frozen prereg."""
-    setup = _prereg_setup(tmp_path)
+    """Section 21 clause 4: prereg precedes consumption and every empirical read."""
+    # (A) A preregistration cannot retrospectively reference a later admission.
+    setup = _prereg_setup(tmp_path / "e")
     prereg = _prereg(setup)
     policy = P.validate_preregistration(
         prereg, prefix=setup["log"].read(), registry=setup["registry"]
     )
     assert policy == setup["policy"]
-    # A pre-freeze admission is admissible; a later admission cannot repair it.
     prefix_before = setup["log"].read()
     later = _inf_contract(procedure_id="later-proc", version="2.0.0")
     later_admission = setup["log"].append(
@@ -2790,6 +2901,25 @@ def test_clause_04_preregistration_before_confirmation_observation(tmp_path) -> 
             prefix=prefix_before,
             registry=_inf_registry(_InfLookupProcedure(later)),
         )
+
+    # (B) End-to-end: the instrumented reader proves, at the instant of the
+    # first empirical read, that PREREGISTRATION, CONSUMPTION and ACCESS were
+    # already durable in K with PREREGISTRATION seq < CONSUMPTION seq < ACCESS
+    # seq. The final-record ordering is never used as a proxy.
+    study = _build_study(tmp_path / "h")
+    study.context.reader.bind(study.log)
+    result = STUDY.execute("study-1", context=study.context)
+    assert result.phase == "assessed"
+    reader = study.context.reader
+    assert reader.calls == [study.member_ids[0]]
+    assert reader.order_verified is True
+    assert reader.durable_order is not None
+    prereg_seq, consumption_seq, access_seq = reader.durable_order
+    assert prereg_seq < consumption_seq < access_seq
+    records = study.log.read()
+    assert records[prereg_seq].kind is RecordKind.PREREGISTRATION
+    assert records[consumption_seq].kind is RecordKind.CONSUMPTION
+    assert records[access_seq].kind is RecordKind.ACCESS
 
 
 def test_clause_05_evidence_footprint_one_use_governance(tmp_path) -> None:
@@ -3217,30 +3347,28 @@ def test_knowledge_pit_row_late_exposed_with_early_event_time_downgrades() -> No
 
 
 def test_knowledge_pit_row_late_not_exposed_no_upgrade() -> None:
-    """Section 18 Knowledge PIT: a later NOT_EXPOSED (seq > tau_P) never upgrades."""
-    chain = _Chain()
-    decision = chain.append(**_decision())
-    freeze = chain.append(**_freeze([decision.record_hash]))
-    artifact = chain.append(**_artifact(_fp()))
-    prereg = chain.append(**_preregistration(freeze))
-    before = ROLES.evidence_role(
-        artifact.record_hash,
-        freeze.record_hash,
-        prereg.record_hash,
-        chain.read(),
-        calendar=ROLE_CALENDAR,
+    """Section 18 Knowledge PIT: a later NOT_EXPOSED (seq > tau_P) never upgrades.
+
+    The only pre-tau_P gap in the late variant is the HUMAN NOT_EXPOSED
+    declaration (a late artifact keeps rule 4 out); the paired control records
+    the identical declaration before tau_P and reaches G3.
+    """
+    control_chain, control, late_chain, late = _not_exposed_timing_scenario(
+        sealed=True, artifact_after_prereg=True
     )
+    control_role = _role(control, control_chain)
+    assert control_role is EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED
+    assert ROLES.grade_for_role(control_role) is EvidenceGrade.G3
+    before = _role(late, late_chain)
     assert before is EvidenceRole.UNKNOWN_EXPOSURE
     _add_declaration(
-        chain, channel=Channel.HUMAN, footprint=_fp(), exposed=False
+        late_chain,
+        channel=Channel.HUMAN,
+        footprint=late["footprint"],
+        exposed=False,
     )
-    after = ROLES.evidence_role(
-        artifact.record_hash,
-        freeze.record_hash,
-        prereg.record_hash,
-        chain.read(),
-        calendar=ROLE_CALENDAR,
-    )
+    after = _role(late, late_chain)
+    assert after is not EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED
     assert after is EvidenceRole.UNKNOWN_EXPOSURE
     assert after.strength <= before.strength
 
@@ -3276,41 +3404,29 @@ def test_knowledge_pit_row_purge_failure_is_development() -> None:
 
 
 def test_knowledge_pit_row_late_not_exposed_on_unknown_stays_unknown() -> None:
-    """Section 18 Knowledge PIT: late NOT_EXPOSED on UNKNOWN_EXPOSURE stays UNKNOWN."""
-    chain = _Chain()
-    decision = chain.append(**_decision())
-    included = chain.append(**_artifact(_fp(subject=SUBJECT_B)))
-    generator = chain.append(
-        **_generator_input([included.record_hash], _fp(subject=SUBJECT_B))
+    """Section 18 Knowledge PIT: late NOT_EXPOSED on UNKNOWN_EXPOSURE stays UNKNOWN.
+
+    Here the ARTIFACT is recorded before tau_P but ``sealed=False``, so rule 4
+    fails on sealing while rule 5 remains the only candidate. The paired
+    control (HUMAN NOT_EXPOSED before tau_P) reaches G3; the late variant was
+    UNKNOWN_EXPOSURE and stays UNKNOWN_EXPOSURE, never G3.
+    """
+    control_chain, control, late_chain, late = _not_exposed_timing_scenario(
+        sealed=False, artifact_after_prereg=False
     )
-    freeze = chain.append(
-        **_freeze([decision.record_hash, generator.record_hash])
-    )
-    prereg = chain.append(**_preregistration(freeze))
-    artifact = chain.append(
-        **_artifact(_fp(subject=SUBJECT_A, start=DAY10), available_from=DAY10)
-    )
-    before = ROLES.evidence_role(
-        artifact.record_hash,
-        freeze.record_hash,
-        prereg.record_hash,
-        chain.read(),
-        calendar=ROLE_CALENDAR,
-    )
+    control_role = _role(control, control_chain)
+    assert control_role is EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED
+    assert ROLES.grade_for_role(control_role) is EvidenceGrade.G3
+    before = _role(late, late_chain)
     assert before is EvidenceRole.UNKNOWN_EXPOSURE
     _add_declaration(
-        chain,
+        late_chain,
         channel=Channel.HUMAN,
-        footprint=_fp(subject=SUBJECT_A, start=DAY10),
+        footprint=late["footprint"],
         exposed=False,
     )
-    after = ROLES.evidence_role(
-        artifact.record_hash,
-        freeze.record_hash,
-        prereg.record_hash,
-        chain.read(),
-        calendar=ROLE_CALENDAR,
-    )
+    after = _role(late, late_chain)
+    assert after is not EvidenceRole.CONFIRMATION_HISTORICAL_DECLARED
     assert after is EvidenceRole.UNKNOWN_EXPOSURE
     assert after.strength <= before.strength
 
