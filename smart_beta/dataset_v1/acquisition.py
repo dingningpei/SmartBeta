@@ -833,32 +833,52 @@ def _run(
                 break
 
             record["attempts"] = record.get("attempts", 0) + outcome.attempts
-            if outcome.retrieved_at_utc is not None:
-                record["retrieved_at_utc"] = outcome.retrieved_at_utc
 
             if outcome.kind == "QUOTA_EXHAUSTED":
                 # Ticker stays PENDING; the batch stops cleanly and resumes.
+                # In refetch mode a previously verified OK record is untouched.
+                if refetch and prior_status == "OK":
+                    record["last_refetch_error"] = "QUOTA_EXHAUSTED"
+                elif outcome.retrieved_at_utc is not None:
+                    record["retrieved_at_utc"] = outcome.retrieved_at_utc
                 persist()
                 stop = "quota"
                 break
 
             if outcome.kind in TERMINAL_STATUSES:
                 is_200 = outcome.kind in {"OK", "EMPTY", "MALFORMED"}
-                if refetch and prior_status == "OK" and is_200:
-                    if outcome.raw_sha256 == prior_sha:
+                if refetch and prior_status == "OK" and not is_200:
+                    # A failed refetch must never downgrade or drop a verified
+                    # OK record: keep the status and the original file/hash,
+                    # and make the failure visible on the record (the
+                    # attempts.jsonl lines are already written).
+                    record["status"] = "OK"
+                    record["raw_file"] = prior_file
+                    record["raw_sha256"] = prior_sha
+                    record["last_refetch_error"] = outcome.kind
+                else:
+                    if outcome.retrieved_at_utc is not None:
+                        record["retrieved_at_utc"] = outcome.retrieved_at_utc
+                    if (
+                        refetch
+                        and prior_status == "OK"
+                        and outcome.raw_sha256 == prior_sha
+                    ):
                         record["status"] = "OK"
                         record["raw_file"] = prior_file
                         record["raw_sha256"] = prior_sha
-                    else:
+                        record.pop("last_refetch_error", None)
+                    elif refetch and prior_status == "OK":
                         record["status"] = "NONDETERMINISTIC"
                         record["raw_file"] = outcome.raw_file
                         record["raw_sha256"] = outcome.raw_sha256
                         record["previous_raw_file"] = prior_file
                         record["previous_raw_sha256"] = prior_sha
-                else:
-                    record["status"] = outcome.kind
-                    record["raw_file"] = outcome.raw_file
-                    record["raw_sha256"] = outcome.raw_sha256
+                        record.pop("last_refetch_error", None)
+                    else:
+                        record["status"] = outcome.kind
+                        record["raw_file"] = outcome.raw_file
+                        record["raw_sha256"] = outcome.raw_sha256
                 if outcome.row_count is not None:
                     record["row_count"] = outcome.row_count
                 if outcome.first_date is not None:

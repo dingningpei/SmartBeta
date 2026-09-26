@@ -147,6 +147,14 @@ def raw_files(root: Path, batch_id: str) -> list[str]:
     return sorted(p.name for p in (root / "raw" / batch_id).iterdir())
 
 
+def _explode(*args: object) -> None:
+    raise AssertionError("no transport call expected")
+
+
+def _ok_record(root: Path, batch_id: str, ticker: str) -> dict:
+    return read_status(root, batch_id)["tickers"][ticker]
+
+
 # ---------------------------------------------------------------------------
 # Expected-pool verification (task §1)
 # ---------------------------------------------------------------------------
@@ -613,6 +621,11 @@ def test_refetch_different_body_is_nondeterministic_and_keeps_both(tmp_path: Pat
     )
 
     assert summary["tickers"]["AAPL"]["status"] == "NONDETERMINISTIC"
+    after = summary["tickers"]["AAPL"]
+    assert after["previous_raw_file"] == "AAPL.json.gz"
+    assert after["previous_raw_sha256"] == acq.sha256_hex(ok_body(2))
+    assert after["raw_file"] == "AAPL.refetch-1.json.gz"
+    assert after["raw_sha256"] == acq.sha256_hex(ok_body(5))
     assert set(second.counts) == {"AAPL"}
     assert sorted(
         name for name in raw_files(tmp_path, batch_id) if name.startswith("AAPL")
@@ -624,14 +637,95 @@ def test_refetch_same_body_keeps_ok(tmp_path: Path) -> None:
     body = ok_body(2)
     first = FakeTransport(lambda t, n, p, q: (200, body))
     acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    before = _ok_record(tmp_path, batch_id, "AAPL")
 
     second = FakeTransport(lambda t, n, p, q: (200, body))
     summary = acq.refetch(
         batch_id, tmp_path, second, SleepSpy(), fixed_clock(), tickers=["AAPL"]
     )
 
-    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    after = summary["tickers"]["AAPL"]
+    assert after["status"] == "OK"
+    assert after["raw_file"] == before["raw_file"]
+    assert after["raw_sha256"] == before["raw_sha256"]
+    assert "last_refetch_error" not in after
     assert "AAPL.refetch-1.json.gz" not in raw_files(tmp_path, batch_id)
+
+
+def test_refetch_403_keeps_verified_ok(tmp_path: Path) -> None:
+    batch_id = make_batch(tmp_path)
+    body = ok_body(2)
+    first = FakeTransport(lambda t, n, p, q: (200, body))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    before = _ok_record(tmp_path, batch_id, "AAPL")
+
+    second = FakeTransport(lambda t, n, p, q: (403, b"forbidden"))
+    summary = acq.refetch(
+        batch_id, tmp_path, second, SleepSpy(), fixed_clock(), tickers=["AAPL"]
+    )
+
+    after = summary["tickers"]["AAPL"]
+    assert after["status"] == "OK"
+    assert after["raw_file"] == before["raw_file"] == "AAPL.json.gz"
+    assert after["raw_sha256"] == before["raw_sha256"] == acq.sha256_hex(body)
+    assert after["last_refetch_error"] == "ENTITLEMENT_ERROR"
+    assert second.counts["AAPL"] == 1
+
+    events = [a for a in read_attempts(tmp_path, batch_id) if a["ticker"] == "AAPL"]
+    assert any(a["http_status"] == 403 for a in events)
+
+    # The kept OK record still verifies: a normal resume makes zero calls.
+    third = FakeTransport(_explode)
+    resumed = acq.run_batch(batch_id, tmp_path, third, SleepSpy(), fixed_clock())
+    assert third.calls == []
+    assert resumed["tickers"]["AAPL"]["status"] == "OK"
+
+
+def test_refetch_5xx_exhausted_keeps_verified_ok(tmp_path: Path) -> None:
+    batch_id = make_batch(tmp_path)
+    body = ok_body(2)
+    first = FakeTransport(lambda t, n, p, q: (200, body))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    before = _ok_record(tmp_path, batch_id, "AAPL")
+
+    second = FakeTransport(lambda t, n, p, q: (503, b"unavailable"))
+    summary = acq.refetch(
+        batch_id, tmp_path, second, SleepSpy(), fixed_clock(), tickers=["AAPL"]
+    )
+
+    after = summary["tickers"]["AAPL"]
+    assert after["status"] == "OK"
+    assert after["raw_file"] == before["raw_file"] == "AAPL.json.gz"
+    assert after["raw_sha256"] == before["raw_sha256"] == acq.sha256_hex(body)
+    assert after["last_refetch_error"] == "RETRY_EXHAUSTED"
+    assert second.counts["AAPL"] == acq.MAX_ATTEMPTS == 3
+    assert after["attempts"] >= 3
+
+    third = FakeTransport(_explode)
+    resumed = acq.run_batch(batch_id, tmp_path, third, SleepSpy(), fixed_clock())
+    assert third.calls == []
+    assert resumed["tickers"]["AAPL"]["status"] == "OK"
+
+
+def test_refetch_quota_keeps_verified_ok(tmp_path: Path) -> None:
+    batch_id = make_batch(tmp_path)
+    body = ok_body(2)
+    first = FakeTransport(lambda t, n, p, q: (200, body))
+    acq.run_batch(batch_id, tmp_path, first, SleepSpy(), fixed_clock())
+    before = _ok_record(tmp_path, batch_id, "AAPL")
+
+    second = FakeTransport(lambda t, n, p, q: (429, b"rate limited"))
+    summary = acq.refetch(
+        batch_id, tmp_path, second, SleepSpy(), fixed_clock(), tickers=["AAPL"]
+    )
+
+    assert summary["batch_state"] == "QUOTA_EXHAUSTED"
+    after = summary["tickers"]["AAPL"]
+    assert after["status"] == "OK"
+    assert after["raw_file"] == before["raw_file"] == "AAPL.json.gz"
+    assert after["raw_sha256"] == before["raw_sha256"] == acq.sha256_hex(body)
+    assert after["last_refetch_error"] == "QUOTA_EXHAUSTED"
+    assert second.counts["AAPL"] == acq.MAX_ATTEMPTS == 3
 
 
 def test_normal_run_never_refetches_ok(tmp_path: Path) -> None:
