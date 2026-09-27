@@ -1818,3 +1818,46 @@ def test_provider_failure_attempt_has_no_response_fields(tmp_path: Path) -> None
         assert "transport_cause" not in line
         for forbidden in ("raw_sha256", "row_count", "first_date", "last_date"):
             assert forbidden not in line, forbidden
+
+
+# ---------------------------------------------------------------------------
+# D2-D item 15 on the live path — a bare HTTPException catch would be wrong
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "exc",
+    [
+        http.client.InvalidURL("no host given"),
+        http.client.ImproperConnectionState("improper connection state"),
+        http.client.ResponseNotReady("response not ready"),
+    ],
+    ids=["InvalidURL", "ImproperConnectionState", "ResponseNotReady"],
+)
+def test_live_transport_does_not_swallow_non_transport_http_exceptions(
+    tmp_path: Path, monkeypatch, exc: Exception
+) -> None:
+    """D2-D item 15 on the *live* transport path.
+
+    These are the classes a bare ``except http.client.HTTPException`` in
+    ``make_live_transport`` would wrongly capture and convert to
+    ``TransportError``. Exercising the live transport (monkeypatched
+    ``urllib.request.urlopen``) proves the production catch set is narrow:
+    the original type must propagate, ``urlopen`` must be called exactly once
+    (no retry), the batch must be ``INTERRUPTED`` and no attempt line may be
+    written.
+    """
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        raise exc
+
+    calls, counts = install_urlopen(monkeypatch, handler)
+    with pytest.raises(type(exc)) as caught:
+        acq.run_batch(
+            batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+        )
+
+    assert not isinstance(caught.value, acq.TransportError)
+    assert [c["ticker"] for c in calls] == ["AAPL"]
+    assert counts["AAPL"] == 1  # called exactly once: no retry
+    assert read_status(tmp_path, batch_id)["batch_state"] == "INTERRUPTED"
+    assert not (tmp_path / "manifest" / batch_id / "attempts.jsonl").exists()
