@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -144,6 +145,25 @@ TERMINAL_STATUSES = frozenset(
 
 #: Batch states.
 BATCH_STATES = frozenset({"RUNNING", "COMPLETE", "QUOTA_EXHAUSTED", "INTERRUPTED"})
+
+#: Wire-level HTTP failures that mean a response body or status line was
+#: truncated, not that the request was malformed. ``IncompleteRead`` (a body
+#: cut short), ``BadStatusLine`` (an unparseable status line, which includes
+#: ``RemoteDisconnected``) and ``LineTooLong`` (an over-long header line) are
+#: all genuine, retryable transport failures. They are ``HTTPException``
+#: subclasses, *not* ``OSError``, so before D2-D they escaped the retry path
+#: entirely, crashed the run and left no attempt record. Only these three are
+#: caught: the parent ``http.client.HTTPException`` is deliberately *not*
+#: caught wholesale because its other subclasses (``InvalidURL``,
+#: ``UnknownProtocol``, ``UnknownTransferEncoding``, ``UnimplementedFileMode``,
+#: ``NotConnected``, ``ImproperConnectionState`` …) indicate programming or
+#: configuration errors, not transient network failures, and must keep
+#: propagating (task D2-D, required semantics 1).
+_HTTP_CLIENT_TRANSPORT_ERRORS = (
+    http.client.IncompleteRead,
+    http.client.BadStatusLine,
+    http.client.LineTooLong,
+)
 
 #: ``(path, params, timeout_s) -> (http_status, raw_bytes)``.
 Transport = Callable[[str, Mapping[str, str], float], "tuple[int, bytes]"]
@@ -627,7 +647,7 @@ def _verify_ok_file(root: str | os.PathLike[str], batch_id: str, record: dict) -
 # ---------------------------------------------------------------------------
 # Retryable-error detection
 # ---------------------------------------------------------------------------
-_RETRYABLE = (TransportError, TimeoutError, OSError)
+_RETRYABLE = (TransportError, TimeoutError, OSError, *_HTTP_CLIENT_TRANSPORT_ERRORS)
 
 
 def _backoff(attempt: int) -> float:
@@ -695,6 +715,22 @@ def _perform_request(
         except _StopBatch:
             raise
         except _RETRYABLE as exc:
+            # A wire-level truncation may reach us already wrapped in a
+            # TransportError by the live transport (with the concrete cause in
+            # __cause__) or, under an injected transport, as the raw
+            # http.client exception. Both spell the same transport failure, so
+            # a raw one is normalised to error_class "TransportError" with its
+            # own class name in transport_cause.
+            if isinstance(exc, _HTTP_CLIENT_TRANSPORT_ERRORS):
+                error_class = "TransportError"
+                cause_name = type(exc).__name__
+            else:
+                error_class = type(exc).__name__
+                cause_name = (
+                    type(exc.__cause__).__name__
+                    if exc.__cause__ is not None
+                    else type(exc).__name__
+                )
             _append_attempt(
                 root,
                 batch_id,
@@ -706,12 +742,9 @@ def _perform_request(
                     "requested_range": dict(params),
                     "retrieved_at_utc": retrieved_at,
                     "http_status": None,
-                    "error_class": type(exc).__name__,
+                    "error_class": error_class,
+                    "transport_cause": cause_name,
                     "attempt": attempts,
-                    "raw_sha256": None,
-                    "row_count": None,
-                    "first_date": None,
-                    "last_date": None,
                 },
             )
             if attempts >= MAX_ATTEMPTS:
@@ -772,13 +805,12 @@ def _perform_request(
                 "endpoint": path,
                 "requested_range": dict(params),
                 "retrieved_at_utc": retrieved_at,
+                # Provider failures keep a non-null http_status and carry no
+                # transport_cause; a failed attempt never records response
+                # fields (raw hash, row count, first/last date).
                 "http_status": status_code,
                 "error_class": None,
                 "attempt": attempts,
-                "raw_sha256": None,
-                "row_count": None,
-                "first_date": None,
-                "last_date": None,
             },
         )
 
@@ -1078,7 +1110,22 @@ def make_live_transport(
             with urllib.request.urlopen(request, timeout=effective_timeout) as response:
                 return int(response.status), response.read()
         except urllib.error.HTTPError as exc:
-            return int(exc.code), exc.read()
+            # ``exc.read()`` can truncate exactly like ``response.read()``.
+            try:
+                return int(exc.code), exc.read()
+            except _HTTP_CLIENT_TRANSPORT_ERRORS as read_exc:
+                # Never interpolate the request headers or the key here; the
+                # concrete class name is the only detail that escapes.
+                raise TransportError(
+                    f"transport failure for {path}: {type(read_exc).__name__}"
+                ) from read_exc
+        except _HTTP_CLIENT_TRANSPORT_ERRORS as exc:
+            # A truncated body/status line is a retryable transport failure.
+            # Catch only the three classes above; a programming or
+            # configuration error (e.g. ``InvalidURL``) must keep propagating.
+            raise TransportError(
+                f"transport failure for {path}: {type(exc).__name__}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             # Never interpolate the request headers or the key here.
             raise TransportError(
