@@ -718,6 +718,56 @@ def _mismatch_frame(records: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
+def _interval_mismatch_frame(
+    observations: pd.DataFrame,
+    assigned: Mapping[str, tuple[str, date, date]],
+) -> pd.DataFrame:
+    """Vectorized ``interval_mismatch`` over the projected observation frame.
+
+    ``assigned`` maps each ``INTERVAL_ASSIGNED`` security_key to its ticker and
+    unclipped ``(listed_start, listed_end)``.  Only ``ticker``, ``date`` and
+    ``raw_row_index`` are touched.  The result is byte-identical to a
+    row-by-row scan, but never materializes one Python dict per observation.
+    """
+    if not assigned or observations.empty:
+        return _mismatch_frame([])
+
+    key_by_ticker = pd.Series(
+        {ticker: key for key, (ticker, _, _) in assigned.items()}, dtype=_STRING
+    )
+    start_by_ticker = pd.Series(
+        {ticker: start for _, (ticker, start, _) in assigned.items()}, dtype=_DATE32
+    )
+    end_by_ticker = pd.Series(
+        {ticker: end for _, (ticker, _, end) in assigned.items()}, dtype=_DATE32
+    )
+
+    tickers = observations["ticker"]
+    observed = observations["date"]
+    keys = tickers.map(key_by_ticker)
+    starts = tickers.map(start_by_ticker)
+    ends = tickers.map(end_by_ticker)
+
+    mask = (observed < starts) | (observed > ends)
+    mask = mask.fillna(False).astype(bool)
+    mask = mask.to_numpy(dtype=bool)
+
+    filtered = pd.DataFrame(
+        {
+            "security_key": keys[mask].reset_index(drop=True),
+            "ticker": tickers[mask].reset_index(drop=True),
+            "date": observed[mask].reset_index(drop=True),
+            "raw_row_index": observations["raw_row_index"][mask].reset_index(drop=True),
+        }
+    )
+    for column, dtype in _MISMATCH_DTYPES.items():
+        filtered[column] = filtered[column].astype(dtype)
+    filtered = filtered.sort_values(
+        ["security_key", "ticker", "date", "raw_row_index"], kind="stable"
+    )
+    return filtered.reset_index(drop=True)
+
+
 def _identity_id(
     normalized_build_id: str,
     normalized_hash: str,
@@ -858,34 +908,7 @@ def resolve_identity(
         key_by_ticker[ticker] = key
 
     observations = _read_observations(root_path, normalized_build_id, assigned_tickers)
-    mismatch_records: list[dict[str, Any]] = []
-    for record in observations.to_dict("records"):
-        ticker = str(record["ticker"])
-        key = key_by_ticker.get(ticker)
-        if key is None:
-            continue
-        observed = _as_date_or_none(record.get("date"))
-        if observed is None:
-            continue
-        _, listed_start, listed_end = assigned[key]
-        if observed < listed_start or observed > listed_end:
-            mismatch_records.append(
-                {
-                    "security_key": key,
-                    "ticker": ticker,
-                    "date": observed,
-                    "raw_row_index": int(record["raw_row_index"]),
-                }
-            )
-    mismatch_records.sort(
-        key=lambda record: (
-            record["security_key"],
-            record["ticker"],
-            record["date"],
-            record["raw_row_index"],
-        )
-    )
-    mismatch = _mismatch_frame(mismatch_records)
+    mismatch = _interval_mismatch_frame(observations, assigned)
 
     # Write atomically into a temporary directory, then publish.
     output_dir = root_path / "derived" / "identity" / identity_id
@@ -922,7 +945,7 @@ def resolve_identity(
             "tolerance_sessions": TOLERANCE_SESSIONS,
             "files_sha256": files_sha256,
             "identity_hash": identity_hash,
-            "counts": _counts(records, len(mismatch_records)),
+            "counts": _counts(records, len(mismatch)),
         }
         if content["counts"]["n_pool_keys"] != n_pool_keys:
             raise InputInconsistencyError("identity counts do not reconcile")

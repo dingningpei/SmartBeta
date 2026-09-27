@@ -815,6 +815,60 @@ def test_interval_mismatch_lists_only_rows_outside_unclipped_interval(tmp_path):
     assert content["counts"]["n_interval_mismatch_rows"] == 2
 
 
+def test_interval_mismatch_vectorized_matches_reference(tmp_path):
+    # Several assigned tickers, rows on both sides of each interval, and rows
+    # in both partitions.  The vectorized result must equal a straightforward
+    # reference scan computed independently from the fixture spec.
+    c_index = _index(C)
+    intervals = {
+        "REF_A": (_sess(200), _sess(400)),
+        "REF_B": (_sess(250), _sess(450)),
+        "REF_C": (_sess(300), C),
+    }
+    obs = {
+        "REF_A": _obs([_sess(199), _sess(300), _sess(401)]),
+        "REF_B": _obs([_sess(247), _sess(300), _sess(453)]),
+        "REF_C": _obs([_sess(298), _sess(1000), _sess(c_index + 3)]),
+    }
+    store = build_store(
+        tmp_path,
+        pool={
+            ticker: [("NYSE", start.isoformat(), end.isoformat())]
+            for ticker, (start, end) in intervals.items()
+        },
+        snapshot=[
+            _snap(ticker, start.isoformat(), end.isoformat())
+            for ticker, (start, end) in intervals.items()
+        ],
+        status={ticker: identity.OK for ticker in intervals},
+        obs=obs,
+    )
+    content, _ = assignment(store)
+    assert content["counts"]["n_interval_assigned_keys"] == 3
+
+    reference = []
+    for ticker, (start, end) in intervals.items():
+        key = f"TIINGO:{ticker}:{start.isoformat()}"
+        for observed, raw_index in obs[ticker]:
+            if observed < start or observed > end:
+                reference.append((key, ticker, observed, raw_index))
+    reference.sort()
+
+    table = mismatch(store, content)
+    got = list(
+        zip(
+            table["security_key"],
+            table["ticker"],
+            table["date"],
+            table["raw_row_index"],
+        )
+    )
+    assert got == reference
+    assert len(reference) == 6
+    assert any(observed < RESERVE_START for _, _, observed, _ in reference)
+    assert any(observed >= RESERVE_START for _, _, observed, _ in reference)
+
+
 def test_empty_ticker_never_reaches_interval_assigned(tmp_path):
     # Adversarial: an EMPTY ticker must not leak through to INTERVAL_ASSIGNED.
     store = build_store(
