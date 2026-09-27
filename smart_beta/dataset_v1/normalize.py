@@ -377,6 +377,38 @@ def _build_frame(
     return frame
 
 
+def _concat_frames(
+    frames: Sequence[pd.DataFrame],
+    columns: Sequence[str],
+    dtypes: Mapping[str, Any],
+) -> pd.DataFrame:
+    """Concatenate per-ticker frames in order, re-pinning every dtype.
+
+    Frames are produced in ascending ticker order and are internally sorted, so
+    the concatenation preserves the frozen ``(ticker, date, raw_row_index``
+    ``[, flag])`` order without a global sort. Each ticker's Python row tuples
+    are released as soon as its columnar frame is built.
+    """
+    if not frames:
+        return _build_frame([], columns, dtypes)
+    frame = pd.concat(list(frames), ignore_index=True)
+    for column in columns:
+        frame[column] = frame[column].astype(dtypes[column])
+    return frame
+
+
+def _observation_sort_key(record: Sequence[Any]) -> tuple:
+    return (record[_OBSERVATION_DATE_IDX], record[_OBSERVATION_RAW_ROW_IDX])
+
+
+def _flag_sort_key(record: Sequence[Any]) -> tuple:
+    return (
+        record[_FLAG_DATE_IDX],
+        record[_FLAG_RAW_ROW_IDX],
+        record[_FLAG_FLAG_IDX],
+    )
+
+
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(
@@ -573,14 +605,20 @@ def _is_malformed_ca(row: Mapping[str, Any]) -> bool:
 
 
 def _gap_sessions(calendar: Any, dates: Sequence[date]) -> int:
-    """Trusted sessions inside [min, max] with no observed row."""
+    """Trusted sessions inside [min, max] with no observed row.
+
+    Only observed dates that are trusted sessions count as covered; an
+    off-calendar row inside the span is not a session and does not reduce the
+    number of genuinely missing sessions.
+    """
     if not dates:
         return 0
     first = pd.Timestamp(min(dates))
     last = pd.Timestamp(max(dates))
     index = calendar.dates
     within = index[(index >= first) & (index <= last)]
-    return max(0, len(within) - len(set(dates)))
+    observed_sessions = {d for d in dates if calendar.is_trading_day(d)}
+    return max(0, len(within) - len(observed_sessions))
 
 
 def _observation_tuple(
@@ -709,10 +747,10 @@ def build_normalized(
     status_tickers = status["tickers"]
 
     summary_records: list[tuple] = []
-    observations_dev: list[tuple] = []
-    observations_res: list[tuple] = []
-    flags_dev: list[tuple] = []
-    flags_res: list[tuple] = []
+    observations_dev_frames: list[pd.DataFrame] = []
+    observations_res_frames: list[pd.DataFrame] = []
+    flags_dev_frames: list[pd.DataFrame] = []
+    flags_res_frames: list[pd.DataFrame] = []
     ca_frames: list[pd.DataFrame] = []
 
     for ticker in sorted(header_entries):
@@ -745,8 +783,10 @@ def build_normalized(
         n_zero_volume = 0
         n_malformed_ca = 0
 
-        ticker_observations: list[tuple] = []
+        ticker_obs_dev: list[tuple] = []
+        ticker_obs_res: list[tuple] = []
         ticker_flags_dev: list[tuple] = []
+        ticker_flags_res: list[tuple] = []
         mapper_rows: list[Mapping[str, Any]] = []
         for raw_row_index, row in enumerate(rows):
             session = sessions[raw_row_index]
@@ -778,32 +818,43 @@ def build_normalized(
             observation = _observation_tuple(
                 ticker, session, row, raw_row_index, raw_sha256
             )
+            flag_rows = [
+                (ticker, session, raw_row_index, flag) for flag in row_flags
+            ]
             if session < reserve_start_date:
-                ticker_observations.append(observation)
-                for flag in row_flags:
-                    ticker_flags_dev.append(
-                        (ticker, session, raw_row_index, flag)
-                    )
+                ticker_obs_dev.append(observation)
+                ticker_flags_dev.extend(flag_rows)
             else:
-                observations_res.append(observation)
-                for flag in row_flags:
-                    flags_res.append((ticker, session, raw_row_index, flag))
+                ticker_obs_res.append(observation)
+                ticker_flags_res.extend(flag_rows)
 
-        ticker_observations.sort(
-            key=lambda record: (
-                record[_OBSERVATION_DATE_IDX],
-                record[_OBSERVATION_RAW_ROW_IDX],
+        # Each ticker's rows are sorted once, then released as a columnar
+        # frame; concatenation in ascending ticker order yields the frozen
+        # (ticker, date, raw_row_index[, flag]) order without a global sort.
+        ticker_obs_dev.sort(key=_observation_sort_key)
+        ticker_obs_res.sort(key=_observation_sort_key)
+        ticker_flags_dev.sort(key=_flag_sort_key)
+        ticker_flags_res.sort(key=_flag_sort_key)
+        if ticker_obs_dev:
+            observations_dev_frames.append(
+                _build_frame(
+                    ticker_obs_dev, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
+                )
             )
-        )
-        ticker_flags_dev.sort(
-            key=lambda record: (
-                record[_FLAG_DATE_IDX],
-                record[_FLAG_RAW_ROW_IDX],
-                record[_FLAG_FLAG_IDX],
+        if ticker_obs_res:
+            observations_res_frames.append(
+                _build_frame(
+                    ticker_obs_res, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
+                )
             )
-        )
-        observations_dev.extend(ticker_observations)
-        flags_dev.extend(ticker_flags_dev)
+        if ticker_flags_dev:
+            flags_dev_frames.append(
+                _build_frame(ticker_flags_dev, FLAG_COLUMNS, _FLAG_DTYPES)
+            )
+        if ticker_flags_res:
+            flags_res_frames.append(
+                _build_frame(ticker_flags_res, FLAG_COLUMNS, _FLAG_DTYPES)
+            )
 
         if ticker_status == "OK":
             endpoint = endpoints.get(ticker, acq.eod_request_path(ticker))
@@ -833,59 +884,40 @@ def build_normalized(
             )
         )
 
-    observations_dev.sort(
-        key=lambda record: (
-            record[_OBSERVATION_DATE_IDX],
-            record[_OBSERVATION_RAW_ROW_IDX],
-        )
-    )
-    observations_res.sort(
-        key=lambda record: (
-            record[_OBSERVATION_DATE_IDX],
-            record[_OBSERVATION_RAW_ROW_IDX],
-        )
-    )
-    flags_dev.sort(
-        key=lambda record: (
-            record[_FLAG_DATE_IDX],
-            record[_FLAG_RAW_ROW_IDX],
-            record[_FLAG_FLAG_IDX],
-        )
-    )
-    flags_res.sort(
-        key=lambda record: (
-            record[_FLAG_DATE_IDX],
-            record[_FLAG_RAW_ROW_IDX],
-            record[_FLAG_FLAG_IDX],
-        )
-    )
-
     summary_frame = _build_frame(summary_records, SUMMARY_COLUMNS, _SUMMARY_DTYPES)
-    observations_dev_frame = _build_frame(
-        observations_dev, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
+    observations_dev_frame = _concat_frames(
+        observations_dev_frames, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
     )
-    observations_res_frame = _build_frame(
-        observations_res, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
+    observations_res_frame = _concat_frames(
+        observations_res_frames, OBSERVATION_COLUMNS, _OBSERVATION_DTYPES
     )
-    flags_dev_frame = _build_frame(flags_dev, FLAG_COLUMNS, _FLAG_DTYPES)
-    flags_res_frame = _build_frame(flags_res, FLAG_COLUMNS, _FLAG_DTYPES)
+    flags_dev_frame = _concat_frames(flags_dev_frames, FLAG_COLUMNS, _FLAG_DTYPES)
+    flags_res_frame = _concat_frames(flags_res_frames, FLAG_COLUMNS, _FLAG_DTYPES)
 
     if ca_frames:
         ca_all = pd.concat(ca_frames, ignore_index=True)
     else:
         ca_all = _empty_ca_frame()
+    ca_all = ca_all.sort_values(
+        [
+            pit_schema.STOCK_COL,
+            pit_schema.EFFECTIVE_DATE_COL,
+            pit_schema.ACTION_TYPE_COL,
+        ],
+        kind="mergesort",
+    ).reset_index(drop=True)
     ca_mask = ca_all[pit_schema.EFFECTIVE_DATE_COL] < pd.Timestamp(RESERVE_START)
     ca_dev_frame = ca_all[ca_mask].reset_index(drop=True)
     ca_res_frame = ca_all[~ca_mask].reset_index(drop=True)
 
     counts = {
         "expected_identifiers": len(summary_records),
-        "observations": len(observations_dev) + len(observations_res),
-        "observations_development": len(observations_dev),
-        "observations_reserve": len(observations_res),
-        "obs_flags": len(flags_dev) + len(flags_res),
-        "obs_flags_development": len(flags_dev),
-        "obs_flags_reserve": len(flags_res),
+        "observations": len(observations_dev_frame) + len(observations_res_frame),
+        "observations_development": len(observations_dev_frame),
+        "observations_reserve": len(observations_res_frame),
+        "obs_flags": len(flags_dev_frame) + len(flags_res_frame),
+        "obs_flags_development": len(flags_dev_frame),
+        "obs_flags_reserve": len(flags_res_frame),
         "ca_events": int(len(ca_all)),
         "ca_events_development": int(len(ca_dev_frame)),
         "ca_events_reserve": int(len(ca_res_frame)),

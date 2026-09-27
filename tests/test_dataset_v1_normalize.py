@@ -361,6 +361,70 @@ def test_partition_split_at_reserve_start(tmp_path: Path) -> None:
     assert {d.date() for d in res_ca["effective_date"]} == {date(2023, 7, 3)}
 
 
+def test_multi_ticker_rows_ordered_by_ticker_then_date(tmp_path: Path) -> None:
+    """Observations and flags must be ordered (ticker, date, raw_row_index[, flag])."""
+    bodies = {
+        "AAA": body(
+            [
+                row("2023-06-30T00:00:00.000Z", close=None),
+                row("2023-07-03T00:00:00.000Z", close=None),
+            ]
+        ),
+        "MMM": body(
+            [
+                row("2023-06-28T00:00:00.000Z", close=1.0),
+                row("2023-06-30T00:00:00.000Z", close=2.0),
+            ]
+        ),
+        "ZZZ": body(
+            [
+                row("2023-06-29T00:00:00.000Z", close=3.0, volume=0),
+                row("2023-07-05T00:00:00.000Z", close=4.0, volume=0),
+            ]
+        ),
+    }
+    root = tmp_path / "store"
+    batch_id = make_batch(root, bodies, ["ZZZ", "AAA", "MMM"])
+    result = do_build(root, batch_id, write_record(tmp_path))
+    bid = result["build_id"]
+
+    dev = load_table(root, bid, "normalized", "observations.parquet")
+    assert list(zip(dev["ticker"], dev["date"].astype(str))) == [
+        ("AAA", "2023-06-30"),
+        ("MMM", "2023-06-28"),
+        ("MMM", "2023-06-30"),
+        ("ZZZ", "2023-06-29"),
+    ]
+    res = load_table(root, bid, "reserve_sealed", "observations.parquet")
+    assert list(zip(res["ticker"], res["date"].astype(str))) == [
+        ("AAA", "2023-07-03"),
+        ("ZZZ", "2023-07-05"),
+    ]
+
+    dev_flags = load_table(root, bid, "normalized", "obs_flags.parquet")
+    assert list(
+        zip(
+            dev_flags["ticker"],
+            dev_flags["date"].astype(str),
+            dev_flags["flag"],
+        )
+    ) == [
+        ("AAA", "2023-06-30", "VENDOR_NULL"),
+        ("ZZZ", "2023-06-29", "LEGIT_ZERO_VOLUME"),
+    ]
+    res_flags = load_table(root, bid, "reserve_sealed", "obs_flags.parquet")
+    assert list(
+        zip(
+            res_flags["ticker"],
+            res_flags["date"].astype(str),
+            res_flags["flag"],
+        )
+    ) == [
+        ("AAA", "2023-07-03", "VENDOR_NULL"),
+        ("ZZZ", "2023-07-05", "LEGIT_ZERO_VOLUME"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 4. Off-calendar row retained and flagged
 # ---------------------------------------------------------------------------
@@ -495,6 +559,27 @@ def test_ca_events_equals_direct_mapper_output(tmp_path: Path) -> None:
     )
     assert set(got["action_type"]) == {"split", "dividend"}
     assert "_ingested_at" not in got.columns
+
+
+def test_ca_events_sorted_by_stock_date_action(tmp_path: Path) -> None:
+    """ca_events is globally ordered by (stock_id, effective_date, action_type)."""
+    same_day = row(
+        "2023-06-30T00:00:00.000Z", close=100.0, div_cash=0.5, split_factor=2.0
+    )
+    bodies = {"BBB": body([same_day]), "AAA": body([same_day])}
+    root = tmp_path / "store"
+    batch_id = make_batch(root, bodies, ["BBB", "AAA"])
+    result = do_build(root, batch_id, write_record(tmp_path))
+    bid = result["build_id"]
+
+    ca_frame = load_table(root, bid, "normalized", "ca_events.parquet")
+    assert list(zip(ca_frame["stock_id"], ca_frame["action_type"])) == [
+        ("AAA", "dividend"),
+        ("AAA", "split"),
+        ("BBB", "dividend"),
+        ("BBB", "split"),
+    ]
+    assert list(ca_frame["effective_date"].dt.date) == [date(2023, 6, 30)] * 4
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +946,23 @@ def test_no_forward_fill_of_gap(tmp_path: Path) -> None:
     assert len(obs) == 2
     assert set(str(d) for d in obs["date"]) == {"2023-06-28", "2023-06-30"}
     summary = load_table(root, bid, "normalized", "source_summary.parquet")
+    assert int(summary.iloc[0]["n_in_span_gap_sessions"]) == 1
+
+
+def test_gap_ignores_off_calendar_row(tmp_path: Path) -> None:
+    """A missing trusted session counts even when an off-calendar row is in span."""
+    rows = [
+        row("2026-04-01T00:00:00.000Z", close=1.0),
+        row("2026-04-03T00:00:00.000Z", close=2.0),  # Good Friday
+        row("2026-04-06T00:00:00.000Z", close=3.0),
+    ]
+    root = tmp_path / "store"
+    batch_id = make_batch(root, {"GAPP": body(rows)}, ["GAPP"])
+    result = do_build(root, batch_id, write_record(tmp_path))
+    summary = load_table(
+        root, result["build_id"], "normalized", "source_summary.parquet"
+    )
+    assert int(summary.iloc[0]["n_off_calendar"]) == 1
     assert int(summary.iloc[0]["n_in_span_gap_sessions"]) == 1
 
 
