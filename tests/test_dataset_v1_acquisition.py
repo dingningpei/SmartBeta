@@ -15,11 +15,14 @@ from __future__ import annotations
 import ast
 import gzip
 import hashlib
+import http.client
 import json
 import os
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -1225,3 +1228,636 @@ def test_cli_create_is_offline(tmp_path, capsys) -> None:
     rc = acq.main(["create", "--pool", str(POOL_FIXTURE), "--root", str(tmp_path)])
     assert rc == 0
     assert capsys.readouterr().out.strip().startswith("b-")
+
+
+# ---------------------------------------------------------------------------
+# D2-D — truncated / wire-level HTTP transport failures
+# ---------------------------------------------------------------------------
+D2D_KEY = "d2d-test-key"
+
+
+class _StubResponse:
+    """Minimal urllib response; ``read()`` either returns a body or raises."""
+
+    def __init__(self, *, status: int = 200, body: bytes = b"", read_exc=None):
+        self.status = status
+        self._body = body
+        self._read_exc = read_exc
+
+    def read(self) -> bytes:
+        if self._read_exc is not None:
+            raise self._read_exc
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+    def close(self) -> None:
+        pass
+
+
+class _RaisingFp:
+    """A file-like whose ``read()`` raises, enough for an ``HTTPError``."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def read(self, *args: object) -> bytes:
+        raise self._exc
+
+    def close(self) -> None:
+        pass
+
+
+def install_urlopen(monkeypatch: pytest.MonkeyPatch, handler):
+    """Install a fake ``urllib.request.urlopen``; return ``(calls, counts)``.
+
+    ``handler(ticker, attempt_number, request)`` returns a response object or
+    raises. Attempts are counted per ticker and appended to ``calls``.
+    """
+    calls: list[dict] = []
+    counts: dict[str, int] = {}
+
+    def fake_urlopen(request, timeout=None):
+        url = request.full_url
+        encoded = url.split("/tiingo/daily/", 1)[1].split("/prices", 1)[0]
+        ticker = urllib.parse.unquote(encoded)
+        counts[ticker] = counts.get(ticker, 0) + 1
+        calls.append(
+            {
+                "ticker": ticker,
+                "attempt": counts[ticker],
+                "url": url,
+                "headers": dict(request.header_items()),
+                "timeout": timeout,
+            }
+        )
+        return handler(ticker, counts[ticker], request)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return calls, counts
+
+
+def live_transport(api_key: str = D2D_KEY):
+    """A live transport with an explicit key, so tests never read the env."""
+    return acq.make_live_transport(api_key=api_key)
+
+
+def _truncate_then_succeed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, n: int = 2):
+    """Run one ticker: attempt 1 truncates, attempt 2 returns a complete body."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+    body = ok_body(n)
+
+    def handler(ticker, attempt, request):
+        if attempt == 1:
+            return _StubResponse(read_exc=http.client.IncompleteRead(b"partial", 999))
+        return _StubResponse(body=body)
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    return batch_id, body, summary
+
+
+def test_incomplete_read_then_success(tmp_path: Path, monkeypatch) -> None:
+    """D2-D item 1: a truncated read is retried and the next attempt succeeds."""
+    batch_id, _body, summary = _truncate_then_succeed(tmp_path, monkeypatch)
+    assert summary["batch_state"] == "COMPLETE"
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    assert summary["requests_made"] == 2
+
+
+def test_failed_truncated_attempt_is_logged_without_response_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """D2-D item 2: the failed attempt carries cause but no response fields."""
+    batch_id, _body, _summary = _truncate_then_succeed(tmp_path, monkeypatch)
+    attempts = read_attempts(tmp_path, batch_id)
+    assert [a["attempt"] for a in attempts] == [1, 2]
+    line = attempts[0]
+    assert line["http_status"] is None
+    assert line["error_class"] == "TransportError"
+    assert line["transport_cause"] == "IncompleteRead"
+    assert line["ticker"] == "AAPL"
+    assert line["retrieved_at_utc"] == FIXED_CLOCK
+    assert line["requested_range"] == {
+        "startDate": "2015-01-02",
+        "endDate": "2024-05-31",
+    }
+    for forbidden in ("raw_sha256", "row_count", "first_date", "last_date", "raw_file"):
+        assert forbidden not in line, forbidden
+
+
+def test_successful_attempt_after_truncation_is_logged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """D2-D item 3: the successful retry is logged with response fields."""
+    batch_id, body, _summary = _truncate_then_succeed(tmp_path, monkeypatch)
+    attempts = read_attempts(tmp_path, batch_id)
+    success = attempts[1]
+    assert success["attempt"] == 2
+    assert success["http_status"] == 200
+    assert success["error_class"] is None
+    assert success["raw_sha256"] == acq.sha256_hex(body)
+    assert success["row_count"] == 2
+
+
+def test_only_complete_body_is_persisted_after_truncation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """D2-D item 4: only the complete body is stored, and its hash matches."""
+    batch_id, body, _summary = _truncate_then_succeed(tmp_path, monkeypatch)
+    stored = (tmp_path / "raw" / batch_id / "AAPL.json.gz").read_bytes()
+    assert gzip.decompress(stored) == body
+    record = _ok_record(tmp_path, batch_id, "AAPL")
+    assert record["raw_sha256"] == acq.sha256_hex(body)
+    assert record["raw_file"] == "AAPL.json.gz"
+
+
+def test_no_raw_file_from_truncated_attempt(tmp_path: Path, monkeypatch) -> None:
+    """D2-D item 5: the failed attempt leaves no raw artifact behind."""
+    batch_id, _body, _summary = _truncate_then_succeed(tmp_path, monkeypatch)
+    assert raw_files(tmp_path, batch_id) == ["AAPL.json.gz"]
+
+
+def test_incomplete_read_all_attempts_logs_three(tmp_path: Path, monkeypatch) -> None:
+    """D2-D item 6: truncation on every attempt produces three logged lines."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        return _StubResponse(read_exc=http.client.IncompleteRead(b"partial", 999))
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    attempts = [a for a in read_attempts(tmp_path, batch_id) if a["ticker"] == "AAPL"]
+    assert [a["attempt"] for a in attempts] == [1, 2, 3]
+    assert all(a["http_status"] is None for a in attempts)
+    assert all(a["error_class"] == "TransportError" for a in attempts)
+    assert all(a["transport_cause"] == "IncompleteRead" for a in attempts)
+    assert summary["requests_made"] == acq.MAX_ATTEMPTS == 3
+
+
+def test_incomplete_read_all_attempts_ends_retry_exhausted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """D2-D item 7: exhaustion is a visible, terminal RETRY_EXHAUSTED."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        return _StubResponse(read_exc=http.client.IncompleteRead(b"partial", 999))
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "RETRY_EXHAUSTED"
+    assert "RETRY_EXHAUSTED" in acq.TERMINAL_STATUSES
+    assert summary["batch_state"] == "COMPLETE"
+    assert read_status(tmp_path, batch_id)["tickers"]["AAPL"]["status"] == (
+        "RETRY_EXHAUSTED"
+    )
+
+
+def test_next_ticker_proceeds_after_truncation_exhaustion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """D2-D item 8: a truncated ticker never stops later tickers in the run."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", "MSFT"))
+
+    def handler(ticker, attempt, request):
+        if ticker == "AAPL":
+            return _StubResponse(read_exc=http.client.IncompleteRead(b"x", 1))
+        return _StubResponse(body=ok_body())
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "RETRY_EXHAUSTED"
+    assert summary["tickers"]["MSFT"]["status"] == "OK"
+    assert summary["batch_state"] == "COMPLETE"
+
+
+def test_resume_after_truncation_makes_zero_calls(tmp_path: Path, monkeypatch) -> None:
+    """D2-D item 9: a resume makes zero calls for a terminal truncated ticker."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    install_urlopen(
+        monkeypatch,
+        lambda ticker, attempt, request: _StubResponse(
+            read_exc=http.client.IncompleteRead(b"x", 1)
+        ),
+    )
+    acq.run_batch(batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock())
+
+    calls, _counts = install_urlopen(
+        monkeypatch,
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("terminal ticker must not be requested")
+        ),
+    )
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert calls == []
+    assert summary["requests_made"] == 0
+    assert summary["batch_state"] == "COMPLETE"
+    assert summary["tickers"]["AAPL"]["status"] == "RETRY_EXHAUSTED"
+
+
+def test_refetch_truncation_keeps_verified_ok(tmp_path: Path, monkeypatch) -> None:
+    """D2-D item 10: truncation under refetch never degrades a verified OK."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+    body = ok_body(2)
+
+    install_urlopen(monkeypatch, lambda t, n, r: _StubResponse(body=body))
+    acq.run_batch(batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock())
+    before = _ok_record(tmp_path, batch_id, "AAPL")
+
+    install_urlopen(
+        monkeypatch,
+        lambda t, n, r: _StubResponse(
+            read_exc=http.client.IncompleteRead(b"partial", 999)
+        ),
+    )
+    summary = acq.refetch(
+        batch_id,
+        tmp_path,
+        live_transport(),
+        SleepSpy(),
+        fixed_clock(),
+        tickers=["AAPL"],
+    )
+    after = summary["tickers"]["AAPL"]
+    assert after["status"] == "OK"
+    assert after["raw_file"] == before["raw_file"] == "AAPL.json.gz"
+    assert after["raw_sha256"] == before["raw_sha256"] == acq.sha256_hex(body)
+    assert after["last_refetch_error"] == "RETRY_EXHAUSTED"
+    stored = (tmp_path / "raw" / batch_id / "AAPL.json.gz").read_bytes()
+    assert gzip.decompress(stored) == body
+    assert raw_files(tmp_path, batch_id) == ["AAPL.json.gz"]
+
+
+def test_empty_unchanged(tmp_path: Path) -> None:
+    """D2-D item 11: EMPTY classification is unchanged by D2-D."""
+    batch_id = make_batch(tmp_path)
+    transport = FakeTransport(lambda t, n, p, q: (200, EMPTY_BODY))
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"]["AAPL"]["status"] == "EMPTY"
+    assert transport.counts["AAPL"] == 1
+
+
+def test_unrequestable_unchanged_under_d2d(tmp_path: Path) -> None:
+    """D2-D item 12: UNREQUESTABLE_IDENTIFIER handling is unchanged."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL", UNREQUESTABLE_SPACE))
+    transport = FakeTransport(lambda t, n, p, q: (200, ok_body()))
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"][UNREQUESTABLE_SPACE]["status"] == (
+        "UNREQUESTABLE_IDENTIFIER"
+    )
+    assert transport.counts == {"AAPL": 1}
+    assert all(
+        line["ticker"] != UNREQUESTABLE_SPACE
+        for line in read_attempts(tmp_path, batch_id)
+    )
+
+
+def test_urlerror_unchanged(tmp_path: Path) -> None:
+    """D2-D item 13: URLError still retries exactly as before."""
+    batch_id = make_batch(tmp_path)
+
+    def handler(ticker, n, path, params):
+        if ticker == "AAPL" and n == 1:
+            raise urllib.error.URLError("boom")
+        return (200, ok_body())
+
+    transport = FakeTransport(handler)
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    assert transport.counts["AAPL"] == 2
+    line = [a for a in read_attempts(tmp_path, batch_id) if a["ticker"] == "AAPL"][0]
+    assert line["http_status"] is None
+    assert line["error_class"] == "URLError"
+    assert line["transport_cause"] == "URLError"
+
+
+def test_timeout_unchanged(tmp_path: Path) -> None:
+    """D2-D item 14: TimeoutError still retries and exhausts after 3 attempts."""
+    batch_id = make_batch(tmp_path)
+
+    def handler(ticker, n, path, params):
+        if ticker == "AAPL":
+            raise TimeoutError("timed out")
+        return (200, ok_body())
+
+    transport = FakeTransport(handler)
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"]["AAPL"]["status"] == "RETRY_EXHAUSTED"
+    assert transport.counts["AAPL"] == acq.MAX_ATTEMPTS == 3
+    attempts = [a for a in read_attempts(tmp_path, batch_id) if a["ticker"] == "AAPL"]
+    assert len(attempts) == 3
+    assert all(a["error_class"] == "TimeoutError" for a in attempts)
+    assert all(a["transport_cause"] == "TimeoutError" for a in attempts)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        http.client.InvalidURL("no host"),
+        ValueError("bad configuration"),
+    ],
+    ids=["InvalidURL", "ValueError"],
+)
+def test_invalid_url_or_value_error_is_not_retried(tmp_path, exc) -> None:
+    """D2-D item 15: programming/config errors propagate, batch INTERRUPTED."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, n, path, params):
+        raise exc
+
+    transport = FakeTransport(handler)
+    with pytest.raises(type(exc)):
+        acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert transport.counts["AAPL"] == 1
+    assert read_status(tmp_path, batch_id)["batch_state"] == "INTERRUPTED"
+    assert not (tmp_path / "manifest" / batch_id / "attempts.jsonl").exists()
+
+
+def test_sentinel_never_in_truncation_artifacts(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """D2-D item 16: the key reaches the header, never an artifact or output."""
+    sentinel = "d2d-sentinel-credential-value-xyz"
+    monkeypatch.setenv("TIINGO_API_KEY", sentinel)
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    calls, _counts = install_urlopen(
+        monkeypatch,
+        lambda t, n, r: _StubResponse(
+            read_exc=http.client.IncompleteRead(b"partial", 999)
+        ),
+    )
+    transport = acq.make_live_transport()  # reads the sentinel from the env
+    acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+
+    assert calls[0]["headers"]["Authorization"] == f"Token {sentinel}"
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert sentinel.encode("utf-8") not in path.read_bytes(), path
+    captured = capsys.readouterr()
+    assert sentinel not in captured.out
+    assert sentinel not in captured.err
+
+
+def test_existing_schema_batch_resumes(tmp_path: Path) -> None:
+    """D2-D item 17: an old-schema batch resumes and completes correctly.
+
+    ``attempts.jsonl`` lines written before D2-D have no ``transport_cause``
+    and still carry the response fields as null. The status file holds a
+    mixed OK/EMPTY/UNREQUESTABLE/PENDING set. Resuming must skip every
+    terminal ticker with zero transport calls and complete the PENDING one.
+    """
+    batch_id = make_batch_from_pool(
+        tmp_path, pool_with("AAPL", "MSFT", "NVDA", UNREQUESTABLE_SPACE)
+    )
+    header = read_header(tmp_path, batch_id)
+    body_aapl = ok_body(2)
+
+    raw_dir = tmp_path / "raw" / batch_id
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "AAPL.json.gz").write_bytes(acq.gzip_bytes(body_aapl))
+
+    old_line = {
+        "batch_id": batch_id,
+        "ticker": "AAPL",
+        "security_keys": ["TIINGO:AAPL:2000-01-01"],
+        "endpoint": "/tiingo/daily/AAPL/prices",
+        "requested_range": {
+            "startDate": "2015-01-02",
+            "endDate": "2024-05-31",
+        },
+        "retrieved_at_utc": FIXED_CLOCK,
+        "http_status": None,
+        "error_class": "TransportError",
+        "attempt": 1,
+        "raw_sha256": None,
+        "row_count": None,
+        "first_date": None,
+        "last_date": None,
+    }
+    attempts_path = tmp_path / "manifest" / batch_id / "attempts.jsonl"
+    attempts_path.write_bytes((acq.canonical_json(old_line) + "\n").encode("utf-8"))
+
+    old_status = {
+        "batch_id": batch_id,
+        "manifest_schema_version": acq.MANIFEST_SCHEMA_VERSION,
+        "contract_sha256": header["contract_sha256"],
+        "C": header["C"],
+        "batch_state": "RUNNING",
+        "tickers": {
+            "AAPL": {
+                "status": "OK",
+                "attempts": 1,
+                "raw_file": "AAPL.json.gz",
+                "raw_sha256": acq.sha256_hex(body_aapl),
+                "row_count": 2,
+                "first_date": "2024-01-02",
+                "last_date": "2024-01-03",
+                "retrieved_at_utc": FIXED_CLOCK,
+            },
+            "MSFT": {"status": "EMPTY", "attempts": 1},
+            "NVDA": {"status": "PENDING", "attempts": 0},
+            UNREQUESTABLE_SPACE: {
+                "status": "UNREQUESTABLE_IDENTIFIER",
+                "reason_code": "REQUEST_PATTERN_MISMATCH",
+                "request_pattern": acq.TICKER_PATTERN.pattern,
+                "attempts": 0,
+            },
+        },
+    }
+    (tmp_path / "manifest" / batch_id / "status.json").write_bytes(
+        (acq.canonical_json(old_status) + "\n").encode("utf-8")
+    )
+
+    transport = FakeTransport(
+        lambda t, n, p, q: (200, ok_body()) if t == "NVDA" else _explode()
+    )
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+
+    assert transport.counts == {"NVDA": 1}
+    assert summary["batch_state"] == "COMPLETE"
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    assert summary["tickers"]["MSFT"]["status"] == "EMPTY"
+    assert summary["tickers"]["NVDA"]["status"] == "OK"
+    assert summary["tickers"][UNREQUESTABLE_SPACE]["status"] == (
+        "UNREQUESTABLE_IDENTIFIER"
+    )
+    # The pre-D2-D line is preserved untouched alongside the new line.
+    attempts = read_attempts(tmp_path, batch_id)
+    assert "transport_cause" not in attempts[0]
+    assert attempts[0] == old_line
+
+
+def test_http_error_read_truncation_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """D2-D extra: ``exc.read()`` in the HTTPError branch retries like a body."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+    body = ok_body(2)
+
+    def handler(ticker, attempt, request):
+        if attempt == 1:
+            fp = _RaisingFp(http.client.IncompleteRead(b"partial", 999))
+            raise urllib.error.HTTPError(
+                request.full_url, 503, "server error", {}, fp
+            )
+        return _StubResponse(body=body)
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    line = read_attempts(tmp_path, batch_id)[0]
+    assert line["http_status"] is None
+    assert line["error_class"] == "TransportError"
+    assert line["transport_cause"] == "IncompleteRead"
+
+
+def test_bad_status_line_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """D2-D extra: ``BadStatusLine`` is a retryable transport failure."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        if attempt == 1:
+            raise http.client.BadStatusLine("garbage")
+        return _StubResponse(body=ok_body())
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    line = read_attempts(tmp_path, batch_id)[0]
+    assert line["transport_cause"] == "BadStatusLine"
+    assert line["error_class"] == "TransportError"
+
+
+def test_line_too_long_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """D2-D extra: ``LineTooLong`` is a retryable transport failure."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        if attempt == 1:
+            return _StubResponse(read_exc=http.client.LineTooLong("header"))
+        return _StubResponse(body=ok_body())
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    line = read_attempts(tmp_path, batch_id)[0]
+    assert line["transport_cause"] == "LineTooLong"
+    assert line["error_class"] == "TransportError"
+
+
+def test_remote_disconnected_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """D2-D extra: ``RemoteDisconnected`` (an OSError subclass) also retries."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        if attempt == 1:
+            raise http.client.RemoteDisconnected("remote closed")
+        return _StubResponse(body=ok_body())
+
+    install_urlopen(monkeypatch, handler)
+    summary = acq.run_batch(
+        batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+    )
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    line = read_attempts(tmp_path, batch_id)[0]
+    assert line["transport_cause"] == "RemoteDisconnected"
+    assert line["error_class"] == "TransportError"
+
+
+def test_raw_incomplete_read_from_injected_transport_is_normalised(
+    tmp_path: Path,
+) -> None:
+    """D2-D extra: a raw truncation from an injected transport is normalised."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, n, path, params):
+        if n == 1:
+            raise http.client.IncompleteRead(b"partial", 999)
+        return (200, ok_body())
+
+    transport = FakeTransport(handler)
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"]["AAPL"]["status"] == "OK"
+    line = read_attempts(tmp_path, batch_id)[0]
+    assert line["error_class"] == "TransportError"
+    assert line["transport_cause"] == "IncompleteRead"
+    assert line["http_status"] is None
+
+
+def test_provider_failure_attempt_has_no_response_fields(tmp_path: Path) -> None:
+    """D2-D extra: the "no response fields on failure" rule also holds for 5xx."""
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+    transport = FakeTransport(lambda t, n, p, q: (503, b"unavailable"))
+    summary = acq.run_batch(batch_id, tmp_path, transport, SleepSpy(), fixed_clock())
+    assert summary["tickers"]["AAPL"]["status"] == "RETRY_EXHAUSTED"
+    attempts = read_attempts(tmp_path, batch_id)
+    assert len(attempts) == acq.MAX_ATTEMPTS == 3
+    for line in attempts:
+        assert line["http_status"] == 503
+        assert "transport_cause" not in line
+        for forbidden in ("raw_sha256", "row_count", "first_date", "last_date"):
+            assert forbidden not in line, forbidden
+
+
+# ---------------------------------------------------------------------------
+# D2-D item 15 on the live path — a bare HTTPException catch would be wrong
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "exc",
+    [
+        http.client.InvalidURL("no host given"),
+        http.client.ImproperConnectionState("improper connection state"),
+        http.client.ResponseNotReady("response not ready"),
+    ],
+    ids=["InvalidURL", "ImproperConnectionState", "ResponseNotReady"],
+)
+def test_live_transport_does_not_swallow_non_transport_http_exceptions(
+    tmp_path: Path, monkeypatch, exc: Exception
+) -> None:
+    """D2-D item 15 on the *live* transport path.
+
+    These are the classes a bare ``except http.client.HTTPException`` in
+    ``make_live_transport`` would wrongly capture and convert to
+    ``TransportError``. Exercising the live transport (monkeypatched
+    ``urllib.request.urlopen``) proves the production catch set is narrow:
+    the original type must propagate, ``urlopen`` must be called exactly once
+    (no retry), the batch must be ``INTERRUPTED`` and no attempt line may be
+    written.
+    """
+    batch_id = make_batch_from_pool(tmp_path, pool_with("AAPL"))
+
+    def handler(ticker, attempt, request):
+        raise exc
+
+    calls, counts = install_urlopen(monkeypatch, handler)
+    with pytest.raises(type(exc)) as caught:
+        acq.run_batch(
+            batch_id, tmp_path, live_transport(), SleepSpy(), fixed_clock()
+        )
+
+    assert not isinstance(caught.value, acq.TransportError)
+    assert [c["ticker"] for c in calls] == ["AAPL"]
+    assert counts["AAPL"] == 1  # called exactly once: no retry
+    assert read_status(tmp_path, batch_id)["batch_state"] == "INTERRUPTED"
+    assert not (tmp_path / "manifest" / batch_id / "attempts.jsonl").exists()
