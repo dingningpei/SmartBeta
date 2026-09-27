@@ -43,6 +43,29 @@ listed instrument as one of:
 - Evidence binds to a `security_key` only when its date falls inside that
   key's listed interval and its symbol and exchange match.
 
+**Clarification 2026-09-27 — REIT / Shares of Beneficial Interest (user
+decision 1):**
+- **A.** Interval-dated positive evidence establishes that the listed
+  instrument is the issuer's common equity, and the issuer or security is a
+  REIT: `COMMON_STOCK`, subtype `REIT_COMMON`. Eligible.
+- **B.** "Shares of Beneficial Interest" appears, but the evidence does not
+  establish eligible REIT or common equity: `CLASS_UNRESOLVED`.
+- **C.** Positive evidence establishes a non-common trust, fund or unit
+  interest: `NON_COMMON`, with the matching reason.
+- SBI or beneficial-interest wording alone is **neither** NON_COMMON **nor**
+  COMMON_STOCK evidence.
+- The 42 Wayback keys provisionally measured as SBI/trust are **not** carried
+  into final classification. They are re-evaluated under the frozen vocabulary
+  when D-SC is implemented.
+
+**Wayback evidence status:** preserved as evidence, not certified
+classification. Its provisional name heuristics are **not frozen**:
+- a common-looking name is not automatically `COMMON_STOCK`;
+- an SBI- or trust-looking name is not automatically `NON_COMMON`.
+
+The final vocabulary must operate on positive evidence rules. The Nasdaq Daily
+List purchase remains not authorized.
+
 ## 2. Q-D6-1 — missingness eligibility is point-in-time (decided)
 
 **Problem.** Contract §3 rule 6 ("not excluded under §10") combined with §10
@@ -64,6 +87,21 @@ at formation session f, for an `INTERVAL_ASSIGNED` key:
 - **Numerator** `M_f` = the sessions in `D_f` with no usable row, which
   covers VENDOR_MISSING and CORRUPT days, plus sessions whose row is
   VENDOR_NULL.
+- **Clarification 2026-09-27 (user decision 2).** The numerator counts
+  **trusted listed sessions that should have usable data but do not**. It is
+  not a count of corrupt rows. For each trusted listed session in `D_f`:
+
+  | Session state | Denominator | Numerator |
+  |---|---|---|
+  | usable observation | +1 | +0 |
+  | no observation | +1 | +1 |
+  | observation exists but is unusable/corrupt | +1 | +1 |
+  | vendor-null observation | +1 | +1 |
+
+  An `OFF_CALENDAR_ROW` is not a trusted session, so it enters **neither**
+  count, and no missing session is manufactured from it. Its frozen D5
+  disposition is unchanged: CORRUPT security-day, retained, flagged, and
+  excluded from session computations.
 - The key fails §10 at f when `M_f / D_f > 0.05`, or when `D_f` is empty.
 - The expanding window has no trailing cap, because the contract defines none.
   It runs alongside the unchanged §3 rule 4 (listing age ≥ 252 sessions) and
