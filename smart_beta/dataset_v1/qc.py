@@ -33,6 +33,11 @@ Explicit interpretation notes (where the frozen text is terse):
 * A **usable row** is present, on-calendar, not CORRUPT, not
   INTERVAL_MISMATCH and not VENDOR_NULL.  The last clause is required by
   Q-D6-1, which counts a vendor-null session in the numerator.
+* ``VENDOR_MISSING`` is every session between the first and last usable rows
+  with no usable row: a date with no row, or a date whose only row(s) are
+  unusable but not vendor-null.  The row-level CORRUPT finding is kept too.
+  A vendor-null session is ``VENDOR_NULL`` and is never also counted as
+  ``VENDOR_MISSING``.
 * ``day_flags`` is long format: one record per distinct
   ``(security_key, date, raw_row_index, class_or_flag)``.  Each record is one
   finding with exactly one disposition.
@@ -693,7 +698,6 @@ def _analyze_assigned_keys(
 
         usable_sub = sub[sub["_usable"]]
         usable_dates = set(usable_sub["date"])
-        has_row_dates = set(sub["date"])
         vendor_null_dates = set(sub.loc[sub[_FLAG_VENDOR_NULL], "date"])
         usable_in_S = [d for d in sessions if d in usable_dates]
         first_usable = usable_in_S[0] if usable_in_S else None
@@ -725,10 +729,16 @@ def _analyze_assigned_keys(
                     (key, ticker, session, None, CLASS_ENDED, LEGIT_MISSING)
                 )
                 continue
-            if session in has_row_dates:
-                if session in vendor_null_dates:
-                    n_vendor_null += 1
+            if session in vendor_null_dates:
+                # A row is present but close/volume is null: VENDOR_NULL, not
+                # VENDOR_MISSING (never double-counted).
+                n_vendor_null += 1
                 continue
+            # No usable row: either no row at all, or only unusable non-null
+            # rows (OHLC/NONPOSITIVE/MALFORMED_CA/DUPLICATE_DATE).  Frozen L2
+            # defines VENDOR_MISSING as sessions with no usable row, and
+            # Q-D6-1 counts such sessions in the numerator.  The row-level
+            # CORRUPT finding was already emitted by L1 and is retained.
             n_vendor_missing += 1
             findings.append(
                 (

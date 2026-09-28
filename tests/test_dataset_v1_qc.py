@@ -57,6 +57,20 @@ CALENDAR = build_nyse_calendar(ACQ_START, "2027-12-31")
 CAL_DATES = [ts.date() for ts in CALENDAR.dates]
 RESERVE_START = date(2023, 7, 3)
 
+#: Ten consecutive January-2016 NYSE sessions (01-18 is the MLK holiday).
+JAN_2016_SESSIONS = (
+    "2016-01-04",
+    "2016-01-05",
+    "2016-01-06",
+    "2016-01-07",
+    "2016-01-08",
+    "2016-01-11",
+    "2016-01-12",
+    "2016-01-13",
+    "2016-01-14",
+    "2016-01-15",
+)
+
 SNAPSHOT_HEADER = (
     "ticker",
     "exchange",
@@ -658,6 +672,89 @@ def test_l1_corp_action_suspect_suppressed_by_event(tmp_path: Path) -> None:
     assert qc.CLASS_CORP_ACTION_SUSPECT not in classes_for(day, key)
 
 
+def test_l1_corp_action_threshold_55_flagged(tmp_path: Path) -> None:
+    """A +55% move crosses the frozen 0.5 threshold and is flagged."""
+    key = "TIINGO:J55:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "J55",
+                rows=[
+                    row("2016-01-04", close=100.0),
+                    row("2016-01-05", close=155.0),
+                ],
+            )
+        ],
+    )
+    day = read_day(store, store.run())
+    assert qc.CLASS_CORP_ACTION_SUSPECT in classes_for(day, key)
+
+
+def test_l1_corp_action_threshold_45_not_flagged(tmp_path: Path) -> None:
+    """A +45% move stays under the frozen 0.5 threshold."""
+    key = "TIINGO:J45:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "J45",
+                rows=[
+                    row("2016-01-04", close=100.0),
+                    row("2016-01-05", close=145.0),
+                ],
+            )
+        ],
+    )
+    day = read_day(store, store.run())
+    assert qc.CLASS_CORP_ACTION_SUSPECT not in classes_for(day, key)
+
+
+def test_l1_corp_action_threshold_55_suppressed_by_split(tmp_path: Path) -> None:
+    """A +55% move with a split event dated t is not a suspect."""
+    key = "TIINGO:J55S:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "J55S",
+                rows=[
+                    row("2016-01-04", close=100.0),
+                    row("2016-01-05", close=155.0, split_factor=1.55),
+                ],
+            )
+        ],
+    )
+    day = read_day(store, store.run())
+    assert qc.CLASS_CORP_ACTION_SUSPECT not in classes_for(day, key)
+
+
+def test_l1_zero_volume_rows_are_usable_for_corp_action(tmp_path: Path) -> None:
+    """A zero-volume row is a valid session, so it feeds the CA ratio."""
+    key = "TIINGO:ZVCA:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "ZVCA",
+                rows=[
+                    row("2016-01-04", close=100.0, volume=0),
+                    row("2016-01-05", close=155.0, volume=0),
+                ],
+                start="2016-01-04",
+                end="2016-01-05",
+            )
+        ],
+    )
+    report = store.run()
+    day = read_day(store, report)
+    row0 = security_row(read_security(store, report), key)
+    assert int(row0["n_vendor_missing"]) == 0
+    assert qc.CLASS_VENDOR_MISSING not in classes_for(day, key)
+    assert qc.CLASS_CORP_ACTION_SUSPECT in classes_for(day, key)
+    assert row0["security_disposition"] == qc.VALID
+
+
 def test_l1_interval_mismatch(tmp_path: Path) -> None:
     key = "TIINGO:MIS:2016-01-05"
     store = build_store(
@@ -779,6 +876,104 @@ def test_l2_termination_mismatch_flag_only(tmp_path: Path) -> None:
     # D5 excludes nothing: the key is still present with its day flags.
     assert key in set(read_day(store, report)["security_key"])
     assert report["gates"]["gate_8_listings"]["counts"]["n_termination_mismatch"] == 1
+
+
+def test_l2_vendor_missing_includes_corrupt_rows(tmp_path: Path) -> None:
+    """A session with only unusable non-null rows is VENDOR_MISSING.
+
+    It is counted in ``n_vendor_missing`` and the diagnostic numerator (and
+    emitted with a null ``raw_row_index``) while the L1 CORRUPT row finding is
+    retained; a vendor-null session is ``VENDOR_NULL`` only.
+    """
+    key = "TIINGO:MIX:2016-01-04"
+    rows = [
+        row("2016-01-04"),
+        row("2016-01-05"),
+        # 2016-01-06 has no row at all.
+        row("2016-01-07", open_=10.0, high=10.0, low=11.0),  # OHLC corrupt
+        row("2016-01-08"),
+        row("2016-01-08", close=11.0),  # duplicate date
+        row("2016-01-11", close=None, volume=None),  # vendor null
+        row("2016-01-12"),
+        row("2016-01-13"),
+        row("2016-01-14"),
+        row("2016-01-15"),
+    ]
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "MIX",
+                rows=rows,
+                start="2016-01-04",
+                end="2016-01-15",
+            )
+        ],
+    )
+    report = store.run()
+    row0 = security_row(read_security(store, report), key)
+    assert int(row0["n_vendor_missing"]) == 3  # 01-06, 01-07, 01-08
+    assert int(row0["n_vendor_null"]) == 1  # 01-11
+    # 4 missingness sessions out of the 10 sessions from the first usable row.
+    assert float(row0["whole_window_missing_rate_diagnostic"]) == pytest.approx(0.4)
+
+    day = day_for(read_day(store, report), key)
+    missing = day[day["class_or_flag"] == qc.CLASS_VENDOR_MISSING]
+    assert sorted(missing["date"].astype(str)) == [
+        "2016-01-06",
+        "2016-01-07",
+        "2016-01-08",
+    ]
+    assert missing["raw_row_index"].isna().all()
+    assert set(missing["disposition"]) == {qc.INSUFFICIENT_COVERAGE}
+
+    nulls = day[day["class_or_flag"] == qc.CLASS_VENDOR_NULL]
+    assert sorted(nulls["date"].astype(str)) == ["2016-01-11"]
+    assert set(nulls["disposition"]) == {qc.INSUFFICIENT_COVERAGE}
+
+    # The row-level CORRUPT findings are retained alongside VENDOR_MISSING.
+    assert qc.CLASS_OHLC in set(day["class_or_flag"])
+    assert qc.CLASS_DUPLICATE_DATE in set(day["class_or_flag"])
+
+
+def test_l2_termination_tolerance_five_not_flagged(tmp_path: Path) -> None:
+    key = "TIINGO:GAP5:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "GAP5",
+                rows=[row(d) for d in JAN_2016_SESSIONS[:5]],
+                start="2016-01-04",
+                end="2016-01-15",
+            )
+        ],
+    )
+    report = store.run()
+    row0 = security_row(read_security(store, report), key)
+    assert bool(row0["termination_mismatch"]) is False
+    assert int(row0["n_ended"]) == 5
+    assert row0["security_disposition"] == qc.VALID
+
+
+def test_l2_termination_tolerance_six_flagged(tmp_path: Path) -> None:
+    key = "TIINGO:GAP6:2016-01-04"
+    store = build_store(
+        tmp_path,
+        [
+            Tick(
+                "GAP6",
+                rows=[row(d) for d in JAN_2016_SESSIONS[:4]],
+                start="2016-01-04",
+                end="2016-01-15",
+            )
+        ],
+    )
+    report = store.run()
+    row0 = security_row(read_security(store, report), key)
+    assert bool(row0["termination_mismatch"]) is True
+    assert int(row0["n_ended"]) == 6
+    assert row0["security_disposition"] == qc.UNCERTIFIED_SEMANTICS
 
 
 def test_l2_whole_window_missing_rate_diagnostic(tmp_path: Path) -> None:
