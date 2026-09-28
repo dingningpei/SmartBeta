@@ -868,9 +868,11 @@ def _policy_segments(
     for row in key.evidence:
         if row["capture_date"] >= key.listed_start:
             candidate_dates.add(row["capture_date"])
+    # SEC events may be filed before the listing start; they are still
+    # knowable and must carry their own policy segment so that a pre-listing
+    # cutoff reflects only evidence dated on or before it.
     for d, _ in sec_events:
-        if d >= key.listed_start:
-            candidate_dates.add(d)
+        candidate_dates.add(d)
 
     def refs(cutoff: date, sources: frozenset[str]) -> list[str]:
         out: set[str] = set()
@@ -1009,16 +1011,22 @@ def class_state_at(
     key: str,
     cutoff: date,
 ) -> tuple[str, str]:
-    """Answer the class of ``key`` at query cutoff ``cutoff`` from segments."""
+    """Answer the class of ``key`` at query cutoff ``cutoff`` from segments.
+
+    A segment applies to cutoffs ``>=`` its ``knowledge_date``.  When no
+    segment is knowable at ``cutoff`` (``cutoff`` earlier than the listing
+    start, or the key has no timeline) the state is the empty-evidence state;
+    the first future segment is never exposed.
+    """
     segments = timeline.get(key)
-    if not segments:
-        return ("CLASS_UNRESOLVED", "NO_ADMISSIBLE_EVIDENCE")
-    chosen = segments[0]
-    for segment in segments:
+    chosen: Mapping[str, Any] | None = None
+    for segment in segments or ():
         if segment["knowledge_date"] <= cutoff:
             chosen = segment
         else:
             break
+    if chosen is None:
+        return ("CLASS_UNRESOLVED", "NO_ADMISSIBLE_EVIDENCE")
     return (str(chosen["state"]), str(chosen["reason"]))
 
 
@@ -1027,16 +1035,24 @@ def policy_state_at(
     key: str,
     cutoff: date,
 ) -> tuple[str, frozenset[str]]:
-    """Answer the policy status of ``key`` at query cutoff ``cutoff``."""
+    """Answer the policy status of ``key`` at query cutoff ``cutoff``.
+
+    A segment applies to cutoffs ``>=`` its ``knowledge_date``.  When no
+    segment is knowable at ``cutoff`` (no SEC or directory-name evidence on
+    or before ``cutoff``) the status is ``NO_REGULATORY_EXCLUSION_OBSERVED``
+    with no sources; the first future segment is never exposed.  A SEC event
+    or name capture dated on or before ``cutoff`` -- including one filed
+    before the listing start -- is represented by its own segment.
+    """
     segments = timeline.get(key)
-    if not segments:
-        return ("NO_REGULATORY_EXCLUSION_OBSERVED", frozenset())
-    chosen = segments[0]
-    for segment in segments:
+    chosen: Mapping[str, Any] | None = None
+    for segment in segments or ():
         if segment["knowledge_date"] <= cutoff:
             chosen = segment
         else:
             break
+    if chosen is None:
+        return ("NO_REGULATORY_EXCLUSION_OBSERVED", frozenset())
     sources = chosen.get("active_sources")
     if isinstance(sources, str):
         sources = json.loads(sources) if sources else []

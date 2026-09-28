@@ -928,6 +928,194 @@ def test_pit_add_remove_future_evidence_invariant(tmp_path: Path) -> None:
         )
 
 
+def test_class_state_at_never_clamps_to_future_segment() -> None:
+    timeline = {
+        "K": [
+            {
+                "knowledge_date": date(2020, 1, 1),
+                "state": "COMMON_STOCK",
+                "reason": "COMMON",
+            }
+        ]
+    }
+    assert class_state_at(timeline, "K", date(2019, 12, 31)) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+    assert class_state_at(timeline, "K", date(2020, 1, 1)) == (
+        "COMMON_STOCK",
+        "COMMON",
+    )
+
+
+def test_policy_state_at_never_clamps_to_future_segment() -> None:
+    timeline = {
+        "K": [
+            {
+                "knowledge_date": date(2020, 1, 1),
+                "policy_state": "EXCLUDED",
+                "active_sources": ["SEC_FORM_BDC"],
+            }
+        ]
+    }
+    assert policy_state_at(timeline, "K", date(2019, 12, 31)) == (
+        "NO_REGULATORY_EXCLUSION_OBSERVED",
+        frozenset(),
+    )
+    assert policy_state_at(timeline, "K", date(2020, 1, 1)) == (
+        "EXCLUDED",
+        frozenset({"SEC_FORM_BDC"}),
+    )
+
+
+def test_class_before_listing_start_is_empty_evidence(tmp_path: Path) -> None:
+    """A cutoff before the listing start must not expose listing-start evidence."""
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    # Evidence dated exactly on the listing start.
+    store.nasdaq(
+        [_nasd_row("ABCD", "Foo Inc. - Common Stock")], timestamp="20160104000000"
+    )
+    content = store.classify()
+    timeline = store.class_timeline(content)
+    assert class_state_at(timeline, key, date(2016, 1, 3)) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+    assert class_state_at(timeline, key, date(2016, 1, 4)) == (
+        "COMMON_STOCK",
+        "COMMON",
+    )
+
+
+def test_class_cutoff_before_and_around_first_evidence(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    store.nasdaq(
+        [_nasd_row("ABCD", "Foo Inc. - Common Stock")], timestamp="20160630000000"
+    )
+    content = store.classify()
+    timeline = store.class_timeline(content)
+    # No class segment is knowable at or before the listing start.
+    assert class_state_at(timeline, key, date(2016, 1, 4)) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+    # Immediately before / on / after the evidence date.
+    assert class_state_at(timeline, key, date(2016, 6, 29)) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+    assert class_state_at(timeline, key, date(2016, 6, 30)) == (
+        "COMMON_STOCK",
+        "COMMON",
+    )
+    assert class_state_at(timeline, key, date(2016, 7, 1)) == (
+        "COMMON_STOCK",
+        "COMMON",
+    )
+
+
+def test_policy_sec_event_before_listing_start_still_applies(tmp_path: Path) -> None:
+    """An N-54A filed before the listing start applies at a pre-listing cutoff."""
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    store.nasdaq(
+        [_nasd_row("ABCD", "Foo Inc. - Common Stock")], timestamp="20160630000000"
+    )
+    store.master(
+        "master_2015Q2.gz",
+        [("1", "Foo Inc.", "N-54A", "2015-06-01", "a")],
+    )
+    content = store.classify()
+    policy_timeline = store.policy_timeline(content)
+    assert policy_state_at(policy_timeline, key, date(2015, 5, 31)) == (
+        "NO_REGULATORY_EXCLUSION_OBSERVED",
+        frozenset(),
+    )
+    assert policy_state_at(policy_timeline, key, date(2015, 6, 1)) == (
+        "EXCLUDED",
+        frozenset({"SEC_FORM_BDC"}),
+    )
+    assert policy_state_at(policy_timeline, key, date(2016, 1, 3)) == (
+        "EXCLUDED",
+        frozenset({"SEC_FORM_BDC"}),
+    )
+    # Class evidence does not exist before the listing start.
+    class_timeline = store.class_timeline(content)
+    assert class_state_at(class_timeline, key, date(2016, 1, 3)) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+
+
+def test_policy_cutoff_before_and_around_name_evidence(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    store.nasdaq(
+        [_nasd_row("ABCD", "Foo Fund Inc. - Common Stock")],
+        timestamp="20160630000000",
+    )
+    content = store.classify()
+    timeline = store.policy_timeline(content)
+    assert policy_state_at(timeline, key, date(2016, 6, 29)) == (
+        "NO_REGULATORY_EXCLUSION_OBSERVED",
+        frozenset(),
+    )
+    assert policy_state_at(timeline, key, date(2016, 6, 30)) == (
+        "EXCLUDED",
+        frozenset({"NAME_BASED_REGISTERED_FUND"}),
+    )
+    assert policy_state_at(timeline, key, date(2016, 7, 1)) == (
+        "EXCLUDED",
+        frozenset({"NAME_BASED_REGISTERED_FUND"}),
+    )
+
+
+def test_pit_adding_post_cutoff_evidence_is_inert(tmp_path: Path) -> None:
+    """Adding evidence strictly after a cutoff leaves class and policy fixed."""
+    base = Store(tmp_path / "base")
+    base_key = base.key("ABCD")
+    base.nasdaq(
+        [_nasd_row("ABCD", "Foo Inc. - Common Stock")], timestamp="20160630000000"
+    )
+    base_content = base.classify()
+
+    extended = Store(tmp_path / "extended")
+    extended_key = extended.key("ABCD")
+    extended.nasdaq(
+        [_nasd_row("ABCD", "Foo Inc. - Common Stock")], timestamp="20160630000000"
+    )
+    extended.nasdaq(
+        [_nasd_row("ABCD", "Foo Fund Inc. - Common Stock")],
+        timestamp="20180630000000",
+    )
+    extended_content = extended.classify()
+
+    base_class = base.class_timeline(base_content)
+    extended_class = extended.class_timeline(extended_content)
+    base_policy = base.policy_timeline(base_content)
+    extended_policy = extended.policy_timeline(extended_content)
+    for cutoff in (
+        date(2016, 1, 3),
+        date(2016, 6, 29),
+        date(2016, 6, 30),
+        date(2017, 1, 1),
+        date(2018, 6, 29),
+    ):
+        assert class_state_at(base_class, base_key, cutoff) == class_state_at(
+            extended_class, extended_key, cutoff
+        )
+        assert policy_state_at(base_policy, base_key, cutoff) == policy_state_at(
+            extended_policy, extended_key, cutoff
+        )
+    # The extra evidence is real: it changes policy only on/after its date.
+    assert policy_state_at(extended_policy, extended_key, date(2018, 6, 30)) == (
+        "EXCLUDED",
+        frozenset({"NAME_BASED_REGISTERED_FUND"}),
+    )
+
+
 def test_pit_transition_is_prospective_only(tmp_path: Path) -> None:
     store = Store(tmp_path)
     key = store.key("ABCD")
