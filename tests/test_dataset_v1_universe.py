@@ -36,6 +36,7 @@ CAL_DATES = [ts.date() for ts in CALENDAR.dates]
 RESERVE_START = universe.RESERVE_START
 F1 = date(2016, 1, 29)
 FL = date(2017, 1, 31)  # later formation with >300 preceding sessions
+DUP_SK = "TIINGO:DUP:2015-01-02"
 CREDENTIAL_SENTINEL = "d6-credential-sentinel-7a1e"
 
 D3_ID = "n-d6test"
@@ -173,6 +174,7 @@ class _Store:
         exchange: str = "NASDAQ",
         security_key: str | None = None,
         state: str = "INTERVAL_ASSIGNED",
+        reason: str = "FITS_ONE_LISTED_ROW",
         class_state: str | None = "COMMON_STOCK",
         class_knowledge: date = date(2000, 1, 1),
         class_reason: str = "COMMON_EVIDENCE",
@@ -190,6 +192,7 @@ class _Store:
                 "listed_start": listed_start,
                 "listed_end": listed_end,
                 "state": state,
+                "reason": reason,
             }
         )
         if class_state is not None:
@@ -205,6 +208,30 @@ class _Store:
         for segment in policy_segments:
             self.policy_rows.append((sk, segment[0], segment[1], "[]", "[]"))
         return sk
+
+    def identity_row(
+        self,
+        ticker: str,
+        *,
+        security_key: str,
+        state: str,
+        listed_start: date | None = None,
+        listed_end: date | None = None,
+        exchange: str = "NASDAQ",
+        reason: str = "FITS_ONE_LISTED_ROW",
+    ) -> None:
+        """Append one raw D4 identity row (for duplicate-key tests)."""
+        self.keys.append(
+            {
+                "security_key": security_key,
+                "ticker": ticker,
+                "exchange": exchange,
+                "listed_start": listed_start,
+                "listed_end": listed_end,
+                "state": state,
+                "reason": reason,
+            }
+        )
 
     def obs(
         self,
@@ -301,6 +328,9 @@ class _Store:
                     [k["listed_end"] for k in self.keys], dtype=_DATE32
                 ),
                 "state": pd.Series([k["state"] for k in self.keys], dtype=_STRING),
+                "reason": pd.Series(
+                    [k["reason"] for k in self.keys], dtype=_STRING
+                ),
             }
         )
         flags = pd.DataFrame(
@@ -1418,6 +1448,238 @@ def test_document_hash_mismatch_fails_closed(tmp_path: Path) -> None:
     document.write_text("tampered normative document\n", encoding="utf-8")
     with pytest.raises(universe.UniverseBindingError):
         store.run()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate security_key clarification (D4 may repeat security_key rows)
+# ---------------------------------------------------------------------------
+
+
+def test_unique_interval_assigned_normal(tmp_path: Path) -> None:
+    store = _build(tmp_path)
+    store.healthy("UNIQ")
+    sk = f"TIINGO:UNIQ:{_start_for_age(F1, 270).isoformat()}"
+    store.build()
+    content = store.run()
+    row = _row_for(_audit_for(store, content, F1), sk)
+    assert row["reason"] == "ELIGIBLE"
+    assert pd.isna(row["duplicate_row_count"])
+    assert pd.isna(row["duplicate_identity_states"])
+    assert pd.isna(row["duplicate_reasons"])
+
+
+def test_duplicate_all_inadmissible_collapses_to_one_member(
+    tmp_path: Path,
+) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    for _ in range(2):
+        store.identity_row(
+            "DUP",
+            security_key=DUP_SK,
+            state="IDENTITY_AMBIGUOUS",
+            listed_start=start,
+            listed_end=date(2099, 1, 1),
+            reason="OVERLAPPING_LISTED_ROWS",
+        )
+    # Data that would otherwise be fully eligible, to prove it is ignored.
+    store.add_sessions("DUP", start, _cutoff(F1))
+    store.build()
+    content = store.run()
+    audit = _audit_for(store, content, F1)
+    assert len(audit[audit["security_key"] == DUP_SK]) == 1
+    row = _row_for(audit, DUP_SK)
+    assert row["reason"] == "IDENTITY_NOT_ADMISSIBLE"
+    assert row["duplicate_row_count"] == 2
+    assert row["duplicate_identity_states"] == "IDENTITY_AMBIGUOUS"
+    assert row["duplicate_reasons"] == "OVERLAPPING_LISTED_ROWS"
+    development = _read(store, content, "universe_development.parquet")
+    assert DUP_SK not in set(development["security_key"])
+
+
+def test_duplicate_two_inadmissible_states_provenance(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="NO_OBSERVATIONS",
+        listed_start=start, listed_end=date(2099, 1, 1), reason="NO_FIT",
+    )
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+        listed_start=start, listed_end=date(2099, 1, 1),
+        reason="OVERLAPPING_LISTED_ROWS",
+    )
+    store.build()
+    content = store.run()
+    row = _row_for(_audit_for(store, content, F1), DUP_SK)
+    assert row["reason"] == "IDENTITY_NOT_ADMISSIBLE"
+    assert row["duplicate_row_count"] == 2
+    assert row["duplicate_identity_states"] == (
+        "IDENTITY_AMBIGUOUS|NO_OBSERVATIONS"
+    )
+    assert row["duplicate_reasons"] == "NO_FIT|OVERLAPPING_LISTED_ROWS"
+    assert pd.isna(row["identity_state"])
+
+
+def test_duplicate_with_interval_assigned_fails_closed(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+        listed_start=start, listed_end=date(2099, 1, 1),
+        reason="OVERLAPPING_LISTED_ROWS",
+    )
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="INTERVAL_ASSIGNED",
+        listed_start=start, listed_end=date(2099, 1, 1),
+    )
+    store.build()
+    with pytest.raises(universe.D6ConsistencyError):
+        store.run()
+    assert not (store.root / "derived" / "universe").exists()
+
+
+def test_duplicate_two_interval_assigned_fails_closed(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    for end in (date(2099, 1, 1), date(2098, 1, 1)):
+        store.identity_row(
+            "DUP", security_key=DUP_SK, state="INTERVAL_ASSIGNED",
+            listed_start=start, listed_end=end,
+        )
+    store.build()
+    with pytest.raises(universe.D6ConsistencyError):
+        store.run()
+
+
+def test_duplicate_row_order_permutation_invariant(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    rows = [
+        dict(
+            state="IDENTITY_AMBIGUOUS", listed_start=start,
+            listed_end=date(2099, 1, 1), reason="OVERLAPPING_LISTED_ROWS",
+        ),
+        dict(
+            state="NO_OBSERVATIONS", listed_start=start,
+            listed_end=date(2099, 1, 1), reason="NO_FIT",
+        ),
+    ]
+    built = []
+    for name, ordered in (("perm-a", rows), ("perm-b", list(reversed(rows)))):
+        store = _build(tmp_path, name)
+        for row in ordered:
+            store.identity_row("DUP", security_key=DUP_SK, **row)
+        store.build()
+        built.append((store, store.run()))
+    (store_a, content_a), (store_b, content_b) = built
+    assert content_a["duplicate_identity_groups"] == (
+        content_b["duplicate_identity_groups"]
+    )
+    for filename in (
+        "universe_development.parquet",
+        "formations.parquet",
+        "audit_development.parquet",
+    ):
+        assert (
+            _out_dir(store_a, content_a).joinpath(filename).read_bytes()
+            == _out_dir(store_b, content_b).joinpath(filename).read_bytes()
+        )
+
+
+def test_duplicate_differing_intervals_no_synthesis(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+        listed_start=start, listed_end=date(2019, 1, 1),
+        reason="OVERLAPPING_LISTED_ROWS",
+    )
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+        listed_start=date(2017, 1, 1), listed_end=date(2099, 1, 1),
+        reason="OVERLAPPING_LISTED_ROWS",
+    )
+    store.build()
+    content = store.run()
+    row = _row_for(_audit_for(store, content, F1), DUP_SK)
+    assert row["reason"] == "IDENTITY_NOT_ADMISSIBLE"
+    # No synthetic listing interval: every interval-derived field stays null.
+    assert pd.isna(row["listing_age_sessions"])
+    assert pd.isna(row["missing_numerator"])
+    assert pd.isna(row["missing_denominator"])
+    assert pd.isna(row["trailing_valid_sessions"])
+    assert pd.isna(row["median_dv"])
+    assert pd.isna(row["rank"])
+
+
+def test_duplicate_one_row_exists_at_f_other_not(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+        listed_start=start, listed_end=date(2017, 1, 1),
+        reason="OVERLAPPING_LISTED_ROWS",
+    )
+    store.identity_row(
+        "DUP", security_key=DUP_SK, state="NO_OBSERVATIONS",
+        listed_start=date(2018, 1, 1), listed_end=date(2099, 1, 1),
+        reason="NO_FIT",
+    )
+    store.build()
+    content = store.run()
+    row = _row_for(_audit_for(store, content, F1), DUP_SK)
+    assert row["reason"] == "IDENTITY_NOT_ADMISSIBLE"
+    development = _read(store, content, "universe_development.parquet")
+    assert DUP_SK not in set(development["security_key"])
+
+
+def test_duplicate_n_population_counts_distinct_keys(tmp_path: Path) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    store.healthy("UNIQ")
+    for _ in range(2):
+        store.identity_row(
+            "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+            listed_start=start, listed_end=date(2099, 1, 1),
+            reason="OVERLAPPING_LISTED_ROWS",
+        )
+    store.build()
+    content = store.run()
+    assert content["n_keys"] == 2
+    formations = _read(store, content, "formations.parquet")
+    f1 = formations[formations["formation_date"] == F1].iloc[0]
+    assert f1["n_population"] == 2
+    summary = [
+        r for r in content["formations"] if r["formation_date"] == F1.isoformat()
+    ][0]
+    assert summary["n_population"] == 2
+
+
+def test_duplicate_group_never_reaches_liquidity_or_ranking(
+    tmp_path: Path,
+) -> None:
+    start = _start_for_age(F1, 260)
+    store = _build(tmp_path)
+    for _ in range(2):
+        store.identity_row(
+            "DUP", security_key=DUP_SK, state="IDENTITY_AMBIGUOUS",
+            listed_start=start, listed_end=date(2099, 1, 1),
+            reason="OVERLAPPING_LISTED_ROWS",
+        )
+    # 300 usable sessions would satisfy age and liquidity if admissible.
+    store.add_sessions("DUP", start, _cutoff(F1))
+    store.healthy("GOOD")
+    store.build()
+    content = store.run()
+    row = _row_for(_audit_for(store, content, F1), DUP_SK)
+    assert row["reason"] == "IDENTITY_NOT_ADMISSIBLE"
+    assert pd.isna(row["trailing_valid_sessions"])
+    assert pd.isna(row["median_dv"])
+    assert pd.isna(row["rank"])
+    development = _read(store, content, "universe_development.parquet")
+    assert DUP_SK not in set(development["security_key"])
+    # The unique eligible key is unaffected.
+    assert "TIINGO:GOOD" in " ".join(development["security_key"])
 
 
 # ---------------------------------------------------------------------------

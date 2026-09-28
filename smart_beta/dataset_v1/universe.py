@@ -12,7 +12,17 @@ universe, the per-formation schedule and the development audit.
 Governing authority (frozen), in precedence order: the Dataset-v1 contract
 §§3, 4, 5, 6, 9, 10, 11, 12, 16 (gate 11); the v1.1 classification amendment;
 the v1.1 identity-binding clarification; the v1.1 D6 clarification; the
-Dataset-v1.1 decisions §2 (Q-D6-1); and the D5 / D-SC task interfaces.
+Dataset-v1.1 decisions §2 (Q-D6-1); the D5 / D-SC task interfaces; and the
+normative D6 duplicate-``security_key`` clarification.
+
+D4 may repeat ``security_key`` rows.  D6 population identity is the distinct
+``security_key``: a repeated group collapses to one diagnostic member only
+when no underlying row is ``INTERVAL_ASSIGNED`` (reason
+``IDENTITY_NOT_ADMISSIBLE``, never eligible or ranked, no synthetic listing
+interval); a group containing an ``INTERVAL_ASSIGNED`` row fails closed with
+:class:`D6ConsistencyError`.  D6 never selects, merges, discards, resolves or
+re-ranks the underlying rows, and records deterministic duplicate-group
+provenance.
 
 Reserve firewall (mechanical, fail closed): every data file is opened through
 one :class:`Resolver`, which refuses any path whose components include
@@ -246,6 +256,9 @@ _AUDIT_COLUMNS = (
     "median_dv",
     "reason",
     "rank",
+    "duplicate_row_count",
+    "duplicate_identity_states",
+    "duplicate_reasons",
 )
 _AUDIT_DTYPES: dict[str, Any] = {
     "formation_date": _DATE32,
@@ -262,6 +275,9 @@ _AUDIT_DTYPES: dict[str, Any] = {
     "median_dv": _FLOAT64,
     "reason": _STRING,
     "rank": _INT64,
+    "duplicate_row_count": _INT64,
+    "duplicate_identity_states": _STRING,
+    "duplicate_reasons": _STRING,
 }
 
 _DOCUMENT_NAMES = frozenset(
@@ -670,11 +686,20 @@ def _verify_stage(resolver: Resolver, stage: StageBinding) -> dict:
 @dataclass(frozen=True)
 class _Key:
     security_key: str
-    ticker: str
+    ticker: str | None
     exchange: str | None
     listed_start: date | None
     listed_end: date | None
-    state: str
+    state: str | None
+    #: True for the single collapsed member of an all-inadmissible duplicate
+    #: ``security_key`` group (D6 duplicate-key clarification).
+    collapsed: bool = False
+    #: The underlying D4 rows' raw (unclipped) intervals, for diagnostic
+    #: population membership only; never synthesised into one interval.
+    intervals: tuple[tuple[date | None, date | None], ...] = ()
+    duplicate_row_count: int | None = None
+    identity_states: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -742,7 +767,15 @@ def build_schedule(calendar: Any) -> Schedule:
 
 def _prepare(
     resolver: Resolver, bindings: Bindings, calendar: Any
-) -> tuple[tuple[_Key, ...], Mapping[str, _TickerData], dict, dict, np.ndarray, dict]:
+) -> tuple[
+    tuple[_Key, ...],
+    list[dict[str, Any]],
+    Mapping[str, _TickerData],
+    dict,
+    dict,
+    np.ndarray,
+    dict,
+]:
     _verify_stage(resolver, bindings.d3)
     _verify_stage(resolver, bindings.d4)
     _verify_stage(resolver, bindings.d5)
@@ -761,6 +794,7 @@ def _prepare(
             "listed_start",
             "listed_end",
             "state",
+            "reason",
         ],
     )
     day_flags = pd.read_parquet(
@@ -788,16 +822,19 @@ def _prepare(
     pos = {d: i for i, d in enumerate(cal_dates)}
     d64 = np.array([np.datetime64(d) for d in cal_dates], dtype="datetime64[D]")
 
-    keys = tuple(_key_from_row(row) for row in identity.to_dict("records"))
-    seen: set[str] = set()
-    for key in keys:
-        if key.security_key in seen:
-            raise D6ConsistencyError(f"duplicate security_key {key.security_key!r}")
-        seen.add(key.security_key)
+    keys, duplicate_groups = _group_identity(identity.to_dict("records"))
 
     unusable = _unusable_keys(day_flags)
     tickers = _prepare_tickers(observations, unusable, pos)
-    return keys, tickers, class_timeline, policy_timeline, d64, pos
+    return (
+        keys,
+        duplicate_groups,
+        tickers,
+        class_timeline,
+        policy_timeline,
+        d64,
+        pos,
+    )
 
 
 def _key_from_row(row: Mapping[str, Any]) -> _Key:
@@ -809,6 +846,82 @@ def _key_from_row(row: Mapping[str, Any]) -> _Key:
         listed_end=_as_date(row["listed_end"]),
         state=str(row["state"]),
     )
+
+
+def _group_identity(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[_Key, ...], list[dict[str, Any]]]:
+    """Collapse D4 ``security_key`` repeats under the duplicate-key rule.
+
+    D6 population identity is the distinct ``security_key``.  A duplicated
+    group is permitted only when **no** row is ``INTERVAL_ASSIGNED``; such a
+    group collapses to one diagnostic member that is never admitted.  Any
+    group containing an ``INTERVAL_ASSIGNED`` row fails closed: D6 never
+    selects, merges, ranks, discards or resolves the rows.
+    """
+    groups: dict[str, list[Mapping[str, Any]]] = {}
+    order: list[str] = []
+    for row in rows:
+        security_key = str(row["security_key"])
+        if security_key not in groups:
+            groups[security_key] = []
+            order.append(security_key)
+        groups[security_key].append(row)
+
+    keys: list[_Key] = []
+    duplicate_groups: list[dict[str, Any]] = []
+    for security_key in order:
+        group = groups[security_key]
+        if len(group) == 1:
+            keys.append(_key_from_row(group[0]))
+            continue
+        states = {str(row["state"]) for row in group}
+        if STATE_INTERVAL_ASSIGNED in states:
+            raise D6ConsistencyError(
+                f"duplicate security_key {security_key!r} contains an "
+                f"{STATE_INTERVAL_ASSIGNED} row"
+            )
+        identity_states = tuple(sorted(states))
+        reasons = tuple(
+            sorted(
+                {
+                    str(row["reason"])
+                    for row in group
+                    if row["reason"] is not None
+                }
+            )
+        )
+        tickers = sorted(
+            {str(row["ticker"]) for row in group if row["ticker"] is not None}
+        )
+        intervals = tuple(
+            (_as_date(row["listed_start"]), _as_date(row["listed_end"]))
+            for row in group
+        )
+        keys.append(
+            _Key(
+                security_key=security_key,
+                ticker=tickers[0] if len(tickers) == 1 else None,
+                exchange=None,
+                listed_start=None,
+                listed_end=None,
+                state=None,
+                collapsed=True,
+                intervals=intervals,
+                duplicate_row_count=len(group),
+                identity_states=identity_states,
+                reasons=reasons,
+            )
+        )
+        duplicate_groups.append(
+            {
+                "security_key": security_key,
+                "duplicate_row_count": len(group),
+                "identity_states": list(identity_states),
+                "reasons": list(reasons),
+            }
+        )
+    return tuple(keys), duplicate_groups
 
 
 def _assert_development_dates(series: pd.Series, what: str) -> None:
@@ -902,12 +1015,47 @@ def _load_timeline(
 
 
 def _in_population(key: _Key, f: date, cutoff: date) -> bool:
+    if key.collapsed:
+        # Diagnostic accounting only: the member is present iff any underlying
+        # row satisfies the existence condition; admission/reason are fixed.
+        return any(
+            listed_start is not None
+            and listed_end is not None
+            and listed_start <= cutoff
+            and listed_end >= f
+            for listed_start, listed_end in key.intervals
+        )
     return (
         key.listed_start is not None
         and key.listed_end is not None
         and key.listed_start <= cutoff
         and key.listed_end >= f
     )
+
+
+def _collapsed_evaluation(key: _Key) -> dict[str, Any]:
+    """The one diagnostic member of an all-inadmissible duplicate group."""
+    identity_state = (
+        key.identity_states[0] if len(key.identity_states) == 1 else None
+    )
+    return {
+        "security_key": key.security_key,
+        "ticker": key.ticker,
+        "identity_state": identity_state,
+        "class_state": None,
+        "class_reason": None,
+        "policy_state": None,
+        "listing_age_sessions": None,
+        "missing_numerator": None,
+        "missing_denominator": None,
+        "trailing_valid_sessions": None,
+        "median_dv": None,
+        "reason": REASON_IDENTITY_NOT_ADMISSIBLE,
+        "rank": None,
+        "duplicate_row_count": key.duplicate_row_count,
+        "duplicate_identity_states": "|".join(key.identity_states) or None,
+        "duplicate_reasons": "|".join(key.reasons) or None,
+    }
 
 
 def _evaluate_key(
@@ -920,6 +1068,8 @@ def _evaluate_key(
     policy_timeline: Mapping[str, list[dict[str, Any]]],
     d64: np.ndarray,
 ) -> dict[str, Any]:
+    if key.collapsed:
+        return _collapsed_evaluation(key)
     assert key.listed_start is not None
     lo_date = key.listed_start
     if lo_date < ACQUISITION_START:
@@ -1004,6 +1154,9 @@ def _evaluate_key(
         "median_dv": median_dv,
         "reason": reason,
         "rank": None,
+        "duplicate_row_count": None,
+        "duplicate_identity_states": None,
+        "duplicate_reasons": None,
     }
 
 
@@ -1121,6 +1274,9 @@ def _build_audit(results: Sequence[dict[str, Any]]) -> pd.DataFrame:
                     evaluation["median_dv"],
                     evaluation["reason"],
                     evaluation["rank"],
+                    evaluation["duplicate_row_count"],
+                    evaluation["duplicate_identity_states"],
+                    evaluation["duplicate_reasons"],
                 ]
             )
     frame = _build_frame(records, _AUDIT_COLUMNS, _AUDIT_DTYPES)
@@ -1324,6 +1480,7 @@ def run_universe(
 
     (
         keys,
+        duplicate_groups,
         tickers,
         class_timeline,
         policy_timeline,
@@ -1360,6 +1517,9 @@ def run_universe(
         "documents": dict(documents),
         "schedule": _schedule_summary(schedule),
         "n_keys": len(keys),
+        "duplicate_identity_groups": sorted(
+            duplicate_groups, key=lambda group: group["security_key"]
+        ),
         "formations": _formation_summary(schedule, results),
         "gate_11": {
             "development": "PASS" if all_ok else "FAIL",
