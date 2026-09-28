@@ -1537,7 +1537,13 @@ def _read_sec_index(
     if not sec_dir.is_dir():
         raise ClassificationInputError(f"missing SEC index directory {sec_dir}")
     events: list[dict[str, Any]] = []
-    name_to_ciks: dict[str, set[str]] = {}
+    # Every CIK that carries any name for a relevant normalized name, before
+    # the regulatory filter.  Only relevant names are retained, so this map
+    # stays bounded by the key issuer-name set.
+    name_to_all_ciks: dict[str, set[str]] = {}
+    # CIKs having at least one regulatory-form event (frozen spec §3 item 2:
+    # the candidate CIKs are the *regulatory* CIKs only).
+    regulatory_ciks: set[str] = set()
     files_sha256: dict[str, str] = {}
     norm_cache: dict[str, str] = {}
     master_files = sorted(
@@ -1548,14 +1554,9 @@ def _read_sec_index(
     for path in master_files:
         files_sha256[path.name] = _file_sha256(path)
         for cik, company, form, date_text, filename in _iter_master_rows(path):
-            normalized = norm_cache.get(company)
-            if normalized is None:
-                normalized = norm(company)
-                norm_cache[company] = normalized
-            if normalized in relevant_names:
-                name_to_ciks.setdefault(normalized, set()).add(cik)
             base_form = form.split("/", 1)[0]
             if base_form in _REGULATORY_FORMS:
+                regulatory_ciks.add(cik)
                 events.append(
                     {
                         "cik": cik,
@@ -1567,6 +1568,18 @@ def _read_sec_index(
                         "source_index": path.name,
                     }
                 )
+            normalized = norm_cache.get(company)
+            if normalized is None:
+                normalized = norm(company)
+                norm_cache[company] = normalized
+            if normalized in relevant_names:
+                name_to_all_ciks.setdefault(normalized, set()).add(cik)
+    # A regulatory CIK's name set is every Company Name it carries in any
+    # index row (all forms, all quarters); non-regulatory CIKs are never
+    # candidates.
+    name_to_ciks = {
+        name: (ciks & regulatory_ciks) for name, ciks in name_to_all_ciks.items()
+    }
     return (events, name_to_ciks, files_sha256)
 
 

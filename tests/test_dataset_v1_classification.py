@@ -869,6 +869,92 @@ def test_ambiguous_issuer_mapping_is_unresolved(tmp_path: Path) -> None:
     assert sources == frozenset({"AMBIGUOUS_MAPPING"})
 
 
+def test_non_regulatory_ciks_are_never_candidates(tmp_path: Path) -> None:
+    """Only CIKs with a regulatory-form event may be candidates.
+
+    The ordinary Alcoa CIKs 1675149 and 4281 both normalize to ``alcoa`` but
+    have no regulatory-form event, so the key is NO_MATCH, not AMBIGUOUS.
+    """
+    store = Store(tmp_path)
+    key = store.key("AA")
+    store.nasdaq([_nasd_row("AA", "Alcoa Corporation - Common Stock")])
+    store.master(
+        "master_2016Q3.gz",
+        [
+            ("1675149", "Alcoa Corporation", "10-K", "2016-08-01", "a"),
+            ("4281", "Alcoa Inc.", "10-Q", "2016-08-02", "b"),
+        ],
+    )
+    content = store.classify()
+    mapping = pd.read_parquet(store.output_dir(content) / "issuer_mapping.parquet")
+    assert mapping.iloc[0]["mapping_state"] == "NO_MATCH"
+    assert mapping.iloc[0]["candidate_ciks"] == "[]"
+    status, sources = policy_state_at(store.policy_timeline(content), key, CUT)
+    assert status == "NO_REGULATORY_EXCLUSION_OBSERVED"
+    assert sources == frozenset()
+
+
+def test_regulatory_cik_selected_over_same_named_non_regulatory(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    store.nasdaq([_nasd_row("ABCD", "Alpha Corporation - Common Stock")])
+    store.master(
+        "master_2016Q3.gz",
+        [
+            ("1", "Alpha Corporation", "N-54A", "2016-08-01", "a"),
+            ("2", "Alpha Corporation", "10-K", "2016-08-02", "b"),
+        ],
+    )
+    content = store.classify()
+    mapping = pd.read_parquet(store.output_dir(content) / "issuer_mapping.parquet")
+    assert mapping.iloc[0]["mapping_state"] == "MAPPED"
+    assert mapping.iloc[0]["candidate_ciks"] == '[\"1\"]'
+    status, sources = policy_state_at(store.policy_timeline(content), key, CUT)
+    assert status == "EXCLUDED"
+    assert sources == frozenset({"SEC_FORM_BDC"})
+
+
+def test_two_regulatory_ciks_remain_ambiguous(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    key = store.key("ABCD")
+    store.nasdaq([_nasd_row("ABCD", "Beta Corporation - Common Stock")])
+    store.master(
+        "master_2016Q3.gz",
+        [
+            ("10", "Beta Corporation", "N-54A", "2016-08-01", "a"),
+            ("20", "Beta Corporation", "N-8A", "2016-08-02", "b"),
+        ],
+    )
+    content = store.classify()
+    mapping = pd.read_parquet(store.output_dir(content) / "issuer_mapping.parquet")
+    assert mapping.iloc[0]["mapping_state"] == "AMBIGUOUS"
+    status, _ = policy_state_at(store.policy_timeline(content), key, CUT)
+    assert status == "ISSUER_STATUS_UNRESOLVED"
+
+
+def test_regulatory_cik_historical_index_names_participate(tmp_path: Path) -> None:
+    """A regulatory CIK's non-regulatory-form names still build its name set."""
+    store = Store(tmp_path)
+    key = store.key("GH")
+    store.nasdaq([_nasd_row("GH", "Gamma Holdings Inc. - Common Stock")])
+    # Ordinary 10-K history, from before the later BDC election.
+    store.master(
+        "master_2010Q1.gz",
+        [("3", "Gamma Holdings Inc.", "10-K", "2010-02-01", "h")],
+    )
+    store.master(
+        "master_2016Q3.gz",
+        [("3", "Gamma Corporation", "N-54A", "2016-08-01", "a")],
+    )
+    content = store.classify()
+    mapping = pd.read_parquet(store.output_dir(content) / "issuer_mapping.parquet")
+    assert mapping.iloc[0]["mapping_state"] == "MAPPED"
+    assert mapping.iloc[0]["candidate_ciks"] == '[\"3\"]'
+    status, sources = policy_state_at(store.policy_timeline(content), key, CUT)
+    assert status == "EXCLUDED"
+    assert sources == frozenset({"SEC_FORM_BDC"})
+
+
 def test_pre_edgar_absence_stays_unexcluded(tmp_path: Path) -> None:
     """A BDC-like name without wording or forms is a documented limitation."""
     store = Store(tmp_path)
