@@ -323,6 +323,7 @@ class StageBinding:
     manifest_relative_path: str
     manifest_hash_field: str
     manifest_hash: str
+    manifest_sha256: str
     files: tuple[FileBinding, ...]
 
 
@@ -369,6 +370,9 @@ def default_bindings() -> Bindings:
             manifest_hash=(
                 "f93093a8b8fa07521191d687560c2c26ab16630ebeed35d68aa12867def47fb3"
             ),
+            manifest_sha256=(
+                "f11d9b05d5cbe2a736d991ea90d4b56f469f855f33b4168a4a4af14b87666450"
+            ),
             files=(
                 FileBinding(
                     "normalized/n-f874d3ecb61374d4/observations.parquet",
@@ -388,6 +392,9 @@ def default_bindings() -> Bindings:
             manifest_hash=(
                 "1023dbca39fd061d52fd26eeb6302f4a8dec467a8ea996b1903da801306ae730"
             ),
+            manifest_sha256=(
+                "b8ed3d23979f8cbb9f320fae96a8cea968b16332fd1000fa1cdedca15df43aa4"
+            ),
             files=(
                 FileBinding(
                     "derived/identity/i-a21f1e46621dee94/identity_assignment.parquet",
@@ -403,6 +410,9 @@ def default_bindings() -> Bindings:
             manifest_hash=(
                 "3d63e51b983096f0ae579cd1e382c613d9329d239c3f848cc785dee2d61cdfc3"
             ),
+            manifest_sha256=(
+                "16c582900b77a328ffaee8fdb78b8bc4b7920a0b48ebbc98f7a2e7e62c769ae1"
+            ),
             files=(
                 FileBinding(
                     "derived/qc/q-5d1028655f8c82e1/day_flags.parquet",
@@ -417,6 +427,9 @@ def default_bindings() -> Bindings:
             manifest_hash_field="universe_hash",
             manifest_hash=(
                 "6e8539b7acb4ed4559846234b0b26e6f1d4e6d34f7e0a5d1e2290134d563ed87"
+            ),
+            manifest_sha256=(
+                "8e5e4ecd1729c2bbf75b1ac1bdd5d497f9f2a360061edb407fc323feb433d737"
             ),
             files=(
                 FileBinding(
@@ -678,10 +691,14 @@ def _verify_documents(bindings: Bindings) -> dict[str, str]:
 
 
 def _verify_stage(resolver: Resolver, stage: StageBinding) -> None:
-    manifest = _load_json(
-        resolver.read_bytes(stage.manifest_relative_path),
-        f"{stage.stage} manifest",
-    )
+    blob = resolver.read_bytes(stage.manifest_relative_path)
+    actual_manifest = _sha256_hex(blob)
+    if actual_manifest != stage.manifest_sha256:
+        raise ReturnsBindingError(
+            f"{stage.stage} manifest file {stage.manifest_relative_path} hash "
+            f"{actual_manifest} != bound {stage.manifest_sha256}"
+        )
+    manifest = _load_json(blob, f"{stage.stage} manifest")
     declared_hash = manifest.get(stage.manifest_hash_field)
     if declared_hash != stage.manifest_hash:
         raise ReturnsBindingError(
@@ -863,7 +880,11 @@ def _resolve_member_keys(
                     f"member security_key {security_key!r} lacks ticker/listed_end"
                 )
             if listed_start is None:
-                listed_start = listed_end
+                raise D7ConsistencyError(
+                    f"member security_key {security_key!r} has a null "
+                    "listed_start; D7a fails closed rather than substituting "
+                    "listed_end"
+                )
             if listed_end <= DEVELOPMENT_END:
                 listing_status = LISTING_ENDS_WITHIN_DEVELOPMENT
                 listed_end_dev: date | None = listed_end
@@ -1336,6 +1357,14 @@ def _label_records(
             continue
         terminal_affected = within_development and key.listed_end <= e
         n_obs = min(h, l_offset) if terminal_affected else h
+        # Fail closed: for a non-crossing label every session in the observed
+        # segment must have evidence. ``None`` is not silently VALID.
+        for k in range(n_obs):
+            if statuses[k] is None:
+                raise D7ConsistencyError(
+                    f"missing session evidence for {key.security_key!r} at "
+                    f"{sessions[pos_f + k + 1]} (label h={h})"
+                )
         n_post = h - n_obs
         n_invalid = prefix[n_obs]
         if n_invalid > 0:
@@ -1387,6 +1416,7 @@ def _compute_returns_id(
             stage.stage: {
                 "artifact_id": stage.artifact_id,
                 "hash": stage.manifest_hash,
+                "manifest_sha256": stage.manifest_sha256,
                 "files_sha256": {
                     binding.relative_path: binding.sha256
                     for binding in stage.files
@@ -1408,6 +1438,7 @@ def _bindings_summary(bindings: Bindings) -> dict[str, Any]:
             "manifest_path": stage.manifest_relative_path,
             "manifest_hash_field": stage.manifest_hash_field,
             "hash": stage.manifest_hash,
+            "manifest_sha256": stage.manifest_sha256,
             "files_sha256": {
                 binding.relative_path: binding.sha256 for binding in stage.files
             },

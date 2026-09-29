@@ -38,6 +38,9 @@ S = [ts.date() for ts in CAL.dates]
 POS = {d: i for i, d in enumerate(S)}
 F1 = date(2016, 1, 29)
 FAR = date(2099, 1, 1)
+#: A session strictly beyond endpoint(F1, 63) but inside the development window.
+#: Used by the within-development terminal-inference variants.
+LD = S[POS[F1] + 100]
 CREDENTIAL_SENTINEL = "d7-credential-sentinel-1f2e"
 
 D3_ID = "n-d7test"
@@ -431,24 +434,28 @@ class _Store:
             "normalized_hash",
             {d3_obs: sha_obs, d3_ca: sha_ca},
         )
+        d3_msha = _sha256_file(root / f"normalized/{D3_ID}/build.json")
         d4_hash = _write_manifest(
             root,
             f"derived/identity/{D4_ID}/identity.json",
             "identity_hash",
             {d4_file: sha_ident},
         )
+        d4_msha = _sha256_file(root / f"derived/identity/{D4_ID}/identity.json")
         d5_hash = _write_manifest(
             root,
             f"derived/qc/{D5_ID}/qc_report.json",
             "qc_hash",
             {d5_file: sha_flags},
         )
+        d5_msha = _sha256_file(root / f"derived/qc/{D5_ID}/qc_report.json")
         d6_hash = _write_manifest(
             root,
             f"derived/universe/{D6_ID}/universe.json",
             "universe_hash",
             {d6_dev: sha_dev, d6_form: sha_form},
         )
+        d6_msha = _sha256_file(root / f"derived/universe/{D6_ID}/universe.json")
 
         documents = []
         for name in sorted(R._DOCUMENT_NAMES):
@@ -464,6 +471,7 @@ class _Store:
                 f"normalized/{D3_ID}/build.json",
                 "normalized_hash",
                 d3_hash,
+                d3_msha,
                 (
                     R.FileBinding(d3_obs, sha_obs),
                     R.FileBinding(d3_ca, sha_ca),
@@ -475,6 +483,7 @@ class _Store:
                 f"derived/identity/{D4_ID}/identity.json",
                 "identity_hash",
                 d4_hash,
+                d4_msha,
                 (R.FileBinding(d4_file, sha_ident),),
             ),
             d5=R.StageBinding(
@@ -483,6 +492,7 @@ class _Store:
                 f"derived/qc/{D5_ID}/qc_report.json",
                 "qc_hash",
                 d5_hash,
+                d5_msha,
                 (R.FileBinding(d5_file, sha_flags),),
             ),
             d6=R.StageBinding(
@@ -491,6 +501,7 @@ class _Store:
                 f"derived/universe/{D6_ID}/universe.json",
                 "universe_hash",
                 d6_hash,
+                d6_msha,
                 (R.FileBinding(d6_dev, sha_dev), R.FileBinding(d6_form, sha_form)),
             ),
             documents=tuple(documents),
@@ -728,6 +739,17 @@ def test_item12_cessation_before_listed_end_is_incomplete(tmp_path: Path) -> Non
     assert not bool(row["terminal_affected"])
     assert row["label_state"] == R.STATE_INCOMPLETE
 
+    # Within-development variant: listed_end <= 2023-06-30 but > endpoint.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions("AAA", S[POS[F1] - 5], S[POS[F1] + 2])
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    wd_row = _label(wd, wd_content, F1, wd_key, 5)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
+
 
 def test_item13_row_after_endpoint_changes_nothing(tmp_path: Path) -> None:
     base, key = _one_member(tmp_path, "base", obs_end=S[POS[F1] + 5])
@@ -742,6 +764,24 @@ def test_item13_row_after_endpoint_changes_nothing(tmp_path: Path) -> None:
         _label(mut, mut_content, F1, key, 1),
     )
 
+    # Within-development variant: removing evidence at endpoint+1 leaves the
+    # h=1 label identical (terminal_affected must stay false).
+    wd_base, wd_key = _one_member(
+        tmp_path, "wd_base", listed_end=LD, obs_end=S[POS[F1] + 5]
+    )
+    wd_base_content = wd_base.run()
+    wd_mut, _ = _one_member(
+        tmp_path, "wd_mut", listed_end=LD, obs_end=S[POS[F1] + 5]
+    )
+    wd_mut.obs_rows = [r for r in wd_mut.obs_rows if r[1] != S[POS[F1] + 2]]
+    wd_mut.build()
+    wd_mut_content = wd_mut.run()
+    wd_b = _label(wd_base, wd_base_content, F1, wd_key, 1)
+    wd_m = _label(wd_mut, wd_mut_content, F1, wd_key, 1)
+    assert not bool(wd_b["terminal_affected"])
+    assert not bool(wd_m["terminal_affected"])
+    pd.testing.assert_series_equal(wd_b, wd_m)
+
 
 def test_item14_temporary_gap_is_incomplete(tmp_path: Path) -> None:
     store, key = _one_member(tmp_path, skip=[S[POS[F1] + 3]])
@@ -750,6 +790,24 @@ def test_item14_temporary_gap_is_incomplete(tmp_path: Path) -> None:
     assert not bool(row["terminal_affected"])
     assert row["label_state"] == R.STATE_INCOMPLETE
     assert row["first_invalid_session"] == S[POS[F1] + 3]
+
+    # Within-development variant: a gap running up to the endpoint, then a
+    # resumption, is INCOMPLETE and not a terminal event.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions(
+        "AAA",
+        S[POS[F1] - 5],
+        R.DEVELOPMENT_END,
+        skip=[S[POS[F1] + 3], S[POS[F1] + 4]],
+    )
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    wd_row = _label(wd, wd_content, F1, wd_key, 4)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
+    assert wd_row["first_invalid_session"] == S[POS[F1] + 3]
 
 
 def test_item15_missing_row_status_chain(tmp_path: Path) -> None:
@@ -761,6 +819,35 @@ def test_item15_missing_row_status_chain(tmp_path: Path) -> None:
         == R.STATUS_PREV_NO_ROW
     )
 
+    # Within-development variant: a trailing missing row at the endpoint is
+    # NO_ROW, not a terminal event.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions("AAA", S[POS[F1] - 5], R.DEVELOPMENT_END, skip=[S[POS[F1] + 2]])
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    assert _daily(wd, wd_content, wd_key, S[POS[F1] + 2])["session_status"] == R.STATUS_NO_ROW
+    assert (
+        _daily(wd, wd_content, wd_key, S[POS[F1] + 3])["session_status"]
+        == R.STATUS_PREV_NO_ROW
+    )
+    wd_row = _label(wd, wd_content, F1, wd_key, 2)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
+
+    # D4 fail-closed: missing session evidence is never treated as VALID.
+    mk = R._MemberKey(
+        security_key=key,
+        ticker="AAA",
+        listed_start=S[POS[F1] - 5],
+        listed_end=LD,
+        listing_status=R.LISTING_ENDS_WITHIN_DEVELOPMENT,
+        listed_end_dev=LD,
+    )
+    with pytest.raises(R.D7ConsistencyError):
+        R._label_records(F1, mk, {}, S, POS)
+
 
 def test_item16_missing_row_at_endpoint_incomplete(tmp_path: Path) -> None:
     store, key = _one_member(tmp_path, skip=[S[POS[F1] + 2]])
@@ -768,6 +855,19 @@ def test_item16_missing_row_at_endpoint_incomplete(tmp_path: Path) -> None:
     row = _label(store, content, F1, key, 2)
     assert row["label_state"] == R.STATE_INCOMPLETE
     assert int(row["n_invalid_sessions"]) == 1
+
+    # Within-development variant: missing session exactly at the endpoint,
+    # listed_end still beyond it.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions("AAA", S[POS[F1] - 5], R.DEVELOPMENT_END, skip=[S[POS[F1] + 2]])
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    wd_row = _label(wd, wd_content, F1, wd_key, 2)
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
+    assert not bool(wd_row["terminal_affected"])
+    assert int(wd_row["n_invalid_sessions"]) == 1
 
 
 def test_item17_missing_pre_terminal_row_affected_and_incomplete(tmp_path: Path) -> None:
@@ -804,6 +904,21 @@ def test_item19_missing_close_f_no_fill(tmp_path: Path) -> None:
     assert row["session_status"] == R.STATUS_PREV_NO_ROW
     assert pd.isna(row["daily_total_return"])
     assert _label(store, content, F1, key, 1)["label_state"] == R.STATE_INCOMPLETE
+
+    # Within-development variant: missing close(f) is PREV_NO_ROW, never filled
+    # and never a terminal event.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions("AAA", S[POS[F1] - 5], R.DEVELOPMENT_END, skip=[F1])
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    wd_daily = _daily(wd, wd_content, wd_key, S[POS[F1] + 1])
+    assert wd_daily["session_status"] == R.STATUS_PREV_NO_ROW
+    assert pd.isna(wd_daily["daily_total_return"])
+    wd_row = _label(wd, wd_content, F1, wd_key, 1)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
 
 
 def test_item20_unusable_row_at_f_prev_row_unusable(tmp_path: Path) -> None:
@@ -1035,12 +1150,14 @@ def test_item35_adj_fields_irrelevant(tmp_path: Path) -> None:
         _canon(manifest["files_sha256"]).encode()
     ).hexdigest()
     manifest_path.write_bytes((_canon(manifest) + "\n").encode())
+    new_msha = _sha256_file(manifest_path)
     # Rebuild bindings pointing at the same files with the new sha.
     mut.bindings = replace(
         mut.bindings,
         d3=replace(
             mut.bindings.d3,
             manifest_hash=manifest["normalized_hash"],
+            manifest_sha256=new_msha,
             files=(
                 R.FileBinding(f"normalized/{D3_ID}/observations.parquet", sha),
                 mut.bindings.d3.files[1],
@@ -1121,6 +1238,20 @@ def test_item39_disappeared_security_kept(tmp_path: Path) -> None:
     assert len(_read(store, content, R.LABELS_FILE)) == 63
     assert key in set(_read(store, content, R.MEMBERS_FILE)["security_key"])
 
+    # Within-development variant: listed_end inside development but beyond
+    # every endpoint; the security is still kept and not terminal.
+    wd = _Store(tmp_path, name="s_wd")
+    wd_key = wd.key("AAA", listed_start=S[POS[F1] - 5], listed_end=LD)
+    wd.add_sessions("AAA", S[POS[F1] - 5], F1)
+    wd.member(F1, wd_key, 1)
+    wd.build()
+    wd_content = wd.run()
+    assert len(_read(wd, wd_content, R.LABELS_FILE)) == 63
+    assert wd_key in set(_read(wd, wd_content, R.MEMBERS_FILE)["security_key"])
+    wd_row = _label(wd, wd_content, F1, wd_key, 1)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
+
 
 def test_item40_survivor_intersection_adversary(tmp_path: Path) -> None:
     store, key = _one_member(tmp_path, obs_end=F1)
@@ -1128,6 +1259,16 @@ def test_item40_survivor_intersection_adversary(tmp_path: Path) -> None:
     assert key in set(_read(store, content, R.MEMBERS_FILE)["security_key"])
     assert key in set(_read(store, content, R.LABELS_FILE)["security_key"])
     assert key in set(_read(store, content, R.DAILY_FILE)["security_key"])
+
+    # Within-development variant: still present, still not terminal.
+    wd, wd_key = _one_member(tmp_path, "wd", listed_end=LD, obs_end=F1)
+    wd_content = wd.run()
+    assert wd_key in set(_read(wd, wd_content, R.MEMBERS_FILE)["security_key"])
+    assert wd_key in set(_read(wd, wd_content, R.LABELS_FILE)["security_key"])
+    assert wd_key in set(_read(wd, wd_content, R.DAILY_FILE)["security_key"])
+    wd_row = _label(wd, wd_content, F1, wd_key, 1)
+    assert not bool(wd_row["terminal_affected"])
+    assert wd_row["label_state"] == R.STATE_INCOMPLETE
 
 
 def test_item41_bad_identity_fails(tmp_path: Path) -> None:
@@ -1156,6 +1297,16 @@ def test_item41_bad_identity_fails(tmp_path: Path) -> None:
     key = store.key(
         "AAA", listed_start=S[POS[F1] - 5], listed_end=FAR, state="NOT_ACQUIRED"
     )
+    store.add_sessions("AAA", S[POS[F1] - 5], R.DEVELOPMENT_END)
+    store.member(F1, key, 1)
+    store.build()
+    with pytest.raises(R.D7ConsistencyError):
+        store.run()
+
+    # Null listed_start: fail closed, never substitute listed_end.
+    store = _Store(tmp_path, name="null_start")
+    key = store.key("AAA", listed_start=S[POS[F1] - 5], listed_end=FAR)
+    store.keys[-1]["listed_start"] = None
     store.add_sessions("AAA", S[POS[F1] - 5], R.DEVELOPMENT_END)
     store.member(F1, key, 1)
     store.build()
@@ -1262,12 +1413,15 @@ def test_item45_refuses_forbidden_path_components(tmp_path: Path) -> None:
     # The component check must fire even when the malicious binding would make
     # the path allowlisted (defence in depth, not just an allowlist miss).
     reserved = R.StageBinding(
-        "D3",
-        D3_ID,
-        "reserve_sealed/n-test/build.json",
-        "normalized_hash",
-        "0" * 64,
-        (R.FileBinding("reserve_sealed/n-test/observations.parquet", "0" * 64),),
+        stage="D3",
+        artifact_id=D3_ID,
+        manifest_relative_path="reserve_sealed/n-test/build.json",
+        manifest_hash_field="normalized_hash",
+        manifest_hash="0" * 64,
+        manifest_sha256="0" * 64,
+        files=(
+            R.FileBinding("reserve_sealed/n-test/observations.parquet", "0" * 64),
+        ),
     )
     bindings = replace(store.bindings, d3=reserved)
     resolver = R.Resolver(store.root, bindings)
@@ -1437,6 +1591,13 @@ def test_item56_binding_and_document_mismatch(tmp_path: Path) -> None:
     bad = replace(store.bindings, d3=bad_stage)
     with pytest.raises(R.ReturnsBindingError):
         R.run_returns(store.root, bindings=bad, calendar=CAL)
+    # Manifest-file hash mismatch for each stage.
+    for stage_name in ("d3", "d4", "d5", "d6"):
+        stage = getattr(store.bindings, stage_name)
+        bad_stage = replace(stage, manifest_sha256="0" * 64)
+        bad = replace(store.bindings, **{stage_name: bad_stage})
+        with pytest.raises(R.ReturnsBindingError):
+            R.run_returns(store.root, bindings=bad, calendar=CAL)
     # Document hash mismatch.
     bad_docs = tuple(
         replace(doc, sha256="0" * 64) if doc.name == "contract" else doc
@@ -1521,6 +1682,30 @@ def test_item58_endpoint_invariance(tmp_path: Path) -> None:
     )
     assert endpoint1 == S[POS[F1] + 1]
 
+    # Within-development variants (listed_end <= 2023-06-30 but > endpoint).
+    wd_base, wd_key = _one_member(
+        tmp_path, "wd_base", listed_end=LD, obs_end=S[POS[F1] + 1]
+    )
+    wd_base_content = wd_base.run()
+    wd_mut, _ = _one_member(
+        tmp_path, "wd_mut", listed_end=LD, obs_end=S[POS[F1] + 1]
+    )
+    wd_mut.obs("AAA", S[POS[F1] + 2], 11.0)  # append after the endpoint
+    wd_mut.build()
+    wd_mut_content = wd_mut.run()
+    wd_b = _label(wd_base, wd_base_content, F1, wd_key, 1)
+    wd_m = _label(wd_mut, wd_mut_content, F1, wd_key, 1)
+    assert not bool(wd_b["terminal_affected"])
+    assert not bool(wd_m["terminal_affected"])
+    pd.testing.assert_series_equal(wd_b, wd_m)
+
+    # A different within-development listed_end still beyond the endpoint.
+    wd2 = _terminal_store_sk(tmp_path, "wd2", S[POS[F1] + 120], wd_key)
+    wd2_content = wd2.run()
+    pd.testing.assert_series_equal(
+        wd_b, _label(wd2, wd2_content, F1, wd_key, 1)
+    )
+
 
 def _terminal_store_sk(tmp_path: Path, name: str, listed_end: date, sk: str):
     store = _Store(tmp_path, name=name)
@@ -1545,6 +1730,25 @@ def test_item59_horizon_nesting(tmp_path: Path) -> None:
         _label(base, base_content, F1, key, 1),
         _label(mut, mut_content, F1, key, 1),
     )
+
+    # Within-development variant: altering evidence in
+    # (endpoint(1), endpoint(2)] must leave the h=1 label identical, and the
+    # newly-filled gap must not promote h=1 to terminal.
+    wd_base, wd_key = _one_member(
+        tmp_path, "wd_base", listed_end=LD, obs_end=S[POS[F1] + 1]
+    )
+    wd_base_content = wd_base.run()
+    wd_mut, _ = _one_member(
+        tmp_path, "wd_mut", listed_end=LD, obs_end=S[POS[F1] + 1]
+    )
+    wd_mut.obs("AAA", S[POS[F1] + 2], 11.0)
+    wd_mut.build()
+    wd_mut_content = wd_mut.run()
+    wd_b = _label(wd_base, wd_base_content, F1, wd_key, 1)
+    wd_m = _label(wd_mut, wd_mut_content, F1, wd_key, 1)
+    assert not bool(wd_b["terminal_affected"])
+    assert not bool(wd_m["terminal_affected"])
+    pd.testing.assert_series_equal(wd_b, wd_m)
 
 
 def test_item60_membership_immutable(tmp_path: Path) -> None:
