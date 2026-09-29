@@ -416,12 +416,8 @@
     "description": "duplicate ARTIFACT append on rerun",
     "edits": [
       {
-        "old": "        if existing is not None:",
-        "new": "        if False:"
-      },
-      {
-        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
-        "new": "        pass"
+        "old": "        if records:\n            first = records[0]\n            if _is_genesis_match(first, artifact):\n                return _result(\n                    registration_mode,\n                    STATUS_ALREADY_REGISTERED,\n                    first,\n                    artifact,\n                    target,\n                )\n            if any(\n                record.payload.get(\"source_label\") == SOURCE_LABEL\n                for record in records\n            ):\n                raise D8ConflictError(\n                    \"a different ARTIFACT already carries the same source_label\"\n                )\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "new": "        if records:\n            pass"
       }
     ]
   },
@@ -464,11 +460,11 @@
     "description": "append when the log already has unrelated records",
     "edits": [
       {
-        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
-        "new": "        pass"
+        "old": "        if records:\n            first = records[0]\n            if _is_genesis_match(first, artifact):\n                return _result(\n                    registration_mode,\n                    STATUS_ALREADY_REGISTERED,\n                    first,\n                    artifact,\n                    target,\n                )\n            if any(\n                record.payload.get(\"source_label\") == SOURCE_LABEL\n                for record in records\n            ):\n                raise D8ConflictError(\n                    \"a different ARTIFACT already carries the same source_label\"\n                )\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "new": "        if records:\n            pass"
       },
       {
-        "old": "    if record.seq != 0 or record.prev_hash != GENESIS_PREV_HASH:",
+        "old": "    if len(records) != 1 or not _is_postcondition_match(records[0], artifact):",
         "new": "    if False:"
       }
     ]
@@ -479,7 +475,7 @@
     "description": "force seq = 0 via direct write",
     "edits": [
       {
-        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "old": "        if records:\n            first = records[0]\n            if _is_genesis_match(first, artifact):\n                return _result(\n                    registration_mode,\n                    STATUS_ALREADY_REGISTERED,\n                    first,\n                    artifact,\n                    target,\n                )\n            if any(\n                record.payload.get(\"source_label\") == SOURCE_LABEL\n                for record in records\n            ):\n                raise D8ConflictError(\n                    \"a different ARTIFACT already carries the same source_label\"\n                )\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
         "new": "        if records:\n            target.write_text(\"\", encoding=\"utf-8\")"
       }
     ]
@@ -490,8 +486,8 @@
     "description": "append an ACCESS backfill",
     "edits": [
       {
-        "old": "    return _result(registration_mode, True, record, artifact, target)",
-        "new": "    log.append(\n        kind=RecordKind.ACCESS,\n        payload={\"artifact_record_hash\": record.record_hash, \"component\": \"reserve\"},\n        footprint=None,\n    )\n    return _result(registration_mode, True, record, artifact, target)"
+        "old": "    return _result(\n        registration_mode,\n        STATUS_REGISTERED,\n        records[0],\n        artifact,\n        target,\n    )",
+        "new": "    log.append(\n        kind=RecordKind.ACCESS,\n        payload={\"artifact_record_hash\": records[0].record_hash, \"component\": \"reserve\"},\n        footprint=None,\n    )\n    return _result(\n        registration_mode,\n        STATUS_REGISTERED,\n        records[0],\n        artifact,\n        target,\n    )"
       }
     ]
   },
@@ -501,8 +497,8 @@
     "description": "append a NOT_EXPOSED declaration",
     "edits": [
       {
-        "old": "    return _result(registration_mode, True, record, artifact, target)",
-        "new": "    log.append(\n        kind=RecordKind.EXPOSURE_DECLARATION,\n        channel=Channel.HUMAN,\n        footprint=artifact.footprint.body,\n        payload={\n            \"schema_version\": \"exposure-declaration-v1\",\n            \"declarant\": {\"declarant_id\": \"d8\", \"role\": \"OPERATOR\"},\n            \"channel\": \"HUMAN\",\n            \"scope\": {\"program_ids\": [\"*\"], \"hypothesis_ids\": []},\n            \"footprint\": artifact.footprint.body,\n            \"claim\": {\"polarity\": \"NOT_EXPOSED\", \"basis_hash\": \"0\" * 64},\n            \"knowledge_snapshot_ref\": {\n                \"length\": 1,\n                \"head_hash\": record.record_hash,\n            },\n        },\n    )\n    return _result(registration_mode, True, record, artifact, target)"
+        "old": "    return _result(\n        registration_mode,\n        STATUS_REGISTERED,\n        records[0],\n        artifact,\n        target,\n    )",
+        "new": "    log.append(\n        kind=RecordKind.EXPOSURE_DECLARATION,\n        channel=Channel.HUMAN,\n        footprint=artifact.footprint.body,\n        payload={\n            \"schema_version\": \"exposure-declaration-v1\",\n            \"declarant\": {\"declarant_id\": \"d8\", \"role\": \"OPERATOR\"},\n            \"channel\": \"HUMAN\",\n            \"scope\": {\"program_ids\": [\"*\"], \"hypothesis_ids\": []},\n            \"footprint\": artifact.footprint.body,\n            \"claim\": {\"polarity\": \"NOT_EXPOSED\", \"basis_hash\": \"0\" * 64},\n            \"knowledge_snapshot_ref\": {\n                \"length\": 1,\n                \"head_hash\": records[0].record_hash,\n            },\n        },\n    )\n    return _result(\n        registration_mode,\n        STATUS_REGISTERED,\n        records[0],\n        artifact,\n        target,\n    )"
       }
     ]
   },

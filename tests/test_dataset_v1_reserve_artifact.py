@@ -732,6 +732,7 @@ def test_item54_historical_disclosure_verbatim(tmp_path):
         ["D6, D7a, D7b", "no production reserve read (file-open audits)"],
         ["Contract \u00a712", "LLM pre-training exposure disclosed"],
         ["D8", "packaging hash verification (bytes) and the one metadata-only key-column read (\u00a75)"],
+        ["D8 (implementation development)", "an implementation-worker `grep` recursively scanned the bytes of `data_store` `*.json` files while searching for a bound hash. It did **not** scan `reserve_sealed` parquet files or `raw/*.json.gz`. It **did** scan JSON files including `qc_report.json`, which contains reserve-derived aggregate counts. The only `data_store` content returned by a matching result to the worker model was D3 `build.json`, which contains already-bound reserve structural row counts and file hashes. No reserve economic outcome or value row was returned to the worker model by this operation. Absence of additional matches is not proof of historical non-exposure outside this recorded event."],
     ]
     assert disclosure["rows"] == expected
     assert "not exhaustive" in disclosure["note"]
@@ -837,6 +838,26 @@ def test_item61_footprint_read_provenance_complete(tmp_path):
         provenance["clarification_sha256"]
         == store.bindings.clarification_sha256
     )
+    assert provenance["addendum_sha256"] == store.bindings.addendum_sha256
+    assert provenance["spec_sha256"] == A.D8_SPEC_SHA256
+    assert provenance["clarification_sha256"] == A.D8_CLARIFICATION_SHA256
+    assert provenance["addendum_sha256"] == A.D8_ADDENDUM_SHA256
+    repo = Path(__file__).resolve().parents[1]
+    for relative, expected in (
+        (
+            "worker_tasks/dataset_v1/task-d8-reserve-firewall.md",
+            A.D8_SPEC_SHA256,
+        ),
+        (
+            "docs/discovery_dataset_v1_1_d8_clarification.md",
+            A.D8_CLARIFICATION_SHA256,
+        ),
+        (
+            "docs/discovery_dataset_v1_1_d8_clarification_addendum.md",
+            A.D8_ADDENDUM_SHA256,
+        ),
+    ):
+        assert hashlib.sha256((repo / relative).read_bytes()).hexdigest() == expected
 
 
 def test_item62_unresolved_reasons_exact(tmp_path):
@@ -865,6 +886,7 @@ def test_item63_absent_log_starts_at_genesis(tmp_path):
     assert result.seq == 0
     assert result.record.prev_hash == "0" * 64
     assert result.created is True
+    assert result.status == A.STATUS_REGISTERED
 
 
 def test_item64_unrelated_record_holds_without_append(tmp_path):
@@ -885,6 +907,33 @@ def test_item64_unrelated_record_holds_without_append(tmp_path):
     with pytest.raises(A.D8HoldError):
         _register(store, log_path)
     assert log_path.read_bytes() == before
+    assert len(read_records(log_path)) == 1
+
+    # A matching D8 ARTIFACT at seq > 0 is never treated as ALREADY_REGISTERED.
+    seq_store = _store(tmp_path / "seq_gt_zero")
+    seq_log_path = tmp_path / "logs_seq" / "knowledge.jsonl"
+    seq_log = KnowledgeLog(seq_log_path)
+    seq_log.append(
+        kind=RecordKind.HUMAN_DECISION,
+        payload={
+            "decision_kind": "OTHER",
+            "actor_role": "operator",
+            "consulted_all_prior": True,
+        },
+    )
+    seq_artifact = _artifact(seq_store)
+    seq_log.append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.SYSTEM,
+        program_id=None,
+        refs={},
+        footprint=seq_artifact.footprint.body,
+        payload=seq_artifact.payload,
+    )
+    seq_before = seq_log_path.read_bytes()
+    with pytest.raises(A.D8ConflictError):
+        _register(seq_store, seq_log_path)
+    assert seq_log_path.read_bytes() == seq_before
 
 
 def test_item65_rerun_identical_is_noop(tmp_path):
@@ -894,6 +943,7 @@ def test_item65_rerun_identical_is_noop(tmp_path):
     before = log_path.read_bytes()
     second = _register(store, log_path)
     assert second.created is False
+    assert second.status == A.STATUS_ALREADY_REGISTERED
     assert second.record_hash == first.record_hash
     assert log_path.read_bytes() == before
 
@@ -910,6 +960,7 @@ def test_item66_different_packaging_hash_conflicts(tmp_path):
     with pytest.raises(A.D8ConflictError):
         _register(other, log_path)
     assert log_path.read_bytes() == before
+    assert len(read_records(log_path)) == 1
 
 
 def test_item67_same_packaging_hash_different_payload_conflicts(tmp_path):
@@ -940,6 +991,7 @@ def test_item67_same_packaging_hash_different_payload_conflicts(tmp_path):
     with pytest.raises(A.D8ConflictError):
         _register(other, log_path)
     assert log_path.read_bytes() == before
+    assert len(read_records(log_path)) == 1
 
     # Case 2: identical payload but a different footprint.  The two D4 files
     # hold the same eligible key set (so every map hash and the unresolved
@@ -1006,16 +1058,46 @@ def test_item68_truncated_tail_raised_not_repaired(tmp_path):
     assert log_path.read_bytes() == before
 
 
-def test_item69_log_is_append_only(tmp_path):
+def test_item69_log_is_append_only(tmp_path, monkeypatch):
     store = _store(tmp_path)
     log_path = tmp_path / "logs" / "knowledge.jsonl"
     _register(store, log_path)
     before = log_path.read_bytes()
-    other = _store(tmp_path / "other", obs_rows=[("AAA", dt.date(2023, 7, 6))])
-    # A fresh run against a fresh log is append-only; here re-run the same
-    # store's build on a copy with the prior bytes and confirm the prefix.
+    # A fresh run against a fresh log is append-only: the prior bytes remain a
+    # prefix of the log after the append.
     assert log_path.read_bytes().startswith(before)
-    assert other is not None
+
+    # A concurrent writer between PRECHECK and the public append is detected by
+    # the POSTCONDITION; nothing is rolled back, deleted or rewritten.
+    race_store = _store(tmp_path / "race")
+    race_log = tmp_path / "race_logs" / "knowledge.jsonl"
+    original_append = KnowledgeLog.append
+    state = {"raced": False}
+
+    def racing_append(self, **kwargs):
+        if not state["raced"]:
+            state["raced"] = True
+            original_append(
+                KnowledgeLog(self.path),
+                kind=RecordKind.HUMAN_DECISION,
+                payload={
+                    "decision_kind": "OTHER",
+                    "actor_role": "operator",
+                    "consulted_all_prior": True,
+                },
+            )
+        return original_append(self, **kwargs)
+
+    monkeypatch.setattr(KnowledgeLog, "append", racing_append)
+    with pytest.raises(A.D8ProductionConcurrencyError):
+        _register(race_store, race_log)
+
+    records = read_records(race_log)
+    assert len(records) == 2
+    assert records[0].kind == RecordKind.HUMAN_DECISION
+    assert records[1].kind == RecordKind.ARTIFACT
+    after = race_log.read_bytes()
+    assert race_log.read_bytes() == after
 
 
 def test_item70_held_lock_surfaces_error(tmp_path):
@@ -1201,6 +1283,7 @@ def test_item78_cli_dry_run(tmp_path, monkeypatch, capsys):
     assert code == 0
     for field in (
         "mode=DRY_RUN",
+        "status=REGISTERED",
         "record_hash=",
         "seq=0",
         "determinable=",
@@ -1219,7 +1302,7 @@ def test_item79_no_network_and_no_credential(tmp_path):
     assert CREDENTIAL_SENTINEL not in log_path.read_text(encoding="utf-8")
 
 
-def test_item80_code_hash_mismatch_fails_closed(tmp_path):
+def test_item80_code_hash_mismatch_fails_closed(tmp_path, monkeypatch):
     store = _store(tmp_path)
     tampered = dataclasses.replace(
         store.bindings,
@@ -1230,3 +1313,15 @@ def test_item80_code_hash_mismatch_fails_closed(tmp_path):
     )
     with pytest.raises(A.D8HoldError):
         A._build_artifact(store.root, tampered)
+
+    # Bound-document pins: a mismatch and an absence both fail closed.
+    for field in ("spec_sha256", "clarification_sha256", "addendum_sha256"):
+        wrong = dataclasses.replace(store.bindings, **{field: "0" * 64})
+        with pytest.raises(A.D8HoldError):
+            A._build_artifact(store.root, wrong)
+
+    missing = dict(A._DOCUMENT_PATHS)
+    missing["addendum"] = tmp_path / "missing-addendum.md"
+    monkeypatch.setattr(A, "_DOCUMENT_PATHS", missing)
+    with pytest.raises(A.D8HoldError):
+        A._build_artifact(store.root, store.bindings)

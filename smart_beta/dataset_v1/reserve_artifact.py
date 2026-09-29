@@ -81,12 +81,18 @@ __all__ = [
     "SOURCE_LABEL",
     "VARIABLE_MAP",
     "PRODUCTION_AUTHORIZATION",
+    "D8_SPEC_SHA256",
+    "D8_CLARIFICATION_SHA256",
+    "D8_ADDENDUM_SHA256",
+    "STATUS_REGISTERED",
+    "STATUS_ALREADY_REGISTERED",
     "RegistrationMode",
     # errors
     "D8Error",
     "D8HoldError",
     "D8ConflictError",
     "D8RegistrationModeError",
+    "D8ProductionConcurrencyError",
     # bindings
     "ReserveBindings",
     "default_bindings",
@@ -119,6 +125,19 @@ SMOKE_BATCH = "b-10cd8b2e2ef11a98"
 PRODUCTION_BATCH = "b-c21b48190918f21f"
 SOURCE_LABEL = f"discovery_dataset_v1:reserve:{D3_BUILD_ID}"
 PRODUCTION_AUTHORIZATION = "D8-PRODUCTION-REGISTRATION-AUTHORIZED"
+
+#: The frozen SHA-256 of the three normative documents (task spec section 1,
+#: clarification, addendum).  They are pinned constants; the files are
+#: verified to exist and to match, never silently skipped.
+D8_SPEC_SHA256 = (
+    "33455cc6bb5e185c9ea0075ac5e67cad267b89d9bd65fc960527738d94caf169"
+)
+D8_CLARIFICATION_SHA256 = (
+    "9a3f218d67c7e7456b2a5c9439a2d1fffe202e5beca3299afb31439b919b24c0"
+)
+D8_ADDENDUM_SHA256 = (
+    "d46b9ef6a59a059dc17f2134835da884e8753cc7f7089c434e7ec725fcfddbcf"
+)
 
 #: The reserve package file hashes, bound in the clarification (section 3).
 _RESERVE_FILE_SHA256: dict[str, str] = {
@@ -243,6 +262,19 @@ _HISTORICAL_DISCLOSURE: tuple[tuple[str, str], ...] = (
         "packaging hash verification (bytes) and the one metadata-only "
         "key-column read (\u00a75)",
     ),
+    (
+        "D8 (implementation development)",
+        "an implementation-worker `grep` recursively scanned the bytes of "
+        "`data_store` `*.json` files while searching for a bound hash. It did "
+        "**not** scan `reserve_sealed` parquet files or `raw/*.json.gz`. It "
+        "**did** scan JSON files including `qc_report.json`, which contains "
+        "reserve-derived aggregate counts. The only `data_store` content "
+        "returned by a matching result to the worker model was D3 `build.json`, "
+        "which contains already-bound reserve structural row counts and file "
+        "hashes. No reserve economic outcome or value row was returned to the "
+        "worker model by this operation. Absence of additional matches is not "
+        "proof of historical non-exposure outside this recorded event.",
+    ),
 )
 
 _EVIDENCE_ROLE = (
@@ -279,6 +311,15 @@ class D8RegistrationModeError(D8HoldError):
     """A registration mode refused the path or token; no append."""
 
 
+class D8ProductionConcurrencyError(D8Error):
+    """The genesis append could not be confirmed (a concurrent writer raced).
+
+    Raised by the POSTCONDITION when the re-read log does not hold exactly
+    the expected genesis ``ARTIFACT``.  Nothing is rolled back, deleted or
+    rewritten.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Bindings
 # ---------------------------------------------------------------------------
@@ -306,8 +347,9 @@ class ReserveBindings:
     code_hashes: Mapping[str, str] = field(
         default_factory=lambda: dict(_PINNED_CODE_SHA256)
     )
-    spec_sha256: str = ""
-    clarification_sha256: str = ""
+    spec_sha256: str = D8_SPEC_SHA256
+    clarification_sha256: str = D8_CLARIFICATION_SHA256
+    addendum_sha256: str = D8_ADDENDUM_SHA256
 
 
 def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
@@ -321,26 +363,35 @@ def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
+#: The bound normative documents, used to verify existence and SHA-256.
+_DOCUMENT_PATHS: dict[str, Path] = {
+    "spec": (
+        _REPO_ROOT / "worker_tasks" / "dataset_v1" / "task-d8-reserve-firewall.md"
+    ),
+    "clarification": (
+        _REPO_ROOT / "docs" / "discovery_dataset_v1_1_d8_clarification.md"
+    ),
+    "addendum": (
+        _REPO_ROOT
+        / "docs"
+        / "discovery_dataset_v1_1_d8_clarification_addendum.md"
+    ),
+}
+
+
 def default_bindings() -> ReserveBindings:
     """The frozen production bindings (tests inject synthetic store values)."""
-    spec_path = (
-        _REPO_ROOT / "worker_tasks" / "dataset_v1" / "task-d8-reserve-firewall.md"
-    )
-    clarification_path = (
-        _REPO_ROOT / "docs" / "discovery_dataset_v1_1_d8_clarification.md"
-    )
-    spec_sha256 = (
-        _sha256_file(spec_path) if spec_path.is_file() else ""
-    )
-    clarification_sha256 = (
-        _sha256_file(clarification_path)
-        if clarification_path.is_file()
-        else ""
-    )
-    return ReserveBindings(
-        spec_sha256=spec_sha256,
-        clarification_sha256=clarification_sha256,
-    )
+    return ReserveBindings()
+
+
+def _verify_document_bindings(bindings: ReserveBindings) -> None:
+    """Fail closed if any bound document is missing or has a wrong SHA-256."""
+    for name, path in _DOCUMENT_PATHS.items():
+        expected = getattr(bindings, f"{name}_sha256")
+        if not path.is_file():
+            raise D8HoldError(f"bound document is missing: {name}")
+        if _sha256_file(path) != expected:
+            raise D8HoldError(f"bound document hash mismatch: {name}")
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +831,7 @@ def _packaging_hash(bindings: ReserveBindings) -> str:
 def _build_artifact(root: Path, bindings: ReserveBindings) -> _Artifact:
     root = Path(root)
     _verify_code_hashes(bindings)
+    _verify_document_bindings(bindings)
     _verify_stage_files(root, bindings)
     _verify_schema(root, bindings)
 
@@ -804,15 +856,6 @@ def _build_artifact(root: Path, bindings: ReserveBindings) -> _Artifact:
     )
     packaging_hash = _packaging_hash(bindings)
     code_sha256 = _sha256_file(Path(__file__))
-    spec_sha256 = bindings.spec_sha256 or _sha256_file(
-        _REPO_ROOT
-        / "worker_tasks"
-        / "dataset_v1"
-        / "task-d8-reserve-firewall.md"
-    )
-    clarification_sha256 = bindings.clarification_sha256 or _sha256_file(
-        _REPO_ROOT / "docs" / "discovery_dataset_v1_1_d8_clarification.md"
-    )
 
     payload: dict[str, Any] = {
         "packaging_hash": packaging_hash,
@@ -836,8 +879,9 @@ def _build_artifact(root: Path, bindings: ReserveBindings) -> _Artifact:
             },
             "build_id": bindings.build_id,
             "code_sha256": code_sha256,
-            "spec_sha256": spec_sha256,
-            "clarification_sha256": clarification_sha256,
+            "spec_sha256": bindings.spec_sha256,
+            "clarification_sha256": bindings.clarification_sha256,
+            "addendum_sha256": bindings.addendum_sha256,
             "time_source": "envelope.recorded_at",
         },
         "d8_maps": {
@@ -900,12 +944,17 @@ _MODE_ALIASES = {
     "production": RegistrationMode.PRODUCTION,
 }
 
+#: The two registration statuses exposed on :class:`RegistrationResult`.
+STATUS_REGISTERED = "REGISTERED"
+STATUS_ALREADY_REGISTERED = "ALREADY_REGISTERED"
+
 
 @dataclass(frozen=True)
 class RegistrationResult:
     """The result of one registration attempt."""
 
     mode: str
+    status: str
     created: bool
     record: KnowledgeRecord
     record_hash: str
@@ -936,16 +985,46 @@ def _same_artifact(
     )
 
 
+def _is_genesis_match(record: KnowledgeRecord, artifact: _Artifact) -> bool:
+    """Whether ``record`` is exactly the D8 genesis registration (A2 precheck).
+
+    The record must itself be seq 0 with a zero ``prev_hash``, ``program_id``
+    ``None``, kind ``ARTIFACT``, the D8 ``source_label`` and ``packaging_hash``,
+    and an identical payload and footprint.
+    """
+    return (
+        record.seq == 0
+        and record.prev_hash == GENESIS_PREV_HASH
+        and record.program_id is None
+        and record.kind == RecordKind.ARTIFACT
+        and record.payload.get("source_label") == SOURCE_LABEL
+        and record.payload.get("packaging_hash") == artifact.packaging_hash
+        and _same_artifact(record, artifact)
+    )
+
+
+def _is_postcondition_match(record: KnowledgeRecord, artifact: _Artifact) -> bool:
+    """Whether the re-read genesis record satisfies the A2 postcondition."""
+    return (
+        record.seq == 0
+        and record.prev_hash == GENESIS_PREV_HASH
+        and record.program_id is None
+        and record.kind == RecordKind.ARTIFACT
+        and _same_artifact(record, artifact)
+    )
+
+
 def _result(
     mode: str,
-    created: bool,
+    status: str,
     record: KnowledgeRecord,
     artifact: _Artifact,
     log_path: Path,
 ) -> RegistrationResult:
     return RegistrationResult(
         mode=mode,
-        created=created,
+        status=status,
+        created=(status == STATUS_REGISTERED),
         record=record,
         record_hash=record.record_hash,
         seq=record.seq,
@@ -1000,12 +1079,16 @@ def register_reserve_artifact(
 ) -> RegistrationResult:
     """Verify the reserve package and register its sealed ``ARTIFACT``.
 
-    The log is read under :meth:`KnowledgeLog.locked` with
-    ``blocking=False`` (a held lock surfaces immediately).  A truncated tail
-    or an integrity error is raised and never repaired.  An identical existing
-    artifact is a byte-preserving no-op; any other same-``source_label``
-    artifact is a :class:`D8ConflictError`; a log with any unrelated record is
-    a :class:`D8HoldError`.
+    The A2 procedure is PRECHECK -> PUBLIC APPEND -> POSTCONDITION.  PRECHECK
+    reads and decides under :meth:`KnowledgeLog.locked` with
+    ``blocking=False`` (a held lock surfaces immediately); a truncated tail or
+    an integrity error is raised and never repaired.  An identical genesis
+    artifact is ``ALREADY_REGISTERED``; any other same-``source_label`` record
+    is a :class:`D8ConflictError`; a log without that exact genesis match is a
+    :class:`D8HoldError`.  Exactly one public ``KnowledgeLog.append`` follows,
+    with no outer lock, and the POSTCONDITION re-reads the log and requires
+    exactly the expected genesis record (else
+    :class:`D8ProductionConcurrencyError`).
     """
     root = Path(root)
     effective_bindings = bindings if bindings is not None else default_bindings()
@@ -1017,30 +1100,33 @@ def register_reserve_artifact(
     artifact = _build_artifact(root, effective_bindings)
 
     log = KnowledgeLog(target)
+
+    # -- PRECHECK: read and decide under a non-blocking lock. -------------
     with log.locked(blocking=False):
         records = read_records(target)
-        existing = None
-        for record in records:
-            if (
-                record.kind == RecordKind.ARTIFACT
-                and record.payload.get("source_label") == SOURCE_LABEL
-            ):
-                existing = record
-                break
-        if existing is not None:
-            if _same_artifact(existing, artifact):
-                return _result(
-                    registration_mode, False, existing, artifact, target
-                )
-            raise D8ConflictError(
-                "a different ARTIFACT already carries the same source_label"
-            )
         if records:
+            first = records[0]
+            if _is_genesis_match(first, artifact):
+                return _result(
+                    registration_mode,
+                    STATUS_ALREADY_REGISTERED,
+                    first,
+                    artifact,
+                    target,
+                )
+            if any(
+                record.payload.get("source_label") == SOURCE_LABEL
+                for record in records
+            ):
+                raise D8ConflictError(
+                    "a different ARTIFACT already carries the same source_label"
+                )
             raise D8HoldError(
                 "the Knowledge-PIT log already holds unrelated records"
             )
 
-    record = log.append(
+    # -- PUBLIC APPEND: exactly one public KnowledgeLog.append. -----------
+    log.append(
         kind=RecordKind.ARTIFACT,
         channel=Channel.SYSTEM,
         program_id=None,
@@ -1050,11 +1136,20 @@ def register_reserve_artifact(
         event_time=None,
         blocking=False,
     )
-    if record.seq != 0 or record.prev_hash != GENESIS_PREV_HASH:
-        raise D8HoldError(
-            "the appended genesis ARTIFACT is not at seq 0 with a zero prev_hash"
+
+    # -- POSTCONDITION: exactly the expected genesis record. --------------
+    records = read_records(target)
+    if len(records) != 1 or not _is_postcondition_match(records[0], artifact):
+        raise D8ProductionConcurrencyError(
+            "D8 PRODUCTION REGISTRATION CONCURRENCY FAILURE"
         )
-    return _result(registration_mode, True, record, artifact, target)
+    return _result(
+        registration_mode,
+        STATUS_REGISTERED,
+        records[0],
+        artifact,
+        target,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1085,6 +1180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     print(f"mode={result.mode}")
+    print(f"status={result.status}")
     print(f"record_hash={result.record_hash}")
     print(f"seq={result.seq}")
     print(f"determinable={result.determinable}")
