@@ -1,0 +1,872 @@
+[
+  {
+    "id": "M1",
+    "description": "call engine.evaluate",
+    "edits": [
+      {
+        "old": "    if declaration is None:\n        return _blank_diagnostics(",
+        "new": "    engine_mod.evaluate(None, None, None, None)\n    if declaration is None:\n        return _blank_diagnostics("
+      }
+    ]
+  },
+  {
+    "id": "M2",
+    "description": "consume holdout in T0",
+    "edits": [
+      {
+        "old": "    loaded = _load_d7a(resolver, bindings, declaration, partition, fold)\n    panel = _validate_factor_panel(",
+        "new": "    partition_mod.HoldoutRegistry().consume(partition)\n    loaded = _load_d7a(resolver, bindings, declaration, partition, fold)\n    panel = _validate_factor_panel("
+      }
+    ]
+  },
+  {
+    "id": "M3",
+    "description": "consume holdout in TS",
+    "edits": [
+      {
+        "old": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )",
+        "new": "    partition_mod.HoldoutRegistry().consume(partition)\n    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )"
+      }
+    ]
+  },
+  {
+    "id": "M4",
+    "description": "fresh-registry second consumption",
+    "edits": [
+      {
+        "old": "    loaded = _load_d7a(resolver, bindings, declaration, partition, fold)\n    panel = _validate_factor_panel(",
+        "new": "    partition_mod.HoldoutRegistry().consume(partition)\n    partition_mod.HoldoutRegistry().consume(partition)\n    loaded = _load_d7a(resolver, bindings, declaration, partition, fold)\n    panel = _validate_factor_panel("
+      }
+    ]
+  },
+  {
+    "id": "M5",
+    "description": "scenario-companion reuse",
+    "edits": [
+      {
+        "old": "    panel_ts = base.copy()",
+        "new": "    panel_ts = panel_t0"
+      }
+    ]
+  },
+  {
+    "id": "M6",
+    "description": "include holdout formations in T0",
+    "edits": [
+      {
+        "old": "        filters=[(\"formation_date\", \">=\", start), (\"formation_date\", \"<\", end)],",
+        "new": "        filters=[(\"formation_date\", \">=\", start), (\"formation_date\", \"<\", RESERVE_START)],"
+      }
+    ]
+  },
+  {
+    "id": "M7",
+    "description": "include holdout in TS",
+    "edits": [
+      {
+        "old": "            (\"date\", \"<\", pd.Timestamp(end)),",
+        "new": "            (\"date\", \"<\", pd.Timestamp(RESERVE_START)),"
+      }
+    ]
+  },
+  {
+    "id": "M8",
+    "description": "read holdout-period rows before filtering",
+    "edits": [
+      {
+        "old": "        filters=[(\"formation_date\", \">=\", start), (\"formation_date\", \"<\", end)],",
+        "new": "        filters=[(\"formation_date\", \">=\", start)],"
+      }
+    ]
+  },
+  {
+    "id": "M9",
+    "description": "confirmation_evidence = true",
+    "edits": [
+      {
+        "old": "            confirmation_evidence=False,",
+        "new": "            confirmation_evidence=True,"
+      }
+    ]
+  },
+  {
+    "id": "M10",
+    "description": "emit an EvaluationRecord",
+    "edits": [
+      {
+        "old": "@dataclass(frozen=True)\nclass DevelopmentDiagnostics:",
+        "new": "@dataclass(frozen=True)\nclass EvaluationRecord:"
+      },
+      {
+        "old": "@dataclass(frozen=True)\nclass D7bDevelopmentSensitivityRecord:",
+        "new": "DevelopmentDiagnostics = EvaluationRecord\n\n\n@dataclass(frozen=True)\nclass D7bDevelopmentSensitivityRecord:"
+      }
+    ]
+  },
+  {
+    "id": "M11",
+    "description": "DELISTING_SENSITIVE advances",
+    "edits": [
+      {
+        "old": "            advancement_blocked=status != STATUS_NOT_SENSITIVE,",
+        "new": "            advancement_blocked=False,"
+      }
+    ]
+  },
+  {
+    "id": "M12",
+    "description": "NOT_ASSESSED advances",
+    "edits": [
+      {
+        "old": "            advancement_blocked=status != STATUS_NOT_SENSITIVE,",
+        "new": "            advancement_blocked=status == STATUS_NOT_SENSITIVE,"
+      }
+    ]
+  },
+  {
+    "id": "M13",
+    "description": "NOT_SENSITIVE sets holdout_authorized",
+    "edits": [
+      {
+        "old": "            holdout_authorized=False,",
+        "new": "            holdout_authorized=status == STATUS_NOT_SENSITIVE,"
+      }
+    ]
+  },
+  {
+    "id": "M14",
+    "description": "different folds T0/TS",
+    "edits": [
+      {
+        "old": "    panel_ts = panel_ts.sort_values(\n        [DATE_COL, STOCK_COL], kind=\"mergesort\"\n    ).reset_index(drop=True)",
+        "new": "    panel_ts = panel_ts.sort_values(\n        [DATE_COL, STOCK_COL], kind=\"mergesort\"\n    ).reset_index(drop=True)\n    panel_ts = panel_ts.loc[\n        panel_ts[DATE_COL] != panel_ts[DATE_COL].min()\n    ].reset_index(drop=True)"
+      }
+    ]
+  },
+  {
+    "id": "M15",
+    "description": "a single firewall for reserve and holdout",
+    "edits": [
+      {
+        "old": "class FinalHoldoutFirewallError(D7bError, ValueError):\n    \"\"\"A final-holdout path or date was encountered.\"\"\"",
+        "new": "FinalHoldoutFirewallError = ReserveFirewallError"
+      }
+    ]
+  },
+  {
+    "id": "M16",
+    "description": "reserve-crossing cell into P7-B",
+    "edits": [
+      {
+        "old": "        if _as_bool(row[\"crosses_reserve\"]):",
+        "new": "        if False:"
+      }
+    ]
+  },
+  {
+    "id": "M17",
+    "description": "reserve purge sent to P7-E as NaN",
+    "edits": [
+      {
+        "old": "        if _as_bool(row[\"crosses_reserve\"]):\n            purged.append(PurgedCell(formation, PURGED_RESERVED_OUTCOME))\n            continue",
+        "new": "        if _as_bool(row[\"crosses_reserve\"]):\n            purged.append(PurgedCell(formation, PURGED_RESERVED_OUTCOME))\n            formations.append(formation)\n            endpoint_by_formation[formation] = endpoint\n            continue"
+      }
+    ]
+  },
+  {
+    "id": "M18",
+    "description": "fold-crossing cell passed to P7-B",
+    "edits": [
+      {
+        "old": "        if not fold.contains_interval(\n            pd.Timestamp(formation), pd.Timestamp(endpoint)\n        ):",
+        "new": "        if False:"
+      }
+    ]
+  },
+  {
+    "id": "M19",
+    "description": "hard-code h = 21",
+    "edits": [
+      {
+        "old": "    horizon = declaration.horizon",
+        "new": "    horizon = 21"
+      }
+    ]
+  },
+  {
+    "id": "M20",
+    "description": "rerank the universe",
+    "edits": [
+      {
+        "old": "        if formation is None or not _as_bool(row.get(flag)):\n            continue",
+        "new": "        if (\n            formation is None\n            or not _as_bool(row.get(flag))\n            or int(row[\"rank\"]) > 2\n        ):\n            continue"
+      }
+    ]
+  },
+  {
+    "id": "M21",
+    "description": "tau from a rule other than the frozen legs",
+    "edits": [
+      {
+        "old": "                tau = 0.0",
+        "new": "                tau = -1.0"
+      }
+    ]
+  },
+  {
+    "id": "M22",
+    "description": "different legs T0/TS",
+    "edits": [
+      {
+        "old": "                    economic_leg=leg,",
+        "new": "                    economic_leg=(\n                        leg if scenario == SCENARIO_T0 else ECONOMIC_MIDDLE\n                    ),"
+      }
+    ]
+  },
+  {
+    "id": "M23",
+    "description": "persist scenario returns",
+    "edits": [
+      {
+        "old": "    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )",
+        "new": "    panel_t0.to_parquet(Path(root) / \"scenario_panel.parquet\")\n    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )"
+      }
+    ]
+  },
+  {
+    "id": "M24",
+    "description": "fill an incomplete pre-terminal path with 0",
+    "edits": [
+      {
+        "old": "        t0_value = float(\"nan\")",
+        "new": "        t0_value = 0.0"
+      },
+      {
+        "old": "        ts_value = float(\"nan\")",
+        "new": "        ts_value = 0.0"
+      }
+    ]
+  },
+  {
+    "id": "M25",
+    "description": "admit TS-long incomplete",
+    "edits": [
+      {
+        "old": "        expected_admissible = group is not None and state in ADMISSIBLE_STATES",
+        "new": "        expected_admissible = group is not None"
+      }
+    ]
+  },
+  {
+    "id": "M26",
+    "description": "drop a member from membership accounting",
+    "edits": [
+      {
+        "old": "        members_by_formation.setdefault(formation, []).append(\n            str(row[\"security_key\"])\n        )",
+        "new": "        if str(row[\"security_key\"]) == \"A\":\n            continue\n        members_by_formation.setdefault(formation, []).append(\n            str(row[\"security_key\"])\n        )"
+      }
+    ]
+  },
+  {
+    "id": "M27",
+    "description": "reserve-purged member in a denominator",
+    "edits": [
+      {
+        "old": "        if _as_bool(row[\"crosses_reserve\"]):\n            purged.append(PurgedCell(formation, PURGED_RESERVED_OUTCOME))\n            continue",
+        "new": "        if _as_bool(row[\"crosses_reserve\"]):\n            purged.append(PurgedCell(formation, PURGED_RESERVED_OUTCOME))\n            formations.append(formation)\n            endpoint_by_formation[formation] = endpoint\n            continue"
+      }
+    ]
+  },
+  {
+    "id": "M28",
+    "description": "affected-fraction denominator on admissible members only",
+    "edits": [
+      {
+        "old": "        short = [row for row in rows if row.economic_leg == ECONOMIC_SHORT]",
+        "new": "        short = [\n            row for row in rows\n            if row.economic_leg == ECONOMIC_SHORT and row.expected_admissible\n        ]"
+      },
+      {
+        "old": "        long = [row for row in rows if row.economic_leg == ECONOMIC_LONG]",
+        "new": "        long = [\n            row for row in rows\n            if row.economic_leg == ECONOMIC_LONG and row.expected_admissible\n        ]"
+      }
+    ]
+  },
+  {
+    "id": "M29",
+    "description": "B conditioned on valid returns",
+    "edits": [
+      {
+        "old": "            b_ratios.append(n_affected / n_universe)",
+        "new": "            b_ratios.append(\n                n_affected / max(1, sum(1 for row in rows if row.expected_admissible))\n            )"
+      }
+    ]
+  },
+  {
+    "id": "M30",
+    "description": "swap E_S/E_L",
+    "edits": [
+      {
+        "old": "        _mean_ratio(b_ratios),\n        len(b_ratios),\n        _mean_ratio(es_ratios),\n        len(es_ratios),\n        _mean_ratio(el_ratios),\n        len(el_ratios),",
+        "new": "        _mean_ratio(b_ratios),\n        len(b_ratios),\n        _mean_ratio(el_ratios),\n        len(el_ratios),\n        _mean_ratio(es_ratios),\n        len(es_ratios),"
+      }
+    ]
+  },
+  {
+    "id": "M31",
+    "description": "flip TS long \u03c4",
+    "edits": [
+      {
+        "old": "                    tau = -1.0",
+        "new": "                    tau = 1.0"
+      }
+    ]
+  },
+  {
+    "id": "M32",
+    "description": "describe +100% as a bound",
+    "edits": [
+      {
+        "old": "            \"scope\": self.scope,\n            \"delisting_return_status\": self.delisting_return_status,\n        }",
+        "new": "            \"scope\": self.scope,\n            \"delisting_return_status\": self.delisting_return_status,\n            \"bound\": self.economic_ts,\n        }"
+      }
+    ]
+  },
+  {
+    "id": "M33",
+    "description": "ignore terminal-at-formation",
+    "edits": [
+      {
+        "old": "    if state == \"EMPTY_OBSERVED_PATH_IDENTITY\":\n        return ADMISSIBLE_TERMINAL_EMPTY",
+        "new": "    if state == \"EMPTY_OBSERVED_PATH_IDENTITY\":\n        return ADMISSIBLE"
+      }
+    ]
+  },
+  {
+    "id": "M34",
+    "description": "empty path recorded as an observed zero",
+    "edits": [
+      {
+        "old": "        record_state = state if group is not None else FACTOR_VALUE_MISSING",
+        "new": "        record_state = (\n            ADMISSIBLE\n            if state == ADMISSIBLE_TERMINAL_EMPTY\n            else (state if group is not None else FACTOR_VALUE_MISSING)\n        )"
+      }
+    ]
+  },
+  {
+    "id": "M35",
+    "description": "TS IC computed on T0 returns",
+    "edits": [
+      {
+        "old": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )",
+        "new": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_t0, declaration\n    )"
+      }
+    ]
+  },
+  {
+    "id": "M36",
+    "description": "different cost T0/TS",
+    "edits": [
+      {
+        "old": "from dataclasses import dataclass",
+        "new": "from dataclasses import dataclass, replace as _dc_replace"
+      },
+      {
+        "old": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )",
+        "new": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts,\n        _dc_replace(\n            declaration,\n            transaction_cost_bps=declaration.transaction_cost_bps + 5.0,\n        ),\n    )"
+      }
+    ]
+  },
+  {
+    "id": "M37",
+    "description": "miss the sign change",
+    "edits": [
+      {
+        "old": "    clause_a = sgn_t0 != sgn_ts",
+        "new": "    clause_a = False"
+      }
+    ]
+  },
+  {
+    "id": "M38",
+    "description": "miss the screen change",
+    "edits": [
+      {
+        "old": "    clause_b = bool(screen_t0.passed) and not bool(screen_ts.passed)",
+        "new": "    clause_b = False"
+      }
+    ]
+  },
+  {
+    "id": "M39",
+    "description": "threshold >= or 3B",
+    "edits": [
+      {
+        "old": "    if b is not None and diagnostics.e_s > 2.0 * b:",
+        "new": "    if b is not None and diagnostics.e_s >= 3.0 * b:"
+      }
+    ]
+  },
+  {
+    "id": "M40",
+    "description": "mishandle B = 0",
+    "edits": [
+      {
+        "old": "    elif b == 0.0 and diagnostics.e_s > 0.0:",
+        "new": "    elif b == 0.0 and diagnostics.e_s >= 0.0:"
+      }
+    ]
+  },
+  {
+    "id": "M41",
+    "description": "allow a reserve path",
+    "edits": [
+      {
+        "old": "            if parsed >= RESERVE_START:\n                raise ReserveFirewallError(\n                    f\"labels.{column} holds a reserve date {parsed}\"\n                )",
+        "new": "            if False and parsed >= RESERVE_START:\n                raise ReserveFirewallError(\n                    f\"labels.{column} holds a reserve date {parsed}\"\n                )"
+      }
+    ]
+  },
+  {
+    "id": "M42",
+    "description": "resolve the latest D7a",
+    "edits": [
+      {
+        "old": "def _d7a_path(bindings: Bindings, name: str) -> str:\n    return f\"derived/returns/{bindings.d7a.artifact_id}/{name}\"",
+        "new": "def _d7a_path(bindings: Bindings, name: str) -> str:\n    return f\"derived/returns/r-9999999999999999/{name}\""
+      }
+    ]
+  },
+  {
+    "id": "M43",
+    "description": "compute every metric and pick one",
+    "edits": [
+      {
+        "old": "        (declaration.primary_metric,),",
+        "new": "        engine_mod.PRIMARY_METRIC_KEYS,"
+      }
+    ]
+  },
+  {
+    "id": "M44",
+    "description": "accept different screens T0/TS",
+    "edits": [
+      {
+        "old": "    if not _screen_matches(\n        screen_t0, diagnostics, SCENARIO_T0\n    ) or not _screen_matches(screen_ts, diagnostics, SCENARIO_TS):",
+        "new": "    if False:"
+      }
+    ]
+  },
+  {
+    "id": "M45",
+    "description": "internal screen threshold",
+    "edits": [
+      {
+        "old": "    clause_b = bool(screen_t0.passed) and not bool(screen_ts.passed)",
+        "new": "    clause_b = diagnostics.economic_t0 > 0.0"
+      }
+    ]
+  },
+  {
+    "id": "M46",
+    "description": "different admissible samples T0/TS",
+    "edits": [
+      {
+        "old": "                    expected_admissible=expected_admissible,",
+        "new": "                    expected_admissible=(\n                        expected_admissible\n                        if scenario == SCENARIO_T0\n                        else False\n                    ),"
+      }
+    ]
+  },
+  {
+    "id": "M47",
+    "description": "remove terminal-incomplete from membership",
+    "edits": [
+      {
+        "old": "        rows = by_formation.get(formation, [])",
+        "new": "        rows = [\n            r for r in by_formation.get(formation, [])\n            if r.admissibility != TERMINAL_OBSERVED_PATH_INCOMPLETE\n        ]"
+      }
+    ]
+  },
+  {
+    "id": "M48",
+    "description": "remove terminal-incomplete from B",
+    "edits": [
+      {
+        "old": "        n_universe = len(rows)",
+        "new": "        n_universe = sum(\n            1 for r in rows\n            if r.admissibility != TERMINAL_OBSERVED_PATH_INCOMPLETE\n        )"
+      }
+    ]
+  },
+  {
+    "id": "M49",
+    "description": "remove terminal-incomplete from E_S/E_L",
+    "edits": [
+      {
+        "old": "        short = [row for row in rows if row.economic_leg == ECONOMIC_SHORT]",
+        "new": "        short = [\n            row for row in rows\n            if row.economic_leg == ECONOMIC_SHORT\n            and row.admissibility != TERMINAL_OBSERVED_PATH_INCOMPLETE\n        ]"
+      }
+    ]
+  },
+  {
+    "id": "M50",
+    "description": "E_S denominator on valid returns",
+    "edits": [
+      {
+        "old": "        short = [row for row in rows if row.economic_leg == ECONOMIC_SHORT]",
+        "new": "        short = [\n            row for row in rows\n            if row.economic_leg == ECONOMIC_SHORT and row.expected_admissible\n        ]"
+      }
+    ]
+  },
+  {
+    "id": "M51",
+    "description": "E_L denominator on valid returns",
+    "edits": [
+      {
+        "old": "        long = [row for row in rows if row.economic_leg == ECONOMIC_LONG]",
+        "new": "        long = [\n            row for row in rows\n            if row.economic_leg == ECONOMIC_LONG and row.expected_admissible\n        ]"
+      }
+    ]
+  },
+  {
+    "id": "M52",
+    "description": "B denominator on valid returns",
+    "edits": [
+      {
+        "old": "        n_universe = len(rows)",
+        "new": "        n_universe = sum(1 for r in rows if r.expected_admissible)"
+      }
+    ]
+  },
+  {
+    "id": "M53",
+    "description": "ignore sign",
+    "edits": [
+      {
+        "old": "        elif sign == 1:",
+        "new": "        elif True:"
+      }
+    ]
+  },
+  {
+    "id": "M54",
+    "description": "top group always long",
+    "edits": [
+      {
+        "old": "            if group == n_groups:\n                leg = ECONOMIC_LONG\n            elif group == 1:\n                leg = ECONOMIC_SHORT",
+        "new": "            if group == n_groups:\n                leg = ECONOMIC_SHORT\n            elif group == 1:\n                leg = ECONOMIC_LONG"
+      }
+    ]
+  },
+  {
+    "id": "M55",
+    "description": "negate values before grouping",
+    "edits": [
+      {
+        "old": "                (formation, stock, value_lookup.get((formation, stock), float(\"nan\")))",
+        "new": "                (formation, stock, -value_lookup.get((formation, stock), float(\"nan\")))"
+      }
+    ]
+  },
+  {
+    "id": "M56",
+    "description": "value-weight E_S/E_L",
+    "edits": [
+      {
+        "old": "            es_ratios.append(affected_short / len(short))",
+        "new": "            es_ratios.append(affected_short / (len(short) + 1.0))"
+      }
+    ]
+  },
+  {
+    "id": "M57",
+    "description": "E_S == 2B sensitive",
+    "edits": [
+      {
+        "old": "    if b is not None and diagnostics.e_s > 2.0 * b:",
+        "new": "    if b is not None and diagnostics.e_s >= 2.0 * b:"
+      }
+    ]
+  },
+  {
+    "id": "M58",
+    "description": "negate factor values in D7b",
+    "edits": [
+      {
+        "old": "            f\"{declaration.factor_panel_sha256}\"\n        )\n    return panel",
+        "new": "            f\"{declaration.factor_panel_sha256}\"\n        )\n    panel[VALUE_COL] = -panel[VALUE_COL]\n    return panel"
+      }
+    ]
+  },
+  {
+    "id": "M59",
+    "description": "rewrite FactorSpec identity",
+    "edits": [
+      {
+        "old": "    if declaration.factor_spec_version != factor_spec.version:",
+        "new": "    if declaration.factor_spec_version != factor_spec.id:"
+      }
+    ]
+  },
+  {
+    "id": "M60",
+    "description": "sign applied to TS only",
+    "edits": [
+      {
+        "old": "    if sign == -1:\n        economic_t0 = None if value_t0 is None else -value_t0\n        economic_ts = None if value_ts is None else -value_ts",
+        "new": "    if sign == -1:\n        economic_ts = None if value_ts is None else -value_ts"
+      }
+    ]
+  },
+  {
+    "id": "M61",
+    "description": "sign applied to T0 only",
+    "edits": [
+      {
+        "old": "    if sign == -1:\n        economic_t0 = None if value_t0 is None else -value_t0\n        economic_ts = None if value_ts is None else -value_ts",
+        "new": "    if sign == -1:\n        economic_t0 = None if value_t0 is None else -value_t0"
+      }
+    ]
+  },
+  {
+    "id": "M62",
+    "description": "accept -(recorded net)",
+    "edits": [
+      {
+        "old": "    if sign == -1 and metric not in SIGN_MINUS_ONE_ADMITTED:",
+        "new": "    if (\n        sign == -1\n        and metric not in SIGN_MINUS_ONE_ADMITTED\n        and metric is not spec_mod.MetricKey.TURNOVER_COST_ADJUSTED\n    ):"
+      }
+    ]
+  },
+  {
+    "id": "M63",
+    "description": "build -gross - cost",
+    "edits": [
+      {
+        "old": "        transaction_cost_bps=declaration.transaction_cost_bps,",
+        "new": "        transaction_cost_bps=declaration.transaction_cost_bps + 1.0,"
+      }
+    ]
+  },
+  {
+    "id": "M64",
+    "description": "admit MDD with sign -1",
+    "edits": [
+      {
+        "old": "SIGN_MINUS_ONE_ADMITTED: tuple[spec_mod.MetricKey, ...] = (\n    spec_mod.MetricKey.IC,\n    spec_mod.MetricKey.RANK_IC,\n    spec_mod.MetricKey.LONG_SHORT,\n    spec_mod.MetricKey.SHARPE,\n)",
+        "new": "SIGN_MINUS_ONE_ADMITTED: tuple[spec_mod.MetricKey, ...] = (\n    spec_mod.MetricKey.IC,\n    spec_mod.MetricKey.RANK_IC,\n    spec_mod.MetricKey.LONG_SHORT,\n    spec_mod.MetricKey.SHARPE,\n    spec_mod.MetricKey.MAX_DRAWDOWN,\n)"
+      }
+    ]
+  },
+  {
+    "id": "M65",
+    "description": "admit benchmark with sign -1",
+    "edits": [
+      {
+        "old": "    if metric is spec_mod.MetricKey.BENCHMARK_RELATIVE:\n        return NOT_ASSESSED_NO_BENCHMARK_AUTHORITY",
+        "new": "    if False:\n        return NOT_ASSESSED_NO_BENCHMARK_AUTHORITY"
+      }
+    ]
+  },
+  {
+    "id": "M66",
+    "description": "admit an unknown key with sign -1",
+    "edits": [
+      {
+        "old": "    if metric not in set(engine_mod.PRIMARY_METRIC_KEYS):\n        return STATUS_NOT_ASSESSED",
+        "new": "    if False:\n        return STATUS_NOT_ASSESSED"
+      }
+    ]
+  },
+  {
+    "id": "M67",
+    "description": "no E_S/E_L swap with sign -1",
+    "edits": [
+      {
+        "old": "        else:\n            if group == 1:\n                leg = ECONOMIC_LONG\n            elif group == n_groups:\n                leg = ECONOMIC_SHORT\n            else:\n                leg = ECONOMIC_MIDDLE",
+        "new": "        else:\n            if group == n_groups:\n                leg = ECONOMIC_LONG\n            elif group == 1:\n                leg = ECONOMIC_SHORT\n            else:\n                leg = ECONOMIC_MIDDLE"
+      }
+    ]
+  },
+  {
+    "id": "M68",
+    "description": "wrong tau with sign -1",
+    "edits": [
+      {
+        "old": "                    tau = 1.0",
+        "new": "                    tau = -1.0"
+      }
+    ]
+  },
+  {
+    "id": "M69",
+    "description": "group change between scenarios",
+    "edits": [
+      {
+        "old": "                    group=group,",
+        "new": "                    group=(None if scenario == SCENARIO_TS else group),"
+      }
+    ]
+  },
+  {
+    "id": "M70",
+    "description": "drop inadmissible rows before grouping",
+    "edits": [
+      {
+        "old": "        state = _admissibility(label)\n        group_value = groups.get(key)",
+        "new": "        state = _admissibility(label)\n        if state in INADMISSIBLE_STATES:\n            continue\n        group_value = groups.get(key)"
+      }
+    ]
+  },
+  {
+    "id": "M71",
+    "description": "regroup after removing NaN",
+    "edits": [
+      {
+        "old": "        assigned = portfolio_sort_mod.assign_groups(sub[VALUE_COL], n_groups)",
+        "new": "        assigned = portfolio_sort_mod.assign_groups(\n            sub[VALUE_COL].dropna(), n_groups\n        )"
+      }
+    ]
+  },
+  {
+    "id": "M72",
+    "description": "tau from a grouping other than P7-E's",
+    "edits": [
+      {
+        "old": "    records: list[AccountingRecord] = []",
+        "new": "    alt_groups = _frozen_groups(winsorized, n_groups + 1)\n    records: list[AccountingRecord] = []"
+      },
+      {
+        "old": "        group_value = groups.get(key)",
+        "new": "        group_value = alt_groups.get(key)"
+      }
+    ]
+  },
+  {
+    "id": "M73",
+    "description": "E_S/E_L from a separate grouping",
+    "edits": [
+      {
+        "old": "        short = [row for row in rows if row.economic_leg == ECONOMIC_SHORT]",
+        "new": "        short = [row for row in rows if (row.group or 0) == 1]"
+      }
+    ]
+  },
+  {
+    "id": "M74",
+    "description": "exclude inadmissible from expected n_stocks",
+    "edits": [
+      {
+        "old": "            expected_stocks[(formation, group_int)] = (\n                expected_stocks.get((formation, group_int), 0) + 1\n            )",
+        "new": "            if key in expected_pairs:\n                expected_stocks[(formation, group_int)] = (\n                    expected_stocks.get((formation, group_int), 0) + 1\n                )"
+      }
+    ]
+  },
+  {
+    "id": "M75",
+    "description": "include inadmissible in expected n_returns",
+    "edits": [
+      {
+        "old": "            if key in expected_pairs:",
+        "new": "            if True:"
+      }
+    ]
+  },
+  {
+    "id": "M76",
+    "description": "accept an untyped NaN",
+    "edits": [
+      {
+        "old": "            record = expected.get(key)\n            if record is None:\n                fail(\"unaccounted_row\", f\"{scenario} {key}\")",
+        "new": "            record = expected.get(key)\n            if record is None:\n                continue"
+      }
+    ]
+  },
+  {
+    "id": "M77",
+    "description": "skip the n_stocks reconciliation",
+    "edits": [
+      {
+        "old": "            if int(row.n_stocks) != expected_stocks.get((parsed, group_int), 0):",
+        "new": "            if False:"
+      }
+    ]
+  },
+  {
+    "id": "M78",
+    "description": "skip the n_returns reconciliation",
+    "edits": [
+      {
+        "old": "            if int(row.n_returns) != expected_returns.get((parsed, group_int), 0):",
+        "new": "            if False:"
+      }
+    ]
+  },
+  {
+    "id": "M79",
+    "description": "different NaN masks T0/TS",
+    "edits": [
+      {
+        "old": "        ts_values.append(ts_value)",
+        "new": "        ts_values.append(\n            ts_value if leg != ECONOMIC_SHORT else float(\"nan\")\n        )"
+      }
+    ]
+  },
+  {
+    "id": "M80",
+    "description": "compare pair counts, not identities",
+    "edits": [
+      {
+        "old": "            pairs.add((_as_date(row.date), str(row.stock_id)))",
+        "new": "            pairs.add((_as_date(row.date), \"x\"))"
+      }
+    ]
+  },
+  {
+    "id": "M81",
+    "description": "skip the P7-B realization_end check",
+    "edits": [
+      {
+        "old": "        if realization_end != expected[key]:",
+        "new": "        if False:"
+      }
+    ]
+  },
+  {
+    "id": "M82",
+    "description": "non-canonical row order",
+    "edits": [
+      {
+        "old": "    ordered = panel.sort_values([DATE_COL, STOCK_COL], kind=\"mergesort\")",
+        "new": "    ordered = panel"
+      }
+    ]
+  },
+  {
+    "id": "M83",
+    "description": "accept value weighting",
+    "edits": [
+      {
+        "old": "    if declaration.weighting != \"EQUAL\":",
+        "new": "    if False:"
+      }
+    ]
+  },
+  {
+    "id": "M84",
+    "description": "persist the scenario panel",
+    "edits": [
+      {
+        "old": "    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )",
+        "new": "    panel_t0.to_parquet(Path(root) / \"persisted_panel.parquet\")\n    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )"
+      }
+    ]
+  },
+  {
+    "id": "M85",
+    "description": "skip the factor-panel hash check",
+    "edits": [
+      {
+        "old": "    if digest != declaration.factor_panel_sha256:",
+        "new": "    if False:"
+      }
+    ]
+  }
+]
