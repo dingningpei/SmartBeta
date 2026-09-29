@@ -947,6 +947,26 @@ def test_item65_rerun_identical_is_noop(tmp_path):
     assert second.record_hash == first.record_hash
     assert log_path.read_bytes() == before
 
+    # G2: a seq-0 record with the identical D8 payload and footprint but a
+    # non-None program_id is not the genesis registration.  It must be a
+    # D8ConflictError, never ALREADY_REGISTERED, with no append.
+    prog_store = _store(tmp_path / "prog")
+    prog_log_path = tmp_path / "logs_prog" / "knowledge.jsonl"
+    prog_artifact = _artifact(prog_store)
+    KnowledgeLog(prog_log_path).append(
+        kind=RecordKind.ARTIFACT,
+        channel=Channel.SYSTEM,
+        program_id="phase9-program",
+        refs={},
+        footprint=prog_artifact.footprint.body,
+        payload=prog_artifact.payload,
+    )
+    prog_before = prog_log_path.read_bytes()
+    with pytest.raises(A.D8ConflictError):
+        _register(prog_store, prog_log_path)
+    assert prog_log_path.read_bytes() == prog_before
+    assert len(read_records(prog_log_path)) == 1
+
 
 def test_item66_different_packaging_hash_conflicts(tmp_path):
     store = _store(tmp_path / "one")
@@ -1067,37 +1087,67 @@ def test_item69_log_is_append_only(tmp_path, monkeypatch):
     # prefix of the log after the append.
     assert log_path.read_bytes().startswith(before)
 
-    # A concurrent writer between PRECHECK and the public append is detected by
-    # the POSTCONDITION; nothing is rolled back, deleted or rewritten.
+    original_append = KnowledgeLog.append
+
+    def _racer(log):
+        original_append(
+            KnowledgeLog(log.path),
+            kind=RecordKind.HUMAN_DECISION,
+            payload={
+                "decision_kind": "OTHER",
+                "actor_role": "operator",
+                "consulted_all_prior": True,
+            },
+        )
+
+    # (a) A concurrent writer between PRECHECK and the public append.
     race_store = _store(tmp_path / "race")
     race_log = tmp_path / "race_logs" / "knowledge.jsonl"
-    original_append = KnowledgeLog.append
     state = {"raced": False}
 
     def racing_append(self, **kwargs):
         if not state["raced"]:
             state["raced"] = True
-            original_append(
-                KnowledgeLog(self.path),
-                kind=RecordKind.HUMAN_DECISION,
-                payload={
-                    "decision_kind": "OTHER",
-                    "actor_role": "operator",
-                    "consulted_all_prior": True,
-                },
-            )
+            _racer(self)
         return original_append(self, **kwargs)
 
     monkeypatch.setattr(KnowledgeLog, "append", racing_append)
     with pytest.raises(A.D8ProductionConcurrencyError):
         _register(race_store, race_log)
-
     records = read_records(race_log)
     assert len(records) == 2
     assert records[0].kind == RecordKind.HUMAN_DECISION
     assert records[1].kind == RecordKind.ARTIFACT
     after = race_log.read_bytes()
     assert race_log.read_bytes() == after
+
+    # (b) A concurrent writer AFTER the D8 append: D8 is seq 0, the racer seq 1.
+    # Dropping the len(records) != 1 POSTCONDITION check would wrongly accept
+    # this.  The log must be preserved exactly (both records, nothing deleted)
+    # and there must be no retry (exactly two records).
+    after_store = _store(tmp_path / "after_race")
+    after_log = tmp_path / "after_race_logs" / "knowledge.jsonl"
+    state_two = {"raced": False}
+
+    def racing_after(self, **kwargs):
+        record = original_append(self, **kwargs)
+        if not state_two["raced"]:
+            state_two["raced"] = True
+            _racer(self)
+        return record
+
+    monkeypatch.setattr(KnowledgeLog, "append", racing_after)
+    with pytest.raises(A.D8ProductionConcurrencyError):
+        _register(after_store, after_log)
+    records_after = read_records(after_log)
+    assert len(records_after) == 2
+    assert records_after[0].seq == 0
+    assert records_after[0].kind == RecordKind.ARTIFACT
+    assert records_after[0].program_id is None
+    assert records_after[1].seq == 1
+    assert records_after[1].kind == RecordKind.HUMAN_DECISION
+    bytes_after = after_log.read_bytes()
+    assert after_log.read_bytes() == bytes_after
 
 
 def test_item70_held_lock_surfaces_error(tmp_path):
