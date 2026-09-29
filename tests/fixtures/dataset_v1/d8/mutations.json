@@ -1,0 +1,630 @@
+[
+  {
+    "id": "M1",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "end >= boundary becomes end > boundary",
+    "edits": [
+      {
+        "old": "        if end_date >= RESERVE_START:",
+        "new": "        if end_date > RESERVE_START:"
+      }
+    ]
+  },
+  {
+    "id": "M2",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "allow exactly 2023-07-03 by moving the boundary",
+    "edits": [
+      {
+        "old": "RESERVE_START = date(2023, 7, 3)",
+        "new": "RESERVE_START = date(2023, 7, 4)"
+      }
+    ]
+  },
+  {
+    "id": "M3",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "read then filter (drop the pyarrow filters)",
+    "edits": [
+      {
+        "old": "        table = pq.read_table(path, columns=read_columns, filters=filters)",
+        "new": "        table = pq.read_table(path, columns=read_columns, filters=[])"
+      }
+    ]
+  },
+  {
+    "id": "M4",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "ignore crossing ranges (check start only)",
+    "edits": [
+      {
+        "old": "        if end_date >= RESERVE_START:",
+        "new": "        if start_date >= RESERVE_START:"
+      }
+    ]
+  },
+  {
+    "id": "M5",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "accept a reserve_sealed path",
+    "edits": [
+      {
+        "old": "        if \"..\" in parts or any(\n            part in _FORBIDDEN_PATH_COMPONENTS for part in parts\n        ):\n            raise ReserveFirewallError(\n                f\"refusing forbidden path component in {relative!r}\"\n            )",
+        "new": "        pass"
+      },
+      {
+        "old": "        base = (self._root / \"normalized\" / D3_BUILD_ID).resolve()",
+        "new": "        base = self._root.resolve()"
+      }
+    ]
+  },
+  {
+    "id": "M6",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "skip the symlink real-path check",
+    "edits": [
+      {
+        "old": "        if not resolved.is_relative_to(base):\n            raise ReserveFirewallError(\n                f\"refusing path outside the development directory: {relative!r}\"\n            )\n        return resolved",
+        "new": "        return resolved"
+      }
+    ]
+  },
+  {
+    "id": "M7",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "accept datetime or tz values",
+    "edits": [
+      {
+        "old": "    if isinstance(value, datetime):\n        raise AccessorInputError(\n            f\"{label} must be a date or 'YYYY-MM-DD' string, got \"\n            f\"{type(value).__name__}\"\n        )\n",
+        "new": ""
+      }
+    ]
+  },
+  {
+    "id": "M8",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "skip the post-load assertion",
+    "edits": [
+      {
+        "old": "            if bool((out_of_range | in_reserve).any()):\n                raise ReserveFirewallError(\n                    \"a returned row lies in the reserve or outside the \"\n                    \"requested range\"\n                )",
+        "new": "            pass"
+      }
+    ]
+  },
+  {
+    "id": "M9",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "allow any column",
+    "edits": [
+      {
+        "old": "        if column not in schema:\n            raise AccessorInputError(\n                f\"unknown column {column!r} for this component\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M10",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "skip the development file hash check",
+    "edits": [
+      {
+        "old": "        actual = _sha256_file(path)\n        if actual != self._bindings[component].sha256:\n            raise ReserveFirewallError(\n                f\"development file {component!r} does not match its binding\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M55",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "accessor accepts start > end",
+    "edits": [
+      {
+        "old": "        if start_date > end_date:",
+        "new": "        if False:"
+      }
+    ]
+  },
+  {
+    "id": "M56",
+    "file": "smart_beta/dataset_v1/reserve_firewall.py",
+    "description": "accessor ticker filter ignored",
+    "edits": [
+      {
+        "old": "            filters.append((meta.id_column, \"in\", list(ticker_values)))",
+        "new": "            pass"
+      }
+    ]
+  },
+  {
+    "id": "M11",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "weaken packaging_hash (hash two files)",
+    "edits": [
+      {
+        "old": "    mapping = {\n        f\"reserve_sealed/{bindings.build_id}/{component}.parquet\": digest\n        for component, digest in bindings.reserve_files.items()\n    }",
+        "new": "    mapping = {\n        f\"reserve_sealed/{bindings.build_id}/{component}.parquet\": digest\n        for component, digest in bindings.reserve_files.items()\n        if component != \"ca_events\"\n    }"
+      }
+    ]
+  },
+  {
+    "id": "M12",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip reserve file hash verification",
+    "edits": [
+      {
+        "old": "        if _sha256_file(path) != expected:\n            raise D8HoldError(\n                f\"reserve file {component!r} hash mismatch\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M13",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "sealed = false",
+    "edits": [
+      {
+        "old": "        \"sealed\": True,",
+        "new": "        \"sealed\": False,"
+      }
+    ]
+  },
+  {
+    "id": "M14",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "available_from = registration date",
+    "edits": [
+      {
+        "old": "        \"available_from\": day,",
+        "new": "        \"available_from\": date.today().isoformat(),"
+      }
+    ]
+  },
+  {
+    "id": "M15",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "available_from = 2023-07-03",
+    "edits": [
+      {
+        "old": "        \"available_from\": day,",
+        "new": "        \"available_from\": \"2023-07-03\","
+      }
+    ]
+  },
+  {
+    "id": "M16",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "available_from = max instead of min",
+    "edits": [
+      {
+        "old": "    day, batch, ticker, attempt, retrieved = qualifying[0]",
+        "new": "    day, batch, ticker, attempt, retrieved = qualifying[-1]"
+      }
+    ]
+  },
+  {
+    "id": "M17",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "drop the last_date qualifying filter",
+    "edits": [
+      {
+        "old": "            last_date = record.get(\"last_date\")\n            if not isinstance(last_date, str) or last_date[:10] < _RESERVE_START_ISO:\n                continue\n",
+        "new": ""
+      }
+    ]
+  },
+  {
+    "id": "M18",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "omit the footprint from the envelope",
+    "edits": [
+      {
+        "old": "        footprint=artifact.footprint.body,",
+        "new": "        footprint=None,"
+      }
+    ]
+  },
+  {
+    "id": "M19",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "build the footprint from resolvable rows only",
+    "edits": [
+      {
+        "old": "        subject = matches[0] if len(matches) == 1 else ticker\n        rows.append((subject, row_date))",
+        "new": "        if len(matches) == 1:\n            rows.append((matches[0], row_date))"
+      }
+    ]
+  },
+  {
+    "id": "M20",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "drop unresolved rows",
+    "edits": [
+      {
+        "old": "    resolved = _resolve_subjects(obs_keys, eligible)",
+        "new": "    resolved = _resolve_subjects(obs_keys, eligible)\n    resolved = [row for row in resolved if row[0] in security_map]"
+      }
+    ]
+  },
+  {
+    "id": "M21",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "ticker fallback SEC:US:<ticker>",
+    "edits": [
+      {
+        "old": "        subject = matches[0] if len(matches) == 1 else ticker",
+        "new": "        subject = matches[0] if len(matches) == 1 else f\"SEC:US:{ticker}\""
+      }
+    ]
+  },
+  {
+    "id": "M22",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "force-map IDENTITY_AMBIGUOUS keys",
+    "edits": [
+      {
+        "old": "        if str(record.state) != \"INTERVAL_ASSIGNED\":\n            continue",
+        "new": "        if str(record.state) not in (\"INTERVAL_ASSIGNED\", \"IDENTITY_AMBIGUOUS\"):\n            continue"
+      }
+    ]
+  },
+  {
+    "id": "M23",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "map rows outside the interval",
+    "edits": [
+      {
+        "old": "            if key_ticker == ticker and start <= row_date <= end",
+        "new": "            if key_ticker == ticker"
+      }
+    ]
+  },
+  {
+    "id": "M24",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "map duplicated keys",
+    "edits": [
+      {
+        "old": "        if counts.get(key, 0) != 1:\n            continue",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M25",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "include provenance columns as variables",
+    "edits": [
+      {
+        "old": "_PROVENANCE_COLUMNS = frozenset({\"raw_row_index\", \"raw_sha256\"})",
+        "new": "_PROVENANCE_COLUMNS = frozenset()"
+      }
+    ]
+  },
+  {
+    "id": "M26",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "map an unknown column silently",
+    "edits": [
+      {
+        "old": "        VARIABLE_MAP,\n        security_map,",
+        "new": "        {\n            **VARIABLE_MAP,\n            **{\n                column: {\"derived_variable\": \"PRICE_FIELD\"}\n                for column in frame.columns\n                if column not in (\"subject\", \"date\")\n            },\n        },\n        security_map,"
+      }
+    ]
+  },
+  {
+    "id": "M27",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "wrong kind for divCash/splitFactor",
+    "edits": [
+      {
+        "old": "    \"divCash\": {\"derived_variable\": \"RETURN_1D\"},\n    \"splitFactor\": {\"derived_variable\": \"RETURN_1D\"},",
+        "new": "    \"divCash\": {\"derived_variable\": \"ACTIVITY_FIELD\"},\n    \"splitFactor\": {\"derived_variable\": \"ACTIVITY_FIELD\"},"
+      }
+    ]
+  },
+  {
+    "id": "M28",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "wrong kind for volume",
+    "edits": [
+      {
+        "old": "    \"volume\": {\"derived_variable\": \"ACTIVITY_FIELD\"},",
+        "new": "    \"volume\": {\"derived_variable\": \"PRICE_FIELD\"},"
+      }
+    ]
+  },
+  {
+    "id": "M29",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "drop open/high/low from PRICE_LEVEL",
+    "edits": [
+      {
+        "old": "    \"open\": {\"derived_variable\": \"PRICE_FIELD\"},\n    \"high\": {\"derived_variable\": \"PRICE_FIELD\"},\n    \"low\": {\"derived_variable\": \"PRICE_FIELD\"},\n",
+        "new": ""
+      }
+    ]
+  },
+  {
+    "id": "M30",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip the obs_flags domain check",
+    "edits": [
+      {
+        "old": "    if not flag_keys.issubset(obs_keys):\n        raise D8HoldError(\"obs_flags key domain is not a subset of observations\")",
+        "new": "    pass"
+      }
+    ]
+  },
+  {
+    "id": "M31",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip the ca_events domain check",
+    "edits": [
+      {
+        "old": "    if not ca_keys.issubset(obs_keys):\n        raise D8HoldError(\"ca_events key domain is not a subset of observations\")",
+        "new": "    pass"
+      }
+    ]
+  },
+  {
+    "id": "M32",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip the schema check",
+    "edits": [
+      {
+        "old": "    if names != tuple(OBSERVATION_COLUMNS):\n        raise D8HoldError(\n            \"reserve observations schema does not equal the frozen 16 names\"\n        )",
+        "new": "    pass"
+      }
+    ]
+  },
+  {
+    "id": "M33",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "allow the frame to materialize value columns",
+    "edits": [
+      {
+        "old": "        if tuple(key) != (\"subject\", \"date\"):\n            raise D8FirewallError(\n                f\"refusing to materialize non-key columns: {list(key)!r}\"\n            )\n        return _KeyProjection(self._key_rows)",
+        "new": "        return _KeyProjection(self._key_rows)"
+      }
+    ]
+  },
+  {
+    "id": "M34",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "project extra reserve columns",
+    "edits": [
+      {
+        "old": "    \"observations\": (\"ticker\", \"date\"),",
+        "new": "    \"observations\": (\"ticker\", \"date\", \"close\"),"
+      }
+    ]
+  },
+  {
+    "id": "M35",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "empty (tiny) calendar",
+    "edits": [
+      {
+        "old": "    return build_nyse_calendar(date(2015, 1, 2), date(2027, 12, 31))",
+        "new": "    return build_nyse_calendar(date(2027, 1, 1), date(2027, 1, 1))"
+      }
+    ]
+  },
+  {
+    "id": "M36",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "duplicate ARTIFACT append on rerun",
+    "edits": [
+      {
+        "old": "        if existing is not None:",
+        "new": "        if False:"
+      },
+      {
+        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M37",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "overwrite or truncate the log",
+    "edits": [
+      {
+        "old": "        records = read_records(target)",
+        "new": "        records = read_records(target)\n        target.write_text(\"\", encoding=\"utf-8\")"
+      }
+    ]
+  },
+  {
+    "id": "M38",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "treat a conflicting packaging_hash as a no-op",
+    "edits": [
+      {
+        "old": "    return (\n        content_hash(existing.payload) == content_hash(artifact.payload)\n        and content_hash(existing.footprint)\n        == content_hash(artifact.footprint.body)\n    )",
+        "new": "    return True"
+      }
+    ]
+  },
+  {
+    "id": "M39",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "repair a TruncatedTail",
+    "edits": [
+      {
+        "old": "        records = read_records(target)",
+        "new": "        try:\n            records = read_records(target)\n        except TruncatedTail as exc:\n            target.write_text(\n                \"\".join(\n                    __import__(\"json\").dumps(\n                        record.to_dict(), sort_keys=True, separators=(\",\", \":\")\n                    )\n                    + \"\\n\"\n                    for record in exc.valid_records\n                ),\n                encoding=\"utf-8\",\n            )\n            records = exc.valid_records"
+      }
+    ]
+  },
+  {
+    "id": "M40",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "append when the log already has unrelated records",
+    "edits": [
+      {
+        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "new": "        pass"
+      },
+      {
+        "old": "    if record.seq != 0 or record.prev_hash != GENESIS_PREV_HASH:",
+        "new": "    if False:"
+      }
+    ]
+  },
+  {
+    "id": "M41",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "force seq = 0 via direct write",
+    "edits": [
+      {
+        "old": "        if records:\n            raise D8HoldError(\n                \"the Knowledge-PIT log already holds unrelated records\"\n            )",
+        "new": "        if records:\n            target.write_text(\"\", encoding=\"utf-8\")"
+      }
+    ]
+  },
+  {
+    "id": "M42",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "append an ACCESS backfill",
+    "edits": [
+      {
+        "old": "    return _result(registration_mode, True, record, artifact, target)",
+        "new": "    log.append(\n        kind=RecordKind.ACCESS,\n        payload={\"artifact_record_hash\": record.record_hash, \"component\": \"reserve\"},\n        footprint=None,\n    )\n    return _result(registration_mode, True, record, artifact, target)"
+      }
+    ]
+  },
+  {
+    "id": "M43",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "append a NOT_EXPOSED declaration",
+    "edits": [
+      {
+        "old": "    return _result(registration_mode, True, record, artifact, target)",
+        "new": "    log.append(\n        kind=RecordKind.EXPOSURE_DECLARATION,\n        channel=Channel.HUMAN,\n        footprint=artifact.footprint.body,\n        payload={\n            \"schema_version\": \"exposure-declaration-v1\",\n            \"declarant\": {\"declarant_id\": \"d8\", \"role\": \"OPERATOR\"},\n            \"channel\": \"HUMAN\",\n            \"scope\": {\"program_ids\": [\"*\"], \"hypothesis_ids\": []},\n            \"footprint\": artifact.footprint.body,\n            \"claim\": {\"polarity\": \"NOT_EXPOSED\", \"basis_hash\": \"0\" * 64},\n            \"knowledge_snapshot_ref\": {\n                \"length\": 1,\n                \"head_hash\": record.record_hash,\n            },\n        },\n    )\n    return _result(registration_mode, True, record, artifact, target)"
+      }
+    ]
+  },
+  {
+    "id": "M44",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "d8_evidence_role upgraded",
+    "edits": [
+      {
+        "old": "_EVIDENCE_ROLE = (\n    \"UNKNOWN_EXPOSURE (not upgraded by registration; absence of ACCESS is \"\n    \"not proof of no access)\"\n)",
+        "new": "_EVIDENCE_ROLE = \"CONFIRMATION_HISTORICAL_RECORDED (upgraded)\""
+      }
+    ]
+  },
+  {
+    "id": "M45",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "drop the non-exposure disclaimer",
+    "edits": [
+      {
+        "old": "_SEALED_SEMANTICS = (\n    \"from the D8 registration boundary onward, the artifact is designated \"\n    \"sealed reserve evidence and is not authorized for development or \"\n    \"evaluation access, except through a separately authorized confirmation \"\n    \"procedure. sealed=true does not assert historical non-exposure\"\n)",
+        "new": "_SEALED_SEMANTICS = (\n    \"from the D8 registration boundary onward, the artifact is designated \"\n    \"sealed reserve evidence and is not authorized for development or \"\n    \"evaluation access, except through a separately authorized confirmation \"\n    \"procedure.\"\n)"
+      }
+    ]
+  },
+  {
+    "id": "M46",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "drop a historical-disclosure row",
+    "edits": [
+      {
+        "old": "    (\"D5 (gate 10)\", \"rebuild re-read raw data, including reserve values\"),\n",
+        "new": ""
+      }
+    ]
+  },
+  {
+    "id": "M47",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "TEST mode accepts the production path",
+    "edits": [
+      {
+        "old": "        if resolved == production.resolve():\n            raise D8RegistrationModeError(\n                \"TEST mode refuses the production Knowledge-PIT path\"\n            )\n        return Path(log_path)",
+        "new": "        return Path(log_path)"
+      }
+    ]
+  },
+  {
+    "id": "M48",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "PRODUCTION without the token",
+    "edits": [
+      {
+        "old": "        if authorization != PRODUCTION_AUTHORIZATION:\n            raise D8RegistrationModeError(\n                \"PRODUCTION mode requires the exact authorization token\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M49",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "DRY_RUN writes to the production log",
+    "edits": [
+      {
+        "old": "        tmp_dir = Path(tempfile.mkdtemp(prefix=\"d8-dry-run-\"))\n        target = tmp_dir / \"knowledge.jsonl\"\n        if production.is_file():\n            shutil.copyfile(production, target)\n        return target",
+        "new": "        return Path(log_path)"
+      }
+    ]
+  },
+  {
+    "id": "M50",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "nondeterministic payload timestamp",
+    "edits": [
+      {
+        "old": "            \"time_source\": \"envelope.recorded_at\",",
+        "new": "            \"time_source\": __import__(\"datetime\").datetime.now().isoformat(),"
+      }
+    ]
+  },
+  {
+    "id": "M51",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip the manifest hash check",
+    "edits": [
+      {
+        "old": "            if _sha256_file(path) != expected_hash:\n                raise D8HoldError(\n                    f\"manifest hash mismatch for {batch}/{filename}\"\n                )",
+        "new": "            pass"
+      }
+    ]
+  },
+  {
+    "id": "M52",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "accept a third batch",
+    "edits": [
+      {
+        "old": "    if actual != expected:\n        raise D8HoldError(\n            \"the manifest batch set is not exactly the two bound batches\"\n        )",
+        "new": "    if not expected.issubset(actual):\n        pass"
+      }
+    ]
+  },
+  {
+    "id": "M53",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "skip the Phase-10 code hash pin",
+    "edits": [
+      {
+        "old": "        actual = _sha256_file(path)\n        if actual != expected:\n            raise D8HoldError(\n                f\"pinned Phase-10 code hash mismatch for {relative}\"\n            )",
+        "new": "        pass"
+      }
+    ]
+  },
+  {
+    "id": "M54",
+    "file": "smart_beta/dataset_v1/reserve_artifact.py",
+    "description": "rewrite the unresolved reasons",
+    "edits": [
+      {
+        "old": "            \"unresolved_reasons\": list(footprint.unresolved),",
+        "new": "            \"unresolved_reasons\": [],"
+      }
+    ]
+  }
+]
