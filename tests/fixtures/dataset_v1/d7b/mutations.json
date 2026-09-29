@@ -44,8 +44,12 @@
     "description": "scenario-companion reuse",
     "edits": [
       {
-        "old": "    panel_ts = base.copy()",
-        "new": "    panel_ts = panel_t0"
+        "old": "    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )",
+        "new": "    _scenario_companion = partition_mod.HoldoutRegistry()\n    _scenario_companion.consume(partition)\n    portfolio_t0, value_t0, t_t0, n_obs_t0 = _evaluate_scenario(\n        panel_t0, declaration\n    )"
+      },
+      {
+        "old": "    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )",
+        "new": "    _scenario_companion.consume(partition)\n    portfolio_ts, value_ts, t_ts, n_obs_ts = _evaluate_scenario(\n        panel_ts, declaration\n    )"
       }
     ]
   },
@@ -814,8 +818,16 @@
     "description": "compare pair counts, not identities",
     "edits": [
       {
-        "old": "            pairs.add((_as_date(row.date), str(row.stock_id)))",
-        "new": "            pairs.add((_as_date(row.date), \"x\"))"
+        "old": "    if not np.array_equal(mask_t0, mask_ts):\n        fail(\"nan_mask\")",
+        "new": "    if int(mask_t0.sum()) != int(mask_ts.sum()):\n        fail(\"nan_mask\")"
+      },
+      {
+        "old": "    if _finite_pairs(panel_t0) != _finite_pairs(panel_ts):\n        fail(\"admissible_identity\")",
+        "new": "    if len(_finite_pairs(panel_t0)) != len(_finite_pairs(panel_ts)):\n        fail(\"admissible_identity\")"
+      },
+      {
+        "old": "        if _finite_pairs(panel) != expected_pairs:\n            fail(\"pair_identity\", scenario)",
+        "new": "        if len(_finite_pairs(panel)) != len(expected_pairs):\n            fail(\"pair_identity\", scenario)"
       }
     ]
   },

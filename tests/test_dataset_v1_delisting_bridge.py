@@ -694,11 +694,15 @@ def test_item009_engine_evaluate_is_never_called(
 ) -> None:
     from smart_beta.evaluation import engine
 
-    def _raise(*args: object, **kwargs: object) -> None:
+    calls = {"n": 0}
+
+    def _spy(*args: object, **kwargs: object) -> None:
+        calls["n"] += 1
         raise AssertionError("engine.evaluate must never be called by D7b")
 
-    monkeypatch.setattr(engine, "evaluate", _raise)
+    monkeypatch.setattr(engine, "evaluate", _spy)
     case = _run(_Store(tmp_path))
+    assert calls["n"] == 0
     assert case.diagnostics.not_assessed is None
 
 
@@ -775,6 +779,26 @@ def test_item013_holdout_role_fold_is_final_holdout_overlap(tmp_path: Path) -> N
         store.root, declaration, spec, panel, partition, bindings=bindings
     )
     assert diag.not_assessed == B.NOT_ASSESSED_FINAL_HOLDOUT_OVERLAP
+
+    # A non-holdout fold that does not overlap the holdout but extends past
+    # 2023-06-30 must be NOT_ASSESSED_NOT_DEVELOPMENT.
+    late_fold = Fold(FoldRole.IS, dt.date(2023, 1, 2), dt.date(2024, 1, 2))
+    late_holdout = Fold(
+        FoldRole.HOLDOUT, dt.date(2024, 1, 2), dt.date(2024, 6, 3)
+    )
+    late_partition = Partition(
+        folds=(late_fold, late_holdout), split_rule="late-development"
+    )
+    late_declaration = _declaration(late_partition, late_fold, panel, spec)
+    late_diag = B.build_development_diagnostics(
+        store.root,
+        late_declaration,
+        spec,
+        panel,
+        late_partition,
+        bindings=bindings,
+    )
+    assert late_diag.not_assessed == B.NOT_ASSESSED_NOT_DEVELOPMENT
     record = B.classify_delisting_sensitivity(diag, None, None)
     assert record.status == B.STATUS_NOT_ASSESSED
     assert record.advancement_blocked
@@ -802,6 +826,26 @@ def test_item014_overlapping_holdout_fold_is_not_assessed(tmp_path: Path) -> Non
         store.root, declaration, spec, panel, partition, bindings=bindings
     )
     assert diag.not_assessed == B.NOT_ASSESSED_FINAL_HOLDOUT_OVERLAP
+
+    # A non-holdout fold that does not overlap the holdout but extends past
+    # 2023-06-30 must be NOT_ASSESSED_NOT_DEVELOPMENT.
+    late_fold = Fold(FoldRole.IS, dt.date(2023, 1, 2), dt.date(2024, 1, 2))
+    late_holdout = Fold(
+        FoldRole.HOLDOUT, dt.date(2024, 1, 2), dt.date(2024, 6, 3)
+    )
+    late_partition = Partition(
+        folds=(late_fold, late_holdout), split_rule="late-development"
+    )
+    late_declaration = _declaration(late_partition, late_fold, panel, spec)
+    late_diag = B.build_development_diagnostics(
+        store.root,
+        late_declaration,
+        spec,
+        panel,
+        late_partition,
+        bindings=bindings,
+    )
+    assert late_diag.not_assessed == B.NOT_ASSESSED_NOT_DEVELOPMENT
 
 
 def test_item015_t0_diagnostic_consumes_zero_holdouts(
@@ -1110,6 +1154,63 @@ def _forward(panel: pd.DataFrame, stock: str, formation: dt.date) -> float:
         & (pd.to_datetime(panel["date"]).dt.date == formation)
     ]
     return float(row["forward_return"].iloc[0])
+
+
+def _equal_count_different_identity_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
+) -> None:
+    """T0/TS and the expected set have equal pair counts but different identities.
+
+    Only the identity checks (mask positions, pair-set identity) can catch
+    this: the per-group n_stocks/n_returns reconciliation, the accounting
+    check and the typed-NaN accounting all remain consistent by construction.
+    """
+    original = B._scenario_panels
+
+    def _patched(**call_kwargs: Any):
+        panel_t0, panel_ts, records = original(**call_kwargs)
+        candidates = [
+            record for record in records
+            if record.scenario == B.SCENARIO_T0
+            and record.expected_admissible
+            and record.formation_date == F1
+        ]
+        first = candidates[0]
+        second = next(
+            record for record in candidates
+            if record.group == first.group and record.stock_id != first.stock_id
+        )
+
+        def row_index(panel: pd.DataFrame, record: Any) -> int:
+            mask = (panel["stock_id"] == record.stock_id) & (
+                pd.to_datetime(panel["date"]).dt.date == record.formation_date
+            )
+            return int(panel.index[mask][0])
+
+        # T0: first finite, second NaN.  TS: first NaN, second finite.
+        panel_t0.loc[row_index(panel_t0, second), "forward_return"] = np.nan
+        panel_ts.loc[row_index(panel_ts, first), "forward_return"] = np.nan
+
+        def adjust(record: Any) -> Any:
+            if record.formation_date != first.formation_date:
+                return record
+            if record.stock_id == first.stock_id:
+                return dataclasses.replace(
+                    record,
+                    expected_admissible=record.scenario == B.SCENARIO_T0,
+                )
+            if record.stock_id == second.stock_id:
+                return dataclasses.replace(
+                    record,
+                    expected_admissible=record.scenario == B.SCENARIO_TS,
+                )
+            return record
+
+        return panel_t0, panel_ts, tuple(adjust(record) for record in records)
+
+    monkeypatch.setattr(B, "_scenario_panels", _patched)
+    with pytest.raises(B.D7bConsistencyError):
+        _capture_run(_Store(tmp_path), **kwargs)
 
 
 # ===========================================================================
@@ -1562,10 +1663,11 @@ def test_item065_nan_masks_identical_across_scenarios(tmp_path: Path) -> None:
 
 
 def test_item066_admissible_identities_identical_across_scenarios(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, panel_t0, panel_ts = _capture_run(_inadmissible_store(tmp_path))
     assert B._finite_pairs(panel_t0) == B._finite_pairs(panel_ts)
+    _equal_count_different_identity_fails(tmp_path, monkeypatch)
 
 
 def test_item067_group_assignments_identical_across_scenarios(tmp_path: Path) -> None:
@@ -1645,12 +1747,18 @@ def test_item073_rank_ic_expected_pairs_exclude_inadmissible(
 
 
 def test_item074_ic_pair_identities_identical_across_scenarios(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, panel_t0, panel_ts = _capture_run(
         _inadmissible_store(tmp_path), primary_metric=B.spec_mod.MetricKey.IC, basis="NONE"
     )
     assert B._finite_pairs(panel_t0) == B._finite_pairs(panel_ts)
+    _equal_count_different_identity_fails(
+        tmp_path,
+        monkeypatch,
+        primary_metric=B.spec_mod.MetricKey.IC,
+        basis="NONE",
+    )
 
 
 def test_item075_admissibility_cannot_trigger_regrouping(tmp_path: Path) -> None:
@@ -1896,6 +2004,31 @@ def test_item092_sign_minus_one_ts_tau(tmp_path: Path) -> None:
     # A is raw bottom (group 1); under sign=-1 it is the economic long.
     assert _forward(panel_t0, "A", F1) == pytest.approx(r)
     assert _forward(panel_ts, "A", F1) == pytest.approx(-1.0)
+
+    # Under sign=-1 a terminal member in the MIDDLE group gets tau = 0.
+    keys = ("A", "B", "C", "D", "E", "F")
+    middle_store = _Store(tmp_path, name="middle-store")
+    for f in (F1, F2):
+        for i, key in enumerate(keys):
+            kw: dict[str, Any] = {"rank": i + 1, "rate": 0.01 * (i + 1)}
+            if key == "C":
+                kw.update(affected=True, m=1)
+            middle_store.add(f, key, **kw)
+    middle_values = {
+        (f, key): float(i + 1) for f in (F1, F2) for i, key in enumerate(keys)
+    }
+    middle_panel = _panel(middle_values)
+    _, middle_t0, middle_ts = _capture_run(
+        middle_store,
+        panel=middle_panel,
+        sign=-1,
+        n_groups=3,
+        primary_metric=B.spec_mod.MetricKey.LONG_SHORT,
+        basis="GROSS",
+    )
+    r_c = _compound(0.03, 1)
+    assert _forward(middle_t0, "C", F1) == pytest.approx(r_c)
+    assert _forward(middle_ts, "C", F1) == pytest.approx(r_c)
 
 
 def test_item093_sign_plus_one_ts_tau_raw_extremes(tmp_path: Path) -> None:
@@ -2154,8 +2287,10 @@ def test_item112_es_equals_two_b_not_sensitive(tmp_path: Path) -> None:
 
 def test_item113_es_just_above_two_b_sensitive(tmp_path: Path) -> None:
     case = _run(_Store(tmp_path))
+    just_above = math.nextafter(2.0 * 0.5, math.inf)
+    assert just_above > 2.0 * 0.5
     record = _classify_override(
-        case, e_s=1.0000001, b=0.5, economic_t0=1.0, economic_ts=1.0
+        case, e_s=just_above, b=0.5, economic_t0=1.0, economic_ts=1.0
     )
     assert record.clause_c is True
     assert record.status == B.STATUS_DELISTING_SENSITIVE
