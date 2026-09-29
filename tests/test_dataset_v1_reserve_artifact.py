@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,19 @@ def _register(
 
 def _obs_keys(rows) -> set:
     return set(rows)
+
+
+def _reference_resolve_subjects(obs_keys, eligible):
+    """The exhaustive (non-indexed) reference behaviour for subject resolution."""
+    rows = []
+    for ticker, row_date in sorted(obs_keys, key=lambda item: (item[0], item[1])):
+        matches = [
+            key
+            for key, key_ticker, start, end in eligible
+            if key_ticker == ticker and start <= row_date <= end
+        ]
+        rows.append((matches[0] if len(matches) == 1 else ticker, row_date))
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +288,36 @@ def test_item32_row_maps_only_inside_interval(tmp_path):
     assert any(
         reason == "unmapped_subject:AAA" for reason in artifact.footprint.unresolved
     )
+
+    # F1: the resolver indexes eligible rows by ticker, so a large fixture is
+    # fast and still identical to the exhaustive reference behaviour.
+    small_obs = {("NOPE", dt.date(2023, 7, 5))}
+    small_eligible = []
+    for index in range(200):
+        ticker = f"T{index:03d}"
+        small_obs.add((ticker, dt.date(2023, 7, 5)))
+        small_eligible.append(
+            (f"XNAS:{ticker}", ticker, dt.date(2023, 1, 1), dt.date(2023, 12, 31))
+        )
+    assert A._resolve_subjects(
+        small_obs, small_eligible
+    ) == _reference_resolve_subjects(small_obs, small_eligible)
+
+    large_count = 20000
+    large_obs = {("NOPE", dt.date(2023, 7, 5))}
+    large_eligible = []
+    for index in range(large_count):
+        ticker = f"T{index:05d}"
+        large_obs.add((ticker, dt.date(2023, 7, 5)))
+        large_eligible.append(
+            (f"XNAS:{ticker}", ticker, dt.date(2023, 1, 1), dt.date(2023, 12, 31))
+        )
+    started = time.perf_counter()
+    large_resolved = A._resolve_subjects(large_obs, large_eligible)
+    elapsed = time.perf_counter() - started
+    assert len(large_resolved) == large_count + 1
+    assert ("NOPE", dt.date(2023, 7, 5)) in large_resolved
+    assert elapsed < 5.0
 
 
 def test_item33_row_outside_every_interval_unresolved(tmp_path):
@@ -869,6 +913,7 @@ def test_item66_different_packaging_hash_conflicts(tmp_path):
 
 
 def test_item67_same_packaging_hash_different_payload_conflicts(tmp_path):
+    # Case 1: same packaging_hash but a different payload (available_from).
     store = _store(tmp_path / "one")
     log_path = tmp_path / "logs" / "knowledge.jsonl"
     _register(store, log_path)
@@ -895,6 +940,58 @@ def test_item67_same_packaging_hash_different_payload_conflicts(tmp_path):
     with pytest.raises(A.D8ConflictError):
         _register(other, log_path)
     assert log_path.read_bytes() == before
+
+    # Case 2: identical payload but a different footprint.  The two D4 files
+    # hold the same eligible key set (so every map hash and the unresolved
+    # reasons are identical) but swap which key's interval contains the
+    # observation, so the resolved subject -- and the footprint -- differs.
+    footprint_a = _store(
+        tmp_path / "fp_a",
+        obs_rows=[("AAA", dt.date(2023, 7, 5))],
+        d4_rows=[
+            {
+                "security_key": "XNAS:AAA",
+                "ticker": "AAA",
+                "listed_start": dt.date(2023, 1, 1),
+                "listed_end": dt.date(2023, 12, 31),
+            },
+            {
+                "security_key": "XNYS:AAA",
+                "ticker": "AAA",
+                "listed_start": dt.date(2020, 1, 1),
+                "listed_end": dt.date(2020, 12, 31),
+            },
+        ],
+    )
+    footprint_b = _store(
+        tmp_path / "fp_b",
+        obs_rows=[("AAA", dt.date(2023, 7, 5))],
+        d4_rows=[
+            {
+                "security_key": "XNAS:AAA",
+                "ticker": "AAA",
+                "listed_start": dt.date(2020, 1, 1),
+                "listed_end": dt.date(2020, 12, 31),
+            },
+            {
+                "security_key": "XNYS:AAA",
+                "ticker": "AAA",
+                "listed_start": dt.date(2023, 1, 1),
+                "listed_end": dt.date(2023, 12, 31),
+            },
+        ],
+    )
+    artifact_a = _artifact(footprint_a)
+    artifact_b = _artifact(footprint_b)
+    assert content_hash(artifact_a.payload) == content_hash(artifact_b.payload)
+    assert artifact_a.footprint.footprint_id != artifact_b.footprint.footprint_id
+
+    log_path_two = tmp_path / "logs2" / "knowledge.jsonl"
+    _register(footprint_a, log_path_two)
+    before_two = log_path_two.read_bytes()
+    with pytest.raises(A.D8ConflictError):
+        _register(footprint_b, log_path_two)
+    assert log_path_two.read_bytes() == before_two
 
 
 def test_item68_truncated_tail_raised_not_repaired(tmp_path):

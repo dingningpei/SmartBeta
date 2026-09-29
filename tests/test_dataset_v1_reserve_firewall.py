@@ -227,9 +227,33 @@ def test_item11_naive_timestamp_and_other_types_rejected(tmp_path):
 
 
 def test_item12_no_read_before_rejection(tmp_path, monkeypatch):
-    accessor = _accessor(tmp_path)
+    root, bindings = _make_store(tmp_path)
+    accessor = F.DevelopmentAccessor(root, bindings=bindings)
     calls: list = []
     monkeypatch.setattr(F.pq, "read_table", _spy(calls))
+
+    # Prove no file is opened either: spy on the firewall's own hasher and on
+    # every "open" audit event under the synthetic store root.
+    hash_calls: list[str] = []
+    original_sha = F._sha256_file
+
+    def spy_sha(path, *args, **kwargs):
+        hash_calls.append(str(path))
+        return original_sha(path, *args, **kwargs)
+
+    monkeypatch.setattr(F, "_sha256_file", spy_sha)
+
+    opened: list[str] = []
+    active = {"on": False}
+    root_str = str(root)
+
+    def hook(event: str, args: tuple) -> None:
+        if active["on"] and event == "open" and args:
+            path = str(args[0])
+            if root_str in path:
+                opened.append(path)
+
+    sys.addaudithook(hook)
 
     rejections = [
         dict(start=dt.date(2023, 6, 30), end=dt.date(2023, 6, 29), columns=["ticker"]),
@@ -244,12 +268,18 @@ def test_item12_no_read_before_rejection(tmp_path, monkeypatch):
             tickers=[],
         ),
     ]
-    for kwargs in rejections:
-        with pytest.raises(F.AccessorError):
-            accessor.read("observations", **kwargs)
+    active["on"] = True
+    try:
+        for kwargs in rejections:
+            with pytest.raises(F.AccessorError):
+                accessor.read("observations", **kwargs)
+    finally:
+        active["on"] = False
     assert calls == []
+    assert hash_calls == []
+    assert opened == []
 
-    # A valid read does call read_table exactly once.
+    # A valid read does open and hash the file and call read_table exactly once.
     accessor.read(
         "observations",
         start=dt.date(2023, 6, 1),
@@ -257,6 +287,7 @@ def test_item12_no_read_before_rejection(tmp_path, monkeypatch):
         columns=["ticker"],
     )
     assert len(calls) == 1
+    assert len(hash_calls) == 1
 
 
 def test_item13_read_uses_filters(tmp_path, monkeypatch):

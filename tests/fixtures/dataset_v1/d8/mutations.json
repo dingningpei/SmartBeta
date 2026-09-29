@@ -273,8 +273,8 @@
     "description": "map rows outside the interval",
     "edits": [
       {
-        "old": "            if key_ticker == ticker and start <= row_date <= end",
-        "new": "            if key_ticker == ticker"
+        "old": "            for key, start, end in by_ticker.get(ticker, ())\n            if start <= row_date <= end",
+        "new": "            for key, start, end in by_ticker.get(ticker, ())"
       }
     ]
   },

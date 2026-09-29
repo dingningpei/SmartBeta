@@ -607,12 +607,20 @@ def _resolve_subjects(
     obs_keys: set[tuple[str, date]],
     eligible: Sequence[tuple[str, str, date, date]],
 ) -> list[tuple[str, date]]:
+    # Index the eligible D4 rows by ticker so each reserve key is compared only
+    # against its own ticker's intervals.  Exhaustively scanning the whole
+    # eligible list per key is O(observations x eligible) and cannot finish on
+    # the real reserve package; the semantics are unchanged because a key still
+    # matches only when exactly one of its ticker's intervals contains the date.
+    by_ticker: dict[str, list[tuple[str, date, date]]] = {}
+    for key, key_ticker, start, end in eligible:
+        by_ticker.setdefault(key_ticker, []).append((key, start, end))
     rows: list[tuple[str, date]] = []
     for ticker, row_date in sorted(obs_keys, key=lambda item: (item[0], item[1])):
         matches = [
             key
-            for key, key_ticker, start, end in eligible
-            if key_ticker == ticker and start <= row_date <= end
+            for key, start, end in by_ticker.get(ticker, ())
+            if start <= row_date <= end
         ]
         subject = matches[0] if len(matches) == 1 else ticker
         rows.append((subject, row_date))
