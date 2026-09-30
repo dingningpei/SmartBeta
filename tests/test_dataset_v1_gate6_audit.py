@@ -21,7 +21,7 @@ import socket
 import time
 import urllib.error
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 
 import pandas as pd
@@ -3432,5 +3432,193 @@ def test_perf_equivalence() -> None:
             A.STRATUM_S2,
         }
         assert {c.band for c in optimized} == set(A.BAND_NAMES)
+
+
+# ===========================================================================
+# Performance repair round 2: compact SEC index for issuer mapping
+# ===========================================================================
+
+
+def _plan_specimen(sid: str, key: str, t: date) -> A.Specimen:
+    return A.Specimen(
+        selection_order=0,
+        specimen_id=sid,
+        stratum=A.STRATUM_S2,
+        band=A.BAND_B1,
+        year=t.year,
+        security_key=key,
+        ticker="AAA",
+        t=t,
+        p=t,
+        rho=2.0,
+        rank_hex="0" * 64,
+        near_split_offset=None,
+        dividend_within_3=False,
+    )
+
+
+def _index_files(
+    raw_rows: list[tuple[str, str, str, str, str]],
+    filenames: tuple[str, ...],
+) -> dict[str, bytes]:
+    groups: dict[str, list[str]] = {name: [] for name in filenames}
+    for idx, (cik, company, form, filed, filename) in enumerate(raw_rows):
+        groups[filenames[idx % len(filenames)]].append(
+            f"{cik}|{company}|{form}|{filed}|{filename}"
+        )
+    return {name: _master(rows) for name, rows in groups.items()}
+
+
+def _random_index_rows(
+    seed: int, n_rows: int
+) -> tuple[list[tuple[str, str, str, str, str]], list[str], list[str]]:
+    """Randomised index rows: collisions, renamed CIKs, unlisted forms, late."""
+    rng = random.Random(seed)
+    ciks = [f"{1000 + i:010d}" for i in range(120)]
+    base_names = [f"Issuer {i:03d} Inc" for i in range(60)]
+    forms = list(A.FORM_PRIORITY) + ["4", "SC 13G", "S-8", "3"]
+    rows: list[tuple[str, str, str, str, str]] = []
+    for idx in range(n_rows):
+        cik = rng.choice(ciks)
+        if idx % 5 == 0:
+            company = f"Unique {cik}"
+        else:
+            company = rng.choice(base_names)
+        if idx % 17 == 0:
+            company = "Renamed Holdco Inc"
+        form = rng.choice(forms)
+        if idx % 13 == 0:
+            filed = date(2024, 1, 1) + timedelta(days=rng.randrange(0, 200))
+        else:
+            filed = date(2010, 1, 1) + timedelta(days=rng.randrange(0, 4900))
+        filename = f"edgar/data/{cik}/{idx:06d}.txt"
+        rows.append((cik, company, form, filed.isoformat(), filename))
+    return rows, ciks, base_names
+
+
+def test_perf2_mapping_equivalence() -> None:
+    """Compact-index mapping equals the per-row reference exactly."""
+    raw_rows, _ciks, base_names = _random_index_rows(seed=2026, n_rows=4000)
+    files = _index_files(
+        raw_rows,
+        ("master_2015Q1.gz", "master_2016Q2.gz", "master_2018Q3.gz"),
+    )
+    reference_rows = A.parse_sec_index_files(files)
+    compact = A.build_sec_index(files)
+
+    rng = random.Random(4242)
+    cases: list[tuple[str, date, tuple[str, ...]]] = []
+    for i in range(260):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=rng.randrange(0, 3000))
+        if i % 11 == 0:
+            names: tuple[str, ...] = ()
+        elif i % 13 == 0:
+            names = (f"Unknown Issuer {i}",)
+        elif i % 7 == 0:
+            names = (base_names[i % len(base_names)], "Renamed Holdco Inc")
+        else:
+            names = (base_names[i % len(base_names)],)
+        cases.append((key, t, names))
+
+    for key, t, names in cases:
+        reference = A.map_issuer(key, names, reference_rows, t)
+        got = A.map_issuer(key, names, (), t, index=compact)
+        assert got == reference, (key, t, names, got, reference)
+
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i, (key, t, names) in enumerate(cases[:180]):
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = names
+    ref_plan, ref_counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=reference_rows
+    )
+    cmp_plan, cmp_counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=compact
+    )
+    assert cmp_plan == ref_plan
+    assert cmp_counts == ref_counts
+    assert A.fetch_plan_sha256(cmp_plan) == A.fetch_plan_sha256(ref_plan)
+    states = {row.mapping_state for row in ref_plan}
+    assert "MAPPED" in states
+    assert states & {
+        A.REASON_NO_ISSUER_NAME,
+        A.REASON_NO_ISSUER_MAPPING,
+        A.REASON_AMBIGUOUS_ISSUER_MAPPING,
+        A.REASON_NO_FILINGS_IN_WINDOW,
+    }
+
+
+def test_perf2_mapping_scale() -> None:
+    """A 1M-row index plus 180 specimens builds the plan in < 60 s."""
+    names = [f"Issuer {i:04d} Inc" for i in range(500)]
+    forms = list(A.FORM_PRIORITY) + ["4", "SC 13G"]
+    base = date(2010, 1, 1)
+    n_rows = 1_000_000
+    raw_rows = [
+        f"{i % 500:010d}|{names[i % 500]}|{forms[i % len(forms)]}|"
+        f"{(base + timedelta(days=i % 4800)).isoformat()}|"
+        f"edgar/data/{i % 500:010d}/{i}.txt"
+        for i in range(n_rows)
+    ]
+    files = {"master_2015Q1.gz": _master(raw_rows)}
+
+    started = time.perf_counter()
+    index = A.build_sec_index(files)
+    assert len(files) == 1
+    assert sum(
+        len(v)
+        for by_cik in index.dates_by_name_cik.values()
+        for v in by_cik.values()
+    ) == n_rows
+
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i in range(180):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=i * 15)
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = (names[i % len(names)],)
+    plan, _counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=index
+    )
+    elapsed = time.perf_counter() - started
+
+    assert len(specimens) == 180
+    assert elapsed < 60.0, f"mapping build took {elapsed:.1f}s"
+
+
+def test_perf2_norm_once_per_distinct_name(monkeypatch) -> None:
+    """``norm`` runs once per distinct name, never per index row."""
+    raw_rows, _ciks, base_names = _random_index_rows(seed=99, n_rows=6000)
+    files = _index_files(raw_rows, ("master_2015Q1.gz",))
+    calls = {"n": 0}
+    real_norm = A._norm
+
+    def counted(name: str) -> str:
+        calls["n"] += 1
+        return real_norm(name)
+
+    monkeypatch.setattr(A, "_norm", counted)
+    index = A.build_sec_index(files)
+    distinct_names = {row[1] for row in raw_rows}
+    assert calls["n"] == len(distinct_names)
+    assert calls["n"] < len(raw_rows)
+
+    # Mapping uses the compact per-name index and never re-normalizes rows.
+    calls["n"] = 0
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i in range(180):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=i)
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = (base_names[i % len(base_names)],)
+    A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=index
+    )
+    assert calls["n"] <= sum(len(v) for v in issuer_names.values())
+    assert calls["n"] < len(raw_rows)
 
 
