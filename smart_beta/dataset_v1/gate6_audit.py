@@ -552,9 +552,12 @@ def compute_magnitude(
     series: KeySeries,
     t: date,
     sessions: Sequence[date],
+    *,
+    usable: Sequence[date] | None = None,
 ) -> tuple[date, float]:
     """The previous usable session ``p`` and ``rho = close_t / close_p``."""
-    usable = usable_dates(series, sessions)
+    if usable is None:
+        usable = usable_dates(series, sessions)
     previous = [d for d in usable if d < t]
     if not previous:
         raise PopulationInconsistencyError(
@@ -648,19 +651,70 @@ def admitted_pairs(admitted_returns: pd.DataFrame) -> set[tuple[str, date]]:
     }
 
 
+@dataclass(frozen=True)
+class CaEventIndex:
+    """D3 corporate-action rows pre-grouped by ticker (source order kept).
+
+    The public helpers below rescan the whole ``ca_events`` frame on every
+    call.  Production has ~80k rows and one call per population row, so this
+    index groups the split and dividend rows once.  Each per-ticker list
+    preserves the source row order exactly: the reference scan returns
+    events in row order, and a tie inside the rule engine can pick a
+    different matching event, so reordering would not be behaviour-preserving.
+    """
+
+    splits: Mapping[str, tuple[tuple[date, float], ...]]
+    dividends: Mapping[str, tuple[tuple[date, float], ...]]
+
+
+def index_ca_events(ca_events: pd.DataFrame) -> CaEventIndex:
+    """Group split and dividend rows by ticker once (source order kept)."""
+    splits: dict[str, list[tuple[date, float]]] = {}
+    dividends: dict[str, list[tuple[date, float]]] = {}
+    if not ca_events.empty:
+        for stock_id, effective, action, factor in zip(
+            ca_events["stock_id"],
+            ca_events["effective_date"],
+            ca_events["action_type"],
+            ca_events["adjustment_factor"],
+        ):
+            kind = str(action)
+            if kind == "split":
+                target = splits
+            elif kind == "dividend":
+                target = dividends
+            else:
+                continue
+            target.setdefault(str(stock_id), []).append(
+                (as_date(effective), float(factor))
+            )
+    return CaEventIndex(
+        splits={key: tuple(value) for key, value in splits.items()},
+        dividends={key: tuple(value) for key, value in dividends.items()},
+    )
+
+
 def split_events_for(
     ticker: str,
     listed_start: date,
     listed_end: date,
     ca_events: pd.DataFrame,
+    *,
+    index: CaEventIndex | None = None,
 ) -> list[tuple[date, float]]:
     """D3 split events for a key's ticker, as ``(effective_date, factor)``.
 
     ``ca_events.stock_id`` carries the **ticker**, not the security_key, so
     events are associated with a key through its D4 assigned interval
-    ``(ticker, listed_start, listed_end)``.
+    ``(ticker, listed_start, listed_end)``.  An optional precomputed
+    ``index`` keeps the semantics but avoids rescanning the frame.
     """
     out: list[tuple[date, float]] = []
+    if index is not None:
+        for d, factor in index.splits.get(ticker, ()):
+            if listed_start <= d <= listed_end:
+                out.append((d, factor))
+        return out
     if ca_events.empty:
         return out
     for stock_id, effective, action, factor in zip(
@@ -694,14 +748,34 @@ def dividend_events_for(
     listed_end: date,
     ca_events: pd.DataFrame,
     observations: pd.DataFrame,
+    *,
+    index: CaEventIndex | None = None,
+    closes: Mapping[tuple[str, date], float] | None = None,
 ) -> list[tuple[date, float]]:
     """D3 dividend events with the amount derived from adjustment_factor.
 
     D3 stores ``adjustment_factor = 1 + divCash / close`` for the same row's
     raw close, so the cash amount is ``(adjustment_factor - 1) * raw_close``.
-    A missing raw close fails closed.
+    A missing raw close fails closed.  Optional precomputed ``index`` and
+    ``closes`` avoid rescanning the frame and rebuilding the close lookup.
     """
     out: list[tuple[date, float]] = []
+    if index is not None:
+        events = index.dividends.get(ticker, ())
+        if not events:
+            return out
+        if closes is None:
+            closes = raw_close_lookup(observations)
+        for d, factor in events:
+            if not (listed_start <= d <= listed_end):
+                continue
+            close = closes.get((ticker, d))
+            if close is None:
+                raise Gate6Error(
+                    f"raw close unavailable for dividend {ticker} on {d}"
+                )
+            out.append((d, (factor - 1.0) * close))
+        return out
     if ca_events.empty:
         return out
     closes = raw_close_lookup(observations)
@@ -735,14 +809,17 @@ def assign_stratum(
     listed_start: date,
     listed_end: date,
     admitted: set[tuple[str, date]],
+    index: CaEventIndex | None = None,
+    position: Mapping[date, int] | None = None,
 ) -> tuple[str, int | None]:
     """Assign one population day to S3, S1 or S2 (in that precedence)."""
-    position = {d: i for i, d in enumerate(sessions)}
+    if position is None:
+        position = {d: i for i, d in enumerate(sessions)}
     if t not in position:
         raise StratumError(f"suspect day {t} is not on the trusted calendar")
     here = position[t]
     for effective, _factor in split_events_for(
-        ticker, listed_start, listed_end, ca_events
+        ticker, listed_start, listed_end, ca_events, index=index
     ):
         if effective == t:
             raise StratumError(
@@ -2449,12 +2526,20 @@ def build_candidates(inputs: G6Inputs) -> list[Candidate]:
     )
     admitted = admitted_pairs(inputs.admitted_returns)
     position = {d: i for i, d in enumerate(inputs.sessions)}
+    ca_index = index_ca_events(inputs.ca_events)
+    closes = raw_close_lookup(inputs.observations)
+    usable_by_key = {
+        key: usable_dates(series, inputs.sessions)
+        for key, series in series_by_key.items()
+    }
 
     candidates: list[Candidate] = []
     for key, t in inputs.population.records:
         ticker, start, end = identity_by_key[key]
         series = series_by_key[key]
-        p, rho = compute_magnitude(series, t, inputs.sessions)
+        p, rho = compute_magnitude(
+            series, t, inputs.sessions, usable=usable_by_key[key]
+        )
         band = magnitude_band(rho)
         stratum, offset = assign_stratum(
             key,
@@ -2465,9 +2550,17 @@ def build_candidates(inputs: G6Inputs) -> list[Candidate]:
             listed_start=start,
             listed_end=end,
             admitted=admitted,
+            index=ca_index,
+            position=position,
         )
         dividends = dividend_events_for(
-            ticker, start, end, inputs.ca_events, inputs.observations
+            ticker,
+            start,
+            end,
+            inputs.ca_events,
+            inputs.observations,
+            index=ca_index,
+            closes=closes,
         )
         here = position[t]
         in_band = any(
@@ -3099,6 +3192,7 @@ def run_e3(
 
     index = build_identity_index(inputs.identity_intervals)
     closes = raw_close_lookup(inputs.observations)
+    ca_index = index_ca_events(inputs.ca_events)
 
     records: list[SpecimenOutcome] = []
     for specimen in specimen_set.specimens:
@@ -3129,9 +3223,17 @@ def run_e3(
             rho=specimen.rho,
             close_t=close_t,
             close_p=close_p,
-            split_events=split_events_for(ticker, start, end, inputs.ca_events),
+            split_events=split_events_for(
+                ticker, start, end, inputs.ca_events, index=ca_index
+            ),
             dividend_events=dividend_events_for(
-                ticker, start, end, inputs.ca_events, inputs.observations
+                ticker,
+                start,
+                end,
+                inputs.ca_events,
+                inputs.observations,
+                index=ca_index,
+                closes=closes,
             ),
             sessions=inputs.sessions,
             mapping_reason=_mapping_reason(specimen.specimen_id, rows_by_specimen),
