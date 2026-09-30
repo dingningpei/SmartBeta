@@ -1508,6 +1508,21 @@ def test_item57_resolver_refuses_forbidden_and_nonallowlisted_paths(tmp_path: Pa
         resolver.resolve("derived/identity/i-not-allowlisted/identity_assignment.parquet")
     with pytest.raises(T.D7cInputError):
         resolver.resolve("../escape.parquet")
+    # Addendum A2: a D-SC query with a cutoff after 2023-06-29 fails closed,
+    # while the last permitted cutoff still passes through to the frozen D-SC
+    # query function.
+    with pytest.raises(T.ReserveFirewallError):
+        T._guarded_class_state_at({}, "K1", date(2023, 7, 3))
+    with pytest.raises(T.ReserveFirewallError):
+        T._guarded_policy_state_at({}, "K1", date(2023, 7, 3))
+    assert T._guarded_class_state_at({}, "K1", T.LAST_SOURCE_DATE) == (
+        "CLASS_UNRESOLVED",
+        "NO_ADMISSIBLE_EVIDENCE",
+    )
+    assert T._guarded_policy_state_at({}, "K1", T.LAST_SOURCE_DATE) == (
+        T.POLICY_NO_EXCLUSION,
+        frozenset(),
+    )
 
 
 def test_item58_injected_reserve_dated_row_raises(tmp_path: Path) -> None:
@@ -1519,6 +1534,26 @@ def test_item58_injected_reserve_dated_row_raises(tmp_path: Path) -> None:
     store.flag("AAA", T.RESERVE_START, 99, "NONPOSITIVE_PRICE")
     with pytest.raises(T.ReserveFirewallError):
         _build(store)
+
+    # Addendum A1/A2: a D-SC timeline containing segments dated on/after the
+    # reserve boundary is loaded whole and builds without error; the boundary
+    # is enforced only when the timeline is queried.
+    future = _Store(tmp_path, "future_dsc")
+    future_key = future.key("AAA", listed_start=date(2019, 1, 2))
+    future.class_seg(future_key, date(2019, 1, 2), "COMMON_STOCK")
+    future.class_seg(future_key, date(2023, 7, 3), "NON_COMMON")
+    future.policy_seg(future_key, date(2019, 1, 2), T.POLICY_NO_EXCLUSION)
+    future.policy_seg(future_key, date(2023, 7, 3), T.POLICY_EXCLUDED)
+    future.obs("AAA", date(2020, 1, 2), 100.0)
+    future.obs("AAA", date(2020, 1, 3), 110.0)
+    content_future = _build(future)
+    assert content_future["dsc_max_query_cutoff"] == T.LAST_SOURCE_DATE.isoformat()
+    future_inputs = T.load_trusted_inputs(
+        future.root, bindings=future.build(), calendar=CAL
+    )
+    assert _value(
+        future_inputs, T.INPUT_DAILY_TOTAL_RETURN, future_key, date(2020, 1, 6)
+    ) == pytest.approx(0.1)
 
 
 def test_item59_binding_hash_mismatch_fails_closed(tmp_path: Path) -> None:

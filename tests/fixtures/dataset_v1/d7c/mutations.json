@@ -265,8 +265,8 @@
     "description": "final-class (ever-COMMON) mask",
     "edits": [
       {
-        "old": "            class_state, _ = class_state_at(\n                inputs.class_timeline, key.security_key, source_session\n            )",
-        "new": "            class_state, _ = class_state_at(\n                inputs.class_timeline, key.security_key, date(2099, 1, 1)\n            )"
+        "old": "            class_state, _ = _guarded_class_state_at(\n                inputs.class_timeline, key.security_key, source_session\n            )",
+        "new": "            class_state, _ = _guarded_class_state_at(\n                inputs.class_timeline, key.security_key, LAST_SOURCE_DATE\n            )"
       }
     ],
     "file": "smart_beta/dataset_v1/trusted_inputs.py"

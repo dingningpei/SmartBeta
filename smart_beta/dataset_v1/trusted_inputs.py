@@ -876,16 +876,6 @@ def _post_load_assertions(inputs: _Inputs) -> None:
     _assert_before_reserve(
         inputs.ca_events["knowledge_date"], "D3 corporate actions"
     )
-    for name, timeline in (
-        ("class", inputs.class_timeline),
-        ("policy", inputs.policy_timeline),
-    ):
-        for segments in timeline.values():
-            for segment in segments:
-                _assert_before_reserve(
-                    pd.Series([segment.get("knowledge_date")]),
-                    f"D-SC {name} timeline",
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -1388,6 +1378,33 @@ def _capabilities(history: int) -> dict[str, DataCapability]:
 # ---------------------------------------------------------------------------
 
 
+def _guarded_class_state_at(
+    timeline: Mapping[str, Any], key: str, cutoff: date
+) -> tuple[str, str]:
+    """``class_state_at`` with the D-SC reserve-query boundary enforced.
+
+    The D-SC timeline is loaded whole (segments at or after 2023-07-03 are
+    structural records, not a reserve violation), but no query may consume
+    knowledge after 2023-06-29 (addendum A2).  A later cutoff fails closed.
+    """
+    if cutoff > LAST_SOURCE_DATE:
+        raise ReserveFirewallError(
+            f"D-SC class query cutoff {cutoff} is after {LAST_SOURCE_DATE}"
+        )
+    return class_state_at(timeline, key, cutoff)
+
+
+def _guarded_policy_state_at(
+    timeline: Mapping[str, Any], key: str, cutoff: date
+) -> tuple[str, frozenset[str]]:
+    """``policy_state_at`` with the D-SC reserve-query boundary enforced."""
+    if cutoff > LAST_SOURCE_DATE:
+        raise ReserveFirewallError(
+            f"D-SC policy query cutoff {cutoff} is after {LAST_SOURCE_DATE}"
+        )
+    return policy_state_at(timeline, key, cutoff)
+
+
 def build_trusted_inputs(
     root: Path | str,
     *,
@@ -1434,6 +1451,7 @@ def build_trusted_inputs(
     tri_records: list[tuple[date, str, date, float]] = []
     dv_records: list[tuple[date, str, date, float]] = []
     segment_records: list[tuple[str, int, date, date, bool]] = []
+    dsc_max_query_cutoff: date | None = None
     mask_counts: dict[str, dict[str, int]] = {
         name: {
             "admitted": 0,
@@ -1478,7 +1496,9 @@ def build_trusted_inputs(
             source_session = _primitive_session(row_date, sessions, pos)
             if source_session is None:
                 continue
-            class_state, _ = class_state_at(
+            if dsc_max_query_cutoff is None or source_session > dsc_max_query_cutoff:
+                dsc_max_query_cutoff = source_session
+            class_state, _ = _guarded_class_state_at(
                 inputs.class_timeline, key.security_key, source_session
             )
             if class_state != CLASS_COMMON_STOCK:
@@ -1486,7 +1506,7 @@ def build_trusted_inputs(
                 mask_counts[INPUT_TOTAL_RETURN_INDEX]["class_masked"] += 1
                 mask_counts[INPUT_DOLLAR_VOLUME]["class_masked"] += 1
                 continue
-            policy_state, _ = policy_state_at(
+            policy_state, _ = _guarded_policy_state_at(
                 inputs.policy_timeline, key.security_key, source_session
             )
             if policy_state != POLICY_NO_EXCLUSION:
@@ -1572,6 +1592,11 @@ def build_trusted_inputs(
             name: cap.to_dict() for name, cap in capabilities.items()
         },
         "knowledge_date_rule": KNOWLEDGE_DATE_RULE,
+        "dsc_max_query_cutoff": (
+            dsc_max_query_cutoff.isoformat()
+            if dsc_max_query_cutoff is not None
+            else None
+        ),
         "mask_counts": mask_counts,
         "certification_boundary": CERTIFICATION_BOUNDARY,
     }
