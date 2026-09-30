@@ -27,11 +27,13 @@ import math
 import os
 import random  # noqa: F401  (referenced by the frozen mutation set)
 import time  # noqa: F401  (referenced by the frozen mutation set)
+from array import array
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import pandas as pd
 
@@ -552,9 +554,12 @@ def compute_magnitude(
     series: KeySeries,
     t: date,
     sessions: Sequence[date],
+    *,
+    usable: Sequence[date] | None = None,
 ) -> tuple[date, float]:
     """The previous usable session ``p`` and ``rho = close_t / close_p``."""
-    usable = usable_dates(series, sessions)
+    if usable is None:
+        usable = usable_dates(series, sessions)
     previous = [d for d in usable if d < t]
     if not previous:
         raise PopulationInconsistencyError(
@@ -648,19 +653,70 @@ def admitted_pairs(admitted_returns: pd.DataFrame) -> set[tuple[str, date]]:
     }
 
 
+@dataclass(frozen=True)
+class CaEventIndex:
+    """D3 corporate-action rows pre-grouped by ticker (source order kept).
+
+    The public helpers below rescan the whole ``ca_events`` frame on every
+    call.  Production has ~80k rows and one call per population row, so this
+    index groups the split and dividend rows once.  Each per-ticker list
+    preserves the source row order exactly: the reference scan returns
+    events in row order, and a tie inside the rule engine can pick a
+    different matching event, so reordering would not be behaviour-preserving.
+    """
+
+    splits: Mapping[str, tuple[tuple[date, float], ...]]
+    dividends: Mapping[str, tuple[tuple[date, float], ...]]
+
+
+def index_ca_events(ca_events: pd.DataFrame) -> CaEventIndex:
+    """Group split and dividend rows by ticker once (source order kept)."""
+    splits: dict[str, list[tuple[date, float]]] = {}
+    dividends: dict[str, list[tuple[date, float]]] = {}
+    if not ca_events.empty:
+        for stock_id, effective, action, factor in zip(
+            ca_events["stock_id"],
+            ca_events["effective_date"],
+            ca_events["action_type"],
+            ca_events["adjustment_factor"],
+        ):
+            kind = str(action)
+            if kind == "split":
+                target = splits
+            elif kind == "dividend":
+                target = dividends
+            else:
+                continue
+            target.setdefault(str(stock_id), []).append(
+                (as_date(effective), float(factor))
+            )
+    return CaEventIndex(
+        splits={key: tuple(value) for key, value in splits.items()},
+        dividends={key: tuple(value) for key, value in dividends.items()},
+    )
+
+
 def split_events_for(
     ticker: str,
     listed_start: date,
     listed_end: date,
     ca_events: pd.DataFrame,
+    *,
+    index: CaEventIndex | None = None,
 ) -> list[tuple[date, float]]:
     """D3 split events for a key's ticker, as ``(effective_date, factor)``.
 
     ``ca_events.stock_id`` carries the **ticker**, not the security_key, so
     events are associated with a key through its D4 assigned interval
-    ``(ticker, listed_start, listed_end)``.
+    ``(ticker, listed_start, listed_end)``.  An optional precomputed
+    ``index`` keeps the semantics but avoids rescanning the frame.
     """
     out: list[tuple[date, float]] = []
+    if index is not None:
+        for d, factor in index.splits.get(ticker, ()):
+            if listed_start <= d <= listed_end:
+                out.append((d, factor))
+        return out
     if ca_events.empty:
         return out
     for stock_id, effective, action, factor in zip(
@@ -694,14 +750,34 @@ def dividend_events_for(
     listed_end: date,
     ca_events: pd.DataFrame,
     observations: pd.DataFrame,
+    *,
+    index: CaEventIndex | None = None,
+    closes: Mapping[tuple[str, date], float] | None = None,
 ) -> list[tuple[date, float]]:
     """D3 dividend events with the amount derived from adjustment_factor.
 
     D3 stores ``adjustment_factor = 1 + divCash / close`` for the same row's
     raw close, so the cash amount is ``(adjustment_factor - 1) * raw_close``.
-    A missing raw close fails closed.
+    A missing raw close fails closed.  Optional precomputed ``index`` and
+    ``closes`` avoid rescanning the frame and rebuilding the close lookup.
     """
     out: list[tuple[date, float]] = []
+    if index is not None:
+        events = index.dividends.get(ticker, ())
+        if not events:
+            return out
+        if closes is None:
+            closes = raw_close_lookup(observations)
+        for d, factor in events:
+            if not (listed_start <= d <= listed_end):
+                continue
+            close = closes.get((ticker, d))
+            if close is None:
+                raise Gate6Error(
+                    f"raw close unavailable for dividend {ticker} on {d}"
+                )
+            out.append((d, (factor - 1.0) * close))
+        return out
     if ca_events.empty:
         return out
     closes = raw_close_lookup(observations)
@@ -735,14 +811,17 @@ def assign_stratum(
     listed_start: date,
     listed_end: date,
     admitted: set[tuple[str, date]],
+    index: CaEventIndex | None = None,
+    position: Mapping[date, int] | None = None,
 ) -> tuple[str, int | None]:
     """Assign one population day to S3, S1 or S2 (in that precedence)."""
-    position = {d: i for i, d in enumerate(sessions)}
+    if position is None:
+        position = {d: i for i, d in enumerate(sessions)}
     if t not in position:
         raise StratumError(f"suspect day {t} is not on the trusted calendar")
     here = position[t]
     for effective, _factor in split_events_for(
-        ticker, listed_start, listed_end, ca_events
+        ticker, listed_start, listed_end, ca_events, index=index
     ):
         if effective == t:
             raise StratumError(
@@ -1014,6 +1093,35 @@ class IndexRow:
 
 
 @dataclass(frozen=True)
+class SecIndex:
+    """Compact, one-pass index over the bound SEC master files.
+
+    Built while streaming the 122 bound files instead of materialising one
+    :class:`IndexRow` per index row (production has ~23.3M rows).  These three
+    maps are all ``map_issuer`` needs:
+
+    * ``ciks_by_name``: every normalized company name seen anywhere, to the
+      set of CIKs that ever carried it (``norm`` runs once per distinct name);
+    * ``dates_by_name_cik``: the filing ordinals (all forms, sorted) of the
+      rows that carry each normalized name, per CIK.  The frozen activity
+      tie-break only looks at the rows that matched the wanted name(s), so
+      the dates must be keyed by name as well as CIK;
+    * ``filings_by_cik``: every CIK's ``FORM_PRIORITY`` filings, in source
+      order, as ``(form, date_filed, filename, company_name, source_file)``
+      for the event window (the event window is matched by CIK, not name).
+
+    Rows dated after ``DEV_END`` are discarded at parse time, exactly as the
+    reference parser does.
+    """
+
+    ciks_by_name: Mapping[str, frozenset[str]]
+    dates_by_name_cik: Mapping[str, Mapping[str, Sequence[int]]]
+    filings_by_cik: Mapping[
+        str, tuple[tuple[str, date, str, str, str], ...]
+    ]
+
+
+@dataclass(frozen=True)
 class MappingResult:
     state: str
     cik: str | None = None
@@ -1050,8 +1158,15 @@ def expected_index_filenames() -> tuple[str, ...]:
     return tuple(names)
 
 
-def parse_master_index(raw: bytes, *, source_file: str = "") -> list[IndexRow]:
-    """Parse one gzipped SEC master index (latin-1, after the ``-----`` line)."""
+def _iter_master_index_rows(
+    raw: bytes,
+) -> Iterator[tuple[str, str, str, date, str]]:
+    """Yield kept ``(cik, company, form, date_filed, filename)`` rows.
+
+    Shared by the reference parser and the compact one-pass builder so both
+    apply exactly the same filters (``Date Filed`` after ``DEV_END`` is
+    discarded at parse time).
+    """
     if raw[:2] == b"\x1f\x8b":
         text = gzip.decompress(raw).decode("latin-1")
     else:
@@ -1062,9 +1177,8 @@ def parse_master_index(raw: bytes, *, source_file: str = "") -> list[IndexRow]:
         if line.startswith("-----"):
             start = i
             break
-    rows: list[IndexRow] = []
     if start is None:
-        return rows
+        return
     for line in lines[start + 1 :]:
         parts = line.split("|")
         if len(parts) < 5:
@@ -1083,17 +1197,105 @@ def parse_master_index(raw: bytes, *, source_file: str = "") -> list[IndexRow]:
             continue
         if d > DEV_END:
             continue
-        rows.append(
-            IndexRow(
-                cik=cik,
-                company_name=company,
-                form=form,
-                date_filed=d,
-                filename=filename,
-                source_file=source_file,
-            )
+        yield cik, company, form, d, filename
+
+
+class _SecIndexBuilder:
+    """Accumulates a :class:`SecIndex` one master file at a time."""
+
+    def __init__(self) -> None:
+        self._ciks_by_name: dict[str, set[str]] = {}
+        self._dates_by_name_cik: dict[str, dict[str, list[int]]] = {}
+        self._filings_by_cik: dict[
+            str, list[tuple[str, date, str, str, str]]
+        ] = {}
+        self._cik_pool: dict[str, str] = {}
+        self._company_pool: dict[str, str] = {}
+        self._source_pool: dict[str, str] = {}
+        self._form_pool: dict[str, str] = {}
+        self._norm_cache: dict[str, str] = {}
+
+    def add_file(self, raw: bytes, *, source_file: str) -> None:
+        source = self._source_pool.setdefault(source_file, source_file)
+        ciks_by_name = self._ciks_by_name
+        dates_by_name_cik = self._dates_by_name_cik
+        filings_by_cik = self._filings_by_cik
+        cik_pool = self._cik_pool
+        company_pool = self._company_pool
+        form_pool = self._form_pool
+        norm_cache = self._norm_cache
+        for cik, company, form, filed, filename in _iter_master_index_rows(raw):
+            cik = cik_pool.setdefault(cik, cik)
+            company = company_pool.setdefault(company, company)
+            norm = norm_cache.get(company)
+            if norm is None:
+                norm = _norm(company)
+                norm_cache[company] = norm
+            by_name = ciks_by_name.get(norm)
+            if by_name is None:
+                by_name = set()
+                ciks_by_name[norm] = by_name
+            by_name.add(cik)
+            by_name_cik = dates_by_name_cik.get(norm)
+            if by_name_cik is None:
+                by_name_cik = {}
+                dates_by_name_cik[norm] = by_name_cik
+            dates = by_name_cik.get(cik)
+            if dates is None:
+                dates = []
+                by_name_cik[cik] = dates
+            dates.append(filed.toordinal())
+            if form in FORM_PRIORITY:
+                canonical = form_pool.setdefault(form, form)
+                filings = filings_by_cik.get(cik)
+                if filings is None:
+                    filings = []
+                    filings_by_cik[cik] = filings
+                filings.append((canonical, filed, filename, company, source))
+
+    def finish(self) -> SecIndex:
+        dates: dict[str, dict[str, Sequence[int]]] = {}
+        for name, by_cik in self._dates_by_name_cik.items():
+            dates[name] = {
+                cik: array("i", sorted(values))
+                for cik, values in by_cik.items()
+            }
+        return SecIndex(
+            ciks_by_name={
+                name: frozenset(values)
+                for name, values in self._ciks_by_name.items()
+            },
+            dates_by_name_cik=dates,
+            filings_by_cik={
+                cik: tuple(values)
+                for cik, values in self._filings_by_cik.items()
+            },
         )
-    return rows
+
+
+def build_sec_index(files: Mapping[str, bytes]) -> SecIndex:
+    """Build a compact :class:`SecIndex` from bound master files (in memory)."""
+    builder = _SecIndexBuilder()
+    for filename in sorted(files):
+        if not allowed_index_filename(filename):
+            continue
+        builder.add_file(files[filename], source_file=Path(filename).name)
+    return builder.finish()
+
+
+def parse_master_index(raw: bytes, *, source_file: str = "") -> list[IndexRow]:
+    """Parse one gzipped SEC master index (latin-1, after the ``-----`` line)."""
+    return [
+        IndexRow(
+            cik=cik,
+            company_name=company,
+            form=form,
+            date_filed=d,
+            filename=filename,
+            source_file=source_file,
+        )
+        for cik, company, form, d, filename in _iter_master_index_rows(raw)
+    ]
 
 
 def parse_sec_index_files(files: Mapping[str, bytes]) -> list[IndexRow]:
@@ -1117,10 +1319,19 @@ def map_issuer(
     names: Sequence[str],
     index_rows: Sequence[IndexRow],
     t: date,
+    *,
+    index: SecIndex | None = None,
 ) -> MappingResult:
-    """The frozen issuer mapping (spec section 5)."""
+    """The frozen issuer mapping (spec section 5).
+
+    With ``index=None`` this is the original per-row reference scan.  Passing
+    a precomputed :class:`SecIndex` gives the same result without rescanning
+    (or re-normalizing) every index row for every specimen.
+    """
     if not names:
         return MappingResult(state="UNRESOLVED", reason=REASON_NO_ISSUER_NAME)
+    if index is not None:
+        return _map_issuer_indexed(names, index, t)
     wanted = {_norm(name) for name in names}
     candidates: dict[str, list[IndexRow]] = {}
     for row in index_rows:
@@ -1171,6 +1382,73 @@ def map_issuer(
     )
 
 
+def _map_issuer_indexed(
+    names: Sequence[str], index: SecIndex, t: date
+) -> MappingResult:
+    """The same frozen mapping over a precomputed :class:`SecIndex`."""
+    wanted = {_norm(name) for name in names}
+    candidate_ciks: set[str] = set()
+    for norm in wanted:
+        candidate_ciks.update(index.ciks_by_name.get(norm, ()))
+    if not candidate_ciks:
+        return MappingResult(state="UNRESOLVED", reason=REASON_NO_ISSUER_MAPPING)
+    if len(candidate_ciks) > 1:
+        lo = (t - timedelta(days=400)).toordinal()
+        hi = min(t + timedelta(days=30), DEV_END).toordinal()
+        active: set[str] = set()
+        for cik in candidate_ciks:
+            for norm in wanted:
+                dates = index.dates_by_name_cik.get(norm, {}).get(cik)
+                if not dates:
+                    continue
+                position = bisect_left(dates, lo)
+                if position < len(dates) and dates[position] <= hi:
+                    active.add(cik)
+                    break
+        candidate_ciks = active
+    if not candidate_ciks:
+        return MappingResult(state="UNRESOLVED", reason=REASON_NO_ISSUER_MAPPING)
+    if len(candidate_ciks) > 1:
+        return MappingResult(
+            state="UNRESOLVED", reason=REASON_AMBIGUOUS_ISSUER_MAPPING
+        )
+    cik = next(iter(candidate_ciks))
+    window_lo = t - timedelta(days=60)
+    window_hi = min(t + timedelta(days=30), DEV_END)
+    filings: list[IndexRow] = []
+    for form, date_filed, filename, company, source in index.filings_by_cik.get(
+        cik, ()
+    ):
+        if window_lo <= date_filed <= window_hi:
+            filings.append(
+                IndexRow(
+                    cik=cik,
+                    company_name=company,
+                    form=form,
+                    date_filed=date_filed,
+                    filename=filename,
+                    source_file=source,
+                )
+            )
+    if not filings:
+        return MappingResult(
+            state="UNRESOLVED", reason=REASON_NO_FILINGS_IN_WINDOW
+        )
+    filings.sort(
+        key=lambda row: (
+            _priority(row.form),
+            abs((row.date_filed - t).days),
+            row.date_filed,
+            row.filename,
+        )
+    )
+    return MappingResult(
+        state="MAPPED",
+        cik=cik,
+        filings=tuple(filings[:MAX_FILINGS_PER_SPECIMEN]),
+    )
+
+
 @dataclass(frozen=True)
 class FetchPlanRow:
     specimen_id: str
@@ -1187,14 +1465,17 @@ def build_fetch_plan(
     specimens: Sequence[Specimen],
     *,
     issuer_names: Mapping[str, Sequence[str]],
-    index_rows: Sequence[IndexRow],
+    index_rows: Sequence[IndexRow] = (),
+    index: SecIndex | None = None,
 ) -> tuple[tuple[FetchPlanRow, ...], dict[str, int]]:
     """Build ``(specimen id, CIK, filename)`` rows plus mapping-state counts."""
     rows: list[FetchPlanRow] = []
     state_counts: Counter[str] = Counter()
     for specimen in specimens:
         names = issuer_names.get(specimen.security_key, ())
-        result = map_issuer(specimen.security_key, names, index_rows, specimen.t)
+        result = map_issuer(
+            specimen.security_key, names, index_rows, specimen.t, index=index
+        )
         if result.state != "MAPPED":
             state_counts[str(result.reason)] += 1
             rows.append(
@@ -2233,6 +2514,7 @@ class G6Inputs:
     issuer_names: Mapping[str, tuple[str, ...]]
     sec_index_rows: tuple[IndexRow, ...]
     sessions: tuple[date, ...]
+    sec_index: SecIndex | None = None
 
 
 def _parse_issuer_names(value: Any) -> tuple[str, ...]:
@@ -2258,17 +2540,19 @@ def _parse_issuer_names(value: Any) -> tuple[str, ...]:
     return tuple(part.strip() for part in text.split(",") if part.strip())
 
 
-def load_sec_index(
+def _iter_verified_index_files(
     root: str | Path,
     dsc: Mapping[str, Any],
-    bindings: ProductionBindings = PRODUCTION_BINDINGS,
-) -> tuple[IndexRow, ...]:
-    """Verify and parse all 122 bound 1993Q1-2023Q2 SEC master files.
+    bindings: ProductionBindings,
+) -> Iterator[tuple[str, bytes]]:
+    """Verify and yield the 122 bound index files one at a time.
 
     Every one of the 122 files must be present in the dsc.json
     ``sec_index_files_sha256`` map and on disk, and hash to its recorded
     value.  Any missing or mismatched file fails closed.  Files from 2023Q3
-    onward are never looked up or opened.
+    onward are never looked up or opened.  Yielding (rather than returning a
+    dict) lets the compact builder stream the files and keep only one in
+    memory at a time.
     """
     root = Path(root)
     index = dsc.get("sec_index_files_sha256") or {}
@@ -2276,7 +2560,6 @@ def load_sec_index(
         Path(str(key)).name: (str(key), expected)
         for key, expected in index.items()
     }
-    files: dict[str, bytes] = {}
     for base in expected_index_filenames():
         entry = by_basename.get(base)
         if entry is None:
@@ -2287,8 +2570,39 @@ def load_sec_index(
         if not path.exists():
             raise BindingMismatch(f"missing sec index file {base}")
         verify_file_sha256(path, expected)
-        files[base] = path.read_bytes()
+        yield base, path.read_bytes()
+
+
+def load_sec_index(
+    root: str | Path,
+    dsc: Mapping[str, Any],
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+) -> tuple[IndexRow, ...]:
+    """Reference: verify and materialise all 122 bound SEC master files.
+
+    Kept as the per-row equivalence oracle.  The production load path uses
+    :func:`load_sec_index_compact` instead so it never materialises ~23M
+    ``IndexRow`` objects.
+    """
+    files = {
+        base: raw
+        for base, raw in _iter_verified_index_files(root, dsc, bindings)
+    }
     return tuple(parse_sec_index_files(files))
+
+
+def load_sec_index_compact(
+    root: str | Path,
+    dsc: Mapping[str, Any],
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+) -> SecIndex:
+    """Verify the 122 bound files and build the compact index, streamed."""
+    builder = _SecIndexBuilder()
+    for base, raw in _iter_verified_index_files(root, dsc, bindings):
+        if not allowed_index_filename(base):
+            continue
+        builder.add_file(raw, source_file=Path(base).name)
+    return builder.finish()
 
 
 def load_g6_inputs(
@@ -2371,7 +2685,7 @@ def load_g6_inputs(
         raise BindingMismatch(
             "qc_report day_flags.parquet sha does not match the day_flags binding"
         )
-    sec_index_rows = load_sec_index(root, dsc, bindings)
+    sec_index = load_sec_index_compact(root, dsc, bindings)
 
     sessions = tuple(calendar) if calendar is not None else tuple(default_calendar())
     return G6Inputs(
@@ -2382,8 +2696,9 @@ def load_g6_inputs(
         ca_events=ca_events,
         admitted_returns=admitted_returns,
         issuer_names=issuer_names,
-        sec_index_rows=sec_index_rows,
+        sec_index_rows=(),
         sessions=sessions,
+        sec_index=sec_index,
     )
 
 
@@ -2449,12 +2764,20 @@ def build_candidates(inputs: G6Inputs) -> list[Candidate]:
     )
     admitted = admitted_pairs(inputs.admitted_returns)
     position = {d: i for i, d in enumerate(inputs.sessions)}
+    ca_index = index_ca_events(inputs.ca_events)
+    closes = raw_close_lookup(inputs.observations)
+    usable_by_key = {
+        key: usable_dates(series, inputs.sessions)
+        for key, series in series_by_key.items()
+    }
 
     candidates: list[Candidate] = []
     for key, t in inputs.population.records:
         ticker, start, end = identity_by_key[key]
         series = series_by_key[key]
-        p, rho = compute_magnitude(series, t, inputs.sessions)
+        p, rho = compute_magnitude(
+            series, t, inputs.sessions, usable=usable_by_key[key]
+        )
         band = magnitude_band(rho)
         stratum, offset = assign_stratum(
             key,
@@ -2465,9 +2788,17 @@ def build_candidates(inputs: G6Inputs) -> list[Candidate]:
             listed_start=start,
             listed_end=end,
             admitted=admitted,
+            index=ca_index,
+            position=position,
         )
         dividends = dividend_events_for(
-            ticker, start, end, inputs.ca_events, inputs.observations
+            ticker,
+            start,
+            end,
+            inputs.ca_events,
+            inputs.observations,
+            index=ca_index,
+            closes=closes,
         )
         here = position[t]
         in_band = any(
@@ -2946,6 +3277,7 @@ def run_e1(
         specimen_set.specimens,
         issuer_names=inputs.issuer_names,
         index_rows=inputs.sec_index_rows,
+        index=inputs.sec_index,
     )
     return write_g6_audit(
         audit_dir,
@@ -3099,6 +3431,7 @@ def run_e3(
 
     index = build_identity_index(inputs.identity_intervals)
     closes = raw_close_lookup(inputs.observations)
+    ca_index = index_ca_events(inputs.ca_events)
 
     records: list[SpecimenOutcome] = []
     for specimen in specimen_set.specimens:
@@ -3129,9 +3462,17 @@ def run_e3(
             rho=specimen.rho,
             close_t=close_t,
             close_p=close_p,
-            split_events=split_events_for(ticker, start, end, inputs.ca_events),
+            split_events=split_events_for(
+                ticker, start, end, inputs.ca_events, index=ca_index
+            ),
             dividend_events=dividend_events_for(
-                ticker, start, end, inputs.ca_events, inputs.observations
+                ticker,
+                start,
+                end,
+                inputs.ca_events,
+                inputs.observations,
+                index=ca_index,
+                closes=closes,
             ),
             sessions=inputs.sessions,
             mapping_reason=_mapping_reason(specimen.specimen_id, rows_by_specimen),

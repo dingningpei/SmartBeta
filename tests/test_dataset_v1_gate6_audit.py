@@ -16,10 +16,13 @@ import hashlib
 import inspect
 import json
 import os
+import random
 import socket
+import time
 import urllib.error
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
+from functools import lru_cache
 
 import pandas as pd
 import pytest
@@ -3161,5 +3164,716 @@ def test_g7_dsc_hash_field_mismatch_with_rebound_file_sha(tmp_path) -> None:
     # The file SHA-256 now matches, so only the dsc_hash field is wrong.
     with pytest.raises(A.BindingMismatch):
         A.load_g6_inputs(root, rebound)
+
+
+# ===========================================================================
+# Performance repair (behaviour-preserving): one index build per run
+# ===========================================================================
+
+
+@lru_cache(maxsize=None)
+def _all_sessions() -> tuple[date, ...]:
+    """The trusted calendar, built once for every performance test."""
+    return tuple(A.default_calendar())
+
+
+def _perf_inputs(
+    *,
+    n_keys: int,
+    rows_per_key: int,
+    sessions: tuple[date, ...],
+    seed: int = 1234,
+    shuffle_ca: bool = True,
+) -> A.G6Inputs:
+    """A synthetic, in-memory E1 input set with real p/rho/covariates.
+
+    Every key gets ``rows_per_key`` spaced suspect days whose previous usable
+    session close makes ``rho`` fall in one of the four bands, plus a few
+    ordered (deliberately shuffled) split and dividend ``ca_events``.
+    """
+    rng = random.Random(seed)
+    identity_keys: list[str] = []
+    identity_tickers: list[str] = []
+    obs_tickers: list[str] = []
+    obs_dates: list[date] = []
+    obs_closes: list[float] = []
+    ca_rows: list[tuple[str, date, str, float]] = []
+    records: list[tuple[str, date]] = []
+    admitted_keys: list[str] = []
+    admitted_sessions: list[date] = []
+    span = 8
+    for k in range(n_keys):
+        ticker = f"T{k:04d}"
+        key = f"TIINGO:{ticker}:2015-01-02"
+        identity_keys.append(key)
+        identity_tickers.append(ticker)
+        start_pos = 3 + (k % 5)
+        positions = [start_pos + i * span for i in range(rows_per_key)]
+        close_at: dict[int, float] = {}
+        for idx, pos in enumerate(positions):
+            if pos >= len(sessions) - 1:
+                break
+            factor = (0.1, 0.4, 2.0, 10.0)[(k + idx) % 4]
+            close_at[pos] = 100.0 * factor
+            t = sessions[pos]
+            records.append((key, t))
+            if (k + idx) % 3 == 0:
+                admitted_keys.append(key)
+                admitted_sessions.append(t)
+        for pos, d in enumerate(sessions):
+            obs_tickers.append(ticker)
+            obs_dates.append(d)
+            obs_closes.append(close_at.get(pos, 100.0))
+        if positions[0] - 2 >= 0:
+            ca_rows.append(
+                (ticker, sessions[positions[0] - 2], "split", 0.5)
+            )
+        ca_rows.append((ticker, sessions[1], "split", 0.25))
+        if len(positions) > 1:
+            ca_rows.append(
+                (ticker, sessions[positions[1] - 1], "dividend", 1.1)
+            )
+        ca_rows.append((ticker, sessions[2], "dividend", 1.05))
+    if shuffle_ca:
+        rng.shuffle(ca_rows)
+
+    identity_intervals = pd.DataFrame(
+        {
+            "security_key": pd.Series(identity_keys, dtype="string"),
+            "ticker": pd.Series(identity_tickers, dtype="string"),
+            "listed_start": pd.array(
+                [pd.Timestamp(A.DEV_START)] * n_keys, dtype="datetime64[ns]"
+            ),
+            "listed_end": pd.array(
+                [pd.Timestamp(A.DEV_END)] * n_keys, dtype="datetime64[ns]"
+            ),
+            "state": pd.Series([A.INTERVAL_ASSIGNED] * n_keys, dtype="string"),
+        }
+    )
+    observations = pd.DataFrame(
+        {
+            "ticker": pd.Series(obs_tickers, dtype="string"),
+            "date": pd.to_datetime(obs_dates),
+            "close": pd.Series(obs_closes, dtype="float64"),
+        }
+    )
+    ca_events = pd.DataFrame(
+        {
+            "stock_id": pd.Series([r[0] for r in ca_rows], dtype="string"),
+            "effective_date": pd.to_datetime([r[1] for r in ca_rows]),
+            "action_type": pd.Series([r[2] for r in ca_rows], dtype="string"),
+            "adjustment_factor": pd.Series(
+                [r[3] for r in ca_rows], dtype="float64"
+            ),
+        }
+    )
+    admitted_returns = pd.DataFrame(
+        {
+            "security_key": pd.Series(admitted_keys, dtype="string"),
+            "source_session": pd.to_datetime(admitted_sessions),
+        }
+    )
+    day_flags = pd.DataFrame(
+        {
+            "security_key": pd.Series([], dtype="string"),
+            "date": pd.Series([], dtype="datetime64[ns]"),
+            "class_or_flag": pd.Series([], dtype="string"),
+            "disposition": pd.Series([], dtype="string"),
+        }
+    )
+    records = sorted(records)
+    population = A.Population(
+        records=tuple(records),
+        sha256="p" * 64,
+        count=len(records),
+        unique_keys=n_keys,
+    )
+    return A.G6Inputs(
+        population=population,
+        day_flags=day_flags,
+        identity_intervals=identity_intervals,
+        observations=observations,
+        ca_events=ca_events,
+        admitted_returns=admitted_returns,
+        issuer_names={},
+        sec_index_rows=(),
+        sessions=tuple(sessions),
+    )
+
+
+def _reference_candidates(inputs: A.G6Inputs) -> list[A.Candidate]:
+    """The original per-row algorithm, kept as an equivalence oracle."""
+    index = A.build_identity_index(inputs.identity_intervals)
+    identity_by_key: dict[str, tuple[str, date, date]] = {}
+    for key, _t in inputs.population.records:
+        identity_by_key.setdefault(key, A.require_identity(key, index))
+    identity_frame = pd.DataFrame(
+        [
+            {
+                "security_key": key,
+                "ticker": ticker,
+                "listed_start": start,
+                "listed_end": end,
+            }
+            for key, (ticker, start, end) in sorted(identity_by_key.items())
+        ],
+        columns=["security_key", "ticker", "listed_start", "listed_end"],
+    )
+    series_by_key = A.build_key_series(
+        identity_frame, inputs.observations, inputs.day_flags
+    )
+    admitted = A.admitted_pairs(inputs.admitted_returns)
+    position = {d: i for i, d in enumerate(inputs.sessions)}
+    candidates: list[A.Candidate] = []
+    for key, t in inputs.population.records:
+        ticker, start, end = identity_by_key[key]
+        series = series_by_key[key]
+        p, rho = A.compute_magnitude(series, t, inputs.sessions)
+        band = A.magnitude_band(rho)
+        stratum, offset = A.assign_stratum(
+            key,
+            t,
+            ticker=ticker,
+            ca_events=inputs.ca_events,
+            sessions=inputs.sessions,
+            listed_start=start,
+            listed_end=end,
+            admitted=admitted,
+        )
+        dividends = A.dividend_events_for(
+            ticker, start, end, inputs.ca_events, inputs.observations
+        )
+        here = position[t]
+        in_band = any(
+            d in position and abs(position[d] - here) <= 3
+            for d, _ in dividends
+        )
+        candidates.append(
+            A.make_candidate(
+                key,
+                ticker,
+                t,
+                stratum,
+                band,
+                p=p,
+                rho=rho,
+                near_split_offset=offset,
+                dividend_within_3=in_band,
+            )
+        )
+    return candidates
+
+
+def test_perf_single_lookup_build(monkeypatch) -> None:
+    """The close lookup and ca_events index build once per run, not per row."""
+    calls = {"raw": 0, "ca": 0}
+    real_raw = A.raw_close_lookup
+    real_ca = A.index_ca_events
+
+    def counted_raw(observations):
+        calls["raw"] += 1
+        return real_raw(observations)
+
+    def counted_ca(ca_events):
+        calls["ca"] += 1
+        return real_ca(ca_events)
+
+    monkeypatch.setattr(A, "raw_close_lookup", counted_raw)
+    monkeypatch.setattr(A, "index_ca_events", counted_ca)
+
+    sessions = _all_sessions()[:200]
+    observed: list[tuple[int, int]] = []
+    for n_keys, rows_per_key in ((5, 4), (40, 6)):
+        calls["raw"] = 0
+        calls["ca"] = 0
+        inputs = _perf_inputs(
+            n_keys=n_keys, rows_per_key=rows_per_key, sessions=sessions
+        )
+        A.build_candidates(inputs)
+        observed.append((calls["raw"], calls["ca"]))
+
+    assert observed == [(1, 1), (1, 1)]
+
+
+def test_perf_scale() -> None:
+    """A production-sized synthetic E1 run builds candidates in < 60 s."""
+    sessions = _all_sessions()
+    inputs = _perf_inputs(n_keys=320, rows_per_key=7, sessions=sessions)
+    assert len(inputs.population.records) >= 2_000
+    assert inputs.population.unique_keys >= 300
+    assert len(inputs.observations) >= 500_000
+
+    started = time.perf_counter()
+    candidates = A.build_candidates(inputs)
+    elapsed = time.perf_counter() - started
+
+    assert len(candidates) == len(inputs.population.records)
+    assert elapsed < 60.0, f"build_candidates took {elapsed:.1f}s"
+
+
+def test_perf_equivalence() -> None:
+    """The indexed build equals the per-row helper reference exactly."""
+    sessions = _all_sessions()[:260]
+    for seed in (7, 11, 2026):
+        inputs = _perf_inputs(
+            n_keys=45,
+            rows_per_key=4,
+            sessions=sessions,
+            seed=seed,
+            shuffle_ca=True,
+        )
+        optimized = A.build_candidates(inputs)
+        reference = _reference_candidates(inputs)
+        assert optimized == reference
+        # Confirm the fixture actually exercised every stratum and band.
+        assert {c.stratum for c in optimized} == {
+            A.STRATUM_S3,
+            A.STRATUM_S1,
+            A.STRATUM_S2,
+        }
+        assert {c.band for c in optimized} == set(A.BAND_NAMES)
+
+
+# ===========================================================================
+# Performance repair round 2: compact SEC index for issuer mapping
+# ===========================================================================
+
+
+def _plan_specimen(sid: str, key: str, t: date) -> A.Specimen:
+    return A.Specimen(
+        selection_order=0,
+        specimen_id=sid,
+        stratum=A.STRATUM_S2,
+        band=A.BAND_B1,
+        year=t.year,
+        security_key=key,
+        ticker="AAA",
+        t=t,
+        p=t,
+        rho=2.0,
+        rank_hex="0" * 64,
+        near_split_offset=None,
+        dividend_within_3=False,
+    )
+
+
+def _index_files(
+    raw_rows: list[tuple[str, str, str, str, str]],
+    filenames: tuple[str, ...],
+) -> dict[str, bytes]:
+    groups: dict[str, list[str]] = {name: [] for name in filenames}
+    for idx, (cik, company, form, filed, filename) in enumerate(raw_rows):
+        groups[filenames[idx % len(filenames)]].append(
+            f"{cik}|{company}|{form}|{filed}|{filename}"
+        )
+    return {name: _master(rows) for name, rows in groups.items()}
+
+
+def _random_index_rows(
+    seed: int, n_rows: int
+) -> tuple[list[tuple[str, str, str, str, str]], list[str], list[str]]:
+    """Randomised index rows: collisions, renamed CIKs, unlisted forms, late."""
+    rng = random.Random(seed)
+    ciks = [f"{1000 + i:010d}" for i in range(120)]
+    base_names = [f"Issuer {i:03d} Inc" for i in range(60)]
+    forms = list(A.FORM_PRIORITY) + ["4", "SC 13G", "S-8", "3"]
+    rows: list[tuple[str, str, str, str, str]] = []
+    for idx in range(n_rows):
+        cik = rng.choice(ciks)
+        if idx % 5 == 0:
+            company = f"Unique {cik}"
+        else:
+            company = rng.choice(base_names)
+        if idx % 17 == 0:
+            company = "Renamed Holdco Inc"
+        form = rng.choice(forms)
+        if idx % 13 == 0:
+            filed = date(2024, 1, 1) + timedelta(days=rng.randrange(0, 200))
+        else:
+            filed = date(2010, 1, 1) + timedelta(days=rng.randrange(0, 4900))
+        filename = f"edgar/data/{cik}/{idx:06d}.txt"
+        rows.append((cik, company, form, filed.isoformat(), filename))
+    return rows, ciks, base_names
+
+
+def test_perf2_mapping_equivalence() -> None:
+    """Compact-index mapping equals the per-row reference exactly."""
+    raw_rows, _ciks, base_names = _random_index_rows(seed=2026, n_rows=4000)
+    files = _index_files(
+        raw_rows,
+        ("master_2015Q1.gz", "master_2016Q2.gz", "master_2018Q3.gz"),
+    )
+    reference_rows = A.parse_sec_index_files(files)
+    compact = A.build_sec_index(files)
+
+    rng = random.Random(4242)
+    cases: list[tuple[str, date, tuple[str, ...]]] = []
+    for i in range(260):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=rng.randrange(0, 3000))
+        if i % 11 == 0:
+            names: tuple[str, ...] = ()
+        elif i % 13 == 0:
+            names = (f"Unknown Issuer {i}",)
+        elif i % 7 == 0:
+            names = (base_names[i % len(base_names)], "Renamed Holdco Inc")
+        else:
+            names = (base_names[i % len(base_names)],)
+        cases.append((key, t, names))
+
+    for key, t, names in cases:
+        reference = A.map_issuer(key, names, reference_rows, t)
+        got = A.map_issuer(key, names, (), t, index=compact)
+        assert got == reference, (key, t, names, got, reference)
+
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i, (key, t, names) in enumerate(cases[:180]):
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = names
+    ref_plan, ref_counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=reference_rows
+    )
+    cmp_plan, cmp_counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=compact
+    )
+    assert cmp_plan == ref_plan
+    assert cmp_counts == ref_counts
+    assert A.fetch_plan_sha256(cmp_plan) == A.fetch_plan_sha256(ref_plan)
+    states = {row.mapping_state for row in ref_plan}
+    assert "MAPPED" in states
+    assert states & {
+        A.REASON_NO_ISSUER_NAME,
+        A.REASON_NO_ISSUER_MAPPING,
+        A.REASON_AMBIGUOUS_ISSUER_MAPPING,
+        A.REASON_NO_FILINGS_IN_WINDOW,
+    }
+
+
+def test_perf2_mapping_scale() -> None:
+    """A 1M-row index plus 180 specimens builds the plan in < 60 s."""
+    names = [f"Issuer {i:04d} Inc" for i in range(500)]
+    forms = list(A.FORM_PRIORITY) + ["4", "SC 13G"]
+    base = date(2010, 1, 1)
+    n_rows = 1_000_000
+    raw_rows = [
+        f"{i % 500:010d}|{names[i % 500]}|{forms[i % len(forms)]}|"
+        f"{(base + timedelta(days=i % 4800)).isoformat()}|"
+        f"edgar/data/{i % 500:010d}/{i}.txt"
+        for i in range(n_rows)
+    ]
+    files = {"master_2015Q1.gz": _master(raw_rows)}
+
+    started = time.perf_counter()
+    index = A.build_sec_index(files)
+    assert len(files) == 1
+    assert sum(
+        len(v)
+        for by_cik in index.dates_by_name_cik.values()
+        for v in by_cik.values()
+    ) == n_rows
+
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i in range(180):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=i * 15)
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = (names[i % len(names)],)
+    plan, _counts = A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=index
+    )
+    elapsed = time.perf_counter() - started
+
+    assert len(specimens) == 180
+    assert elapsed < 60.0, f"mapping build took {elapsed:.1f}s"
+
+
+def test_perf2_norm_once_per_distinct_name(monkeypatch) -> None:
+    """``norm`` runs once per distinct name, never per index row."""
+    raw_rows, _ciks, base_names = _random_index_rows(seed=99, n_rows=6000)
+    files = _index_files(raw_rows, ("master_2015Q1.gz",))
+    calls = {"n": 0}
+    real_norm = A._norm
+
+    def counted(name: str) -> str:
+        calls["n"] += 1
+        return real_norm(name)
+
+    monkeypatch.setattr(A, "_norm", counted)
+    index = A.build_sec_index(files)
+    distinct_names = {row[1] for row in raw_rows}
+    assert calls["n"] == len(distinct_names)
+    assert calls["n"] < len(raw_rows)
+
+    # Mapping uses the compact per-name index and never re-normalizes rows.
+    calls["n"] = 0
+    specimens: list[A.Specimen] = []
+    issuer_names: dict[str, tuple[str, ...]] = {}
+    for i in range(180):
+        key = f"K{i:04d}"
+        t = date(2015, 1, 2) + timedelta(days=i)
+        specimens.append(_plan_specimen(f"g6-{i:04d}", key, t))
+        issuer_names[key] = (base_names[i % len(base_names)],)
+    A.build_fetch_plan(
+        specimens, issuer_names=issuer_names, index_rows=(), index=index
+    )
+    assert calls["n"] <= sum(len(v) for v in issuer_names.values())
+    assert calls["n"] < len(raw_rows)
+
+
+# ===========================================================================
+# Performance repair round 3: guard the indexed production paths
+# ===========================================================================
+
+
+def _compact_index_from_rows(rows: list[str]) -> A.SecIndex:
+    return A.build_sec_index({"master_2020Q1.gz": _master(rows)})
+
+
+def test_perf3_indexed_split_respects_d4_interval() -> None:
+    """The indexed split branch must still honour the key's D4 interval (P24a)."""
+    sessions = A.default_calendar()
+    ticker = "ABC"
+    t = date(2020, 2, 3)
+    start, end = date(2020, 2, 1), date(2020, 3, 1)
+    pos = {d: i for i, d in enumerate(sessions)}
+    outside = sessions[pos[t] - 2]
+    assert not (start <= outside <= end)
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(outside)],
+            "action_type": ["split"],
+            "adjustment_factor": [0.1],
+        }
+    )
+    index = A.index_ca_events(ca)
+    assert A.split_events_for(ticker, start, end, ca, index=index) == []
+    assert A.split_events_for(ticker, start, end, ca, index=index) == (
+        A.split_events_for(ticker, start, end, ca)
+    )
+
+    stratum, _ = A.assign_stratum(
+        "K1",
+        t,
+        ticker=ticker,
+        ca_events=ca,
+        sessions=sessions,
+        listed_start=start,
+        listed_end=end,
+        admitted=set(),
+        index=index,
+    )
+    assert stratum == A.STRATUM_S2
+
+    out = A.run_rule_engine(
+        _engine(
+            security_key="K1",
+            ticker=ticker,
+            t=t,
+            sessions=sessions,
+            facts=[_fact("SPLIT", factor=0.1, market_effective_date=t)],
+            split_events=A.split_events_for(
+                ticker, start, end, ca, index=index
+            ),
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_OMISSION, A.REASON_OMITTED_SPLIT)
+
+
+def test_perf3_indexed_unlisted_forms_never_enter_the_plan() -> None:
+    """A2 through the indexed builder: only FORM_PRIORITY rows are kept (P35)."""
+    t = date(2020, 6, 15)
+    listed = "1|Acme Corp|8-K|2020-06-15|edgar/data/1/a.txt"
+    unlisted = [
+        "1|Acme Corp|4|2020-06-15|edgar/data/1/b.txt",
+        "1|Acme Corp|SC 13G|2020-06-15|edgar/data/1/c.txt",
+    ]
+    listed_index = _compact_index_from_rows([listed])
+    with_unlisted = _compact_index_from_rows([listed] + unlisted)
+
+    result = A.map_issuer("K1", ["Acme Corp"], (), t, index=with_unlisted)
+    assert result.state == "MAPPED"
+    assert [row.form for row in result.filings] == ["8-K"]
+
+    specimen = _plan_specimen("g6-0000", "K1", t)
+    plan_a, _ = A.build_fetch_plan(
+        [specimen],
+        issuer_names={"K1": ["Acme Corp"]},
+        index_rows=(),
+        index=listed_index,
+    )
+    plan_b, _ = A.build_fetch_plan(
+        [specimen],
+        issuer_names={"K1": ["Acme Corp"]},
+        index_rows=(),
+        index=with_unlisted,
+    )
+    assert {row.form for row in plan_b} == {"8-K"}
+    assert all(row.form in A.FORM_PRIORITY for row in plan_b)
+    assert plan_b == plan_a
+    assert A.fetch_plan_sha256(plan_b) == A.fetch_plan_sha256(plan_a)
+
+    only_unlisted = _compact_index_from_rows(
+        unlisted + ["1|Acme Corp|8-K|2019-01-02|edgar/data/1/old.txt"]
+    )
+    assert (
+        A.map_issuer("K1", ["Acme Corp"], (), t, index=only_unlisted).reason
+        == A.REASON_NO_FILINGS_IN_WINDOW
+    )
+
+
+def test_perf3_indexed_dividend_missing_close_fails_closed() -> None:
+    """The index+closes dividend path must still fail closed on no close (P38)."""
+    ticker = "ABC"
+    effective = date(2020, 1, 6)
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(effective)],
+            "action_type": ["dividend"],
+            "adjustment_factor": [1.35],
+        }
+    )
+    index = A.index_ca_events(ca)
+    empty_observations = pd.DataFrame(
+        {
+            "ticker": pd.Series([], dtype="string"),
+            "date": pd.Series([], dtype="datetime64[ns]"),
+            "close": pd.Series([], dtype="float64"),
+        }
+    )
+    with pytest.raises(A.Gate6Error):
+        A.dividend_events_for(
+            ticker,
+            A.DEV_START,
+            A.DEV_END,
+            ca,
+            empty_observations,
+            index=index,
+            closes={},
+        )
+
+    closes = {(ticker, effective): 20.0}
+    events = A.dividend_events_for(
+        ticker,
+        A.DEV_START,
+        A.DEV_END,
+        ca,
+        empty_observations,
+        index=index,
+        closes=closes,
+    )
+    assert events == [(effective, pytest.approx(7.0))]
+
+
+def test_perf3_indexed_event_window_boundaries() -> None:
+    """The indexed event window keeps the exact frozen boundaries (P39)."""
+    t = date(2020, 6, 15)
+    assert t - timedelta(days=60) == date(2020, 4, 16)
+    assert t + timedelta(days=30) == date(2020, 7, 15)
+    rows = [
+        "1|Acme Corp|8-K|2020-04-16|edgar/data/1/m60.txt",
+        "1|Acme Corp|8-K|2020-04-15|edgar/data/1/m61.txt",
+        "1|Acme Corp|8-K|2020-07-15|edgar/data/1/p30.txt",
+        "1|Acme Corp|8-K|2020-07-16|edgar/data/1/p31.txt",
+    ]
+    index = _compact_index_from_rows(rows)
+    result = A.map_issuer("K1", ["Acme Corp"], (), t, index=index)
+    assert result.state == "MAPPED"
+    assert {row.date_filed for row in result.filings} == {
+        date(2020, 4, 16),
+        date(2020, 7, 15),
+    }
+
+    # The upper bound is min(t + 30 days, DEV_END): exactly DEV_END is kept.
+    t_cap = date(2023, 6, 15)
+    assert t_cap + timedelta(days=30) > A.DEV_END
+    cap_rows = [
+        "2|Acme Corp|8-K|2023-06-30|edgar/data/2/cap.txt",
+        "2|Acme Corp|8-K|2023-06-29|edgar/data/2/pre.txt",
+    ]
+    cap_index = _compact_index_from_rows(cap_rows)
+    cap_result = A.map_issuer("K1", ["Acme Corp"], (), t_cap, index=cap_index)
+    assert cap_result.state == "MAPPED"
+    assert {row.date_filed for row in cap_result.filings} == {
+        date(2023, 6, 30),
+        date(2023, 6, 29),
+    }
+
+
+@pytest.mark.parametrize(
+    "class_or_flag, disposition",
+    [
+        ("OHLC_INCONSISTENT", "CORRUPT"),
+        ("INTERVAL_MISMATCH", "LEGIT"),
+    ],
+)
+def test_perf3_build_candidates_skips_unusable_sessions(
+    class_or_flag: str, disposition: str
+) -> None:
+    """The cached usable-session list skips unusable sessions (8b / P40)."""
+    d1, d2, d3 = date(2020, 1, 2), date(2020, 1, 3), date(2020, 1, 6)
+    sessions = (d1, d2, d3)
+    observations = pd.DataFrame(
+        {
+            "ticker": pd.Series(["ABC", "ABC", "ABC"], dtype="string"),
+            "date": pd.to_datetime([d1, d2, d3]),
+            "close": pd.Series([10.0, 8.0, 30.0], dtype="float64"),
+        }
+    )
+    day_flags = pd.DataFrame(
+        {
+            "security_key": pd.Series(["K1"], dtype="string"),
+            "date": pd.to_datetime([d2]),
+            "class_or_flag": pd.Series([class_or_flag], dtype="string"),
+            "disposition": pd.Series([disposition], dtype="string"),
+        }
+    )
+    identity_intervals = pd.DataFrame(
+        {
+            "security_key": pd.Series(["K1"], dtype="string"),
+            "ticker": pd.Series(["ABC"], dtype="string"),
+            "listed_start": pd.array(
+                [pd.Timestamp(A.DEV_START)], dtype="datetime64[ns]"
+            ),
+            "listed_end": pd.array(
+                [pd.Timestamp(A.DEV_END)], dtype="datetime64[ns]"
+            ),
+            "state": pd.Series([A.INTERVAL_ASSIGNED], dtype="string"),
+        }
+    )
+    inputs = A.G6Inputs(
+        population=A.Population(
+            records=(("K1", d3),), sha256="p" * 64, count=1, unique_keys=1
+        ),
+        day_flags=day_flags,
+        identity_intervals=identity_intervals,
+        observations=observations,
+        ca_events=pd.DataFrame(
+            {
+                "stock_id": pd.Series([], dtype="string"),
+                "effective_date": pd.Series([], dtype="datetime64[ns]"),
+                "action_type": pd.Series([], dtype="string"),
+                "adjustment_factor": pd.Series([], dtype="float64"),
+            }
+        ),
+        admitted_returns=pd.DataFrame(
+            {
+                "security_key": pd.Series([], dtype="string"),
+                "source_session": pd.Series([], dtype="datetime64[ns]"),
+            }
+        ),
+        issuer_names={},
+        sec_index_rows=(),
+        sessions=sessions,
+    )
+    candidates = A.build_candidates(inputs)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.p == d1
+    assert candidate.rho == pytest.approx(3.0)
+    assert candidate.band == A.BAND_B3
 
 
