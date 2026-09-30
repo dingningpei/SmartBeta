@@ -411,6 +411,7 @@ def test_09_s3_uses_trusted_sessions_and_split_at_t_fails() -> None:
     stratum, offset = A.assign_stratum(
         "K1",
         t,
+        ticker="K1",
         ca_events=ca,
         sessions=sessions,
         listed_start=A.DEV_START,
@@ -425,6 +426,7 @@ def test_09_s3_uses_trusted_sessions_and_split_at_t_fails() -> None:
         A.assign_stratum(
             "K1",
             t,
+            ticker="K1",
             ca_events=at_t,
             sessions=sessions,
             listed_start=A.DEV_START,
@@ -454,6 +456,7 @@ def test_10_s1_membership_equals_d7c_admission() -> None:
     stratum, _ = A.assign_stratum(
         "K1",
         t,
+        ticker="K1",
         ca_events=ca,
         sessions=sessions,
         listed_start=A.DEV_START,
@@ -464,6 +467,7 @@ def test_10_s1_membership_equals_d7c_admission() -> None:
     stratum2, _ = A.assign_stratum(
         "K2",
         date(2020, 1, 2),
+        ticker="K2",
         ca_events=ca,
         sessions=sessions,
         listed_start=A.DEV_START,
@@ -488,6 +492,7 @@ def test_11_strata_disjoint_exhaustive_and_s3_precedence() -> None:
     stratum, _ = A.assign_stratum(
         "K1",
         t,
+        ticker="K1",
         ca_events=ca,
         sessions=sessions,
         listed_start=A.DEV_START,
@@ -498,6 +503,7 @@ def test_11_strata_disjoint_exhaustive_and_s3_precedence() -> None:
     other, _ = A.assign_stratum(
         "K9",
         t,
+        ticker="K9",
         ca_events=ca,
         sessions=sessions,
         listed_start=A.DEV_START,
@@ -1238,24 +1244,23 @@ def test_52_reconciliation_mismatch_fails_closed() -> None:
         A.reconcile_counts(2, counts)
 
 
+def _records_for(specimen_set, outcome=A.OUTCOME_UNRESOLVED):
+    return [
+        _rec(s.stratum, s.band, s.year, outcome, sid=s.specimen_id)
+        for s in specimen_set.specimens
+    ]
+
+
 def _artifacts():
     specimen_set = _one_set()
-    specimen = specimen_set.specimens[0]
-    decision = A.decide_gate6(
-        [
-            _rec(
-                specimen.stratum,
-                specimen.band,
-                specimen.year,
-                A.OUTCOME_UNRESOLVED,
-            )
-        ]
-    )
+    records = _records_for(specimen_set)
+    decision = A.decide_gate6(records)
     return A.build_g6_artifacts(
         population_sha256="p" * 64,
         specimen_sha256=A.specimen_sha256(specimen_set),
         fetch_plan_sha256="f" * 64,
         specimen_set=specimen_set,
+        records=records,
         decision=decision,
         mapping_state_counts={"MAPPED": 1},
         procedure={"rho_example": 0.123456, "runtime": "test"},
@@ -1268,7 +1273,8 @@ def test_53_artifacts_deterministic_and_git_summary_data_free() -> None:
         specimen_sha256=A.specimen_sha256(_one_set()),
         fetch_plan_sha256="f" * 64,
         specimen_set=_one_set(),
-        decision=A.decide_gate6([]),
+        records=_records_for(_one_set()),
+        decision=A.decide_gate6(_records_for(_one_set())),
         mapping_state_counts={"MAPPED": 1},
         procedure={"rho_example": 0.123456},
     )
@@ -1277,7 +1283,8 @@ def test_53_artifacts_deterministic_and_git_summary_data_free() -> None:
         specimen_sha256=A.specimen_sha256(_one_set()),
         fetch_plan_sha256="f" * 64,
         specimen_set=_one_set(),
-        decision=A.decide_gate6([]),
+        records=_records_for(_one_set()),
+        decision=A.decide_gate6(_records_for(_one_set())),
         mapping_state_counts={"MAPPED": 1},
         procedure={"rho_example": 0.123456},
     )
@@ -1343,14 +1350,32 @@ class _Clock:
         self.t += seconds
 
 
+def _plan_row(
+    specimen_id="g6-0001",
+    cik="1",
+    accession="ACC1",
+    filename="edgar/data/1/acc1.txt",
+    mapping_state="MAPPED",
+    form="8-K",
+    date_filed=date(2020, 1, 3),
+    priority=1,
+):
+    return A.FetchPlanRow(
+        specimen_id=specimen_id,
+        mapping_state=mapping_state,
+        cik=cik,
+        accession=accession,
+        form=form,
+        date_filed=date_filed,
+        filename=filename,
+        priority=priority,
+    )
+
+
 def _filings():
     return [
-        F.PlanFiling(
-            "g6-0001", "1", "ACC1", "/Archives/edgar/data/1/acc1.txt"
-        ),
-        F.PlanFiling(
-            "g6-0001", "1", "ACC2", "/Archives/edgar/data/1/acc2.txt"
-        ),
+        _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt"),
+        _plan_row(accession="ACC2", filename="edgar/data/1/acc2.txt"),
     ]
 
 
@@ -1359,22 +1384,23 @@ def test_55_host_path_allowlist_refuses_off_plan() -> None:
     transport = _FakeTransport([])
     fetcher = F.SecFetcher(
         filings,
-        plan_sha256=F.plan_sha256(filings),
+        plan_sha256=A.fetch_plan_sha256(filings),
         transport=transport,
         contact="audit@example.com",
     )
-    off_plan = F.PlanFiling(
-        "g6-0002", "2", "ACC9", "/Archives/edgar/data/2/acc9.txt"
+    off_plan = _plan_row(
+        specimen_id="g6-0002", cik="2", accession="ACC9",
+        filename="edgar/data/2/acc9.txt",
     )
     with pytest.raises(F.UrlRefused):
         fetcher.fetch_filing(off_plan)
     assert transport.calls == []
 
-    weird = F.PlanFiling("g6-0001", "1", "ACC1", "evil.example/path")
+    weird = _plan_row(filename="evil.example/path")
     weird_transport = _FakeTransport([])
     weird_fetcher = F.SecFetcher(
         [weird],
-        plan_sha256=F.plan_sha256([weird]),
+        plan_sha256=A.fetch_plan_sha256([weird]),
         transport=weird_transport,
         contact="audit@example.com",
     )
@@ -1402,7 +1428,7 @@ def test_57_contact_required_and_never_logged(monkeypatch) -> None:
     with pytest.raises(F.ContactMissing):
         F.SecFetcher(
             filings,
-            plan_sha256=F.plan_sha256(filings),
+            plan_sha256=A.fetch_plan_sha256(filings),
             transport=_FakeTransport([]),
             contact=None,
         )
@@ -1412,7 +1438,7 @@ def test_57_contact_required_and_never_logged(monkeypatch) -> None:
     )
     fetcher = F.SecFetcher(
         filings,
-        plan_sha256=F.plan_sha256(filings),
+        plan_sha256=A.fetch_plan_sha256(filings),
         transport=transport,
         contact=None,
     )
@@ -1427,7 +1453,7 @@ def test_57_contact_required_and_never_logged(monkeypatch) -> None:
 
 def test_58_rate_retries_and_request_cap() -> None:
     filings = _filings()
-    plan_hash = F.plan_sha256(filings)
+    plan_hash = A.fetch_plan_sha256(filings)
 
     clock = _Clock()
     rate_transport = _FakeTransport(
@@ -1449,7 +1475,7 @@ def test_58_rate_retries_and_request_cap() -> None:
     )
     retry_fetcher = F.SecFetcher(
         [filings[0]],
-        plan_sha256=F.plan_sha256([filings[0]]),
+        plan_sha256=A.fetch_plan_sha256([filings[0]]),
         transport=retry_transport,
         contact="audit@example.com",
         clock=clock.now,
@@ -1462,7 +1488,7 @@ def test_58_rate_retries_and_request_cap() -> None:
     not_found = _FakeTransport([F.TransportResponse(404)])
     not_found_fetcher = F.SecFetcher(
         [filings[0]],
-        plan_sha256=F.plan_sha256([filings[0]]),
+        plan_sha256=A.fetch_plan_sha256([filings[0]]),
         transport=not_found,
         contact="audit@example.com",
         clock=clock.now,
@@ -1487,10 +1513,8 @@ def test_58_rate_retries_and_request_cap() -> None:
 
 
 def test_59_atomic_cache_resume_and_corruption(tmp_path) -> None:
-    filing = F.PlanFiling(
-        "g6-0001", "1", "ACC1", "/Archives/edgar/data/1/acc1.txt"
-    )
-    plan_hash = F.plan_sha256([filing])
+    filing = _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt")
+    plan_hash = A.fetch_plan_sha256([filing])
     first_transport = _FakeTransport([F.TransportResponse(200, b"hello")])
     first = F.SecFetcher(
         [filing],
@@ -1537,7 +1561,7 @@ def test_60_no_credentials_read_or_logged_no_vendor_client() -> None:
     )
     fetcher = F.SecFetcher(
         filings,
-        plan_sha256=F.plan_sha256(filings),
+        plan_sha256=A.fetch_plan_sha256(filings),
         transport=transport,
         contact="audit@example.com",
     )
@@ -1556,3 +1580,797 @@ def test_60_no_credentials_read_or_logged_no_vendor_client() -> None:
     assert "import requests" not in source
     assert "vendors.tiingo.client" not in source
     assert "import socket" not in source
+
+
+# ===========================================================================
+# Addendum A1 — conflict domain
+# ===========================================================================
+
+
+def test_a1_out_of_window_split_does_not_conflict() -> None:
+    out = A.run_rule_engine(
+        _engine(
+            facts=[
+                _fact(
+                    "SPLIT", factor=0.1, market_effective_date=date(2020, 1, 1)
+                ),
+                _fact(
+                    "SPLIT", factor=0.5, market_effective_date=date(2020, 1, 6)
+                ),
+            ]
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_UNRESOLVED, A.REASON_NO_EXPLANATORY_FILING)
+
+
+def test_a1_out_of_window_cash_does_not_conflict() -> None:
+    out = A.run_rule_engine(
+        _engine(
+            rho=0.2,
+            close_t=2.0,
+            close_p=10.0,
+            facts=[
+                _fact(
+                    "CASH_DISTRIBUTION", amount=7.0, ex_date=date(2020, 1, 1)
+                ),
+                _fact(
+                    "CASH_DISTRIBUTION", amount=99.0, ex_date=date(2020, 1, 6)
+                ),
+            ],
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_UNRESOLVED, A.REASON_NO_EXPLANATORY_FILING)
+
+
+def test_a1_in_window_split_conflicts_even_when_one_fails_a_test() -> None:
+    out = A.run_rule_engine(
+        _engine(
+            facts=[
+                _fact(
+                    "SPLIT", factor=0.1, market_effective_date=date(2020, 1, 3)
+                ),
+                _fact(
+                    "SPLIT", factor=0.5, market_effective_date=date(2020, 1, 3)
+                ),
+            ]
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_UNRESOLVED, A.REASON_EVIDENCE_CONFLICT)
+
+
+def test_a1_in_window_cash_conflicts_even_when_one_fails_qualification() -> None:
+    out = A.run_rule_engine(
+        _engine(
+            rho=0.2,
+            close_t=2.0,
+            close_p=10.0,
+            facts=[
+                _fact(
+                    "CASH_DISTRIBUTION", amount=7.0, ex_date=date(2020, 1, 3)
+                ),
+                _fact(
+                    "CASH_DISTRIBUTION", amount=100.0, ex_date=date(2020, 1, 3)
+                ),
+            ],
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_UNRESOLVED, A.REASON_EVIDENCE_CONFLICT)
+
+
+# ===========================================================================
+# Addendum A2 — the form table is a closed allowlist
+# ===========================================================================
+
+
+def test_a2_unlisted_forms_never_enter_the_plan() -> None:
+    t = date(2020, 6, 15)
+    rows = [
+        _index_row("1", "Acme Corp", t, form="8-K", filename="edgar/data/1/a.txt"),
+        _index_row("1", "Acme Corp", t, form="4", filename="edgar/data/1/b.txt"),
+        _index_row("1", "Acme Corp", t, form="SC 13G", filename="edgar/data/1/c.txt"),
+    ]
+    result = A.map_issuer("K1", ["Acme Corp"], rows, t)
+    assert result.state == "MAPPED"
+    assert [row.form for row in result.filings] == ["8-K"]
+    specimen = A.Specimen(
+        selection_order=0,
+        specimen_id="g6-0000",
+        stratum=A.STRATUM_S2,
+        band=A.BAND_B1,
+        year=2020,
+        security_key="K1",
+        ticker="AAA",
+        t=t,
+        p=date(2020, 6, 12),
+        rho=9.6,
+        rank_hex="0" * 64,
+        near_split_offset=None,
+        dividend_within_3=False,
+    )
+    plan, _counts = A.build_fetch_plan(
+        [specimen], issuer_names={"K1": ["Acme Corp"]}, index_rows=rows
+    )
+    assert {row.form for row in plan} == {"8-K"}
+    assert all(row.form in A.FORM_PRIORITY for row in plan)
+
+
+def test_a2_unlisted_forms_never_change_the_plan_hash() -> None:
+    t = date(2020, 6, 15)
+    listed = [
+        _index_row("1", "Acme Corp", t, form="8-K", filename="edgar/data/1/a.txt")
+    ]
+    with_unlisted = listed + [
+        _index_row("1", "Acme Corp", t, form="4", filename="edgar/data/1/b.txt"),
+        _index_row("1", "Acme Corp", t, form="SC 13G", filename="edgar/data/1/c.txt"),
+    ]
+    specimen = A.Specimen(
+        selection_order=0,
+        specimen_id="g6-0000",
+        stratum=A.STRATUM_S2,
+        band=A.BAND_B1,
+        year=2020,
+        security_key="K1",
+        ticker="AAA",
+        t=t,
+        p=date(2020, 6, 12),
+        rho=9.6,
+        rank_hex="0" * 64,
+        near_split_offset=None,
+        dividend_within_3=False,
+    )
+    plan_a, _ = A.build_fetch_plan(
+        [specimen], issuer_names={"K1": ["Acme Corp"]}, index_rows=listed
+    )
+    plan_b, _ = A.build_fetch_plan(
+        [specimen], issuer_names={"K1": ["Acme Corp"]}, index_rows=with_unlisted
+    )
+    assert A.fetch_plan_sha256(plan_a) == A.fetch_plan_sha256(plan_b)
+
+
+def test_a2_only_unlisted_forms_in_window_gives_no_filings() -> None:
+    t = date(2020, 6, 15)
+    rows = [
+        _index_row("1", "Acme Corp", t, form="4", filename="edgar/data/1/b.txt"),
+        _index_row("1", "Acme Corp", t, form="SC 13G", filename="edgar/data/1/c.txt"),
+        _index_row(
+            "1", "Acme Corp", date(2019, 1, 2), form="8-K",
+            filename="edgar/data/1/old.txt",
+        ),
+    ]
+    result = A.map_issuer("K1", ["Acme Corp"], rows, t)
+    assert result.reason == A.REASON_NO_FILINGS_IN_WINDOW
+
+
+# ===========================================================================
+# Repair defects — production pipeline and semantics
+# ===========================================================================
+
+
+def _synthetic_root(tmp_path):
+    root = tmp_path / "store"
+    build_id = A.D3_BUILD_ID
+    (root / "normalized" / build_id).mkdir(parents=True, exist_ok=True)
+
+    day = pd.DataFrame(
+        [
+            {
+                "security_key": "TIINGO:ABC:2010-01-04",
+                "ticker": "ABC",
+                "date": pd.Timestamp(date(2020, 1, 3)),
+                "raw_row_index": 1,
+                "class_or_flag": A.SUSPECT,
+                "disposition": A.UNCERTIFIED,
+            }
+        ]
+    )
+    day_dir = root / "derived" / "qc" / "q-test"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    day_path = day_dir / "day_flags.parquet"
+    day.to_parquet(day_path, index=False)
+
+    obs = pd.DataFrame(
+        {
+            "ticker": ["ABC", "ABC"],
+            "date": [pd.Timestamp(date(2020, 1, 2)), pd.Timestamp(date(2020, 1, 3))],
+            "close": [10.0, 96.0],
+            "raw_row_index": [0, 1],
+        }
+    )
+    obs_path = root / "normalized" / build_id / "observations.parquet"
+    obs.to_parquet(obs_path, index=False)
+
+    ca = pd.DataFrame(
+        {
+            "stock_id": pd.Series([], dtype="string"),
+            "effective_date": pd.Series([], dtype="datetime64[ns]"),
+            "action_type": pd.Series([], dtype="string"),
+            "adjustment_factor": pd.Series([], dtype="float64"),
+        }
+    )
+    ca_path = root / "normalized" / build_id / "ca_events.parquet"
+    ca.to_parquet(ca_path, index=False)
+
+    ident = pd.DataFrame(
+        {
+            "security_key": ["TIINGO:ABC:2010-01-04"],
+            "ticker": ["ABC"],
+            "listed_start": [pd.Timestamp(A.DEV_START)],
+            "listed_end": [pd.Timestamp(A.DEV_END)],
+            "state": [A.INTERVAL_ASSIGNED],
+        }
+    )
+    ident_dir = root / "derived" / "identity" / "i-test"
+    ident_dir.mkdir(parents=True, exist_ok=True)
+    ident_path = ident_dir / "identity_assignment.parquet"
+    ident.to_parquet(ident_path, index=False)
+
+    d7c = pd.DataFrame(
+        {
+            "security_key": pd.Series([], dtype="string"),
+            "source_session": pd.Series([], dtype="datetime64[ns]"),
+        }
+    )
+    d7c_dir = root / "derived" / "trusted_inputs" / "ti-test"
+    d7c_dir.mkdir(parents=True, exist_ok=True)
+    d7c_path = d7c_dir / "daily_total_return.parquet"
+    d7c.to_parquet(d7c_path, index=False)
+
+    issuer = pd.DataFrame(
+        {
+            "security_key": ["TIINGO:ABC:2010-01-04"],
+            "issuer_names_norm": [json.dumps(["Acme Corp"])],
+        }
+    )
+    clas_dir = root / "derived" / "classification" / "c-test"
+    clas_dir.mkdir(parents=True, exist_ok=True)
+    issuer_path = clas_dir / "issuer_mapping.parquet"
+    issuer.to_parquet(issuer_path, index=False)
+
+    index_dir = root / A.SEC_INDEX_DIR
+    index_dir.mkdir(parents=True, exist_ok=True)
+    body = "-----\n1|Acme Corp|8-K|2020-01-03|edgar/data/1/acc1.txt\n"
+    index_bytes = gzip.compress(body.encode("latin-1"))
+    index_name = "master_2020Q1.gz"
+    (index_dir / index_name).write_bytes(index_bytes)
+    dsc = {
+        "sec_index_files_sha256": {
+            index_name: hashlib.sha256(index_bytes).hexdigest()
+        }
+    }
+    dsc_path = clas_dir / "dsc.json"
+    dsc_path.write_text(A.canonical_json(dsc) + "\n")
+
+    records = A.population_records(day)
+    bindings = A.ProductionBindings(
+        day_flags=A.ArtifactBinding(
+            "derived/qc/q-test/day_flags.parquet",
+            hashlib.sha256(day_path.read_bytes()).hexdigest(),
+        ),
+        qc_hash="q-test",
+        d3_build_id=build_id,
+        observations=A.ArtifactBinding(
+            f"normalized/{build_id}/observations.parquet",
+            hashlib.sha256(obs_path.read_bytes()).hexdigest(),
+        ),
+        ca_events=A.ArtifactBinding(
+            f"normalized/{build_id}/ca_events.parquet",
+            hashlib.sha256(ca_path.read_bytes()).hexdigest(),
+        ),
+        identity_assignment=A.ArtifactBinding(
+            "derived/identity/i-test/identity_assignment.parquet",
+            hashlib.sha256(ident_path.read_bytes()).hexdigest(),
+        ),
+        daily_total_return=A.ArtifactBinding(
+            "derived/trusted_inputs/ti-test/daily_total_return.parquet",
+            hashlib.sha256(d7c_path.read_bytes()).hexdigest(),
+        ),
+        issuer_mapping=A.ArtifactBinding(
+            "derived/classification/c-test/issuer_mapping.parquet",
+            hashlib.sha256(issuer_path.read_bytes()).hexdigest(),
+        ),
+        dsc_json=A.ArtifactBinding(
+            "derived/classification/c-test/dsc.json",
+            hashlib.sha256(dsc_path.read_bytes()).hexdigest(),
+        ),
+        dsc_hash="d-test",
+        population=A.PopulationBinding(
+            count=len(records),
+            sha256=A.population_sha256(records),
+            unique_keys=1,
+        ),
+    )
+    return root, bindings
+
+
+def test_d1_production_bindings_present_and_fail_closed(tmp_path) -> None:
+    b = A.PRODUCTION_BINDINGS
+    assert b.day_flags.sha256 == (
+        "f4010ebeabf5cfae2684f3658a5f19f922f15e2c8898410049f2148440cf7891"
+    )
+    assert b.qc_hash == (
+        "3d63e51b983096f0ae579cd1e382c613d9329d239c3f848cc785dee2d61cdfc3"
+    )
+    assert b.observations.sha256 == (
+        "557001d0e9c617befd3c036683f171094e86e19badb760098f40c08f3f56596e"
+    )
+    assert b.ca_events.sha256 == (
+        "afd4a2986c934d84c2b23eaf68f23ee18746e7c929c6b8625b6c9911e4a2b109"
+    )
+    assert b.identity_assignment.sha256 == (
+        "fee4614009095773f75fb832343a5fa9b87b9de1cf363125567222b08fad3f8b"
+    )
+    assert b.daily_total_return.sha256 == (
+        "511bcf4ac4ea2bd02158438732e0fdf19c04d783b88ca7a01ff5a364ec8e688c"
+    )
+    assert b.issuer_mapping.sha256 == (
+        "dbfb424e50ccdc8127ba9064228738cfc105d5d4e7d4071694a27e28d3e127b5"
+    )
+    assert b.dsc_json.sha256 == (
+        "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60"
+    )
+    assert b.population.count == 17469
+    assert b.population.sha256 == (
+        "d2153329b8c13a5d20d2bbe351972e048c9dc421216051e08633ffda68fb2783"
+    )
+
+    root, bindings = _synthetic_root(tmp_path)
+    A.load_g6_inputs(root, bindings)
+    (root / bindings.day_flags.relative_path).write_bytes(b"tampered")
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+
+
+def test_d1_full_e1_e2_e3_pipeline(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    e1 = A.run_e1(root, audit, bindings=bindings)
+    assert e1["specimen_size"] == 1
+    assert (audit / "specimen.parquet").exists()
+    assert (audit / "fetch_plan.parquet").exists()
+    assert (audit / "population.json").exists()
+    assert (audit / "specimen_manifest.md").exists()
+
+    body = b"8-K split filing"
+    transport = _FakeTransport([F.TransportResponse(200, body)])
+    e2 = A.run_e2(root, audit, transport=transport, contact="audit@example.com")
+    assert e2["fetch_plan_sha256"] == e1["fetch_plan_sha256"]
+    evidence = A.read_evidence(audit)
+    digest = hashlib.sha256(body).hexdigest()
+    assert list(evidence.values()) == [digest]
+
+    specimen_id = pd.read_parquet(audit / "specimen.parquet")["specimen_id"][0]
+    fact = {
+        "specimen_id": str(specimen_id),
+        "type": "SPLIT",
+        "source": "E1",
+        "accession": "acc1",
+        "form": "8-K",
+        "date_filed": "2020-01-03",
+        "doc_sha256": digest,
+        "locator": "acc1.txt",
+        "quote": "reverse split 1-for-10",
+        "factor": 0.1,
+        "market_effective_date": "2020-01-03",
+    }
+    A.write_facts(audit / "facts_worker.jsonl", [fact])
+    A.write_facts(audit / "facts_planner.jsonl", [fact])
+
+    e3 = A.run_e3(root, audit, bindings=bindings)
+    assert e3["decision"] == A.DECISION_HOLD
+    artifacts = json.loads((audit / "g6_audit.json").read_text())
+    assert any(
+        "CERTIFIED_FIELD_OMISSION" in key
+        for key in artifacts["stratum_band_outcome_counts"]
+    )
+    outcomes = pd.read_parquet(audit / "outcomes.parquet")
+    assert set(outcomes["outcome"]) == {A.OUTCOME_OMISSION}
+    assert set(outcomes["worker_outcome"]) == {A.OUTCOME_OMISSION}
+    assert set(outcomes["planner_outcome"]) == {A.OUTCOME_OMISSION}
+
+
+def test_d1_e3_two_blind_fact_sets_are_separate_inputs(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings)
+    body = b"8-K split filing"
+    A.run_e2(
+        root,
+        audit,
+        transport=_FakeTransport([F.TransportResponse(200, body)]),
+        contact="audit@example.com",
+    )
+    digest = hashlib.sha256(body).hexdigest()
+    specimen_id = pd.read_parquet(audit / "specimen.parquet")["specimen_id"][0]
+    fact = {
+        "specimen_id": str(specimen_id),
+        "type": "SPLIT",
+        "source": "E1",
+        "accession": "acc1",
+        "form": "8-K",
+        "date_filed": "2020-01-03",
+        "doc_sha256": digest,
+        "locator": "acc1.txt",
+        "quote": "reverse split 1-for-10",
+        "factor": 0.1,
+        "market_effective_date": "2020-01-03",
+    }
+    A.write_facts(audit / "facts_worker.jsonl", [fact])
+    A.write_facts(audit / "facts_planner.jsonl", [])
+    A.run_e3(root, audit, bindings=bindings)
+    outcomes = pd.read_parquet(audit / "outcomes.parquet")
+    assert set(outcomes["worker_outcome"]) == {A.OUTCOME_OMISSION}
+    assert set(outcomes["planner_outcome"]) == {A.OUTCOME_UNRESOLVED}
+    assert set(outcomes["outcome"]) == {A.OUTCOME_UNRESOLVED}
+    assert set(outcomes["reason"]) == {A.REASON_REVIEWER_DISAGREEMENT}
+
+
+def test_d1_specimens_carry_real_p_rho_and_covariate(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    inputs = A.load_g6_inputs(root, bindings)
+    candidates = A.build_candidates(inputs)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.p == date(2020, 1, 2)
+    assert candidate.rho == pytest.approx(9.6)
+    assert candidate.band == A.BAND_B4
+    assert candidate.stratum == A.STRATUM_S2
+    assert candidate.dividend_within_3 is False
+    specimen_set = A.select_specimens(
+        candidates, population_sha256=inputs.population.sha256
+    )
+    specimen = specimen_set.specimens[0]
+    assert specimen.p == date(2020, 1, 2)
+    assert specimen.rho == pytest.approx(9.6)
+    assert specimen.t != specimen.p
+    assert not (specimen.rho != specimen.rho)  # not NaN
+
+
+def test_d1_writers_deterministic(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    first = tmp_path / "audit-a"
+    second = tmp_path / "audit-b"
+    A.run_e1(root, first, bindings=bindings)
+    A.run_e1(root, second, bindings=bindings)
+    for name in ("population.json", "specimen.json", "specimen_manifest.md"):
+        assert (first / name).read_text() == (second / name).read_text()
+    assert A.specimen_frame(A.read_specimen_set(first)[0]).equals(
+        A.specimen_frame(A.read_specimen_set(second)[0])
+    )
+    assert A.fetch_plan_frame(A.read_fetch_plan(first)).equals(
+        A.fetch_plan_frame(A.read_fetch_plan(second))
+    )
+
+
+def test_d1_manifest_is_data_free(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings)
+    manifest = (audit / "specimen_manifest.md").read_text()
+    assert "TIINGO" not in manifest
+    assert "ABC" not in manifest
+    assert "2020-" not in manifest
+    assert "rho" not in manifest
+    assert "ratio" not in manifest
+    assert "quote" not in manifest
+
+
+def test_d1_cli_prints_only_ids_hashes_counts() -> None:
+    line = A._format_cli(
+        {
+            "population_sha256": "p" * 64,
+            "specimen_sha256": "s" * 64,
+            "decision": A.DECISION_PASS,
+            "rho": 0.123,
+            "security_key": "TIINGO:ABC:2010-01-04",
+            "t": "2020-01-03",
+        }
+    )
+    assert "population_sha256=" + "p" * 64 in line
+    assert "0.123" not in line
+    assert "TIINGO" not in line
+    assert "2020-01-03" not in line
+    assert callable(A.main)
+
+
+def test_d2_stock_id_is_ticker_and_s3_uses_identity(tmp_path) -> None:
+    key = "TIINGO:ABC:2010-01-04"
+    ticker = "ABC"
+    t = date(2020, 1, 6)
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(date(2020, 1, 2))],
+            "action_type": ["split"],
+            "adjustment_factor": [0.5],
+        }
+    )
+    assert A.split_events_for(ticker, A.DEV_START, A.DEV_END, ca) == [
+        (date(2020, 1, 2), 0.5)
+    ]
+    assert A.split_events_for("ZZZ", A.DEV_START, A.DEV_END, ca) == []
+    stratum, offset = A.assign_stratum(
+        key,
+        t,
+        ticker=ticker,
+        ca_events=ca,
+        sessions=A.default_calendar(),
+        listed_start=A.DEV_START,
+        listed_end=A.DEV_END,
+        admitted=set(),
+    )
+    assert stratum == A.STRATUM_S3
+    assert offset == -2
+
+    # MISDATED_SPLIT flows from a D3 event associated through the ticker.
+    d3_split = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(date(2020, 1, 6))],
+            "action_type": ["split"],
+            "adjustment_factor": [0.1],
+        }
+    )
+    out = A.run_rule_engine(
+        _engine(
+            security_key=key,
+            ticker=ticker,
+            facts=[
+                _fact(
+                    "SPLIT", factor=0.1,
+                    market_effective_date=date(2020, 1, 3),
+                )
+            ],
+            split_events=A.split_events_for(
+                ticker, A.DEV_START, A.DEV_END, d3_split
+            ),
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_OMISSION, A.REASON_MISDATED_SPLIT, 1)
+
+
+def test_d2_missing_or_ambiguous_identity_fails_closed() -> None:
+    missing = pd.DataFrame(
+        {
+            "security_key": ["K1"],
+            "ticker": ["AAA"],
+            "listed_start": [pd.Timestamp(A.DEV_START)],
+            "listed_end": [pd.Timestamp(A.DEV_END)],
+            "state": ["NOT_ASSIGNED"],
+        }
+    )
+    index = A.build_identity_index(missing)
+    with pytest.raises(A.Gate6Error):
+        A.require_identity("K1", index)
+
+    ambiguous = pd.DataFrame(
+        {
+            "security_key": ["K1", "K1"],
+            "ticker": ["AAA", "BBB"],
+            "listed_start": [pd.Timestamp(A.DEV_START)] * 2,
+            "listed_end": [pd.Timestamp(A.DEV_END)] * 2,
+            "state": [A.INTERVAL_ASSIGNED, A.INTERVAL_ASSIGNED],
+        }
+    )
+    index = A.build_identity_index(ambiguous)
+    with pytest.raises(A.Gate6Error):
+        A.require_identity("K1", index)
+
+
+def test_d3_dividend_amount_derived_from_factor() -> None:
+    ticker = "ABC"
+    effective = date(2020, 1, 6)
+    observations = pd.DataFrame(
+        {
+            "ticker": [ticker],
+            "date": [pd.Timestamp(effective)],
+            "close": [20.0],
+        }
+    )
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(effective)],
+            "action_type": ["dividend"],
+            # adjustment_factor = 1 + divCash / close = 1 + 7 / 20.
+            "adjustment_factor": [1.35],
+        }
+    )
+    events = A.dividend_events_for(
+        ticker, A.DEV_START, A.DEV_END, ca, observations
+    )
+    assert events == [(effective, pytest.approx(7.0))]
+
+    out = A.run_rule_engine(
+        _engine(
+            rho=0.4,
+            close_t=4.0,
+            close_p=10.0,
+            facts=[
+                _fact(
+                    "CASH_DISTRIBUTION", amount=7.0, ex_date=date(2020, 1, 3)
+                )
+            ],
+            dividend_events=events,
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_OMISSION, A.REASON_MISDATED_CASH, 1)
+
+    missing_close = observations.iloc[:0]
+    with pytest.raises(A.Gate6Error):
+        A.dividend_events_for(
+            ticker, A.DEV_START, A.DEV_END, ca, missing_close
+        )
+
+
+def test_d4_artifact_records_real_outcomes(tmp_path) -> None:
+    specimen_set = _select(
+        [
+            ("K1", date(2020, 1, 3), A.STRATUM_S1, A.BAND_B1),
+            ("K2", date(2020, 2, 3), A.STRATUM_S1, A.BAND_B1),
+            ("K3", date(2020, 3, 3), A.STRATUM_S1, A.BAND_B1),
+        ]
+    )
+    specimens = list(specimen_set.specimens)
+    records = [
+        _rec(
+            specimens[0].stratum, specimens[0].band, specimens[0].year,
+            A.OUTCOME_OMISSION, A.REASON_OMITTED_SPLIT, sid=specimens[0].specimen_id,
+        ),
+        _rec(
+            specimens[1].stratum, specimens[1].band, specimens[1].year,
+            A.OUTCOME_GENUINE, "EARNINGS_OR_GUIDANCE", sid=specimens[1].specimen_id,
+        ),
+        _rec(
+            specimens[2].stratum, specimens[2].band, specimens[2].year,
+            A.OUTCOME_UNRESOLVED, A.REASON_NO_EXPLANATORY_FILING,
+            sid=specimens[2].specimen_id,
+        ),
+    ]
+    artifacts = A.build_g6_artifacts(
+        population_sha256="p" * 64,
+        specimen_sha256=A.specimen_sha256(specimen_set),
+        fetch_plan_sha256="f" * 64,
+        specimen_set=specimen_set,
+        records=records,
+        decision=A.decide_gate6(records),
+        mapping_state_counts={"MAPPED": 3},
+    )
+    counts = artifacts["stratum_band_outcome_counts"]
+    assert any("CERTIFIED_FIELD_OMISSION" in key for key in counts)
+    assert any("GENUINE_MOVE_DOCUMENTED" in key for key in counts)
+    assert any("UNRESOLVED" in key for key in counts)
+    assert sum(counts.values()) == len(specimens)
+    with pytest.raises(A.ReconciliationError):
+        A.build_g6_artifacts(
+            population_sha256="p" * 64,
+            specimen_sha256=A.specimen_sha256(specimen_set),
+            fetch_plan_sha256="f" * 64,
+            specimen_set=specimen_set,
+            records=records[:-1],
+            decision=A.decide_gate6(records),
+            mapping_state_counts={"MAPPED": 3},
+        )
+
+
+def test_d5_single_canonical_fetch_plan_hash(tmp_path) -> None:
+    assert not hasattr(F, "plan_sha256")
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    e1 = A.run_e1(root, audit, bindings=bindings)
+    rows = A.read_fetch_plan(audit)
+    assert A.fetch_plan_sha256(rows) == e1["fetch_plan_sha256"]
+
+    transport = _FakeTransport([])
+    F.SecFetcher(
+        rows,
+        plan_sha256=e1["fetch_plan_sha256"],
+        transport=transport,
+        contact="audit@example.com",
+    )
+    assert transport.calls == []
+    with pytest.raises(F.FetchPlanMismatch):
+        F.SecFetcher(
+            rows,
+            plan_sha256="0" * 64,
+            transport=transport,
+            contact="audit@example.com",
+        )
+    assert transport.calls == []
+
+
+def test_d6_t3_groups_cross_type_by_signed_offset() -> None:
+    cross_type = A.escalation_tags(
+        [
+            _rec("S1", "B1", 2020, A.OUTCOME_OMISSION, A.REASON_MISDATED_SPLIT, 1),
+            _rec("S1", "B2", 2021, A.OUTCOME_OMISSION, A.REASON_MISDATED_CASH, 1),
+        ]
+    )
+    assert A.TAG_T3 in cross_type
+    different = A.escalation_tags(
+        [
+            _rec("S1", "B1", 2020, A.OUTCOME_OMISSION, A.REASON_MISDATED_SPLIT, 1),
+            _rec("S1", "B2", 2021, A.OUTCOME_OMISSION, A.REASON_MISDATED_CASH, -1),
+        ]
+    )
+    assert A.TAG_T3 not in different
+
+
+def test_d7_generic_transport_error_is_not_retried() -> None:
+    filing = _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt")
+    plan_hash = A.fetch_plan_sha256([filing])
+
+    def _raise_oserror(url, headers):
+        raise OSError("connection reset")
+
+    transport = _FakeTransport(_raise_oserror)
+    fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=plan_hash,
+        transport=transport,
+        contact="audit@example.com",
+    )
+    assert fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+    assert len(transport.calls) == 1
+
+    attempts = {"n": 0}
+
+    def _timeout(url, headers):
+        attempts["n"] += 1
+        raise TimeoutError("slow")
+
+    timeout_fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=plan_hash,
+        transport=_FakeTransport(_timeout),
+        contact="audit@example.com",
+        clock=_Clock().now,
+        sleep=_Clock().sleep,
+    )
+    assert timeout_fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+    assert attempts["n"] == 3
+
+
+def test_d8a_population_requires_uncertified_disposition() -> None:
+    frame = _day_flags(
+        [("K1", "AAA", date(2020, 1, 3), A.SUSPECT, "SOME_OTHER_DISPOSITION")]
+    )
+    with pytest.raises(A.PopulationInconsistencyError):
+        A.population_records(frame)
+
+
+def test_d8b_unusable_sessions_follow_disposition_semantics() -> None:
+    d1, d2, d3 = date(2020, 1, 2), date(2020, 1, 3), date(2020, 1, 6)
+    observations = pd.DataFrame(
+        {
+            "ticker": ["ABC", "ABC", "ABC"],
+            "date": [pd.Timestamp(d1), pd.Timestamp(d2), pd.Timestamp(d3)],
+            "close": [10.0, 8.0, 30.0],
+        }
+    )
+    day_flags = pd.DataFrame(
+        [
+            # A brand-new class name with disposition CORRUPT is unusable.
+            ("K1", "ABC", pd.Timestamp(d2), "BRAND_NEW_CLASS", "CORRUPT"),
+            # A known CORRUPT class name without the CORRUPT disposition is usable.
+            ("K1", "ABC", pd.Timestamp(d1), "OHLC_INCONSISTENT", "LEGIT"),
+        ],
+        columns=[
+            "security_key", "ticker", "date", "class_or_flag", "disposition",
+        ],
+    )
+    identity = pd.DataFrame(
+        {
+            "security_key": ["K1"],
+            "ticker": ["ABC"],
+            "listed_start": [pd.Timestamp(A.DEV_START)],
+            "listed_end": [pd.Timestamp(A.DEV_END)],
+        }
+    )
+    series = A.build_key_series(identity, observations, day_flags)["K1"]
+    assert d2 in series.unusable
+    assert d1 not in series.unusable
+
+    p, rho = A.compute_magnitude(series, d3, [d1, d2, d3])
+    assert p == d1
+    assert rho == pytest.approx(3.0)
+

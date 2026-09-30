@@ -6,6 +6,10 @@ so the whole module is exercised offline with a fake transport in tests.  It
 never reads a provider credential and never writes the SEC contact to a log,
 an artifact or Git.
 
+The fetch-plan serialization and hash live in exactly one place,
+:func:`smart_beta.dataset_v1.gate6_audit.fetch_plan_sha256`; the fetcher
+imports and verifies that hash rather than re-deriving its own.
+
 The retriever is deliberately narrow:
 
 * only ``GET https://www.sec.gov/Archives/<Filename>`` for a Filename present
@@ -14,7 +18,8 @@ The retriever is deliberately narrow:
   must be present, else nothing is fetched;
 * at most 4 requests per second, at most 1 GET per planned filing plus
   retries, and a hard cap of 2,500 requests;
-* retries only 429/5xx/timeouts (twice), never 403 or 404;
+* retries only HTTP 429, HTTP 5xx and timeouts (twice), never 403, 404 or a
+  generic transport error;
 * atomic, SHA-256-addressed caching, so a resumed run skips verified files.
 """
 
@@ -24,10 +29,12 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
+
+from smart_beta.dataset_v1 import gate6_audit as _audit
 
 REQUEST_CAP = 2500
 RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -65,16 +72,8 @@ class UrlRefused(FetchError, ValueError):
 
 
 @dataclass(frozen=True)
-class PlanFiling:
-    specimen_id: str
-    cik: str
-    accession: str
-    filename: str
-
-
-@dataclass(frozen=True)
 class TransportResponse:
-    status: int
+    status: int | None
     body: bytes = b""
     error: str | None = None
 
@@ -99,32 +98,16 @@ class FetchOutcome:
     doc_sha256: str | None = None
 
 
-def plan_sha256(filings: Sequence[PlanFiling]) -> str:
-    payload = [
-        {
-            "specimen_id": f.specimen_id,
-            "cik": f.cik,
-            "accession": f.accession,
-            "filename": f.filename,
-        }
-        for f in filings
-    ]
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
-
-_compute_plan_sha256 = plan_sha256
-
-
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def build_url(filename: str) -> str:
-    if not filename.startswith("/"):
-        filename = "/" + filename
-    return f"https://{SEC_HOST}{filename}"
+    if filename.startswith("/Archives/"):
+        return f"https://{SEC_HOST}{filename}"
+    if filename.startswith("/"):
+        filename = filename[1:]
+    return f"https://{SEC_HOST}/Archives/{filename}"
 
 
 class SecFetcher:
@@ -132,7 +115,7 @@ class SecFetcher:
 
     def __init__(
         self,
-        filings: Sequence[PlanFiling],
+        plan: Sequence[Any],
         *,
         plan_sha256: str,
         transport: Callable[[str, Mapping[str, str]], TransportResponse],
@@ -144,16 +127,21 @@ class SecFetcher:
         max_requests: int = REQUEST_CAP,
         max_rate: float = 4.0,
     ) -> None:
-        self._filings = list(filings)
-        actual = _compute_plan_sha256(self._filings)
+        self._plan = list(plan)
+        actual = _audit.fetch_plan_sha256(self._plan)
         if actual != plan_sha256:
             raise FetchPlanMismatch(
                 f"fetch-plan hash {actual} != bound {plan_sha256}"
             )
         self._bound_plan_sha256 = plan_sha256
-        self._allowed = {f.filename for f in self._filings}
+        self._mapped = [
+            row for row in self._plan if row.mapping_state == "MAPPED"
+        ]
+        self._allowed = {row.filename for row in self._mapped}
         self._transport = transport
-        self._contact = contact if contact is not None else os.environ.get("SEC_CONTACT")
+        self._contact = (
+            contact if contact is not None else os.environ.get("SEC_CONTACT")
+        )
         if not self._contact:
             raise ContactMissing("SEC_CONTACT is required for SEC retrieval")
         self._cache_dir = Path(cache_dir) if cache_dir is not None else None
@@ -185,10 +173,10 @@ class SecFetcher:
     def _user_agent(self) -> str:
         return f"{USER_AGENT_PREFIX} {self._contact}"
 
-    # -- allowlist ---------------------------------------------------------
+    # -- plan and allowlist ------------------------------------------------
 
     def _check_plan(self) -> None:
-        actual = plan_sha256(self._filings)
+        actual = _audit.fetch_plan_sha256(self._plan)
         if actual != self._bound_plan_sha256:
             raise FetchPlanMismatch("fetch-plan hash changed after construction")
 
@@ -222,8 +210,8 @@ class SecFetcher:
             return self._transport(url, {"User-Agent": self._user_agent()})
         except TimeoutError:
             return TransportResponse(status=None, error="TIMEOUT")
-        except OSError as exc:  # network-level failure
-            return TransportResponse(status=None, error=f"OSERROR:{exc}")
+        except OSError as exc:  # generic transport error: never retried
+            return TransportResponse(status=None, error=f"TRANSPORT:{exc}")
 
     def _record(
         self,
@@ -280,7 +268,7 @@ class SecFetcher:
 
     # -- per-filing fetch --------------------------------------------------
 
-    def fetch_filing(self, filing: PlanFiling) -> FetchOutcome:
+    def fetch_filing(self, filing: Any) -> FetchOutcome:
         self._check_plan()
         url = self._check_url(filing.filename)
         cached = self._cached_verified(filing.accession)
@@ -305,7 +293,9 @@ class SecFetcher:
             attempt += 1
             response = self._request(url, attempt=attempt)
             if response.error == "REQUEST_CAP_REACHED":
-                self._record(url, response, attempt=attempt, outcome="REQUEST_CAP_REACHED")
+                self._record(
+                    url, response, attempt=attempt, outcome="REQUEST_CAP_REACHED"
+                )
                 return FetchOutcome(
                     specimen_id=filing.specimen_id,
                     accession=filing.accession,
@@ -313,7 +303,9 @@ class SecFetcher:
                 )
             status = response.status
             if status == 200:
-                digest, path = self._write_cache(filing.accession, response.body or b"")
+                digest, path = self._write_cache(
+                    filing.accession, response.body or b""
+                )
                 self._record(url, response, attempt=attempt, outcome="OK")
                 self._retrieved[filing.accession] = digest
                 return FetchOutcome(
@@ -323,12 +315,9 @@ class SecFetcher:
                     cached_path=path,
                     doc_sha256=digest,
                 )
-            # 403 and 404 are never retried: neither is in RETRY_STATUS nor a
-            # timeout, so they fall straight through to UNRETRIEVABLE below.
+            # Only HTTP 429, HTTP 5xx and timeouts are retried.
             retryable = (
-                status in RETRY_STATUS
-                or response.error == "TIMEOUT"
-                or (response.error or "").startswith("OSERROR")
+                status in RETRY_STATUS or response.error == "TIMEOUT"
             )
             if not retryable or attempt > len(BACKOFFS):
                 self._record(
@@ -343,7 +332,7 @@ class SecFetcher:
             self._sleep(BACKOFFS[attempt - 1])
 
     def fetch_all(self) -> list[FetchOutcome]:
-        return [self.fetch_filing(filing) for filing in self._filings]
+        return [self.fetch_filing(row) for row in self._mapped]
 
     def log_jsonl(self) -> str:
         """The ``retrieval_log.jsonl`` payload (no contact, no secret)."""
@@ -363,6 +352,28 @@ class SecFetcher:
             + "\n"
             for record in self._log
         )
+
+
+def urllib_transport(
+    url: str,
+    headers: Mapping[str, str],
+    *,
+    timeout: float = 30.0,
+) -> TransportResponse:
+    """The real E2 transport; used only by the authorized network step."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, headers=dict(headers))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return TransportResponse(status=response.status, body=response.read())
+    except urllib.error.HTTPError as exc:
+        return TransportResponse(status=exc.code, body=b"")
+    except TimeoutError:
+        return TransportResponse(status=None, error="TIMEOUT")
+    except OSError as exc:
+        return TransportResponse(status=None, error=f"TRANSPORT:{exc}")
 
 
 def scrub_credentials(environ: dict[str, str] | None = None) -> list[str]:

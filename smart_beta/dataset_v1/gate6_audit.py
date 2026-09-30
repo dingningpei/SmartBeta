@@ -35,6 +35,10 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import pandas as pd
 
 from smart_beta.dataset_v1.classification import norm as _norm
+from smart_beta.dataset_v1.reserve_firewall import (
+    DevelopmentAccessor,
+    FileBinding,
+)
 from smart_beta.vendors.tiingo.calendar_source import build_nyse_calendar
 
 # ---------------------------------------------------------------------------
@@ -98,16 +102,9 @@ DEFAULT_ALLOCATION: dict[tuple[str, str | None], int] = {
 REQUEST_CAP = 2500
 MAX_FILINGS_PER_SPECIMEN = 12
 
-CORRUPT_CLASSES = frozenset(
-    {
-        "OHLC_INCONSISTENT",
-        "NONPOSITIVE_PRICE",
-        "MALFORMED_CA",
-        "OFF_CALENDAR_ROW",
-        "DUPLICATE_DATE",
-    }
-)
-UNUSABLE_CLASSES = CORRUPT_CLASSES | {"INTERVAL_MISMATCH"}
+# NOTE: unusable sessions are identified from D5 disposition semantics
+# (``disposition == "CORRUPT"`` or ``class_or_flag == "INTERVAL_MISMATCH"``),
+# never from a hand-written class-name list.
 
 # Outcome vocabulary
 OUTCOME_GENUINE = "GENUINE_MOVE_DOCUMENTED"
@@ -376,7 +373,7 @@ class Population:
 
 def population_records(day_flags: pd.DataFrame) -> list[tuple[str, date]]:
     """The sorted ``(security_key, date)`` rows of the frozen population P."""
-    required = ("security_key", "date", "class_or_flag")
+    required = ("security_key", "date", "class_or_flag", "disposition")
     missing = [c for c in required if c not in day_flags.columns]
     if missing:
         raise PopulationInconsistencyError(
@@ -384,8 +381,15 @@ def population_records(day_flags: pd.DataFrame) -> list[tuple[str, date]]:
         )
     frame = day_flags[day_flags["class_or_flag"] == SUSPECT]
     records: list[tuple[str, date]] = []
-    for key, value in zip(frame["security_key"], frame["date"]):
+    for key, value, disposition in zip(
+        frame["security_key"], frame["date"], frame["disposition"]
+    ):
         d = as_date(value)
+        if str(disposition) != UNCERTIFIED:
+            raise PopulationInconsistencyError(
+                f"population row {key} {d} has disposition {disposition!r}, "
+                f"expected {UNCERTIFIED!r}"
+            )
         if d >= RESERVE_START:
             raise PopulationInconsistencyError(
                 f"reserve-dated row in population input: {key} {d}"
@@ -500,12 +504,14 @@ def build_key_series(
 
     unusable: dict[str, set[date]] = {}
     if not day_flags.empty:
-        for key, d, klass in zip(
+        for key, d, klass, disposition in zip(
             day_flags["security_key"],
             day_flags["date"],
             day_flags["class_or_flag"],
+            day_flags["disposition"],
         ):
-            if str(klass) in UNUSABLE_CLASSES:
+            # D5 section-3 usable row: not CORRUPT and not INTERVAL_MISMATCH.
+            if str(disposition) == "CORRUPT" or str(klass) == "INTERVAL_MISMATCH":
                 unusable.setdefault(str(key), set()).add(as_date(d))
 
     series: dict[str, KeySeries] = {}
@@ -640,9 +646,17 @@ def admitted_pairs(admitted_returns: pd.DataFrame) -> set[tuple[str, date]]:
 
 
 def split_events_for(
-    security_key: str, ca_events: pd.DataFrame
+    ticker: str,
+    listed_start: date,
+    listed_end: date,
+    ca_events: pd.DataFrame,
 ) -> list[tuple[date, float]]:
-    """D3 split events for a key, as ``(effective_date, factor)``."""
+    """D3 split events for a key's ticker, as ``(effective_date, factor)``.
+
+    ``ca_events.stock_id`` carries the **ticker**, not the security_key, so
+    events are associated with a key through its D4 assigned interval
+    ``(ticker, listed_start, listed_end)``.
+    """
     out: list[tuple[date, float]] = []
     if ca_events.empty:
         return out
@@ -652,25 +666,59 @@ def split_events_for(
         ca_events["action_type"],
         ca_events["adjustment_factor"],
     ):
-        if str(stock_id) == security_key and str(action) == "split":
-            out.append((as_date(effective), float(factor)))
+        if str(stock_id) != ticker or str(action) != "split":
+            continue
+        d = as_date(effective)
+        if listed_start <= d <= listed_end:
+            out.append((d, float(factor)))
     return out
 
 
+def raw_close_lookup(observations: pd.DataFrame) -> dict[tuple[str, date], float]:
+    lookup: dict[tuple[str, date], float] = {}
+    for ticker, d, close in zip(
+        observations["ticker"], observations["date"], observations["close"]
+    ):
+        if pd.isna(close):
+            continue
+        lookup[(str(ticker), as_date(d))] = float(close)
+    return lookup
+
+
 def dividend_events_for(
-    security_key: str, ca_events: pd.DataFrame
+    ticker: str,
+    listed_start: date,
+    listed_end: date,
+    ca_events: pd.DataFrame,
+    observations: pd.DataFrame,
 ) -> list[tuple[date, float]]:
+    """D3 dividend events with the amount derived from adjustment_factor.
+
+    D3 stores ``adjustment_factor = 1 + divCash / close`` for the same row's
+    raw close, so the cash amount is ``(adjustment_factor - 1) * raw_close``.
+    A missing raw close fails closed.
+    """
     out: list[tuple[date, float]] = []
     if ca_events.empty:
         return out
+    closes = raw_close_lookup(observations)
     for stock_id, effective, action, factor in zip(
         ca_events["stock_id"],
         ca_events["effective_date"],
         ca_events["action_type"],
         ca_events["adjustment_factor"],
     ):
-        if str(stock_id) == security_key and str(action) == "dividend":
-            out.append((as_date(effective), float(factor)))
+        if str(stock_id) != ticker or str(action) != "dividend":
+            continue
+        d = as_date(effective)
+        if not (listed_start <= d <= listed_end):
+            continue
+        close = closes.get((ticker, d))
+        if close is None:
+            raise Gate6Error(
+                f"raw close unavailable for dividend {ticker} on {d}"
+            )
+        out.append((d, (float(factor) - 1.0) * close))
     return out
 
 
@@ -678,6 +726,7 @@ def assign_stratum(
     security_key: str,
     t: date,
     *,
+    ticker: str,
     ca_events: pd.DataFrame,
     sessions: Sequence[date],
     listed_start: date,
@@ -689,9 +738,9 @@ def assign_stratum(
     if t not in position:
         raise StratumError(f"suspect day {t} is not on the trusted calendar")
     here = position[t]
-    for effective, _factor in split_events_for(security_key, ca_events):
-        if not (listed_start <= effective <= listed_end):
-            continue
+    for effective, _factor in split_events_for(
+        ticker, listed_start, listed_end, ca_events
+    ):
         if effective == t:
             raise StratumError(
                 f"a split dated exactly the suspect day {t} is impossible"
@@ -725,6 +774,10 @@ class Candidate:
     stratum: str
     band: str
     rank_hex: str
+    p: date | None = None
+    rho: float | None = None
+    near_split_offset: int | None = None
+    dividend_within_3: bool = False
 
 
 @dataclass(frozen=True)
@@ -782,6 +835,11 @@ def make_candidate(
     t: date,
     stratum: str,
     band: str,
+    *,
+    p: date | None = None,
+    rho: float | None = None,
+    near_split_offset: int | None = None,
+    dividend_within_3: bool = False,
 ) -> Candidate:
     return Candidate(
         security_key=security_key,
@@ -790,6 +848,10 @@ def make_candidate(
         stratum=stratum,
         band=band,
         rank_hex=rank_hex(security_key, t),
+        p=p,
+        rho=rho,
+        near_split_offset=near_split_offset,
+        dividend_within_3=dividend_within_3,
     )
 
 
@@ -886,11 +948,11 @@ def _specimen_from_candidate(ordinal: int, candidate: Candidate) -> Specimen:
         security_key=candidate.security_key,
         ticker=candidate.ticker,
         t=candidate.t,
-        p=candidate.t,
-        rho=float("nan"),
+        p=candidate.p if candidate.p is not None else candidate.t,
+        rho=candidate.rho if candidate.rho is not None else float("nan"),
         rank_hex=candidate.rank_hex,
-        near_split_offset=None,
-        dividend_within_3=False,
+        near_split_offset=candidate.near_split_offset,
+        dividend_within_3=candidate.dividend_within_3,
     )
 
 
@@ -1072,7 +1134,9 @@ def map_issuer(
     filings = [
         row
         for row in index_rows
-        if row.cik == cik and window_lo <= row.date_filed <= window_hi
+        if row.cik == cik
+        and window_lo <= row.date_filed <= window_hi
+        and row.form in FORM_PRIORITY
     ]
     if not filings:
         return MappingResult(
@@ -1139,7 +1203,7 @@ def build_fetch_plan(
                     specimen_id=specimen.specimen_id,
                     mapping_state="MAPPED",
                     cik=row.cik,
-                    accession=Path(row.filename).name,
+                    accession=Path(row.filename).stem,
                     form=row.form,
                     date_filed=row.date_filed,
                     filename=row.filename,
@@ -1331,6 +1395,15 @@ def _rel_close(x: float, y: float, tol: float = 1e-6) -> bool:
     return abs(x - y) / abs(y) <= tol
 
 
+def _values_conflict(values: Sequence[float]) -> bool:
+    """Whether two values differ beyond a relative 1e-6."""
+    for i in range(len(values)):
+        for j in range(i + 1, len(values)):
+            if not _rel_close(values[i], values[j]):
+                return True
+    return False
+
+
 def run_rule_engine(
     inp: EngineInput,
     *,
@@ -1373,6 +1446,23 @@ def run_rule_engine(
     cash = [f for f in facts if f["type"] == "CASH_DISTRIBUTION"]
     complex_actions = [f for f in facts if f["type"] == "COMPLEX_ACTION"]
 
+    # A1: SPLIT/CASH conflicts are looked for only among facts whose own
+    # event date is in (p, t], and before the candidate/magnitude test.
+    in_window_splits = [
+        f
+        for f in splits
+        if _in_half_open(as_date(f["market_effective_date"]), inp.p, inp.t)
+    ]
+    in_window_cash = [
+        f
+        for f in cash
+        if _in_half_open(as_date(f["ex_date"]), inp.p, inp.t)
+    ]
+    if _values_conflict([float(f["factor"]) for f in in_window_splits]):
+        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
+    if _values_conflict([float(f["amount"]) for f in in_window_cash]):
+        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
+
     cand_a = [
         f
         for f in splits
@@ -1396,10 +1486,6 @@ def run_rule_engine(
 
     categories = sum(1 for group in (cand_a, cand_b, cand_c) if group)
     if categories > 1:
-        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
-    if len({round(float(f["factor"]), 12) for f in splits}) > 1:
-        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
-    if len({round(float(f["amount"]), 12) for f in cash}) > 1:
         return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
 
     if cand_a:
@@ -1493,6 +1579,11 @@ class SpecimenOutcome:
     outcome: str
     reason: str | None = None
     offset: int | None = None
+    worker_outcome: str | None = None
+    worker_reason: str | None = None
+    planner_outcome: str | None = None
+    planner_reason: str | None = None
+    fact_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1519,13 +1610,13 @@ def escalation_tags(records: Sequence[SpecimenOutcome]) -> frozenset[str]:
         >= 2
     ):
         tags.add(TAG_T2)
-    misdated = Counter(
-        (r.reason, r.offset)
+    misdated_offsets = Counter(
+        r.offset
         for r in records
         if r.outcome == OUTCOME_OMISSION
         and r.reason in (REASON_MISDATED_SPLIT, REASON_MISDATED_CASH)
     )
-    if any(value >= 2 for value in misdated.values()):
+    if any(value >= 2 for value in misdated_offsets.values()):
         tags.add(TAG_T3)
     year_band = Counter(
         (r.year, r.band)
@@ -1651,12 +1742,18 @@ def build_g6_artifacts(
     specimen_sha256: str,
     fetch_plan_sha256: str,
     specimen_set: SpecimenSet,
+    records: Sequence[SpecimenOutcome],
     decision: Decision,
     mapping_state_counts: Mapping[str, int],
     procedure: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The in-memory ``g6_audit.json`` content (no timestamps, no secrets)."""
-    records = _records_from_specimen_set(specimen_set)
+    """The in-memory ``g6_audit.json`` content (no timestamps, no secrets).
+
+    Records are the **actual** final per-specimen outcomes; they are
+    reconciled against the specimen size before the artifact is built.
+    """
+    counts = outcome_counts(records)
+    reconcile_counts(len(specimen_set.specimens), counts)
     return {
         "protocol_version": G6_PROTOCOL_VERSION,
         "algorithm": specimen_set.algorithm,
@@ -1676,7 +1773,7 @@ def build_g6_artifacts(
         "stratum_band_outcome_counts": {
             f"{k[0]}:{k[1]}:{k[2]}:{k[3] or ''}": v
             for k, v in sorted(
-                outcome_counts(records).items(),
+                counts.items(),
                 key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3] or ""),
             )
         },
@@ -1693,19 +1790,6 @@ def build_g6_artifacts(
             k: v for k, v in (procedure or {}).items() if k != "timestamp"
         },
     }
-
-
-def _records_from_specimen_set(specimen_set: SpecimenSet) -> list[SpecimenOutcome]:
-    return [
-        SpecimenOutcome(
-            specimen_id=s.specimen_id,
-            stratum=s.stratum,
-            band=s.band,
-            year=s.year,
-            outcome=OUTCOME_UNRESOLVED,
-        )
-        for s in specimen_set.specimens
-    ]
 
 
 def git_summary(artifacts: Mapping[str, Any]) -> str:
@@ -1738,3 +1822,1001 @@ def g6_id(bindings: Mapping[str, Any], code_sha256: str) -> str:
 
 def default_calendar() -> list[date]:
     return [ts.date() for ts in build_nyse_calendar(CALENDAR_START, CALENDAR_END).dates]
+
+
+# ===========================================================================
+# Production bindings (spec section 1)
+# ===========================================================================
+
+INTERVAL_ASSIGNED = "INTERVAL_ASSIGNED"
+D3_BUILD_ID = "n-f874d3ecb61374d4"
+SEC_INDEX_DIR = "dsc_evidence/sec-regindex-20260927/raw"
+
+
+@dataclass(frozen=True)
+class ArtifactBinding:
+    """A hash-pinned artifact path relative to the data-store root."""
+
+    relative_path: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class ProductionBindings:
+    """Every frozen section-1 binding, fail-closed."""
+
+    day_flags: ArtifactBinding
+    qc_hash: str
+    d3_build_id: str
+    observations: ArtifactBinding
+    ca_events: ArtifactBinding
+    identity_assignment: ArtifactBinding
+    daily_total_return: ArtifactBinding
+    issuer_mapping: ArtifactBinding
+    dsc_json: ArtifactBinding
+    dsc_hash: str
+    population: PopulationBinding
+    sec_index_dir: str = SEC_INDEX_DIR
+
+
+PRODUCTION_BINDINGS = ProductionBindings(
+    day_flags=ArtifactBinding(
+        "derived/qc/q-5d1028655f8c82e1/day_flags.parquet",
+        "f4010ebeabf5cfae2684f3658a5f19f922f15e2c8898410049f2148440cf7891",
+    ),
+    qc_hash=(
+        "3d63e51b983096f0ae579cd1e382c613d9329d239c3f848cc785dee2d61cdfc3"
+    ),
+    d3_build_id=D3_BUILD_ID,
+    observations=ArtifactBinding(
+        f"normalized/{D3_BUILD_ID}/observations.parquet",
+        "557001d0e9c617befd3c036683f171094e86e19badb760098f40c08f3f56596e",
+    ),
+    ca_events=ArtifactBinding(
+        f"normalized/{D3_BUILD_ID}/ca_events.parquet",
+        "afd4a2986c934d84c2b23eaf68f23ee18746e7c929c6b8625b6c9911e4a2b109",
+    ),
+    identity_assignment=ArtifactBinding(
+        "derived/identity/i-a21f1e46621dee94/identity_assignment.parquet",
+        "fee4614009095773f75fb832343a5fa9b87b9de1cf363125567222b08fad3f8b",
+    ),
+    daily_total_return=ArtifactBinding(
+        "derived/trusted_inputs/ti-aa23fabd3db4e595/daily_total_return.parquet",
+        "511bcf4ac4ea2bd02158438732e0fdf19c04d783b88ca7a01ff5a364ec8e688c",
+    ),
+    issuer_mapping=ArtifactBinding(
+        "derived/classification/c-27b6dabd0db0cb15/issuer_mapping.parquet",
+        "dbfb424e50ccdc8127ba9064228738cfc105d5d4e7d4071694a27e28d3e127b5",
+    ),
+    dsc_json=ArtifactBinding(
+        "derived/classification/c-27b6dabd0db0cb15/dsc.json",
+        "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60",
+    ),
+    dsc_hash=(
+        "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60"
+    ),
+    population=PRODUCTION_POPULATION_BINDING,
+)
+
+
+def bindings_manifest(
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+) -> dict[str, Any]:
+    """The data-free section-1 binding manifest (ids and hashes only)."""
+    return {
+        "algorithm": G6_ALGORITHM_ID,
+        "day_flags": bindings.day_flags.relative_path,
+        "day_flags_sha256": bindings.day_flags.sha256,
+        "qc_hash": bindings.qc_hash,
+        "d3_build_id": bindings.d3_build_id,
+        "observations_sha256": bindings.observations.sha256,
+        "ca_events_sha256": bindings.ca_events.sha256,
+        "identity_assignment": bindings.identity_assignment.relative_path,
+        "identity_assignment_sha256": bindings.identity_assignment.sha256,
+        "daily_total_return": bindings.daily_total_return.relative_path,
+        "daily_total_return_sha256": bindings.daily_total_return.sha256,
+        "issuer_mapping": bindings.issuer_mapping.relative_path,
+        "issuer_mapping_sha256": bindings.issuer_mapping.sha256,
+        "dsc_json": bindings.dsc_json.relative_path,
+        "dsc_hash": bindings.dsc_hash,
+        "population_sha256": bindings.population.sha256,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bound input loading
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class G6Inputs:
+    population: Population
+    day_flags: pd.DataFrame
+    identity_intervals: pd.DataFrame
+    observations: pd.DataFrame
+    ca_events: pd.DataFrame
+    admitted_returns: pd.DataFrame
+    issuer_names: Mapping[str, tuple[str, ...]]
+    sec_index_rows: tuple[IndexRow, ...]
+    sessions: tuple[date, ...]
+
+
+def _parse_issuer_names(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(str(v) for v in value)
+    if value is None:
+        return ()
+    try:
+        if pd.isna(value):
+            return ()
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text:
+        return ()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return tuple(str(v) for v in parsed)
+        except json.JSONDecodeError:
+            pass
+    return tuple(part.strip() for part in text.split(",") if part.strip())
+
+
+def load_sec_index(
+    root: str | Path,
+    dsc: Mapping[str, Any],
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+) -> tuple[IndexRow, ...]:
+    """Verify and parse the bound 1993Q1-2023Q2 SEC master files."""
+    root = Path(root)
+    index = dsc.get("sec_index_files_sha256") or {}
+    files: dict[str, bytes] = {}
+    for key, expected in index.items():
+        base = Path(key).name
+        if not allowed_index_filename(base):
+            continue
+        relative = Path(key) if "/" in key else Path(bindings.sec_index_dir) / base
+        path = root / relative
+        verify_file_sha256(path, expected)
+        files[base] = path.read_bytes()
+    return tuple(parse_sec_index_files(files))
+
+
+def load_g6_inputs(
+    root: str | Path,
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    *,
+    calendar: Sequence[date] | None = None,
+) -> G6Inputs:
+    """Verify every bound file and load the development inputs."""
+    root = Path(root)
+
+    day_flags_path = root / bindings.day_flags.relative_path
+    verify_file_sha256(day_flags_path, bindings.day_flags.sha256)
+    day_flags = pd.read_parquet(day_flags_path)
+    population = build_population(day_flags, bindings.population)
+
+    accessor = DevelopmentAccessor(
+        root,
+        bindings={
+            "observations": FileBinding(
+                f"normalized/{bindings.d3_build_id}/observations.parquet",
+                bindings.observations.sha256,
+            ),
+            "ca_events": FileBinding(
+                f"normalized/{bindings.d3_build_id}/ca_events.parquet",
+                bindings.ca_events.sha256,
+            ),
+        },
+    )
+    market = MarketData(accessor)
+    observations = market.observations()
+    ca_events = market.ca_events()
+
+    identity_path = root / bindings.identity_assignment.relative_path
+    verify_file_sha256(identity_path, bindings.identity_assignment.sha256)
+    identity_intervals = pd.read_parquet(identity_path)
+
+    admitted_path = root / bindings.daily_total_return.relative_path
+    verify_file_sha256(admitted_path, bindings.daily_total_return.sha256)
+    admitted_returns = pd.read_parquet(
+        admitted_path, columns=["security_key", "source_session"]
+    )
+
+    issuer_path = root / bindings.issuer_mapping.relative_path
+    verify_file_sha256(issuer_path, bindings.issuer_mapping.sha256)
+    issuer_frame = pd.read_parquet(
+        issuer_path, columns=["security_key", "issuer_names_norm"]
+    )
+    issuer_names = {
+        str(key): _parse_issuer_names(value)
+        for key, value in zip(
+            issuer_frame["security_key"], issuer_frame["issuer_names_norm"]
+        )
+    }
+
+    dsc_path = root / bindings.dsc_json.relative_path
+    verify_file_sha256(dsc_path, bindings.dsc_json.sha256)
+    dsc = json.loads(dsc_path.read_text(encoding="utf-8"))
+    sec_index_rows = load_sec_index(root, dsc, bindings)
+
+    sessions = tuple(calendar) if calendar is not None else tuple(default_calendar())
+    return G6Inputs(
+        population=population,
+        day_flags=day_flags,
+        identity_intervals=identity_intervals,
+        observations=observations,
+        ca_events=ca_events,
+        admitted_returns=admitted_returns,
+        issuer_names=issuer_names,
+        sec_index_rows=sec_index_rows,
+        sessions=sessions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Candidate construction with real p/rho/offset/covariate
+# ---------------------------------------------------------------------------
+
+
+def build_identity_index(
+    identity_intervals: pd.DataFrame,
+) -> dict[str, list[tuple[str, date, date]]]:
+    index: dict[str, list[tuple[str, date, date]]] = {}
+    for key, ticker, start, end, state in zip(
+        identity_intervals["security_key"],
+        identity_intervals["ticker"],
+        identity_intervals["listed_start"],
+        identity_intervals["listed_end"],
+        identity_intervals["state"],
+    ):
+        if str(state) != INTERVAL_ASSIGNED:
+            continue
+        index.setdefault(str(key), []).append(
+            (str(ticker), as_date(start), as_date(end))
+        )
+    return index
+
+
+def require_identity(
+    security_key: str,
+    index: Mapping[str, list[tuple[str, date, date]]],
+) -> tuple[str, date, date]:
+    rows = index.get(security_key, [])
+    if len(rows) != 1:
+        raise Gate6Error(
+            f"key {security_key} has {len(rows)} INTERVAL_ASSIGNED row(s); "
+            "exactly one is required"
+        )
+    return rows[0]
+
+
+def build_candidates(inputs: G6Inputs) -> list[Candidate]:
+    """Build every population candidate with real p, rho and covariates."""
+    index = build_identity_index(inputs.identity_intervals)
+
+    identity_by_key: dict[str, tuple[str, date, date]] = {}
+    for key, _t in inputs.population.records:
+        identity_by_key.setdefault(key, require_identity(key, index))
+    unique_rows = [
+        {
+            "security_key": key,
+            "ticker": ticker,
+            "listed_start": start,
+            "listed_end": end,
+        }
+        for key, (ticker, start, end) in sorted(identity_by_key.items())
+    ]
+    identity_frame = pd.DataFrame(
+        unique_rows,
+        columns=["security_key", "ticker", "listed_start", "listed_end"],
+    )
+    series_by_key = build_key_series(
+        identity_frame, inputs.observations, inputs.day_flags
+    )
+    admitted = admitted_pairs(inputs.admitted_returns)
+    position = {d: i for i, d in enumerate(inputs.sessions)}
+
+    candidates: list[Candidate] = []
+    for key, t in inputs.population.records:
+        ticker, start, end = identity_by_key[key]
+        series = series_by_key[key]
+        p, rho = compute_magnitude(series, t, inputs.sessions)
+        band = magnitude_band(rho)
+        stratum, offset = assign_stratum(
+            key,
+            t,
+            ticker=ticker,
+            ca_events=inputs.ca_events,
+            sessions=inputs.sessions,
+            listed_start=start,
+            listed_end=end,
+            admitted=admitted,
+        )
+        dividends = dividend_events_for(
+            ticker, start, end, inputs.ca_events, inputs.observations
+        )
+        here = position[t]
+        in_band = any(
+            d in position and abs(position[d] - here) <= 3 for d, _ in dividends
+        )
+        candidates.append(
+            make_candidate(
+                key,
+                ticker,
+                t,
+                stratum,
+                band,
+                p=p,
+                rho=rho,
+                near_split_offset=offset,
+                dividend_within_3=in_band,
+            )
+        )
+    return candidates
+
+
+# ---------------------------------------------------------------------------
+# Deterministic writers (spec section 11)
+# ---------------------------------------------------------------------------
+
+_SPECIMEN_COLUMNS = (
+    "specimen_id",
+    "selection_order",
+    "stratum",
+    "band",
+    "year",
+    "security_key",
+    "ticker",
+    "t",
+    "p",
+    "rho",
+    "rank_hex",
+    "near_split_offset",
+    "dividend_within_3",
+)
+
+_FETCH_PLAN_COLUMNS = (
+    "specimen_id",
+    "mapping_state",
+    "cik",
+    "accession",
+    "form",
+    "date_filed",
+    "filename",
+    "priority",
+)
+
+
+def _cell_key(stratum: str, band: str | None) -> str:
+    return f"{stratum}:{band or ''}"
+
+
+def specimen_frame(specimen_set: SpecimenSet) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "specimen_id": s.specimen_id,
+                "selection_order": s.selection_order,
+                "stratum": s.stratum,
+                "band": s.band,
+                "year": s.year,
+                "security_key": s.security_key,
+                "ticker": s.ticker,
+                "t": pd.Timestamp(s.t),
+                "p": pd.Timestamp(s.p),
+                "rho": float(s.rho),
+                "rank_hex": s.rank_hex,
+                "near_split_offset": (
+                    None if s.near_split_offset is None else int(s.near_split_offset)
+                ),
+                "dividend_within_3": bool(s.dividend_within_3),
+            }
+            for s in specimen_set.specimens
+        ],
+        columns=list(_SPECIMEN_COLUMNS),
+    )
+
+
+def fetch_plan_frame(rows: Sequence[FetchPlanRow]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "specimen_id": r.specimen_id,
+                "mapping_state": r.mapping_state,
+                "cik": r.cik,
+                "accession": r.accession,
+                "form": r.form,
+                "date_filed": (
+                    None if r.date_filed is None else pd.Timestamp(r.date_filed)
+                ),
+                "filename": r.filename,
+                "priority": r.priority,
+            }
+            for r in rows
+        ],
+        columns=list(_FETCH_PLAN_COLUMNS),
+    )
+
+
+def write_json(path: str | Path, payload: Mapping[str, Any]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(canonical_json(payload) + "\n", encoding="utf-8")
+    return path
+
+
+def write_parquet(path: str | Path, frame: pd.DataFrame) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(path, index=False)
+    return path
+
+
+def write_g6_audit(
+    audit_dir: str | Path,
+    population: Population,
+    specimen_set: SpecimenSet,
+    rows: Sequence[FetchPlanRow],
+    mapping_state_counts: Mapping[str, int],
+    candidate_counts: Mapping[tuple[str, str | None], int],
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+) -> dict[str, Any]:
+    """E1 writers: the specimen/fetch plan and the data-free manifest."""
+    audit_dir = Path(audit_dir)
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    spec_sha = specimen_sha256(specimen_set)
+    plan_sha = fetch_plan_sha256(rows)
+
+    write_json(
+        audit_dir / "population.json",
+        {
+            "bindings": bindings_manifest(bindings),
+            "population_sha256": population.sha256,
+            "count": population.count,
+            "unique_keys": population.unique_keys,
+            "per_year": {str(k): v for k, v in population.per_year.items()},
+            "per_stratum_band": {
+                _cell_key(k[0], k[1]): v
+                for k, v in sorted(
+                    candidate_counts.items(),
+                    key=lambda item: (item[0][0], item[0][1] or ""),
+                )
+            },
+        },
+    )
+    write_parquet(audit_dir / "specimen.parquet", specimen_frame(specimen_set))
+    write_parquet(audit_dir / "fetch_plan.parquet", fetch_plan_frame(rows))
+    write_json(
+        audit_dir / "specimen.json",
+        {
+            "algorithm": specimen_set.algorithm,
+            "seed": specimen_set.seed,
+            "allocation": {
+                _cell_key(k[0], k[1]): v for k, v in specimen_set.allocation.items()
+            },
+            "shortfalls": {
+                _cell_key(k[0], k[1]): v
+                for k, v in specimen_set.shortfalls.items()
+            },
+            "population_sha256": population.sha256,
+            "specimen_sha256": spec_sha,
+            "fetch_plan_sha256": plan_sha,
+        },
+    )
+    manifest = build_specimen_manifest(
+        population, specimen_set, rows, mapping_state_counts
+    )
+    (audit_dir / "specimen_manifest.md").write_text(manifest, encoding="utf-8")
+    return {
+        "population_sha256": population.sha256,
+        "specimen_sha256": spec_sha,
+        "fetch_plan_sha256": plan_sha,
+        "specimen_size": len(specimen_set.specimens),
+        "mapping_state_counts": dict(sorted(mapping_state_counts.items())),
+    }
+
+
+def build_specimen_manifest(
+    population: Population,
+    specimen_set: SpecimenSet,
+    rows: Sequence[FetchPlanRow],
+    mapping_state_counts: Mapping[str, int],
+) -> str:
+    """The pre-network, data-free committed manifest (hashes/counts only)."""
+    lines = [
+        "# Gate-6 specimen audit — pre-network manifest (data-free)",
+        "",
+        f"- algorithm: `{specimen_set.algorithm}`",
+        f"- population_sha256: `{population.sha256}`",
+        f"- specimen_sha256: `{specimen_sha256(specimen_set)}`",
+        f"- fetch_plan_sha256: `{fetch_plan_sha256(rows)}`",
+        f"- specimen_size: {len(specimen_set.specimens)}",
+        "",
+        "## per-cell counts",
+    ]
+    cell_counts = Counter(
+        (s.stratum, None if s.stratum == STRATUM_S3 else s.band)
+        for s in specimen_set.specimens
+    )
+    for cell in CELL_ORDER:
+        lines.append(f"- {_cell_key(*cell)}: {cell_counts.get(cell, 0)}")
+    lines.append("")
+    lines.append("## shortfalls")
+    for cell in CELL_ORDER:
+        lines.append(f"- {_cell_key(*cell)}: {specimen_set.shortfalls.get(cell, 0)}")
+    lines.append("")
+    lines.append("## mapping-state counts")
+    for state in sorted(mapping_state_counts):
+        lines.append(f"- {state}: {mapping_state_counts[state]}")
+    return "\n".join(lines) + "\n"
+
+
+def read_specimen_set(
+    audit_dir: str | Path,
+) -> tuple[SpecimenSet, dict[str, Any]]:
+    audit_dir = Path(audit_dir)
+    info = json.loads((audit_dir / "specimen.json").read_text(encoding="utf-8"))
+    frame = pd.read_parquet(audit_dir / "specimen.parquet")
+    specimens = []
+    for _, row in frame.iterrows():
+        offset = row["near_split_offset"]
+        specimens.append(
+            Specimen(
+                selection_order=int(row["selection_order"]),
+                specimen_id=str(row["specimen_id"]),
+                stratum=str(row["stratum"]),
+                band=str(row["band"]),
+                year=int(row["year"]),
+                security_key=str(row["security_key"]),
+                ticker=str(row["ticker"]),
+                t=as_date(row["t"]),
+                p=as_date(row["p"]),
+                rho=float(row["rho"]),
+                rank_hex=str(row["rank_hex"]),
+                near_split_offset=(None if pd.isna(offset) else int(offset)),
+                dividend_within_3=bool(row["dividend_within_3"]),
+            )
+        )
+    allocation = {
+        tuple(key.split(":", 1)): value
+        for key, value in info["allocation"].items()
+    }
+    allocation = {
+        (stratum, band or None): value
+        for (stratum, band), value in allocation.items()
+    }
+    shortfalls = {
+        (stratum, band or None): value
+        for (stratum, band), value in (
+            (tuple(key.split(":", 1)), value)
+            for key, value in info["shortfalls"].items()
+        )
+    }
+    specimen_set = SpecimenSet(
+        specimens=tuple(specimens),
+        shortfalls=shortfalls,
+        population_sha256=info["population_sha256"],
+        seed=info["seed"],
+        allocation=allocation,
+        algorithm=info["algorithm"],
+    )
+    return specimen_set, info
+
+
+def read_fetch_plan(audit_dir: str | Path) -> tuple[FetchPlanRow, ...]:
+    frame = pd.read_parquet(Path(audit_dir) / "fetch_plan.parquet")
+    rows = []
+    for _, row in frame.iterrows():
+        cik = row["cik"]
+        filed = row["date_filed"]
+        rows.append(
+            FetchPlanRow(
+                specimen_id=str(row["specimen_id"]),
+                mapping_state=str(row["mapping_state"]),
+                cik=None if pd.isna(cik) else str(cik),
+                accession=str(row["accession"]) if not pd.isna(row["accession"]) else "",
+                form=str(row["form"]) if not pd.isna(row["form"]) else "",
+                date_filed=None if pd.isna(filed) else as_date(filed),
+                filename=str(row["filename"]) if not pd.isna(row["filename"]) else "",
+                priority=int(row["priority"]),
+            )
+        )
+    return tuple(rows)
+
+
+# ---------------------------------------------------------------------------
+# Facts, evidence and outcomes I/O
+# ---------------------------------------------------------------------------
+
+
+def read_facts(path: str | Path) -> list[dict[str, Any]]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    facts: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            facts.append(json.loads(line))
+    return facts
+
+
+def write_facts(path: str | Path, facts: Sequence[Mapping[str, Any]]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(canonical_json(dict(fact)) + "\n" for fact in facts),
+        encoding="utf-8",
+    )
+    return path
+
+
+def fact_template(specimen: Specimen) -> dict[str, Any]:
+    """A per-specimen blank extraction template (contains no facts)."""
+    return {
+        "specimen_id": specimen.specimen_id,
+        "type": None,
+        "source": "E1",
+        "accession": None,
+        "form": None,
+        "date_filed": None,
+        "doc_sha256": None,
+        "locator": None,
+        "quote": None,
+    }
+
+
+def read_evidence(audit_dir: str | Path) -> dict[str, str]:
+    evidence_dir = Path(audit_dir) / "evidence"
+    evidence: dict[str, str] = {}
+    if not evidence_dir.exists():
+        return evidence
+    for path in sorted(evidence_dir.glob("*.txt")):
+        evidence[path.stem] = sha256_file(path)
+    return evidence
+
+
+def _outcomes_frame(records: Sequence[SpecimenOutcome]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "specimen_id": r.specimen_id,
+                "stratum": r.stratum,
+                "band": r.band,
+                "year": r.year,
+                "worker_outcome": r.worker_outcome,
+                "worker_reason": r.worker_reason,
+                "planner_outcome": r.planner_outcome,
+                "planner_reason": r.planner_reason,
+                "outcome": r.outcome,
+                "reason": r.reason,
+                "offset": r.offset,
+                "fact_refs": list(r.fact_refs),
+            }
+            for r in records
+        ],
+        columns=[
+            "specimen_id",
+            "stratum",
+            "band",
+            "year",
+            "worker_outcome",
+            "worker_reason",
+            "planner_outcome",
+            "planner_reason",
+            "outcome",
+            "reason",
+            "offset",
+            "fact_refs",
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# E1 / E2 / E3 pipeline
+# ---------------------------------------------------------------------------
+
+
+def _candidate_cell_counts(
+    candidates: Sequence[Candidate],
+) -> dict[tuple[str, str | None], int]:
+    counts: Counter[tuple[str, str | None]] = Counter()
+    for candidate in candidates:
+        cell = (
+            (candidate.stratum, None)
+            if candidate.stratum == STRATUM_S3
+            else (candidate.stratum, candidate.band)
+        )
+        counts[cell] += 1
+    return dict(counts)
+
+
+def run_e1(
+    root: str | Path,
+    audit_dir: str | Path,
+    *,
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    inputs: G6Inputs | None = None,
+) -> dict[str, Any]:
+    """Offline E1: population, specimen, fetch plan and manifest."""
+    inputs = inputs or load_g6_inputs(root, bindings)
+    candidates = build_candidates(inputs)
+    specimen_set = select_specimens(
+        candidates, population_sha256=inputs.population.sha256
+    )
+    rows, state_counts = build_fetch_plan(
+        specimen_set.specimens,
+        issuer_names=inputs.issuer_names,
+        index_rows=inputs.sec_index_rows,
+    )
+    return write_g6_audit(
+        audit_dir,
+        inputs.population,
+        specimen_set,
+        rows,
+        state_counts,
+        _candidate_cell_counts(candidates),
+        bindings,
+    )
+
+
+def run_e2(
+    root: str | Path,
+    audit_dir: str | Path,
+    *,
+    transport: Callable[..., Any] | None = None,
+    contact: str | None = None,
+) -> dict[str, Any]:
+    """Network E2: verify both hashes, then retrieve the planned filings."""
+    from smart_beta.dataset_v1.gate6_sec_fetch import (
+        SecFetcher,
+        urllib_transport,
+    )
+
+    specimen_set, info = read_specimen_set(audit_dir)
+    rows = read_fetch_plan(audit_dir)
+    spec_sha = str(info["specimen_sha256"])
+    plan_sha = str(info["fetch_plan_sha256"])
+    verify_specimen_hash(specimen_set, spec_sha)
+    verify_fetch_plan_hash(rows, plan_sha)
+
+    fetcher = SecFetcher(
+        rows,
+        plan_sha256=plan_sha,
+        transport=transport or urllib_transport,
+        contact=contact,
+        cache_dir=audit_dir,
+    )
+    outcomes = fetcher.fetch_all()
+    (Path(audit_dir) / "retrieval_log.jsonl").write_text(
+        fetcher.log_jsonl(), encoding="utf-8"
+    )
+    return {
+        "specimen_sha256": spec_sha,
+        "fetch_plan_sha256": plan_sha,
+        "filings": len(outcomes),
+        "fetched": sum(1 for o in outcomes if o.outcome in ("FETCHED", "CACHED")),
+    }
+
+
+def _mapping_reason(
+    specimen_id: str, rows_by_specimen: Mapping[str, Sequence[FetchPlanRow]]
+) -> str | None:
+    rows = rows_by_specimen.get(specimen_id, ())
+    if any(row.mapping_state == "MAPPED" for row in rows):
+        return None
+    if rows:
+        return rows[0].mapping_state
+    return REASON_NO_ISSUER_MAPPING
+
+
+def run_e3(
+    root: str | Path,
+    audit_dir: str | Path,
+    *,
+    worker_facts_path: str | Path | None = None,
+    planner_facts_path: str | Path | None = None,
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    inputs: G6Inputs | None = None,
+) -> dict[str, Any]:
+    """E3: two blind fact sets, the engine, the decision and the artifact."""
+    audit_dir = Path(audit_dir)
+    specimen_set, info = read_specimen_set(audit_dir)
+    rows = read_fetch_plan(audit_dir)
+    spec_sha = str(info["specimen_sha256"])
+    plan_sha = str(info["fetch_plan_sha256"])
+    verify_specimen_hash(specimen_set, spec_sha)
+    verify_fetch_plan_hash(rows, plan_sha)
+
+    inputs = inputs or load_g6_inputs(root, bindings)
+    evidence = read_evidence(audit_dir)
+    specimen_ids = {s.specimen_id for s in specimen_set.specimens}
+
+    worker_path = worker_facts_path or (audit_dir / "facts_worker.jsonl")
+    planner_path = planner_facts_path or (audit_dir / "facts_planner.jsonl")
+    worker_facts = validate_facts(
+        read_facts(worker_path), specimen_ids=specimen_ids, evidence=evidence
+    )
+    planner_facts = validate_facts(
+        read_facts(planner_path), specimen_ids=specimen_ids, evidence=evidence
+    )
+    worker_by = _group_facts(worker_facts)
+    planner_by = _group_facts(planner_facts)
+
+    index = build_identity_index(inputs.identity_intervals)
+    closes = raw_close_lookup(inputs.observations)
+    rows_by_specimen: dict[str, list[FetchPlanRow]] = {}
+    for row in rows:
+        rows_by_specimen.setdefault(row.specimen_id, []).append(row)
+
+    records: list[SpecimenOutcome] = []
+    for specimen in specimen_set.specimens:
+        ticker, start, end = require_identity(specimen.security_key, index)
+        close_t = closes.get((ticker, specimen.t))
+        close_p = closes.get((ticker, specimen.p))
+        if close_t is None or close_p is None:
+            raise Gate6Error(
+                f"missing raw close for {specimen.specimen_id} "
+                f"({ticker} {specimen.t}/{specimen.p})"
+            )
+        planned = rows_by_specimen.get(specimen.specimen_id, [])
+        mapped = [row for row in planned if row.mapping_state == "MAPPED"]
+        unretrievable = bool(mapped) and not any(
+            row.accession in evidence for row in mapped
+        )
+        base = dict(
+            specimen_id=specimen.specimen_id,
+            security_key=specimen.security_key,
+            ticker=ticker,
+            t=specimen.t,
+            p=specimen.p,
+            rho=specimen.rho,
+            close_t=close_t,
+            close_p=close_p,
+            split_events=split_events_for(ticker, start, end, inputs.ca_events),
+            dividend_events=dividend_events_for(
+                ticker, start, end, inputs.ca_events, inputs.observations
+            ),
+            sessions=inputs.sessions,
+            mapping_reason=_mapping_reason(specimen.specimen_id, rows_by_specimen),
+            evidence_unretrievable=unretrievable,
+        )
+        worker_outcome = run_rule_engine(
+            EngineInput(facts=worker_by.get(specimen.specimen_id, ()), **base)
+        )
+        planner_outcome = run_rule_engine(
+            EngineInput(facts=planner_by.get(specimen.specimen_id, ()), **base)
+        )
+        final = combine_outcomes(worker_outcome, planner_outcome)
+        records.append(
+            SpecimenOutcome(
+                specimen_id=specimen.specimen_id,
+                stratum=specimen.stratum,
+                band=specimen.band,
+                year=specimen.year,
+                outcome=final.outcome,
+                reason=final.reason,
+                offset=final.offset,
+                worker_outcome=worker_outcome.outcome,
+                worker_reason=worker_outcome.reason,
+                planner_outcome=planner_outcome.outcome,
+                planner_reason=planner_outcome.reason,
+            )
+        )
+
+    decision = decide_gate6(records)
+    write_parquet(audit_dir / "outcomes.parquet", _outcomes_frame(records))
+    artifacts = build_g6_artifacts(
+        population_sha256=inputs.population.sha256,
+        specimen_sha256=spec_sha,
+        fetch_plan_sha256=plan_sha,
+        specimen_set=specimen_set,
+        records=records,
+        decision=decision,
+        mapping_state_counts=_mapping_state_counts(rows),
+        procedure={"protocol_version": G6_PROTOCOL_VERSION},
+    )
+    write_json(audit_dir / "g6_audit.json", artifacts)
+    return {
+        "specimen_sha256": spec_sha,
+        "fetch_plan_sha256": plan_sha,
+        "specimen_size": len(records),
+        "decision": decision.decision,
+        "tags": sorted(decision.tags),
+    }
+
+
+def _group_facts(
+    facts: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for fact in facts:
+        grouped.setdefault(str(fact["specimen_id"]), []).append(dict(fact))
+    return grouped
+
+
+def _mapping_state_counts(rows: Sequence[FetchPlanRow]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    seen: set[str] = set()
+    for row in rows:
+        if row.specimen_id in seen:
+            continue
+        seen.add(row.specimen_id)
+        counts[row.mapping_state] += 1
+    return dict(counts)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+_CLI_KEYS = (
+    "population_sha256",
+    "specimen_sha256",
+    "fetch_plan_sha256",
+    "specimen_size",
+    "filings",
+    "fetched",
+    "decision",
+)
+
+
+def _format_cli(result: Mapping[str, Any]) -> str:
+    """Format a result as ``key=value`` ids/hashes/counts only."""
+    parts = []
+    for key in _CLI_KEYS:
+        if key in result:
+            value = result[key]
+            if isinstance(value, (list, tuple)):
+                value = ",".join(str(v) for v in value)
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m smart_beta.dataset_v1.gate6_audit"
+    )
+    parser.add_argument("stage", choices=("e1", "e2", "e3"))
+    parser.add_argument("--root", required=True)
+    parser.add_argument("--audit-dir", required=True)
+    parser.add_argument("--contact", default=None)
+    parser.add_argument("--worker-facts", default=None)
+    parser.add_argument("--planner-facts", default=None)
+    parser.add_argument("--template", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.stage == "e1":
+        result = run_e1(args.root, args.audit_dir)
+    elif args.stage == "e2":
+        result = run_e2(args.root, args.audit_dir, contact=args.contact)
+    else:
+        if args.template:
+            specimen_set, _info = read_specimen_set(args.audit_dir)
+            write_facts(
+                Path(args.audit_dir) / "facts_worker.jsonl",
+                [fact_template(s) for s in specimen_set.specimens],
+            )
+            write_facts(
+                Path(args.audit_dir) / "facts_planner.jsonl",
+                [fact_template(s) for s in specimen_set.specimens],
+            )
+            result = {"specimen_size": len(specimen_set.specimens)}
+        else:
+            result = run_e3(
+                args.root,
+                args.audit_dir,
+                worker_facts_path=args.worker_facts,
+                planner_facts_path=args.planner_facts,
+            )
+    print(_format_cli(result))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
