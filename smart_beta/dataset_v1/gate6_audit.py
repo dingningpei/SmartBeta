@@ -102,6 +102,8 @@ DEFAULT_ALLOCATION: dict[tuple[str, str | None], int] = {
 #: The reserved request cap for the SEC retrieval protocol.
 REQUEST_CAP = 2500
 MAX_FILINGS_PER_SPECIMEN = 12
+#: The hard SEC retrieval cap (mirrors the fetcher's constant; spec section 10).
+REQUEST_CAP = 2500
 
 # NOTE: unusable sessions are identified from D5 disposition semantics
 # (``disposition == "CORRUPT"`` or ``class_or_flag == "INTERVAL_MISMATCH"``),
@@ -2962,6 +2964,7 @@ def run_e2(
     *,
     transport: Callable[..., Any] | None = None,
     contact: str | None = None,
+    max_requests: int = REQUEST_CAP,
 ) -> dict[str, Any]:
     """Network E2: verify both hashes, then retrieve the planned filings."""
     from smart_beta.dataset_v1.gate6_sec_fetch import (
@@ -2975,6 +2978,17 @@ def run_e2(
     plan_sha = str(info["fetch_plan_sha256"])
     verify_specimen_hash(specimen_set, spec_sha)
     verify_fetch_plan_hash(rows, plan_sha)
+
+    # R12: the cap is cumulative across resumed runs.  Every transport attempt
+    # already recorded in retrieval_log.jsonl counts toward it.
+    log_path = Path(audit_dir) / "retrieval_log.jsonl"
+    prior_attempts = 0
+    if log_path.exists():
+        prior_attempts = sum(
+            1
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
 
     # R9: resume from the previously recorded verified SHA-256 values so a
     # verified cached file is skipped without a request.
@@ -2993,17 +3007,20 @@ def run_e2(
         contact=contact,
         cache_dir=audit_dir,
         cache_index=cache_index,
+        max_requests=max_requests,
+        initial_requests=prior_attempts,
     )
     outcomes = fetcher.fetch_all()
-    (Path(audit_dir) / "retrieval_log.jsonl").write_text(
-        fetcher.log_jsonl(), encoding="utf-8"
-    )
+    # R12: append new records; never overwrite the earlier log lines.
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(fetcher.log_jsonl())
     write_fetch_outcomes(audit_dir, outcomes)
     return {
         "specimen_sha256": spec_sha,
         "fetch_plan_sha256": plan_sha,
         "filings": len(outcomes),
         "fetched": sum(1 for o in outcomes if o.outcome in ("FETCHED", "CACHED")),
+        "requests": fetcher.requests,
     }
 
 
@@ -3263,6 +3280,7 @@ _CLI_KEYS = (
     "specimen_size",
     "filings",
     "fetched",
+    "requests",
     "decision",
 )
 

@@ -2853,3 +2853,102 @@ def test_r11_missing_extraction_file_fails_closed(tmp_path) -> None:
     A.run_e3(root, audit, bindings=bindings_)
 
 
+def test_r12_cumulative_cap_and_log_append(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings)
+    log_path = audit / "retrieval_log.jsonl"
+
+    # First run consumes the whole cap (one request).
+    transport = _FakeTransport([F.TransportResponse(200, b"body")])
+    first = A.run_e2(
+        root,
+        audit,
+        transport=transport,
+        contact="audit@example.com",
+        max_requests=1,
+    )
+    assert first["requests"] == 1
+    first_log = log_path.read_text()
+    assert len([line for line in first_log.splitlines() if line.strip()]) == 1
+
+    # Resume: the cap is already consumed.  Corrupt the cache so a re-fetch
+    # would otherwise be attempted; prove no transport call happens, the total
+    # never exceeds the cap, and the earlier log lines are preserved.
+    (audit / "evidence" / "acc1.txt").write_bytes(b"corrupted")
+    calls = {"n": 0}
+
+    def _must_not_fetch(url, headers):
+        calls["n"] += 1
+        return F.TransportResponse(200, b"should-not-be-used")
+
+    resumed = A.run_e2(
+        root,
+        audit,
+        transport=_FakeTransport(_must_not_fetch),
+        contact="audit@example.com",
+        max_requests=1,
+    )
+    assert calls["n"] == 0
+    assert resumed["requests"] == 1 <= 1
+    outcomes = A.read_fetch_outcomes(audit)
+    assert outcomes[0]["outcome"] == "REQUEST_CAP_REACHED"
+    assert log_path.read_text() == first_log
+
+    # A fetcher initialised at the cap makes no request at all.
+    filing = _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt")
+    empty_transport = _FakeTransport([])
+    capped = F.SecFetcher(
+        [filing],
+        plan_sha256=A.fetch_plan_sha256([filing]),
+        transport=empty_transport,
+        contact="audit@example.com",
+        max_requests=2,
+        initial_requests=2,
+    )
+    assert capped.fetch_all()[0].outcome == "REQUEST_CAP_REACHED"
+    assert empty_transport.calls == []
+
+
+def test_r13_one_get_per_shared_filing(tmp_path) -> None:
+    shared = _plan_row(
+        specimen_id="g6-0000", accession="ACC1",
+        filename="edgar/data/1/acc1.txt",
+    )
+    duplicate = _plan_row(
+        specimen_id="g6-0001", accession="ACC1",
+        filename="edgar/data/1/acc1.txt",
+    )
+    plan = [shared, duplicate]
+    body = b"shared-body"
+    digest = hashlib.sha256(body).hexdigest()
+    transport = _FakeTransport([F.TransportResponse(200, body)])
+    fetcher = F.SecFetcher(
+        plan,
+        plan_sha256=A.fetch_plan_sha256(plan),
+        transport=transport,
+        contact="audit@example.com",
+        cache_dir=tmp_path,
+    )
+    outcomes = fetcher.fetch_all()
+    assert len(transport.calls) == 1
+    assert outcomes[0].outcome == "FETCHED"
+    assert outcomes[1].outcome == "CACHED"
+    assert outcomes[0].doc_sha256 == digest
+    assert outcomes[1].doc_sha256 == digest
+    assert outcomes[1].specimen_id == "g6-0001"
+
+    # A failed first retrieval is shared too, but is not mislabelled CACHED.
+    fail_transport = _FakeTransport([F.TransportResponse(404)])
+    fail_fetcher = F.SecFetcher(
+        plan,
+        plan_sha256=A.fetch_plan_sha256(plan),
+        transport=fail_transport,
+        contact="audit@example.com",
+    )
+    failed = fail_fetcher.fetch_all()
+    assert len(fail_transport.calls) == 1
+    assert failed[0].outcome == "UNRETRIEVABLE"
+    assert failed[1].outcome == "UNRETRIEVABLE"
+
+

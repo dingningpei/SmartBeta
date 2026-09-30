@@ -139,6 +139,7 @@ class SecFetcher:
         sleep: Callable[[float], None] = time.sleep,
         max_requests: int = REQUEST_CAP,
         max_rate: float = 4.0,
+        initial_requests: int = 0,
     ) -> None:
         self._plan = list(plan)
         actual = _audit.fetch_plan_sha256(self._plan)
@@ -164,7 +165,7 @@ class SecFetcher:
         self._max_requests = max_requests
         self._min_interval = 1.0 / max_rate if max_rate > 0 else 0.0
         self._last_request: float | None = None
-        self._requests = 0
+        self._requests = int(initial_requests)
         self._log: list[RetrievalRecord] = []
         self._retrieved: dict[str, str] = {}
         self._used_cache: dict[str, str] = {}
@@ -308,9 +309,6 @@ class SecFetcher:
             attempt += 1
             response = self._request(url, attempt=attempt)
             if response.error == "REQUEST_CAP_REACHED":
-                self._record(
-                    url, response, attempt=attempt, outcome="REQUEST_CAP_REACHED"
-                )
                 return FetchOutcome(
                     specimen_id=filing.specimen_id,
                     accession=filing.accession,
@@ -347,7 +345,38 @@ class SecFetcher:
             self._sleep(BACKOFFS[attempt - 1])
 
     def fetch_all(self) -> list[FetchOutcome]:
-        return [self.fetch_filing(row) for row in self._mapped]
+        """Fetch each distinct planned file at most once per run.
+
+        Several fetch-plan rows (different specimens) may share the same
+        filename/accession.  The first row performs the retrieval; any later
+        row with the same filename reuses that result (``CACHED`` with the
+        same ``doc_sha256`` when the first retrieval succeeded).
+        """
+        results: list[FetchOutcome] = []
+        seen: dict[str, FetchOutcome] = {}
+        for row in self._mapped:
+            key = row.filename
+            if key in seen:
+                first = seen[key]
+                reused = (
+                    "CACHED"
+                    if first.outcome in ("FETCHED", "CACHED")
+                    else first.outcome
+                )
+                results.append(
+                    FetchOutcome(
+                        specimen_id=row.specimen_id,
+                        accession=row.accession,
+                        outcome=reused,
+                        cached_path=first.cached_path,
+                        doc_sha256=first.doc_sha256,
+                    )
+                )
+                continue
+            outcome = self.fetch_filing(row)
+            seen[key] = outcome
+            results.append(outcome)
+        return results
 
     def log_jsonl(self) -> str:
         """The ``retrieval_log.jsonl`` payload (no contact, no secret)."""
