@@ -17,6 +17,7 @@ import inspect
 import json
 import os
 import socket
+import urllib.error
 from dataclasses import replace
 from datetime import date
 
@@ -1828,23 +1829,39 @@ def _synthetic_root(tmp_path):
 
     index_dir = root / A.SEC_INDEX_DIR
     index_dir.mkdir(parents=True, exist_ok=True)
-    body = "-----\n1|Acme Corp|8-K|2020-01-03|edgar/data/1/acc1.txt\n"
-    index_bytes = gzip.compress(body.encode("latin-1"))
-    index_name = "master_2020Q1.gz"
-    (index_dir / index_name).write_bytes(index_bytes)
+    index_bytes: dict[str, bytes] = {}
+    for name in A.expected_index_filenames():
+        if name == "master_2020Q1.gz":
+            body = "-----\n1|Acme Corp|8-K|2020-01-03|edgar/data/1/acc1.txt\n"
+        else:
+            body = "-----\n"
+        data = gzip.compress(body.encode("latin-1"))
+        (index_dir / name).write_bytes(data)
+        index_bytes[name] = data
     dsc = {
+        "dsc_hash": "d-test",
         "sec_index_files_sha256": {
-            index_name: hashlib.sha256(index_bytes).hexdigest()
-        }
+            name: hashlib.sha256(data).hexdigest()
+            for name, data in index_bytes.items()
+        },
     }
+    # A 2023Q3+ decoy entry must never be opened or verified.
+    dsc["sec_index_files_sha256"]["master_2023Q3.gz"] = "0" * 64
     dsc_path = clas_dir / "dsc.json"
     dsc_path.write_text(A.canonical_json(dsc) + "\n")
+
+    day_sha = hashlib.sha256(day_path.read_bytes()).hexdigest()
+    qc_report = {
+        "qc_hash": "q-test",
+        "files_sha256": {"day_flags.parquet": day_sha},
+    }
+    qc_report_path = day_dir / "qc_report.json"
+    qc_report_path.write_text(A.canonical_json(qc_report) + "\n")
 
     records = A.population_records(day)
     bindings = A.ProductionBindings(
         day_flags=A.ArtifactBinding(
-            "derived/qc/q-test/day_flags.parquet",
-            hashlib.sha256(day_path.read_bytes()).hexdigest(),
+            "derived/qc/q-test/day_flags.parquet", day_sha
         ),
         qc_hash="q-test",
         d3_build_id=build_id,
@@ -1873,6 +1890,7 @@ def _synthetic_root(tmp_path):
             hashlib.sha256(dsc_path.read_bytes()).hexdigest(),
         ),
         dsc_hash="d-test",
+        qc_report_path="derived/qc/q-test/qc_report.json",
         population=A.PopulationBinding(
             count=len(records),
             sha256=A.population_sha256(records),
@@ -1906,6 +1924,9 @@ def test_d1_production_bindings_present_and_fail_closed(tmp_path) -> None:
         "dbfb424e50ccdc8127ba9064228738cfc105d5d4e7d4071694a27e28d3e127b5"
     )
     assert b.dsc_json.sha256 == (
+        "23877643018f28b4776e092be1c53d048f0c51a810544f073f9a68f57abcc030"
+    )
+    assert b.dsc_hash == (
         "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60"
     )
     assert b.population.count == 17469
@@ -2373,4 +2394,462 @@ def test_d8b_unusable_sessions_follow_disposition_semantics() -> None:
     p, rho = A.compute_magnitude(series, d3, [d1, d2, d3])
     assert p == d1
     assert rho == pytest.approx(3.0)
+
+
+# ===========================================================================
+# Repair round 2 (R1-R11)
+# ===========================================================================
+
+
+def _e1_e2(tmp_path, body=b"8-K split filing"):
+    root, bindings = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings)
+    transport = _FakeTransport([F.TransportResponse(200, body)])
+    A.run_e2(root, audit, transport=transport, contact="audit@example.com")
+    return root, bindings, audit, hashlib.sha256(body).hexdigest()
+
+
+def _split_fact(audit, digest):
+    specimen_id = pd.read_parquet(audit / "specimen.parquet")["specimen_id"][0]
+    return {
+        "specimen_id": str(specimen_id),
+        "type": "SPLIT",
+        "source": "E1",
+        "accession": "acc1",
+        "form": "8-K",
+        "date_filed": "2020-01-03",
+        "doc_sha256": digest,
+        "locator": "acc1.txt",
+        "quote": "reverse split 1-for-10",
+        "factor": 0.1,
+        "market_effective_date": "2020-01-03",
+    }
+
+
+def test_r1_dsc_json_file_and_field_binding(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    A.load_g6_inputs(root, bindings)
+    dsc_path = root / bindings.dsc_json.relative_path
+
+    original = dsc_path.read_bytes()
+    dsc_path.write_bytes(b"tampered")
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+
+    dsc = json.loads(original.decode("utf-8"))
+    dsc["dsc_hash"] = "wrong"
+    dsc_path.write_text(A.canonical_json(dsc) + "\n")
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+
+
+def test_r2_qc_report_binding(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    A.load_g6_inputs(root, bindings)
+    qc_path = root / bindings.qc_report_path
+    report = json.loads(qc_path.read_text())
+
+    bad_hash = dict(report)
+    bad_hash["qc_hash"] = "wrong"
+    qc_path.write_text(A.canonical_json(bad_hash) + "\n")
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+
+    bad_files = dict(report)
+    bad_files["files_sha256"] = {"day_flags.parquet": "0" * 64}
+    qc_path.write_text(A.canonical_json(bad_files) + "\n")
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+
+
+def test_r3_all_122_sec_index_files_required(tmp_path) -> None:
+    names = A.expected_index_filenames()
+    assert len(names) == 122
+    assert names[0] == "master_1993Q1.gz"
+    assert names[-1] == "master_2023Q2.gz"
+    assert "master_2023Q3.gz" not in names
+
+    root, bindings = _synthetic_root(tmp_path)
+    # The 2023Q3 decoy in dsc.json has a bogus hash and no file on disk; the
+    # successful load proves it is never opened.
+    A.load_g6_inputs(root, bindings)
+
+    index_dir = root / A.SEC_INDEX_DIR
+    (index_dir / "master_2001Q3.gz").unlink()
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, bindings)
+    (index_dir / "master_2001Q3.gz").write_bytes(
+        gzip.compress(b"-----\n")
+    )
+
+    dsc_path = root / bindings.dsc_json.relative_path
+    dsc = json.loads(dsc_path.read_text())
+    del dsc["sec_index_files_sha256"]["master_2001Q3.gz"]
+    dsc_path.write_text(A.canonical_json(dsc) + "\n")
+    # Rebind dsc.json so the file hash is valid; only the missing entry fails.
+    rebound = bindings.__class__(
+        **{
+            **bindings.__dict__,
+            "dsc_json": A.ArtifactBinding(
+                bindings.dsc_json.relative_path,
+                hashlib.sha256(dsc_path.read_bytes()).hexdigest(),
+            ),
+        }
+    )
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, rebound)
+
+
+def test_r4_request_cap_and_evidence_unretrievable(tmp_path) -> None:
+    for outcome, expected in (
+        ("REQUEST_CAP_REACHED", A.REASON_REQUEST_CAP_REACHED),
+        ("UNRETRIEVABLE", A.REASON_EVIDENCE_UNRETRIEVABLE),
+    ):
+        root, bindings = _synthetic_root(tmp_path / outcome)
+        audit = tmp_path / outcome / "audit"
+        A.run_e1(root, audit, bindings=bindings)
+        specimen_id = pd.read_parquet(audit / "specimen.parquet")["specimen_id"][0]
+        A.write_facts(
+            audit / "fetch_outcomes.jsonl",
+            [
+                {
+                    "specimen_id": str(specimen_id),
+                    "accession": "acc1",
+                    "outcome": outcome,
+                    "doc_sha256": None,
+                }
+            ],
+        )
+        (audit / "facts_worker.jsonl").write_text("")
+        (audit / "facts_planner.jsonl").write_text("")
+        A.run_e3(root, audit, bindings=bindings)
+        outcomes = pd.read_parquet(audit / "outcomes.parquet")
+        assert set(outcomes["reason"]) == {expected}
+
+
+def test_r5_evidence_binding_and_fact_ownership(tmp_path) -> None:
+    root, bindings, audit, digest = _e1_e2(tmp_path)
+    fact = _split_fact(audit, digest)
+    A.write_facts(audit / "facts_worker.jsonl", [fact])
+    A.write_facts(audit / "facts_planner.jsonl", [fact])
+
+    # An extra cached file fails closed.
+    (audit / "evidence" / "extra.txt").write_bytes(b"extra")
+    with pytest.raises(A.Gate6Error):
+        A.run_e3(root, audit, bindings=bindings)
+    (audit / "evidence" / "extra.txt").unlink()
+
+    # A hash mismatch fails closed.
+    cache = audit / "evidence" / "acc1.txt"
+    original = cache.read_bytes()
+    cache.write_bytes(b"corrupted")
+    with pytest.raises(A.Gate6Error):
+        A.run_e3(root, audit, bindings=bindings)
+    cache.write_bytes(original)
+
+    # A fact must cite an accession from its own specimen's planned filings.
+    with pytest.raises(A.FactValidationError):
+        A.validate_fact(
+            fact,
+            specimen_ids={fact["specimen_id"]},
+            evidence={"acc1": digest},
+            planned_accessions={fact["specimen_id"]: {"different-accession"}},
+        )
+
+
+def test_r6_artifact_completeness_and_decision_independence(monkeypatch) -> None:
+    monkeypatch.setenv("SEC_CONTACT", "secret@example.com")
+    specimen_set = _select(
+        [
+            ("K1", date(2020, 1, 3), A.STRATUM_S1, A.BAND_B1),
+            ("K2", date(2020, 2, 3), A.STRATUM_S1, A.BAND_B1),
+            ("K3", date(2020, 3, 3), A.STRATUM_S2, A.BAND_B1),
+        ]
+    )
+    specimens = list(specimen_set.specimens)
+    records = [
+        _rec(
+            specimens[0].stratum, specimens[0].band, specimens[0].year,
+            A.OUTCOME_OMISSION, A.REASON_OMITTED_SPLIT, sid=specimens[0].specimen_id,
+        ),
+        _rec(
+            specimens[1].stratum, specimens[1].band, specimens[1].year,
+            A.OUTCOME_UNRESOLVED, A.REASON_NO_EXPLANATORY_FILING,
+            sid=specimens[1].specimen_id,
+        ),
+        _rec(
+            specimens[2].stratum, specimens[2].band, specimens[2].year,
+            A.OUTCOME_COMPLEX, "SPINOFF", sid=specimens[2].specimen_id,
+        ),
+    ]
+    worker_facts = [
+        {"type": "TICKER_LINK", "specimen_id": specimens[0].specimen_id}
+    ]
+    planner_facts: list = []
+    procedure = {
+        "worker_runtime": "pi",
+        "worker_model": "deepseek-v4-flash",
+        "planner_model": "claude",
+        "herdr_workspace": "w1",
+        "timestamp": "2026-09-30T00:00:00Z",
+        "contact": "secret@example.com",
+        "note": "reach me at secret@example.com",
+    }
+    artifacts = A.build_g6_artifacts(
+        population_sha256="p" * 64,
+        specimen_sha256=A.specimen_sha256(specimen_set),
+        fetch_plan_sha256="f" * 64,
+        specimen_set=specimen_set,
+        records=records,
+        decision=A.decide_gate6(records),
+        mapping_state_counts={"MAPPED": 3},
+        evidence={"acc1": "a" * 64},
+        worker_facts=worker_facts,
+        planner_facts=planner_facts,
+        bindings_manifest={"day_flags_sha256": "d" * 64},
+        procedure=procedure,
+    )
+    for key in (
+        "population_sha256",
+        "specimen_sha256",
+        "fetch_plan_sha256",
+        "evidence_sha256",
+        "worker_facts_sha256",
+        "planner_facts_sha256",
+        "outcomes_sha256",
+        "bindings",
+    ):
+        assert key in artifacts["hashes"]
+    assert artifacts["unresolved_by_reason"] == {A.REASON_NO_EXPLANATORY_FILING: 1}
+    assert artifacts["unresolved_by_year"] == {"2020": 1}
+    assert artifacts["unresolved_by_band"] == {A.BAND_B1: 1}
+    assert set(artifacts["resolution_rates"]) == {"S1", "S2", "S3"}
+    assert artifacts["resolution_rates"]["S2"]["n"] == 1
+    assert artifacts["covariates"]["ticker_link_present_worker"] == 1
+    assert artifacts["covariates"]["ticker_link_present_planner"] == 0
+    assert set(artifacts["covariates"]["admission_context"]) == {"S1", "S2", "S3"}
+    assert "timestamp" not in artifacts["procedure"]
+    assert "contact" not in artifacts["procedure"]
+    assert "note" not in artifacts["procedure"]
+    assert "secret@example.com" not in A.canonical_json(artifacts)
+    assert artifacts["decision"] == A.decide_gate6(records).decision
+
+    # The reported extras never affect the decision.
+    bare = A.build_g6_artifacts(
+        population_sha256="p" * 64,
+        specimen_sha256=A.specimen_sha256(specimen_set),
+        fetch_plan_sha256="f" * 64,
+        specimen_set=specimen_set,
+        records=records,
+        decision=A.decide_gate6(records),
+        mapping_state_counts={"MAPPED": 3},
+    )
+    assert bare["decision"] == artifacts["decision"]
+    assert A.decide_gate6(records).decision == artifacts["decision"]
+
+
+def test_r6_clopper_pearson_known_values() -> None:
+    lower, upper = A.clopper_pearson(0, 120)
+    assert lower == 0.0
+    assert upper == pytest.approx(0.03027297257742007, abs=1e-9)
+    assert A._cp_upper_bisect(0, 120, 0.05) == pytest.approx(
+        0.03027297257742007, abs=1e-6
+    )
+    lower6, upper6 = A.clopper_pearson(6, 120)
+    assert 0.0 < lower6 < upper6 < 1.0
+
+
+def test_r7_fact_refs() -> None:
+    out = A.run_rule_engine(
+        _engine(
+            facts=[
+                _fact(
+                    "SPLIT", factor=0.1,
+                    market_effective_date=date(2020, 1, 3),
+                )
+            ]
+        )
+    )
+    assert out.fact_refs == ("ACC1|doc.txt",)
+    unresolved = A.run_rule_engine(_engine(facts=[]))
+    assert unresolved.fact_refs == ()
+
+
+def test_r7_e3_outcomes_record_worker_and_planner_refs(tmp_path) -> None:
+    root, bindings, audit, digest = _e1_e2(tmp_path)
+    fact = _split_fact(audit, digest)
+    A.write_facts(audit / "facts_worker.jsonl", [fact])
+    A.write_facts(audit / "facts_planner.jsonl", [])
+    A.run_e3(root, audit, bindings=bindings)
+    outcomes = pd.read_parquet(audit / "outcomes.parquet")
+    row = outcomes.iloc[0]
+    assert list(row["worker_fact_refs"]) == ["acc1|acc1.txt"]
+    assert list(row["planner_fact_refs"]) == []
+    # Disagreement -> the final UNRESOLVED has no deciding fact.
+    assert list(row["fact_refs"]) == []
+
+
+def test_r8_audit_dir_derivation(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    derived = A.derive_audit_dir(root, bindings, code_sha256_value="c" * 64)
+    assert derived.parent.name == "qc_audit"
+    assert derived.parent.parent == root / "derived"
+    assert derived.name.startswith("g6-")
+    assert len(derived.name) == len("g6-") + 16
+    assert A.resolve_audit_dir(
+        root, derived, bindings=bindings, code_sha256_value="c" * 64
+    ) == derived
+    with pytest.raises(A.Gate6Error):
+        A.resolve_audit_dir(
+            root,
+            tmp_path / "somewhere-else",
+            bindings=bindings,
+            code_sha256_value="c" * 64,
+        )
+
+
+def test_r9_resume_skips_verified_cache(tmp_path) -> None:
+    root, bindings, audit, digest = _e1_e2(tmp_path / "run1")
+
+    calls = {"n": 0}
+
+    def _must_not_fetch(url, headers):
+        calls["n"] += 1
+        return F.TransportResponse(200, b"should-not-be-used")
+
+    A.run_e2(
+        root,
+        audit,
+        transport=_FakeTransport(_must_not_fetch),
+        contact="audit@example.com",
+    )
+    assert calls["n"] == 0
+    outcomes = A.read_fetch_outcomes(audit)
+    assert outcomes[0]["outcome"] == "CACHED"
+
+    # A corrupted cached file is re-fetched exactly once.
+    (audit / "evidence" / "acc1.txt").write_bytes(b"corrupted")
+    repair_calls = {"n": 0}
+
+    def _repair(url, headers):
+        repair_calls["n"] += 1
+        return F.TransportResponse(200, b"repaired")
+
+    A.run_e2(
+        root,
+        audit,
+        transport=_FakeTransport(_repair),
+        contact="audit@example.com",
+    )
+    assert repair_calls["n"] == 1
+    assert (audit / "evidence" / "acc1.txt").read_bytes() == b"repaired"
+
+
+def test_r10_retry_classes() -> None:
+    filing = _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt")
+    plan_hash = A.fetch_plan_sha256([filing])
+
+    def _fetcher(script):
+        return F.SecFetcher(
+            [filing],
+            plan_sha256=plan_hash,
+            transport=_FakeTransport(script),
+            contact="audit@example.com",
+            clock=_Clock().now,
+            sleep=_Clock().sleep,
+        )
+
+    for status in (500, 503, 599, 429):
+        transport = _FakeTransport(
+            [F.TransportResponse(status), F.TransportResponse(200, b"ok")]
+        )
+        fetcher = F.SecFetcher(
+            [filing],
+            plan_sha256=plan_hash,
+            transport=transport,
+            contact="audit@example.com",
+            clock=_Clock().now,
+            sleep=_Clock().sleep,
+        )
+        assert fetcher.fetch_all()[0].outcome == "FETCHED"
+        assert len(transport.calls) == 2
+
+    for status in (400, 403, 404, 418):
+        transport = _FakeTransport([F.TransportResponse(status)])
+        fetcher = F.SecFetcher(
+            [filing],
+            plan_sha256=plan_hash,
+            transport=transport,
+            contact="audit@example.com",
+            clock=_Clock().now,
+            sleep=_Clock().sleep,
+        )
+        assert fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+        assert len(transport.calls) == 1
+
+    timeout_calls = {"n": 0}
+
+    def _timeout(url, headers):
+        timeout_calls["n"] += 1
+        raise TimeoutError("slow")
+
+    fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=plan_hash,
+        transport=_FakeTransport(_timeout),
+        contact="audit@example.com",
+        clock=_Clock().now,
+        sleep=_Clock().sleep,
+    )
+    assert fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+    assert timeout_calls["n"] == 3
+
+    urlerror_timeout_calls = {"n": 0}
+
+    def _url_timeout(url, headers):
+        urlerror_timeout_calls["n"] += 1
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=plan_hash,
+        transport=_FakeTransport(_url_timeout),
+        contact="audit@example.com",
+        clock=_Clock().now,
+        sleep=_Clock().sleep,
+    )
+    assert fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+    assert urlerror_timeout_calls["n"] == 3
+
+    urlerror_calls = {"n": 0}
+
+    def _url_error(url, headers):
+        urlerror_calls["n"] += 1
+        raise urllib.error.URLError(OSError("connection reset"))
+
+    fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=plan_hash,
+        transport=_FakeTransport(_url_error),
+        contact="audit@example.com",
+        clock=_Clock().now,
+        sleep=_Clock().sleep,
+    )
+    assert fetcher.fetch_all()[0].outcome == "UNRETRIEVABLE"
+    assert urlerror_calls["n"] == 1
+
+
+def test_r11_missing_extraction_file_fails_closed(tmp_path) -> None:
+    root, bindings_ = _synthetic_root(tmp_path)
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings_)
+    with pytest.raises(A.Gate6Error):
+        A.run_e3(root, audit, bindings=bindings_)
+
+    # An empty but present file is allowed.
+    (audit / "facts_worker.jsonl").write_text("")
+    (audit / "facts_planner.jsonl").write_text("")
+    A.run_e3(root, audit, bindings=bindings_)
+
 

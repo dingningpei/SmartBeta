@@ -323,8 +323,8 @@
     "id": "M41",
     "description": "retry 404",
     "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
-    "old": "            retryable = (\n                status in RETRY_STATUS",
-    "new": "            retryable = (\n                status in RETRY_STATUS\n                or status == 404",
+    "old": "            retryable = (\n                is_retry_status(status)",
+    "new": "            retryable = (\n                is_retry_status(status)\n                or status == 404",
     "killing_test": "test_58_rate_retries_and_request_cap"
   },
   {

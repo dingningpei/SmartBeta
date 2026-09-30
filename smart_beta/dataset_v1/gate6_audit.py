@@ -24,6 +24,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import random  # noqa: F401  (referenced by the frozen mutation set)
 import time  # noqa: F401  (referenced by the frozen mutation set)
 from collections import Counter
@@ -1036,6 +1037,17 @@ def allowed_index_filename(filename: str) -> bool:
     return (1993, 1) <= (year, quarter) <= (2023, 2)
 
 
+def expected_index_filenames() -> tuple[str, ...]:
+    """All 122 bound master files, 1993Q1 .. 2023Q2 (2023Q3+ excluded)."""
+    names: list[str] = []
+    for year in range(1993, 2024):
+        for quarter in range(1, 5):
+            if (year, quarter) > (2023, 2):
+                break
+            names.append(f"master_{year}Q{quarter}.gz")
+    return tuple(names)
+
+
 def parse_master_index(raw: bytes, *, source_file: str = "") -> list[IndexRow]:
     """Parse one gzipped SEC master index (latin-1, after the ``-----`` line)."""
     if raw[:2] == b"\x1f\x8b":
@@ -1251,6 +1263,7 @@ def validate_fact(
     *,
     specimen_ids: set[str],
     evidence: Mapping[str, str],
+    planned_accessions: Mapping[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """Validate one fact against the closed schema and the evidence set."""
     missing = [f for f in FACT_COMMON_FIELDS if fact.get(f) in (None, "")]
@@ -1281,10 +1294,18 @@ def validate_fact(
         raise FactValidationError(
             f"fact doc_sha256 for {accession!r} does not match the cache"
         )
-    if str(fact["specimen_id"]) not in specimen_ids:
+    specimen_id = str(fact["specimen_id"])
+    if specimen_id not in specimen_ids:
         raise FactValidationError(
-            f"fact specimen_id {fact['specimen_id']!r} is not in the specimen set"
+            f"fact specimen_id {specimen_id!r} is not in the specimen set"
         )
+    if planned_accessions is not None:
+        allowed = planned_accessions.get(specimen_id, set())
+        if accession not in allowed:
+            raise FactValidationError(
+                f"fact accession {accession!r} is not among specimen "
+                f"{specimen_id!r}'s planned filings"
+            )
     if ftype == "COMPLEX_ACTION" and str(fact["complex_type"]) not in COMPLEX_TYPES:
         raise FactValidationError(
             f"unknown complex action type {fact['complex_type']!r}"
@@ -1303,9 +1324,15 @@ def validate_facts(
     *,
     specimen_ids: set[str],
     evidence: Mapping[str, str],
+    planned_accessions: Mapping[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     return [
-        validate_fact(fact, specimen_ids=specimen_ids, evidence=evidence)
+        validate_fact(
+            fact,
+            specimen_ids=specimen_ids,
+            evidence=evidence,
+            planned_accessions=planned_accessions,
+        )
         for fact in facts
     ]
 
@@ -1320,6 +1347,7 @@ class Outcome:
     outcome: str
     reason: str | None = None
     offset: int | None = None
+    fact_refs: tuple[str, ...] = field(default=(), compare=False)
 
     def key(self) -> tuple[str, str | None]:
         return (self.outcome, self.reason)
@@ -1404,6 +1432,11 @@ def _values_conflict(values: Sequence[float]) -> bool:
     return False
 
 
+def _ref(fact: Mapping[str, Any]) -> str:
+    """The deciding-fact reference encoding (accession + locator)."""
+    return f"{fact.get('accession')}|{fact.get('locator')}"
+
+
 def run_rule_engine(
     inp: EngineInput,
     *,
@@ -1425,7 +1458,11 @@ def run_rule_engine(
         if fact["type"] == "TICKER_REASSIGNMENT":
             when = as_date(fact["date"])
             if _in_half_open(when, inp.p, inp.t):
-                return Outcome(OUTCOME_IDENTITY, REASON_IDENTITY_MISMATCH)
+                return Outcome(
+                    OUTCOME_IDENTITY,
+                    REASON_IDENTITY_MISMATCH,
+                    fact_refs=(_ref(fact),),
+                )
     for fact in facts:
         if fact["type"] == "STATED_CLOSE":
             when = as_date(fact["date"])
@@ -1439,7 +1476,11 @@ def run_rule_engine(
                 continue
             ratio = float(fact["price"]) / actual
             if not (0.8 <= ratio <= 1.25):
-                return Outcome(OUTCOME_IDENTITY, REASON_PRICE_CONTRADICTED)
+                return Outcome(
+                    OUTCOME_IDENTITY,
+                    REASON_PRICE_CONTRADICTED,
+                    fact_refs=(_ref(fact),),
+                )
 
     # Step 2: mechanical explanations.
     splits = [f for f in facts if f["type"] == "SPLIT"]
@@ -1459,9 +1500,17 @@ def run_rule_engine(
         if _in_half_open(as_date(f["ex_date"]), inp.p, inp.t)
     ]
     if _values_conflict([float(f["factor"]) for f in in_window_splits]):
-        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
+        return Outcome(
+            OUTCOME_UNRESOLVED,
+            REASON_EVIDENCE_CONFLICT,
+            fact_refs=tuple(_ref(f) for f in in_window_splits),
+        )
     if _values_conflict([float(f["amount"]) for f in in_window_cash]):
-        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
+        return Outcome(
+            OUTCOME_UNRESOLVED,
+            REASON_EVIDENCE_CONFLICT,
+            fact_refs=tuple(_ref(f) for f in in_window_cash),
+        )
 
     cand_a = [
         f
@@ -1486,7 +1535,13 @@ def run_rule_engine(
 
     categories = sum(1 for group in (cand_a, cand_b, cand_c) if group)
     if categories > 1:
-        return Outcome(OUTCOME_UNRESOLVED, REASON_EVIDENCE_CONFLICT)
+        return Outcome(
+            OUTCOME_UNRESOLVED,
+            REASON_EVIDENCE_CONFLICT,
+            fact_refs=tuple(
+                _ref(group[0]) for group in (cand_a, cand_b, cand_c) if group
+            ),
+        )
 
     if cand_a:
         fact = cand_a[0]
@@ -1502,8 +1557,11 @@ def run_rule_engine(
                     OUTCOME_OMISSION,
                     REASON_MISDATED_SPLIT,
                     offset=distance,
+                    fact_refs=(_ref(fact),),
                 )
-        return Outcome(OUTCOME_OMISSION, REASON_OMITTED_SPLIT)
+        return Outcome(
+            OUTCOME_OMISSION, REASON_OMITTED_SPLIT, fact_refs=(_ref(fact),)
+        )
 
     if cand_b:
         fact = cand_b[0]
@@ -1517,11 +1575,18 @@ def run_rule_engine(
                     OUTCOME_OMISSION,
                     REASON_MISDATED_CASH,
                     offset=distance,
+                    fact_refs=(_ref(fact),),
                 )
-        return Outcome(OUTCOME_OMISSION, REASON_OMITTED_CASH)
+        return Outcome(
+            OUTCOME_OMISSION, REASON_OMITTED_CASH, fact_refs=(_ref(fact),)
+        )
 
     if cand_c:
-        return Outcome(OUTCOME_COMPLEX, str(cand_c[0]["complex_type"]))
+        return Outcome(
+            OUTCOME_COMPLEX,
+            str(cand_c[0]["complex_type"]),
+            fact_refs=(_ref(cand_c[0]),),
+        )
 
     # Step 3: documented market move.
     for fact in facts:
@@ -1533,7 +1598,11 @@ def run_rule_engine(
         ):
             continue
         if direction_allowed(str(fact["event_type"]), inp.rho):
-            return Outcome(OUTCOME_GENUINE, str(fact["event_type"]))
+            return Outcome(
+                OUTCOME_GENUINE,
+                str(fact["event_type"]),
+                fact_refs=(_ref(fact),),
+            )
 
     # Step 4: nothing decides.
     return Outcome(OUTCOME_UNRESOLVED, REASON_NO_EXPLANATORY_FILING)
@@ -1581,8 +1650,10 @@ class SpecimenOutcome:
     offset: int | None = None
     worker_outcome: str | None = None
     worker_reason: str | None = None
+    worker_fact_refs: tuple[str, ...] = ()
     planner_outcome: str | None = None
     planner_reason: str | None = None
+    planner_fact_refs: tuple[str, ...] = ()
     fact_refs: tuple[str, ...] = ()
 
 
@@ -1736,6 +1807,135 @@ def certification_text(specimen_sha256: str, population_sha256: str) -> str:
     )
 
 
+def _canonical_hash(obj: Any) -> str:
+    return sha256_hex(canonical_json(obj))
+
+
+def _facts_sha256(facts: Sequence[Mapping[str, Any]]) -> str:
+    ordered = sorted(
+        (dict(fact) for fact in facts),
+        key=lambda fact: (
+            str(fact.get("specimen_id")),
+            str(fact.get("accession")),
+            str(fact.get("type")),
+            str(fact.get("locator")),
+        ),
+    )
+    return _canonical_hash(ordered)
+
+
+def _outcomes_sha256(records: Sequence[SpecimenOutcome]) -> str:
+    ordered = sorted(
+        (
+            {
+                "specimen_id": r.specimen_id,
+                "stratum": r.stratum,
+                "band": r.band,
+                "year": r.year,
+                "worker_outcome": r.worker_outcome,
+                "worker_reason": r.worker_reason,
+                "planner_outcome": r.planner_outcome,
+                "planner_reason": r.planner_reason,
+                "outcome": r.outcome,
+                "reason": r.reason,
+                "offset": r.offset,
+                "fact_refs": list(r.fact_refs),
+            }
+            for r in records
+        ),
+        key=lambda row: row["specimen_id"],
+    )
+    return _canonical_hash(ordered)
+
+
+def _evidence_sha256(evidence: Mapping[str, str]) -> str:
+    ordered = {str(k): str(v) for k, v in sorted(evidence.items())}
+    return _canonical_hash(ordered)
+
+
+def _binom_cdf(k: int, n: int, p: float) -> float:
+    if k < 0:
+        return 0.0
+    if k >= n:
+        return 1.0
+    if p <= 0.0:
+        return 1.0
+    if p >= 1.0:
+        return 0.0
+    total = 0.0
+    for i in range(0, k + 1):
+        total += math.comb(n, i) * (p**i) * ((1.0 - p) ** (n - i))
+    return total
+
+
+def _cp_upper_bisect(k: int, n: int, alpha: float) -> float:
+    if k >= n:
+        return 1.0
+    lo, hi = (k / n if n else 0.0), 1.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if _binom_cdf(k, n, mid) > alpha / 2.0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _cp_lower_bisect(k: int, n: int, alpha: float) -> float:
+    if k <= 0:
+        return 0.0
+    lo, hi = 0.0, (k / n if n else 0.0)
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if 1.0 - _binom_cdf(k - 1, n, mid) > alpha / 2.0:
+            hi = mid
+        else:
+            lo = mid
+    return (lo + hi) / 2.0
+
+
+def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
+    """The exact Clopper-Pearson interval for ``k`` of ``n``.
+
+    Uses ``scipy.stats.beta`` when available (the venv has scipy), otherwise
+    an exact bisection on the binomial CDF.
+    """
+    n = int(n)
+    k = max(0, min(int(k), n))
+    if n <= 0:
+        return (0.0, 1.0)
+    try:
+        from scipy.stats import beta as _beta
+
+        lower = 0.0 if k == 0 else float(_beta.ppf(alpha / 2.0, k, n - k + 1))
+        upper = (
+            1.0
+            if k == n
+            else float(_beta.ppf(1.0 - alpha / 2.0, k + 1, n - k))
+        )
+        return (lower, upper)
+    except Exception:  # pragma: no cover - exercised only without scipy
+        return (_cp_lower_bisect(k, n, alpha), _cp_upper_bisect(k, n, alpha))
+
+
+def _two_sided_ci(k: int, n: int, alpha: float = 0.05) -> dict[str, Any]:
+    lower, upper = clopper_pearson(k, n, alpha)
+    return {"k": int(k), "n": int(n), "lower": lower, "upper": upper}
+
+
+def _resolution_rate(
+    records: Sequence[SpecimenOutcome], stratum: str
+) -> dict[str, Any]:
+    members = [r for r in records if r.stratum == stratum]
+    resolved = sum(1 for r in members if r.outcome != OUTCOME_UNRESOLVED)
+    n = len(members)
+    return {
+        "n": n,
+        "resolved": resolved,
+        "rate": (resolved / n) if n else None,
+    }
+
+
 def build_g6_artifacts(
     *,
     population_sha256: str,
@@ -1745,15 +1945,42 @@ def build_g6_artifacts(
     records: Sequence[SpecimenOutcome],
     decision: Decision,
     mapping_state_counts: Mapping[str, int],
+    evidence: Mapping[str, str] | None = None,
+    worker_facts: Sequence[Mapping[str, Any]] = (),
+    planner_facts: Sequence[Mapping[str, Any]] = (),
+    bindings_manifest: Mapping[str, Any] | None = None,
     procedure: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The in-memory ``g6_audit.json`` content (no timestamps, no secrets).
 
     Records are the **actual** final per-specimen outcomes; they are
-    reconciled against the specimen size before the artifact is built.
+    reconciled against the specimen size before the artifact is built.  The
+    extra reported quantities never affect the decision.
     """
     counts = outcome_counts(records)
     reconcile_counts(len(specimen_set.specimens), counts)
+
+    s1 = [r for r in records if r.stratum == STRATUM_S1]
+    unresolved_records = [r for r in records if r.outcome == OUTCOME_UNRESOLVED]
+    complex_s1 = sum(1 for r in s1 if r.outcome == OUTCOME_COMPLEX)
+    unresolved_s1 = sum(1 for r in s1 if r.outcome == OUTCOME_UNRESOLVED)
+    worker_links = sum(
+        1 for fact in worker_facts if str(fact.get("type")) == "TICKER_LINK"
+    )
+    planner_links = sum(
+        1 for fact in planner_facts if str(fact.get("type")) == "TICKER_LINK"
+    )
+    specimen_size = len(specimen_set.specimens)
+    safe_procedure = {
+        key: value
+        for key, value in (procedure or {}).items()
+        if key not in ("timestamp", "contact", "sec_contact", "SEC_CONTACT")
+        and not (
+            isinstance(value, str)
+            and os.environ.get("SEC_CONTACT")
+            and os.environ["SEC_CONTACT"] in value
+        )
+    }
     return {
         "protocol_version": G6_PROTOCOL_VERSION,
         "algorithm": specimen_set.algorithm,
@@ -1761,7 +1988,17 @@ def build_g6_artifacts(
         "population_sha256": population_sha256,
         "specimen_sha256": specimen_sha256,
         "fetch_plan_sha256": fetch_plan_sha256,
-        "specimen_size": len(specimen_set.specimens),
+        "specimen_size": specimen_size,
+        "hashes": {
+            "population_sha256": population_sha256,
+            "specimen_sha256": specimen_sha256,
+            "fetch_plan_sha256": fetch_plan_sha256,
+            "evidence_sha256": _evidence_sha256(evidence or {}),
+            "worker_facts_sha256": _facts_sha256(worker_facts),
+            "planner_facts_sha256": _facts_sha256(planner_facts),
+            "outcomes_sha256": _outcomes_sha256(records),
+            "bindings": dict(bindings_manifest or {}),
+        },
         "shortfalls": {
             f"{stratum}:{band or ''}": value
             for (stratum, band), value in sorted(
@@ -1782,13 +2019,64 @@ def build_g6_artifacts(
         "n1": decision.n1,
         "r1": decision.r1,
         "unresolved": decision.unresolved,
+        "unresolved_by_reason": dict(
+            sorted(Counter(r.reason for r in unresolved_records).items())
+        ),
+        "unresolved_by_year": {
+            str(k): v
+            for k, v in sorted(
+                Counter(r.year for r in unresolved_records).items()
+            )
+        },
+        "unresolved_by_band": dict(
+            sorted(Counter(r.band for r in unresolved_records).items())
+        ),
+        "clopper_pearson": {
+            "complex_share_s1": _two_sided_ci(complex_s1, len(s1)),
+            "unresolved_share_s1": _two_sided_ci(unresolved_s1, len(s1)),
+        },
+        "resolution_rates": {
+            stratum: _resolution_rate(records, stratum)
+            for stratum in STRATUM_NAMES
+        },
+        "covariates": {
+            "ticker_link_present_worker": worker_links,
+            "ticker_link_absent_worker": specimen_size - worker_links,
+            "ticker_link_present_planner": planner_links,
+            "ticker_link_absent_planner": specimen_size - planner_links,
+            "dividend_within_3": dict(
+                sorted(
+                    Counter(
+                        str(s.dividend_within_3) for s in specimen_set.specimens
+                    ).items()
+                )
+            ),
+            "near_split_offset": dict(
+                sorted(
+                    Counter(
+                        str(s.near_split_offset)
+                        for s in specimen_set.specimens
+                    ).items()
+                )
+            ),
+            "year": {
+                str(k): v
+                for k, v in sorted(
+                    Counter(s.year for s in specimen_set.specimens).items()
+                )
+            },
+            "admission_context": {
+                stratum: sum(
+                    1 for s in specimen_set.specimens if s.stratum == stratum
+                )
+                for stratum in STRATUM_NAMES
+            },
+        },
         "certification": certification_text(
             specimen_sha256, population_sha256
         ),
         "nonclaims": list(NONCLAIMS),
-        "procedure": {
-            k: v for k, v in (procedure or {}).items() if k != "timestamp"
-        },
+        "procedure": safe_procedure,
     }
 
 
@@ -1855,6 +2143,7 @@ class ProductionBindings:
     issuer_mapping: ArtifactBinding
     dsc_json: ArtifactBinding
     dsc_hash: str
+    qc_report_path: str
     population: PopulationBinding
     sec_index_dir: str = SEC_INDEX_DIR
 
@@ -1890,11 +2179,12 @@ PRODUCTION_BINDINGS = ProductionBindings(
     ),
     dsc_json=ArtifactBinding(
         "derived/classification/c-27b6dabd0db0cb15/dsc.json",
-        "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60",
+        "23877643018f28b4776e092be1c53d048f0c51a810544f073f9a68f57abcc030",
     ),
     dsc_hash=(
         "2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60"
     ),
+    qc_report_path="derived/qc/q-5d1028655f8c82e1/qc_report.json",
     population=PRODUCTION_POPULATION_BINDING,
 )
 
@@ -1918,7 +2208,9 @@ def bindings_manifest(
         "issuer_mapping": bindings.issuer_mapping.relative_path,
         "issuer_mapping_sha256": bindings.issuer_mapping.sha256,
         "dsc_json": bindings.dsc_json.relative_path,
+        "dsc_json_sha256": bindings.dsc_json.sha256,
         "dsc_hash": bindings.dsc_hash,
+        "qc_report": bindings.qc_report_path,
         "population_sha256": bindings.population.sha256,
     }
 
@@ -1969,16 +2261,29 @@ def load_sec_index(
     dsc: Mapping[str, Any],
     bindings: ProductionBindings = PRODUCTION_BINDINGS,
 ) -> tuple[IndexRow, ...]:
-    """Verify and parse the bound 1993Q1-2023Q2 SEC master files."""
+    """Verify and parse all 122 bound 1993Q1-2023Q2 SEC master files.
+
+    Every one of the 122 files must be present in the dsc.json
+    ``sec_index_files_sha256`` map and on disk, and hash to its recorded
+    value.  Any missing or mismatched file fails closed.  Files from 2023Q3
+    onward are never looked up or opened.
+    """
     root = Path(root)
     index = dsc.get("sec_index_files_sha256") or {}
+    by_basename = {
+        Path(str(key)).name: (str(key), expected)
+        for key, expected in index.items()
+    }
     files: dict[str, bytes] = {}
-    for key, expected in index.items():
-        base = Path(key).name
-        if not allowed_index_filename(base):
-            continue
+    for base in expected_index_filenames():
+        entry = by_basename.get(base)
+        if entry is None:
+            raise BindingMismatch(f"missing sec index binding for {base}")
+        key, expected = entry
         relative = Path(key) if "/" in key else Path(bindings.sec_index_dir) / base
         path = root / relative
+        if not path.exists():
+            raise BindingMismatch(f"missing sec index file {base}")
         verify_file_sha256(path, expected)
         files[base] = path.read_bytes()
     return tuple(parse_sec_index_files(files))
@@ -2040,6 +2345,30 @@ def load_g6_inputs(
     dsc_path = root / bindings.dsc_json.relative_path
     verify_file_sha256(dsc_path, bindings.dsc_json.sha256)
     dsc = json.loads(dsc_path.read_text(encoding="utf-8"))
+    if str(dsc.get("dsc_hash")) != bindings.dsc_hash:
+        raise BindingMismatch(
+            f"dsc.json dsc_hash {dsc.get('dsc_hash')!r} != {bindings.dsc_hash}"
+        )
+
+    qc_report_path = root / bindings.qc_report_path
+    if not qc_report_path.exists():
+        raise BindingMismatch(f"missing qc report {bindings.qc_report_path}")
+    qc_report = json.loads(qc_report_path.read_text(encoding="utf-8"))
+    if str(qc_report.get("qc_hash")) != bindings.qc_hash:
+        raise BindingMismatch(
+            f"qc_report qc_hash {qc_report.get('qc_hash')!r} != {bindings.qc_hash}"
+        )
+    files_sha256 = qc_report.get("files_sha256") or {}
+    day_flags_entry = files_sha256.get("day_flags.parquet")
+    if day_flags_entry is None:
+        for key, value in files_sha256.items():
+            if Path(str(key)).name == "day_flags.parquet":
+                day_flags_entry = value
+                break
+    if day_flags_entry != bindings.day_flags.sha256:
+        raise BindingMismatch(
+            "qc_report day_flags.parquet sha does not match the day_flags binding"
+        )
     sec_index_rows = load_sec_index(root, dsc, bindings)
 
     sessions = tuple(calendar) if calendar is not None else tuple(default_calendar())
@@ -2444,6 +2773,14 @@ def read_facts(path: str | Path) -> list[dict[str, Any]]:
     return facts
 
 
+def read_facts_required(path: str | Path) -> list[dict[str, Any]]:
+    """Read a fact file; a missing file fails closed, an empty one is fine."""
+    path = Path(path)
+    if not path.exists():
+        raise Gate6Error(f"missing extraction file {path}")
+    return read_facts(path)
+
+
 def write_facts(path: str | Path, facts: Sequence[Mapping[str, Any]]) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2479,6 +2816,58 @@ def read_evidence(audit_dir: str | Path) -> dict[str, str]:
     return evidence
 
 
+def read_verified_evidence(
+    audit_dir: str | Path, expected: Mapping[str, str]
+) -> dict[str, str]:
+    """The E3 evidence set must be exactly the retrieved planned accessions.
+
+    Any extra cached file, any missing file, or any hash that differs from the
+    SHA-256 E2 recorded fails closed.
+    """
+    actual = read_evidence(audit_dir)
+    extra = sorted(set(actual) - set(expected))
+    missing = sorted(set(expected) - set(actual))
+    if extra or missing:
+        raise Gate6Error(
+            f"evidence set mismatch: extra={extra} missing={missing}"
+        )
+    for accession, digest in expected.items():
+        if actual[accession] != digest:
+            raise Gate6Error(
+                f"evidence sha mismatch for {accession}: "
+                f"{actual[accession]} != {digest}"
+            )
+    return actual
+
+
+def write_fetch_outcomes(
+    audit_dir: str | Path, outcomes: Sequence[Any]
+) -> Path:
+    """Persist per-filing E2 outcomes deterministically (no timestamps)."""
+    path = Path(audit_dir) / "fetch_outcomes.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(
+            canonical_json(
+                {
+                    "specimen_id": outcome.specimen_id,
+                    "accession": outcome.accession,
+                    "outcome": outcome.outcome,
+                    "doc_sha256": outcome.doc_sha256,
+                }
+            )
+            + "\n"
+            for outcome in outcomes
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def read_fetch_outcomes(audit_dir: str | Path) -> list[dict[str, Any]]:
+    return read_facts(Path(audit_dir) / "fetch_outcomes.jsonl")
+
+
 def _outcomes_frame(records: Sequence[SpecimenOutcome]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -2489,8 +2878,10 @@ def _outcomes_frame(records: Sequence[SpecimenOutcome]) -> pd.DataFrame:
                 "year": r.year,
                 "worker_outcome": r.worker_outcome,
                 "worker_reason": r.worker_reason,
+                "worker_fact_refs": list(r.worker_fact_refs),
                 "planner_outcome": r.planner_outcome,
                 "planner_reason": r.planner_reason,
+                "planner_fact_refs": list(r.planner_fact_refs),
                 "outcome": r.outcome,
                 "reason": r.reason,
                 "offset": r.offset,
@@ -2505,8 +2896,10 @@ def _outcomes_frame(records: Sequence[SpecimenOutcome]) -> pd.DataFrame:
             "year",
             "worker_outcome",
             "worker_reason",
+            "worker_fact_refs",
             "planner_outcome",
             "planner_reason",
+            "planner_fact_refs",
             "outcome",
             "reason",
             "offset",
@@ -2583,17 +2976,29 @@ def run_e2(
     verify_specimen_hash(specimen_set, spec_sha)
     verify_fetch_plan_hash(rows, plan_sha)
 
+    # R9: resume from the previously recorded verified SHA-256 values so a
+    # verified cached file is skipped without a request.
+    prior = read_fetch_outcomes(audit_dir)
+    cache_index = {
+        str(record["accession"]): str(record["doc_sha256"])
+        for record in prior
+        if record.get("outcome") in ("FETCHED", "CACHED")
+        and record.get("doc_sha256")
+    }
+
     fetcher = SecFetcher(
         rows,
         plan_sha256=plan_sha,
         transport=transport or urllib_transport,
         contact=contact,
         cache_dir=audit_dir,
+        cache_index=cache_index,
     )
     outcomes = fetcher.fetch_all()
     (Path(audit_dir) / "retrieval_log.jsonl").write_text(
         fetcher.log_jsonl(), encoding="utf-8"
     )
+    write_fetch_outcomes(audit_dir, outcomes)
     return {
         "specimen_sha256": spec_sha,
         "fetch_plan_sha256": plan_sha,
@@ -2621,6 +3026,7 @@ def run_e3(
     planner_facts_path: str | Path | None = None,
     bindings: ProductionBindings = PRODUCTION_BINDINGS,
     inputs: G6Inputs | None = None,
+    procedure: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """E3: two blind fact sets, the engine, the decision and the artifact."""
     audit_dir = Path(audit_dir)
@@ -2632,25 +3038,50 @@ def run_e3(
     verify_fetch_plan_hash(rows, plan_sha)
 
     inputs = inputs or load_g6_inputs(root, bindings)
-    evidence = read_evidence(audit_dir)
+
+    # R4/R5: the E3 evidence set is exactly the accessions E2 retrieved.
+    fetch_outcomes = read_fetch_outcomes(audit_dir)
+    outcome_by_accession = {
+        str(record["accession"]): record for record in fetch_outcomes
+    }
+    expected_evidence = {
+        accession: str(record["doc_sha256"])
+        for accession, record in outcome_by_accession.items()
+        if record.get("outcome") in ("FETCHED", "CACHED")
+        and record.get("doc_sha256")
+    }
+    evidence = read_verified_evidence(audit_dir, expected_evidence)
     specimen_ids = {s.specimen_id for s in specimen_set.specimens}
+
+    rows_by_specimen: dict[str, list[FetchPlanRow]] = {}
+    for row in rows:
+        rows_by_specimen.setdefault(row.specimen_id, []).append(row)
+    planned_accessions = {
+        specimen_id: {
+            row.accession for row in members if row.mapping_state == "MAPPED"
+        }
+        for specimen_id, members in rows_by_specimen.items()
+    }
 
     worker_path = worker_facts_path or (audit_dir / "facts_worker.jsonl")
     planner_path = planner_facts_path or (audit_dir / "facts_planner.jsonl")
     worker_facts = validate_facts(
-        read_facts(worker_path), specimen_ids=specimen_ids, evidence=evidence
+        read_facts_required(worker_path),
+        specimen_ids=specimen_ids,
+        evidence=evidence,
+        planned_accessions=planned_accessions,
     )
     planner_facts = validate_facts(
-        read_facts(planner_path), specimen_ids=specimen_ids, evidence=evidence
+        read_facts_required(planner_path),
+        specimen_ids=specimen_ids,
+        evidence=evidence,
+        planned_accessions=planned_accessions,
     )
     worker_by = _group_facts(worker_facts)
     planner_by = _group_facts(planner_facts)
 
     index = build_identity_index(inputs.identity_intervals)
     closes = raw_close_lookup(inputs.observations)
-    rows_by_specimen: dict[str, list[FetchPlanRow]] = {}
-    for row in rows:
-        rows_by_specimen.setdefault(row.specimen_id, []).append(row)
 
     records: list[SpecimenOutcome] = []
     for specimen in specimen_set.specimens:
@@ -2664,9 +3095,14 @@ def run_e3(
             )
         planned = rows_by_specimen.get(specimen.specimen_id, [])
         mapped = [row for row in planned if row.mapping_state == "MAPPED"]
-        unretrievable = bool(mapped) and not any(
-            row.accession in evidence for row in mapped
+        retrieved = any(row.accession in evidence for row in mapped)
+        cap_limited = any(
+            str(outcome_by_accession.get(row.accession, {}).get("outcome"))
+            == "REQUEST_CAP_REACHED"
+            for row in mapped
         )
+        unretrievable = bool(mapped) and not retrieved and not cap_limited
+        request_cap = bool(mapped) and not retrieved and cap_limited
         base = dict(
             specimen_id=specimen.specimen_id,
             security_key=specimen.security_key,
@@ -2683,6 +3119,7 @@ def run_e3(
             sessions=inputs.sessions,
             mapping_reason=_mapping_reason(specimen.specimen_id, rows_by_specimen),
             evidence_unretrievable=unretrievable,
+            request_cap_reached=request_cap,
         )
         worker_outcome = run_rule_engine(
             EngineInput(facts=worker_by.get(specimen.specimen_id, ()), **base)
@@ -2691,6 +3128,7 @@ def run_e3(
             EngineInput(facts=planner_by.get(specimen.specimen_id, ()), **base)
         )
         final = combine_outcomes(worker_outcome, planner_outcome)
+        agreed = worker_outcome.key() == planner_outcome.key()
         records.append(
             SpecimenOutcome(
                 specimen_id=specimen.specimen_id,
@@ -2702,8 +3140,11 @@ def run_e3(
                 offset=final.offset,
                 worker_outcome=worker_outcome.outcome,
                 worker_reason=worker_outcome.reason,
+                worker_fact_refs=worker_outcome.fact_refs,
                 planner_outcome=planner_outcome.outcome,
                 planner_reason=planner_outcome.reason,
+                planner_fact_refs=planner_outcome.fact_refs,
+                fact_refs=worker_outcome.fact_refs if agreed else (),
             )
         )
 
@@ -2717,7 +3158,11 @@ def run_e3(
         records=records,
         decision=decision,
         mapping_state_counts=_mapping_state_counts(rows),
-        procedure={"protocol_version": G6_PROTOCOL_VERSION},
+        evidence=evidence,
+        worker_facts=worker_facts,
+        planner_facts=planner_facts,
+        bindings_manifest=bindings_manifest(bindings),
+        procedure=procedure,
     )
     write_json(audit_dir / "g6_audit.json", artifacts)
     return {
@@ -2747,6 +3192,64 @@ def _mapping_state_counts(rows: Sequence[FetchPlanRow]) -> dict[str, int]:
         seen.add(row.specimen_id)
         counts[row.mapping_state] += 1
     return dict(counts)
+
+
+# ---------------------------------------------------------------------------
+# Audit location (spec section 11)
+# ---------------------------------------------------------------------------
+
+
+def code_sha256() -> str:
+    """SHA-256 over the two G6-SW module file hashes."""
+    audit_file = Path(__file__)
+    fetch_file = audit_file.with_name("gate6_sec_fetch.py")
+    combined = (
+        sha256_file(audit_file) + ":" + sha256_file(fetch_file)
+    )
+    return sha256_hex(combined)
+
+
+def g6_id_for(
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    code_sha256_value: str | None = None,
+) -> str:
+    code = (
+        code_sha256_value
+        if code_sha256_value is not None
+        else code_sha256()
+    )
+    return g6_id(bindings_manifest(bindings), code)
+
+
+def derive_audit_dir(
+    root: str | Path,
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    code_sha256_value: str | None = None,
+) -> Path:
+    """``<root>/derived/qc_audit/<g6_id>/`` per spec section 11."""
+    return (
+        Path(root)
+        / "derived"
+        / "qc_audit"
+        / g6_id_for(bindings, code_sha256_value)
+    )
+
+
+def resolve_audit_dir(
+    root: str | Path,
+    audit_dir: str | Path | None = None,
+    *,
+    bindings: ProductionBindings = PRODUCTION_BINDINGS,
+    code_sha256_value: str | None = None,
+) -> Path:
+    """Derive the audit dir; a supplied one must equal it or fail closed."""
+    derived = derive_audit_dir(root, bindings, code_sha256_value)
+    if audit_dir is None:
+        return derived
+    given = Path(audit_dir)
+    if given.resolve() != derived.resolve():
+        raise Gate6Error(f"audit dir {given} != derived {derived}")
+    return given
 
 
 # ---------------------------------------------------------------------------
@@ -2784,35 +3287,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("stage", choices=("e1", "e2", "e3"))
     parser.add_argument("--root", required=True)
-    parser.add_argument("--audit-dir", required=True)
+    parser.add_argument("--audit-dir", default=None)
     parser.add_argument("--contact", default=None)
     parser.add_argument("--worker-facts", default=None)
     parser.add_argument("--planner-facts", default=None)
+    parser.add_argument("--procedure-json", default=None)
     parser.add_argument("--template", action="store_true")
     args = parser.parse_args(argv)
 
+    audit_dir = resolve_audit_dir(args.root, args.audit_dir)
+    procedure = None
+    if args.procedure_json:
+        procedure = json.loads(
+            Path(args.procedure_json).read_text(encoding="utf-8")
+        )
+
     if args.stage == "e1":
-        result = run_e1(args.root, args.audit_dir)
+        result = run_e1(args.root, audit_dir)
     elif args.stage == "e2":
-        result = run_e2(args.root, args.audit_dir, contact=args.contact)
+        result = run_e2(args.root, audit_dir, contact=args.contact)
     else:
         if args.template:
-            specimen_set, _info = read_specimen_set(args.audit_dir)
+            specimen_set, _info = read_specimen_set(audit_dir)
             write_facts(
-                Path(args.audit_dir) / "facts_worker.jsonl",
+                Path(audit_dir) / "facts_worker.jsonl",
                 [fact_template(s) for s in specimen_set.specimens],
             )
             write_facts(
-                Path(args.audit_dir) / "facts_planner.jsonl",
+                Path(audit_dir) / "facts_planner.jsonl",
                 [fact_template(s) for s in specimen_set.specimens],
             )
             result = {"specimen_size": len(specimen_set.specimens)}
         else:
             result = run_e3(
                 args.root,
-                args.audit_dir,
+                audit_dir,
                 worker_facts_path=args.worker_facts,
                 planner_facts_path=args.planner_facts,
+                procedure=procedure,
             )
     print(_format_cli(result))
     return 0

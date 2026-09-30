@@ -37,11 +37,24 @@ from typing import Any, Callable, Mapping, Sequence
 from smart_beta.dataset_v1 import gate6_audit as _audit
 
 REQUEST_CAP = 2500
-RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 BACKOFFS = (2.0, 8.0)
 USER_AGENT_PREFIX = "SmartBeta-Gate6-Audit"
 SEC_HOST = "www.sec.gov"
 SEC_PATH_PREFIX = "/Archives/edgar/data/"
+
+
+def is_retry_status(status: int | None) -> bool:
+    """Every HTTP 5xx and HTTP 429 is retryable; nothing else is."""
+    if status is None:
+        return False
+    return status == 429 or 500 <= status <= 599
+
+
+def _is_timeout(error: BaseException) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    reason = getattr(error, "reason", None)
+    return isinstance(reason, TimeoutError)
 
 CREDENTIAL_VARIABLES = (
     "TIINGO_API_KEY",
@@ -211,6 +224,8 @@ class SecFetcher:
         except TimeoutError:
             return TransportResponse(status=None, error="TIMEOUT")
         except OSError as exc:  # generic transport error: never retried
+            if _is_timeout(exc):
+                return TransportResponse(status=None, error="TIMEOUT")
             return TransportResponse(status=None, error=f"TRANSPORT:{exc}")
 
     def _record(
@@ -317,7 +332,7 @@ class SecFetcher:
                 )
             # Only HTTP 429, HTTP 5xx and timeouts are retried.
             retryable = (
-                status in RETRY_STATUS or response.error == "TIMEOUT"
+                is_retry_status(status) or response.error == "TIMEOUT"
             )
             if not retryable or attempt > len(BACKOFFS):
                 self._record(
@@ -370,9 +385,15 @@ def urllib_transport(
             return TransportResponse(status=response.status, body=response.read())
     except urllib.error.HTTPError as exc:
         return TransportResponse(status=exc.code, body=b"")
+    except urllib.error.URLError as exc:
+        if _is_timeout(exc):
+            return TransportResponse(status=None, error="TIMEOUT")
+        return TransportResponse(status=None, error=f"TRANSPORT:{exc}")
     except TimeoutError:
         return TransportResponse(status=None, error="TIMEOUT")
     except OSError as exc:
+        if _is_timeout(exc):
+            return TransportResponse(status=None, error="TIMEOUT")
         return TransportResponse(status=None, error=f"TRANSPORT:{exc}")
 
 
