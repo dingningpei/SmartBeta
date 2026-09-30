@@ -163,8 +163,8 @@
     "id": "M21",
     "description": "split window includes p",
     "file": "smart_beta/dataset_v1/gate6_audit.py",
-    "old": "        if _in_half_open(as_date(f[\"market_effective_date\"]), inp.p, inp.t)",
-    "new": "        if inp.p <= as_date(f[\"market_effective_date\"]) <= inp.t",
+    "old": "        if _in_half_open(as_date(f[\"market_effective_date\"]), inp.p, inp.t)\n        and 0.5 <= inp.rho * float(f[\"factor\"]) <= 1.5",
+    "new": "        if inp.p <= as_date(f[\"market_effective_date\"]) <= inp.t\n        and 0.5 <= inp.rho * float(f[\"factor\"]) <= 1.5",
     "killing_test": "test_33_split_effective_outside_window_no_explanation"
   },
   {
@@ -331,8 +331,8 @@
     "id": "M42",
     "description": "ignore the request cap",
     "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
-    "old": "        if self._requests >= self._max_requests:",
-    "new": "        if False:",
+    "old": "    def _cap_reached(self) -> bool:\n        return self._requests >= self._max_requests",
+    "new": "    def _cap_reached(self) -> bool:\n        return False",
     "killing_test": "test_58_rate_retries_and_request_cap"
   }
 ]

@@ -215,8 +215,11 @@ class SecFetcher:
 
     # -- transport ---------------------------------------------------------
 
+    def _cap_reached(self) -> bool:
+        return self._requests >= self._max_requests
+
     def _request(self, url: str, *, attempt: int) -> TransportResponse:
-        if self._requests >= self._max_requests:
+        if self._cap_reached():
             return TransportResponse(status=None, error="REQUEST_CAP_REACHED")
         self._throttle()
         self._requests += 1
@@ -297,7 +300,7 @@ class SecFetcher:
                 cached_path=str(self._cache_path(filing.accession)),
                 doc_sha256=cached,
             )
-        if self._requests >= self._max_requests:
+        if self._cap_reached():
             return FetchOutcome(
                 specimen_id=filing.specimen_id,
                 accession=filing.accession,

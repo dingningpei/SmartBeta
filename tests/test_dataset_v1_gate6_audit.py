@@ -2952,3 +2952,214 @@ def test_r13_one_get_per_shared_filing(tmp_path) -> None:
     assert failed[1].outcome == "UNRETRIEVABLE"
 
 
+# ===========================================================================
+# Repair round 4 (G1-G7)
+# ===========================================================================
+
+
+def test_g1_s3_boundary_three_sessions_yes_four_no() -> None:
+    sessions = A.default_calendar()
+    t = date(2020, 1, 8)
+    assert t in sessions
+    pos = {d: i for i, d in enumerate(sessions)}
+    three_back = sessions[pos[t] - 3]
+    four_back = sessions[pos[t] - 4]
+
+    def _ca(day):
+        return pd.DataFrame(
+            {
+                "stock_id": ["ABC"],
+                "effective_date": [pd.Timestamp(day)],
+                "action_type": ["split"],
+                "adjustment_factor": [0.5],
+            }
+        )
+
+    near, near_offset = A.assign_stratum(
+        "K1",
+        t,
+        ticker="ABC",
+        ca_events=_ca(three_back),
+        sessions=sessions,
+        listed_start=A.DEV_START,
+        listed_end=A.DEV_END,
+        admitted=set(),
+    )
+    assert near == A.STRATUM_S3
+    assert near_offset == -3
+
+    far, _ = A.assign_stratum(
+        "K1",
+        t,
+        ticker="ABC",
+        ca_events=_ca(four_back),
+        sessions=sessions,
+        listed_start=A.DEV_START,
+        listed_end=A.DEV_END,
+        admitted=set(),
+    )
+    assert far == A.STRATUM_S2
+
+
+def test_g2_engine_ignores_non_e1_facts_passed_directly() -> None:
+    context_facts = A.tiingo_context_facts(
+        {
+            "material_events": [
+                {
+                    "event_type": "EARNINGS_OR_GUIDANCE",
+                    "event_date": date(2020, 1, 3),
+                }
+            ]
+        }
+    )
+    assert context_facts
+    assert all(fact["source"] == "TIINGO" for fact in context_facts)
+    out = A.run_rule_engine(_engine(facts=context_facts))
+    assert out == A.Outcome(A.OUTCOME_UNRESOLVED, A.REASON_NO_EXPLANATORY_FILING)
+
+
+def test_g3_fact_rejected_when_accession_absent_from_evidence() -> None:
+    fact = _fact(
+        "SPLIT",
+        accession="ACC1",
+        doc_sha256="self-consistent",
+        factor=0.1,
+        market_effective_date=date(2020, 1, 3),
+    )
+    with pytest.raises(A.FactValidationError):
+        A.validate_fact(
+            fact,
+            specimen_ids={"g6-0001"},
+            evidence={},
+            planned_accessions={"g6-0001": {"ACC1"}},
+        )
+
+
+def test_g4_cap_reached_mid_retry_stops_transport() -> None:
+    filing = _plan_row(accession="ACC1", filename="edgar/data/1/acc1.txt")
+    transport = _FakeTransport([F.TransportResponse(500)])
+    fetcher = F.SecFetcher(
+        [filing],
+        plan_sha256=A.fetch_plan_sha256([filing]),
+        transport=transport,
+        contact="audit@example.com",
+        max_requests=1,
+        clock=_Clock().now,
+        sleep=_Clock().sleep,
+    )
+    outcome = fetcher.fetch_all()[0]
+    assert outcome.outcome == "REQUEST_CAP_REACHED"
+    assert len(transport.calls) == 1
+
+
+def _bound_input_paths(root, bindings):
+    paths = [
+        root / bindings.day_flags.relative_path,
+        root / bindings.observations.relative_path,
+        root / bindings.ca_events.relative_path,
+        root / bindings.identity_assignment.relative_path,
+        root / bindings.daily_total_return.relative_path,
+        root / bindings.issuer_mapping.relative_path,
+        root / bindings.dsc_json.relative_path,
+        root / bindings.qc_report_path,
+    ]
+    index_dir = root / A.SEC_INDEX_DIR
+    paths.extend(index_dir / name for name in A.expected_index_filenames())
+    return paths
+
+
+def test_g5_no_bound_input_remediation(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    paths = _bound_input_paths(root, bindings)
+    before = {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths
+    }
+
+    audit = tmp_path / "audit"
+    A.run_e1(root, audit, bindings=bindings)
+    body = b"8-K split filing"
+    A.run_e2(
+        root,
+        audit,
+        transport=_FakeTransport([F.TransportResponse(200, body)]),
+        contact="audit@example.com",
+    )
+    digest = hashlib.sha256(body).hexdigest()
+    fact = _split_fact(audit, digest)
+    A.write_facts(audit / "facts_worker.jsonl", [fact])
+    A.write_facts(audit / "facts_planner.jsonl", [fact])
+    A.run_e3(root, audit, bindings=bindings)
+
+    after = {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in paths
+    }
+    assert before == after
+
+
+def test_g6_out_of_interval_split_ignored(tmp_path) -> None:
+    sessions = A.default_calendar()
+    t = date(2020, 2, 3)
+    start, end = date(2020, 2, 1), date(2020, 3, 1)
+    pos = {d: i for i, d in enumerate(sessions)}
+    outside = sessions[pos[t] - 2]
+    assert not (start <= outside <= end)
+    ca = pd.DataFrame(
+        {
+            "stock_id": ["ABC"],
+            "effective_date": [pd.Timestamp(outside)],
+            "action_type": ["split"],
+            "adjustment_factor": [0.1],
+        }
+    )
+    events = A.split_events_for("ABC", start, end, ca)
+    assert events == []
+
+    stratum, _ = A.assign_stratum(
+        "K1",
+        t,
+        ticker="ABC",
+        ca_events=ca,
+        sessions=sessions,
+        listed_start=start,
+        listed_end=end,
+        admitted=set(),
+    )
+    assert stratum == A.STRATUM_S2
+
+    out = A.run_rule_engine(
+        _engine(
+            security_key="K1",
+            ticker="ABC",
+            t=t,
+            sessions=sessions,
+            facts=[
+                _fact(
+                    "SPLIT", factor=0.1, market_effective_date=t
+                )
+            ],
+            split_events=events,
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_OMISSION, A.REASON_OMITTED_SPLIT)
+
+
+def test_g7_dsc_hash_field_mismatch_with_rebound_file_sha(tmp_path) -> None:
+    root, bindings = _synthetic_root(tmp_path)
+    dsc_path = root / bindings.dsc_json.relative_path
+    dsc = json.loads(dsc_path.read_text())
+    dsc["dsc_hash"] = "wrong"
+    dsc_path.write_text(A.canonical_json(dsc) + "\n")
+    rebound = replace(
+        bindings,
+        dsc_json=A.ArtifactBinding(
+            bindings.dsc_json.relative_path,
+            hashlib.sha256(dsc_path.read_bytes()).hexdigest(),
+        ),
+    )
+    # The file SHA-256 now matches, so only the dsc_hash field is wrong.
+    with pytest.raises(A.BindingMismatch):
+        A.load_g6_inputs(root, rebound)
+
+
