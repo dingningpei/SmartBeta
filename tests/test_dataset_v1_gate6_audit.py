@@ -3622,3 +3622,258 @@ def test_perf2_norm_once_per_distinct_name(monkeypatch) -> None:
     assert calls["n"] < len(raw_rows)
 
 
+# ===========================================================================
+# Performance repair round 3: guard the indexed production paths
+# ===========================================================================
+
+
+def _compact_index_from_rows(rows: list[str]) -> A.SecIndex:
+    return A.build_sec_index({"master_2020Q1.gz": _master(rows)})
+
+
+def test_perf3_indexed_split_respects_d4_interval() -> None:
+    """The indexed split branch must still honour the key's D4 interval (P24a)."""
+    sessions = A.default_calendar()
+    ticker = "ABC"
+    t = date(2020, 2, 3)
+    start, end = date(2020, 2, 1), date(2020, 3, 1)
+    pos = {d: i for i, d in enumerate(sessions)}
+    outside = sessions[pos[t] - 2]
+    assert not (start <= outside <= end)
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(outside)],
+            "action_type": ["split"],
+            "adjustment_factor": [0.1],
+        }
+    )
+    index = A.index_ca_events(ca)
+    assert A.split_events_for(ticker, start, end, ca, index=index) == []
+    assert A.split_events_for(ticker, start, end, ca, index=index) == (
+        A.split_events_for(ticker, start, end, ca)
+    )
+
+    stratum, _ = A.assign_stratum(
+        "K1",
+        t,
+        ticker=ticker,
+        ca_events=ca,
+        sessions=sessions,
+        listed_start=start,
+        listed_end=end,
+        admitted=set(),
+        index=index,
+    )
+    assert stratum == A.STRATUM_S2
+
+    out = A.run_rule_engine(
+        _engine(
+            security_key="K1",
+            ticker=ticker,
+            t=t,
+            sessions=sessions,
+            facts=[_fact("SPLIT", factor=0.1, market_effective_date=t)],
+            split_events=A.split_events_for(
+                ticker, start, end, ca, index=index
+            ),
+        )
+    )
+    assert out == A.Outcome(A.OUTCOME_OMISSION, A.REASON_OMITTED_SPLIT)
+
+
+def test_perf3_indexed_unlisted_forms_never_enter_the_plan() -> None:
+    """A2 through the indexed builder: only FORM_PRIORITY rows are kept (P35)."""
+    t = date(2020, 6, 15)
+    listed = "1|Acme Corp|8-K|2020-06-15|edgar/data/1/a.txt"
+    unlisted = [
+        "1|Acme Corp|4|2020-06-15|edgar/data/1/b.txt",
+        "1|Acme Corp|SC 13G|2020-06-15|edgar/data/1/c.txt",
+    ]
+    listed_index = _compact_index_from_rows([listed])
+    with_unlisted = _compact_index_from_rows([listed] + unlisted)
+
+    result = A.map_issuer("K1", ["Acme Corp"], (), t, index=with_unlisted)
+    assert result.state == "MAPPED"
+    assert [row.form for row in result.filings] == ["8-K"]
+
+    specimen = _plan_specimen("g6-0000", "K1", t)
+    plan_a, _ = A.build_fetch_plan(
+        [specimen],
+        issuer_names={"K1": ["Acme Corp"]},
+        index_rows=(),
+        index=listed_index,
+    )
+    plan_b, _ = A.build_fetch_plan(
+        [specimen],
+        issuer_names={"K1": ["Acme Corp"]},
+        index_rows=(),
+        index=with_unlisted,
+    )
+    assert {row.form for row in plan_b} == {"8-K"}
+    assert all(row.form in A.FORM_PRIORITY for row in plan_b)
+    assert plan_b == plan_a
+    assert A.fetch_plan_sha256(plan_b) == A.fetch_plan_sha256(plan_a)
+
+    only_unlisted = _compact_index_from_rows(
+        unlisted + ["1|Acme Corp|8-K|2019-01-02|edgar/data/1/old.txt"]
+    )
+    assert (
+        A.map_issuer("K1", ["Acme Corp"], (), t, index=only_unlisted).reason
+        == A.REASON_NO_FILINGS_IN_WINDOW
+    )
+
+
+def test_perf3_indexed_dividend_missing_close_fails_closed() -> None:
+    """The index+closes dividend path must still fail closed on no close (P38)."""
+    ticker = "ABC"
+    effective = date(2020, 1, 6)
+    ca = pd.DataFrame(
+        {
+            "stock_id": [ticker],
+            "effective_date": [pd.Timestamp(effective)],
+            "action_type": ["dividend"],
+            "adjustment_factor": [1.35],
+        }
+    )
+    index = A.index_ca_events(ca)
+    empty_observations = pd.DataFrame(
+        {
+            "ticker": pd.Series([], dtype="string"),
+            "date": pd.Series([], dtype="datetime64[ns]"),
+            "close": pd.Series([], dtype="float64"),
+        }
+    )
+    with pytest.raises(A.Gate6Error):
+        A.dividend_events_for(
+            ticker,
+            A.DEV_START,
+            A.DEV_END,
+            ca,
+            empty_observations,
+            index=index,
+            closes={},
+        )
+
+    closes = {(ticker, effective): 20.0}
+    events = A.dividend_events_for(
+        ticker,
+        A.DEV_START,
+        A.DEV_END,
+        ca,
+        empty_observations,
+        index=index,
+        closes=closes,
+    )
+    assert events == [(effective, pytest.approx(7.0))]
+
+
+def test_perf3_indexed_event_window_boundaries() -> None:
+    """The indexed event window keeps the exact frozen boundaries (P39)."""
+    t = date(2020, 6, 15)
+    assert t - timedelta(days=60) == date(2020, 4, 16)
+    assert t + timedelta(days=30) == date(2020, 7, 15)
+    rows = [
+        "1|Acme Corp|8-K|2020-04-16|edgar/data/1/m60.txt",
+        "1|Acme Corp|8-K|2020-04-15|edgar/data/1/m61.txt",
+        "1|Acme Corp|8-K|2020-07-15|edgar/data/1/p30.txt",
+        "1|Acme Corp|8-K|2020-07-16|edgar/data/1/p31.txt",
+    ]
+    index = _compact_index_from_rows(rows)
+    result = A.map_issuer("K1", ["Acme Corp"], (), t, index=index)
+    assert result.state == "MAPPED"
+    assert {row.date_filed for row in result.filings} == {
+        date(2020, 4, 16),
+        date(2020, 7, 15),
+    }
+
+    # The upper bound is min(t + 30 days, DEV_END): exactly DEV_END is kept.
+    t_cap = date(2023, 6, 15)
+    assert t_cap + timedelta(days=30) > A.DEV_END
+    cap_rows = [
+        "2|Acme Corp|8-K|2023-06-30|edgar/data/2/cap.txt",
+        "2|Acme Corp|8-K|2023-06-29|edgar/data/2/pre.txt",
+    ]
+    cap_index = _compact_index_from_rows(cap_rows)
+    cap_result = A.map_issuer("K1", ["Acme Corp"], (), t_cap, index=cap_index)
+    assert cap_result.state == "MAPPED"
+    assert {row.date_filed for row in cap_result.filings} == {
+        date(2023, 6, 30),
+        date(2023, 6, 29),
+    }
+
+
+@pytest.mark.parametrize(
+    "class_or_flag, disposition",
+    [
+        ("OHLC_INCONSISTENT", "CORRUPT"),
+        ("INTERVAL_MISMATCH", "LEGIT"),
+    ],
+)
+def test_perf3_build_candidates_skips_unusable_sessions(
+    class_or_flag: str, disposition: str
+) -> None:
+    """The cached usable-session list skips unusable sessions (8b / P40)."""
+    d1, d2, d3 = date(2020, 1, 2), date(2020, 1, 3), date(2020, 1, 6)
+    sessions = (d1, d2, d3)
+    observations = pd.DataFrame(
+        {
+            "ticker": pd.Series(["ABC", "ABC", "ABC"], dtype="string"),
+            "date": pd.to_datetime([d1, d2, d3]),
+            "close": pd.Series([10.0, 8.0, 30.0], dtype="float64"),
+        }
+    )
+    day_flags = pd.DataFrame(
+        {
+            "security_key": pd.Series(["K1"], dtype="string"),
+            "date": pd.to_datetime([d2]),
+            "class_or_flag": pd.Series([class_or_flag], dtype="string"),
+            "disposition": pd.Series([disposition], dtype="string"),
+        }
+    )
+    identity_intervals = pd.DataFrame(
+        {
+            "security_key": pd.Series(["K1"], dtype="string"),
+            "ticker": pd.Series(["ABC"], dtype="string"),
+            "listed_start": pd.array(
+                [pd.Timestamp(A.DEV_START)], dtype="datetime64[ns]"
+            ),
+            "listed_end": pd.array(
+                [pd.Timestamp(A.DEV_END)], dtype="datetime64[ns]"
+            ),
+            "state": pd.Series([A.INTERVAL_ASSIGNED], dtype="string"),
+        }
+    )
+    inputs = A.G6Inputs(
+        population=A.Population(
+            records=(("K1", d3),), sha256="p" * 64, count=1, unique_keys=1
+        ),
+        day_flags=day_flags,
+        identity_intervals=identity_intervals,
+        observations=observations,
+        ca_events=pd.DataFrame(
+            {
+                "stock_id": pd.Series([], dtype="string"),
+                "effective_date": pd.Series([], dtype="datetime64[ns]"),
+                "action_type": pd.Series([], dtype="string"),
+                "adjustment_factor": pd.Series([], dtype="float64"),
+            }
+        ),
+        admitted_returns=pd.DataFrame(
+            {
+                "security_key": pd.Series([], dtype="string"),
+                "source_session": pd.Series([], dtype="datetime64[ns]"),
+            }
+        ),
+        issuer_names={},
+        sec_index_rows=(),
+        sessions=sessions,
+    )
+    candidates = A.build_candidates(inputs)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.p == d1
+    assert candidate.rho == pytest.approx(3.0)
+    assert candidate.band == A.BAND_B3
+
+
