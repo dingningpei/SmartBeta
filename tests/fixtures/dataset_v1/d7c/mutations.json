@@ -1,0 +1,576 @@
+[
+  {
+    "id": "M1",
+    "description": "zero lag (row d holds s = d)",
+    "edits": [
+      {
+        "old": "    i = pos[row_date]\n    if i == 0:\n        return None\n    return sessions[i - 1]",
+        "new": "    i = pos[row_date]\n    if i == 0:\n        return None\n    return sessions[i]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M2",
+    "description": "double lag",
+    "edits": [
+      {
+        "old": "    return sessions[i - 1]",
+        "new": "    return sessions[i - 2] if i >= 2 else None"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M3",
+    "description": "reverse shift",
+    "edits": [
+      {
+        "old": "    return sessions[i - 1]",
+        "new": "    return sessions[i + 1] if i + 1 < len(sessions) else None"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M4",
+    "description": "previous calendar day instead of trusted session",
+    "edits": [
+      {
+        "old": "    return sessions[i - 1]",
+        "new": "    return (pd.Timestamp(row_date) - pd.Timedelta(days=1)).date()"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M5",
+    "description": "include row-f/future grid rows",
+    "edits": [
+      {
+        "old": "    grid_sessions = [\n        d for d in sessions if CALENDAR_START <= d <= DEVELOPMENT_END\n    ]",
+        "new": "    grid_sessions = [\n        d for d in sessions if CALENDAR_START <= d <= CALENDAR_END\n    ]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M6",
+    "description": "read end >= 2023-07-03",
+    "edits": [
+      {
+        "old": "        end=LAST_SOURCE_DATE,\n        columns=[\"ticker\", \"date\", \"close\", \"volume\", \"raw_row_index\"],",
+        "new": "        end=RESERVE_START,\n        columns=[\"ticker\", \"date\", \"close\", \"volume\", \"raw_row_index\"],"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M7",
+    "description": "bypass DevelopmentAccessor",
+    "edits": [
+      {
+        "old": "def _load_inputs(\n",
+        "new": "class _RawAccessor:\n    def __init__(self, root, bindings):\n        self._root = root\n\n    def read(self, component, *, start, end, columns, tickers=None):\n        rel = f\"normalized/n-f874d3ecb61374d4/{component}.parquet\"\n        return pd.read_parquet(Path(self._root) / rel, columns=list(columns))\n\n\ndef _load_inputs(\n"
+      },
+      {
+        "old": "        accessor = DevelopmentAccessor(root, bindings=_accessor_bindings(bindings))",
+        "new": "        accessor = _RawAccessor(root, bindings)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M8",
+    "description": "skip the post-load reserve assertion",
+    "edits": [
+      {
+        "old": "    _post_load_assertions(inputs)",
+        "new": "    pass  # post-load reserve assertion skipped"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M9",
+    "description": "forward-fill missing values",
+    "edits": [
+      {
+        "old": "    wide = wide.astype(\"float64\")\n    wide = wide.sort_index(axis=0).sort_index(axis=1)",
+        "new": "    wide = wide.ffill().astype(\"float64\")\n    wide = wide.sort_index(axis=0).sort_index(axis=1)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M10",
+    "description": "treat a missing row as return 0",
+    "edits": [
+      {
+        "old": "        if s in usable and p in usable:\n            raw_returns[s] = usable[s].close / usable[p].close - 1.0",
+        "new": "        if s in usable and p in usable:\n            raw_returns[s] = usable[s].close / usable[p].close - 1.0\n        else:\n            raw_returns[s] = 0.0"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M11",
+    "description": "bridge a gap with the last available close",
+    "edits": [
+      {
+        "old": "    raw_returns: dict[date, float] = {}",
+        "new": "    _last = None\n    for s in interval:\n        if s in usable:\n            _last = usable[s]\n        elif _last is not None:\n            usable[s] = _last\n    raw_returns: dict[date, float] = {}"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M12",
+    "description": "allow a CORRUPT row",
+    "edits": [
+      {
+        "old": "        if (\n            disposition == DISPOSITION_CORRUPT\n            or klass in CORRUPT_FLAGS\n            or klass == CLASS_INTERVAL_MISMATCH\n            or klass == CLASS_VENDOR_NULL\n        ):\n            unusable.add((ticker, d, idx))",
+        "new": "        if (\n            klass == CLASS_INTERVAL_MISMATCH\n            or klass == CLASS_VENDOR_NULL\n        ):\n            unusable.add((ticker, d, idx))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M13",
+    "description": "allow INTERVAL_MISMATCH",
+    "edits": [
+      {
+        "old": "            or klass == CLASS_INTERVAL_MISMATCH\n            or klass == CLASS_VENDOR_NULL",
+        "new": "            or klass == CLASS_VENDOR_NULL"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M14",
+    "description": "allow VENDOR_NULL",
+    "edits": [
+      {
+        "old": "            or klass in CORRUPT_FLAGS\n            or klass == CLASS_INTERVAL_MISMATCH\n            or klass == CLASS_VENDOR_NULL",
+        "new": "            or klass in CORRUPT_FLAGS\n            or klass == CLASS_INTERVAL_MISMATCH"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M15",
+    "description": "zero volume -> NaN",
+    "edits": [
+      {
+        "old": "        dollar_volume[s] = float(row.close) * float(row.volume)",
+        "new": "        dollar_volume[s] = float(\"nan\") if row.volume == 0 else float(row.close) * float(row.volume)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M16",
+    "description": "use adjClose instead of raw close",
+    "edits": [
+      {
+        "old": "        columns=[\"ticker\", \"date\", \"close\", \"volume\", \"raw_row_index\"],",
+        "new": "        columns=[\"ticker\", \"date\", \"close\", \"adjClose\", \"volume\", \"raw_row_index\"],"
+      },
+      {
+        "old": "        close = _as_float(record[\"close\"])",
+        "new": "        close = _as_float(record[\"adjClose\"])"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M17",
+    "description": "forked corporate-action formula (apply to next session)",
+    "edits": [
+      {
+        "old": "        _validate_ca_sessions(events, session_set)\n        primitives = _compute_key_primitives(",
+        "new": "        _validate_ca_sessions(events, session_set)\n        events = [replace(ev, effective_date=sessions[pos[ev.effective_date] + 1]) for ev in events]\n        primitives = _compute_key_primitives("
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M18",
+    "description": "ignore unmatched corporate actions",
+    "edits": [
+      {
+        "old": "        if event.effective_date not in sessions:\n            raise D7cConsistencyError(\n                f\"corporate action dated {event.effective_date} is not a \"\n                \"trusted session (unmatched fails closed)\"\n            )",
+        "new": "        if event.effective_date not in sessions:\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M19",
+    "description": "drop the > -1 / finite guard",
+    "edits": [
+      {
+        "old": "    returns = _adjusted_returns(key, raw_returns, ca_events)\n    for s, value in returns.items():\n        if not math.isfinite(value) or value <= -1.0:\n            raise D7cConsistencyError(\n                f\"daily_total_return {value!r} for {key.security_key!r} on \"\n                f\"{s} is not finite and > -1\"\n            )",
+        "new": "    returns = _adjusted_returns(key, raw_returns, ca_events)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M20",
+    "description": "ticker stitching across keys (ignore listed_end)",
+    "edits": [
+      {
+        "old": "    upper = min(key.listed_end, DEVELOPMENT_END)",
+        "new": "    upper = DEVELOPMENT_END"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M21",
+    "description": "include IDENTITY_AMBIGUOUS keys",
+    "edits": [
+      {
+        "old": "        if _as_str(record[\"state\"]) != STATE_INTERVAL_ASSIGNED:\n            continue",
+        "new": "        if _as_str(record[\"state\"]) not in (STATE_INTERVAL_ASSIGNED, \"IDENTITY_AMBIGUOUS\"):\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M22",
+    "description": "use rows outside the interval (ignore listed_start)",
+    "edits": [
+      {
+        "old": "        interval = [\n            s\n            for s in sessions\n            if key.listed_start <= s <= upper\n        ]",
+        "new": "        interval = [\n            s\n            for s in sessions\n            if s <= upper\n        ]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M23",
+    "description": "grid columns from the broader identity population",
+    "edits": [
+      {
+        "old": "        if key is None or counts[key] != 1:\n            continue\n        if _as_str(record[\"state\"]) != STATE_INTERVAL_ASSIGNED:\n            continue",
+        "new": "        if key is None:\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M24",
+    "description": "final-class (ever-COMMON) mask",
+    "edits": [
+      {
+        "old": "            class_state, _ = _guarded_class_state_at(\n                inputs.class_timeline, key.security_key, source_session\n            )",
+        "new": "            class_state, _ = _guarded_class_state_at(\n                inputs.class_timeline, key.security_key, LAST_SOURCE_DATE\n            )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M25",
+    "description": "D-SC cutoff = d instead of prev(d)",
+    "edits": [
+      {
+        "old": "                inputs.class_timeline, key.security_key, source_session",
+        "new": "                inputs.class_timeline, key.security_key, row_date"
+      },
+      {
+        "old": "                inputs.policy_timeline, key.security_key, source_session",
+        "new": "                inputs.policy_timeline, key.security_key, row_date"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M26",
+    "description": "admit ISSUER_STATUS_UNRESOLVED",
+    "edits": [
+      {
+        "old": "            if policy_state != POLICY_NO_EXCLUSION:",
+        "new": "            if policy_state not in (POLICY_NO_EXCLUSION, POLICY_ISSUER_STATUS_UNRESOLVED):"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M27",
+    "description": "admit EXCLUDED",
+    "edits": [
+      {
+        "old": "            if policy_state != POLICY_NO_EXCLUSION:",
+        "new": "            if policy_state not in (POLICY_NO_EXCLUSION, POLICY_EXCLUDED):"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M28",
+    "description": "skip the class mask",
+    "edits": [
+      {
+        "old": "            if class_state != CLASS_COMMON_STOCK:\n                mask_counts[INPUT_DAILY_TOTAL_RETURN][\"class_masked\"] += 1\n                mask_counts[INPUT_TOTAL_RETURN_INDEX][\"class_masked\"] += 1\n                mask_counts[INPUT_DOLLAR_VOLUME][\"class_masked\"] += 1\n                continue",
+        "new": "            if False:\n                continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M29",
+    "description": "TRI restart visible after a break",
+    "edits": [
+      {
+        "old": "        if seg_id == 1:\n            level = 1.0\n            tri[interval[anchor]] = 1.0\n            for j in range(anchor + 1, k):\n                level = level * (1.0 + returns[interval[j]])\n                tri[interval[j]] = level",
+        "new": "        level = 1.0\n        tri[interval[anchor]] = 1.0\n        for j in range(anchor + 1, k):\n            level = level * (1.0 + returns[interval[j]])\n            tri[interval[j]] = level"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M30",
+    "description": "TRI 252-session suppression instead of segment-1-only",
+    "edits": [
+      {
+        "old": "        if seg_id == 1:\n            level = 1.0\n            tri[interval[anchor]] = 1.0\n            for j in range(anchor + 1, k):\n                level = level * (1.0 + returns[interval[j]])\n                tri[interval[j]] = level",
+        "new": "        level = 1.0\n        tri[interval[anchor]] = 1.0\n        for j in range(anchor + 1, k):\n            level = level * (1.0 + returns[interval[j]])\n            if seg_id == 1 or j - anchor <= 252:\n                tri[interval[j]] = level"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M31",
+    "description": "TRI carries the level across a gap",
+    "edits": [
+      {
+        "old": "        k = anchor + 1\n        while k < n and valid[k]:\n            k += 1",
+        "new": "        k = anchor + 1\n        while k < n:\n            k += 1"
+      },
+      {
+        "old": "                level = level * (1.0 + returns[interval[j]])",
+        "new": "                level = level * (1.0 + returns.get(interval[j], 0.0))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M32",
+    "description": "TRI anchor != 1.0",
+    "edits": [
+      {
+        "old": "        if seg_id == 1:\n            level = 1.0\n            tri[interval[anchor]] = 1.0",
+        "new": "        if seg_id == 1:\n            level = 1.01\n            tri[interval[anchor]] = 1.01"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M33",
+    "description": "TRI ignores an identity boundary",
+    "edits": [
+      {
+        "old": "        if s in usable and p in usable:\n            raw_returns[s] = usable[s].close / usable[p].close - 1.0",
+        "new": "        if s in ticker_rows and p in ticker_rows:\n            raw_returns[s] = ticker_rows[s][0].close / ticker_rows[p][0].close - 1.0"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M34",
+    "description": "TRI break session admitted",
+    "edits": [
+      {
+        "old": "            for j in range(anchor + 1, k):\n                level = level * (1.0 + returns[interval[j]])\n                tri[interval[j]] = level",
+        "new": "            for j in range(anchor + 1, min(k + 1, n)):\n                level = level * (1.0 + returns.get(interval[j], 0.0))\n                tri[interval[j]] = level"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M35",
+    "description": "capability evidence class upgraded",
+    "edits": [
+      {
+        "old": "            evidence_class=EvidenceClass.LIVE_RECORDED,",
+        "new": "            evidence_class=EvidenceClass.OFFICIAL_VENDOR_CERTIFIED,"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M36",
+    "description": "wrong capability units/period",
+    "edits": [
+      {
+        "old": "            observation_period=ObservationPeriod.INSTANT,\n            units=Unit.RATIO,",
+        "new": "            observation_period=ObservationPeriod.PERIOD,\n            units=Unit.CURRENCY,"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M37",
+    "description": "frames on different grids",
+    "edits": [
+      {
+        "old": "        wide = _long_to_grid(long, row_dates, columns)\n        result[name] = TrustedInput(",
+        "new": "        wide = _long_to_grid(long, row_dates, columns)\n        if name == INPUT_TOTAL_RETURN_INDEX:\n            wide = wide.iloc[1:]\n        result[name] = TrustedInput("
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M38",
+    "description": "sorting-dependent ordering (shift/grid before sort)",
+    "edits": [
+      {
+        "old": "    keys.sort(key=lambda k: k.security_key)",
+        "new": "    # keys left in input order"
+      },
+      {
+        "old": "    frame = frame.sort_values(\n        [\"row_date\", \"security_key\"], kind=\"stable\"\n    ).reset_index(drop=True)\n    return frame",
+        "new": "    frame = frame.reset_index(drop=True)\n    return frame"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M39",
+    "description": "accept duplicate usable rows",
+    "edits": [
+      {
+        "old": "        if len(candidates) > 1:\n            raise D7cConsistencyError(\n                f\"{key.security_key!r} has {len(candidates)} usable rows on \"\n                f\"session {s}\"\n            )",
+        "new": "        if False:\n            raise D7cConsistencyError(\n                f\"{key.security_key!r} has {len(candidates)} usable rows on \"\n                f\"session {s}\"\n            )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M40",
+    "description": "timezone-dependent session interpretation",
+    "edits": [
+      {
+        "old": "    if isinstance(value, date):\n        return value",
+        "new": "    if isinstance(value, date):\n        return (\n            pd.Timestamp(value)\n            .tz_localize(datetime.now().astimezone().tzinfo)\n            .tz_convert(\"UTC\")\n        ).date()"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M41",
+    "description": "skip the binding hash check",
+    "edits": [
+      {
+        "old": "        actual = _sha256_hex(resolver.read_bytes(binding.relative_path))\n        if actual != binding.sha256:\n            raise D7cBindingError(\n                f\"{stage.stage} file {binding.relative_path} hash {actual} != \"\n                f\"bound {binding.sha256}\"\n            )",
+        "new": "        _sha256_hex(resolver.read_bytes(binding.relative_path))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M42",
+    "description": "skip the pinned-code check",
+    "edits": [
+      {
+        "old": "        actual = _sha256_hex(blob)\n        if actual != code.sha256:\n            raise D7cBindingError(\n                f\"pinned code {code.name} hash {actual} != bound {code.sha256}\"\n            )",
+        "new": "        _sha256_hex(blob)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M43",
+    "description": "resolve the latest artifact",
+    "edits": [
+      {
+        "old": "    directory = Path(root) / \"derived\" / \"trusted_inputs\" / ti_id",
+        "new": "    _base = Path(root) / \"derived\" / \"trusted_inputs\"\n    _candidates = sorted(p for p in _base.iterdir() if p.is_dir())\n    directory = _candidates[-1] if _candidates else _base / ti_id"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M44",
+    "description": "allow a reserve path in the resolver",
+    "edits": [
+      {
+        "old": "        if any(\n            part in {\"reserve_sealed\", \"raw\", \"dsc_evidence\"} for part in pure.parts\n        ):\n            raise ReserveFirewallError(\n                f\"refusing reserve path component in {raw!r}\"\n            )",
+        "new": "        if False:\n            raise ReserveFirewallError(\n                f\"refusing reserve path component in {raw!r}\"\n            )"
+      },
+      {
+        "old": "        if raw not in self._allow:\n            raise ReserveFirewallError(f\"path {raw!r} is not allowlisted\")",
+        "new": "        if False:\n            raise ReserveFirewallError(f\"path {raw!r} is not allowlisted\")"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M45",
+    "description": "include a tau/scenario value",
+    "edits": [
+      {
+        "old": "    data = {\n        \"row_date\": pd.Series(\n            [r[0] for r in records], dtype=_DATE32\n        ),",
+        "new": "    data = {\n        \"tau\": pd.Series([0.0] * len(records), dtype=\"float64\"),\n        \"row_date\": pd.Series(\n            [r[0] for r in records], dtype=_DATE32\n        ),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M46",
+    "description": "hard-code the grid row count",
+    "edits": [
+      {
+        "old": "    grid_sessions = [\n        d for d in sessions if CALENDAR_START <= d <= DEVELOPMENT_END\n    ]",
+        "new": "    grid_sessions = sessions[pos[DEVELOPMENT_END] - 251 : pos[DEVELOPMENT_END] + 1]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M47",
+    "description": "source_session != prev(row_date)",
+    "edits": [
+      {
+        "old": "                daily_records.append(\n                    (\n                        row_date,\n                        key.security_key,\n                        source_session,\n                        primitives.returns[source_session],\n                    )\n                )",
+        "new": "                daily_records.append(\n                    (\n                        row_date,\n                        key.security_key,\n                        row_date,\n                        primitives.returns[source_session],\n                    )\n                )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M48",
+    "description": "loader reads raw sources",
+    "edits": [
+      {
+        "old": "    ti_id = _compute_ti_id(bindings, code_sha)\n    directory = Path(root) / \"derived\" / \"trusted_inputs\" / ti_id",
+        "new": "    ti_id = _compute_ti_id(bindings, code_sha)\n    pd.read_parquet(\n        Path(root) / \"normalized\" / \"n-f874d3ecb61374d4\" / \"observations.parquet\"\n    )\n    directory = Path(root) / \"derived\" / \"trusted_inputs\" / ti_id"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M49",
+    "description": "ineligible column given 0 instead of NaN",
+    "edits": [
+      {
+        "old": "    wide = pd.DataFrame(\n        np.nan,\n        index=index,",
+        "new": "    wide = pd.DataFrame(\n        0.0,\n        index=index,"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  },
+  {
+    "id": "M50",
+    "description": "nondeterministic manifest (timestamp)",
+    "edits": [
+      {
+        "old": "        \"schema\": SCHEMA,",
+        "new": "        \"schema\": SCHEMA,\n        \"generated_at\": datetime.now().isoformat(),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/trusted_inputs.py"
+  }
+]
