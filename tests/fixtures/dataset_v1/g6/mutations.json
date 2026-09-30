@@ -1,0 +1,338 @@
+[
+  {
+    "id": "M1",
+    "description": "include reserve rows in P",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        if d >= RESERVE_START:",
+    "new": "        if False:",
+    "killing_test": "test_02_reserve_dated_row_fails_closed"
+  },
+  {
+    "id": "M2",
+    "description": "accessor end unbounded",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "                \"observations\",\n                start=self._start,\n                end=DEV_END,",
+    "new": "                \"observations\",\n                start=self._start,\n                end=date(2099, 1, 1),",
+    "killing_test": "test_07_d3_reads_are_development_only"
+  },
+  {
+    "id": "M3",
+    "description": "include OHLC_INCONSISTENT in P",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    frame = day_flags[day_flags[\"class_or_flag\"] == SUSPECT]",
+    "new": "    frame = day_flags[day_flags[\"class_or_flag\"].isin([SUSPECT, \"OHLC_INCONSISTENT\"])]",
+    "killing_test": "test_01_population_equals_fixture_and_hash_rule"
+  },
+  {
+    "id": "M4",
+    "description": "population hash over unsorted rows",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    for key, t in sorted(records):",
+    "new": "    for key, t in records:",
+    "killing_test": "test_01_population_equals_fixture_and_hash_rule"
+  },
+  {
+    "id": "M5",
+    "description": "unseeded random rank",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    return hashlib.sha256(payload.encode(\"utf-8\")).hexdigest()",
+    "new": "    return format(random.random(), \"064x\")",
+    "killing_test": "test_13_rank_is_sha256_of_seed_key_date"
+  },
+  {
+    "id": "M6",
+    "description": "time-based seed",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    return hashlib.sha256(payload.encode(\"utf-8\")).hexdigest()",
+    "new": "    return hashlib.sha256(str(time.time()).encode(\"utf-8\")).hexdigest()",
+    "killing_test": "test_12_sampling_deterministic_and_tz"
+  },
+  {
+    "id": "M7",
+    "description": "rank over key only",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    payload = G6_RANK_PREFIX + security_key + \"|\" + t.isoformat()",
+    "new": "    payload = G6_RANK_PREFIX + security_key",
+    "killing_test": "test_13_rank_is_sha256_of_seed_key_date"
+  },
+  {
+    "id": "M8",
+    "description": "no per-key cap",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "                while index < len(listing) and listing[index].security_key in used_keys:",
+    "new": "                while False:",
+    "killing_test": "test_16_at_most_one_specimen_per_key"
+  },
+  {
+    "id": "M9",
+    "description": "per-key cap per cell only",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "                used_keys.add(candidate.security_key)",
+    "new": "                pass",
+    "killing_test": "test_16_at_most_one_specimen_per_key"
+  },
+  {
+    "id": "M10",
+    "description": "reallocate shortfalls (records none)",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        shortfalls[cell] = target - picked",
+    "new": "        shortfalls[cell] = 0",
+    "killing_test": "test_18_small_cell_census_shortfall_not_reallocated"
+  },
+  {
+    "id": "M11",
+    "description": "replace/drop UNRESOLVED specimens from counts",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    counts = Counter(\n        (r.stratum, r.band, r.outcome, r.reason) for r in records\n    )",
+    "new": "    counts = Counter(\n        (r.stratum, r.band, r.outcome, r.reason)\n        for r in records\n        if r.outcome != OUTCOME_UNRESOLVED\n    )",
+    "killing_test": "test_50_pass_and_unresolved_stay_in_counts"
+  },
+  {
+    "id": "M12",
+    "description": "allow duplicate specimens",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "            if s.security_key in keys:",
+    "new": "            if False:",
+    "killing_test": "test_21_duplicate_specimen_fails_closed"
+  },
+  {
+    "id": "M13",
+    "description": "S1 by class instead of D7c admission",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if (security_key, t) in admitted:",
+    "new": "    if False:",
+    "killing_test": "test_10_s1_membership_equals_d7c_admission"
+  },
+  {
+    "id": "M14",
+    "description": "band boundary < to <=",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if rho < 1 / 3:",
+    "new": "    if rho <= 1 / 3:",
+    "killing_test": "test_08_band_boundaries_exact"
+  },
+  {
+    "id": "M15",
+    "description": "S3 in calendar days",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        if abs(there - here) <= 3:",
+    "new": "        if abs((effective - t).days) <= 3:",
+    "killing_test": "test_09_s3_uses_trusted_sessions_and_split_at_t_fails"
+  },
+  {
+    "id": "M16",
+    "description": "drop year round-robin",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        active = list(years)",
+    "new": "        active = list(years)[:1]",
+    "killing_test": "test_15_year_round_robin_order"
+  },
+  {
+    "id": "M17",
+    "description": "accept a non-E1 fact",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if str(fact[\"source\"]) != \"E1\":",
+    "new": "    if False:",
+    "killing_test": "test_27_non_e1_fact_rejected"
+  },
+  {
+    "id": "M18",
+    "description": "accept date_filed > 2023-06-30",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if filed > DEV_END:",
+    "new": "    if False:",
+    "killing_test": "test_28_fact_after_dev_end_rejected"
+  },
+  {
+    "id": "M19",
+    "description": "skip doc_sha256 check",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if str(fact[\"doc_sha256\"]) != expected:",
+    "new": "    if False:",
+    "killing_test": "test_29_doc_sha256_mismatch_rejected"
+  },
+  {
+    "id": "M20",
+    "description": "include index rows after 2023-06-30",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        if d > DEV_END:\n            continue",
+    "new": "        if False:\n            continue",
+    "killing_test": "test_24_index_after_dev_end_never_used"
+  },
+  {
+    "id": "M21",
+    "description": "split window includes p",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        if _in_half_open(as_date(f[\"market_effective_date\"]), inp.p, inp.t)",
+    "new": "        if inp.p <= as_date(f[\"market_effective_date\"]) <= inp.t",
+    "killing_test": "test_33_split_effective_outside_window_no_explanation"
+  },
+  {
+    "id": "M22",
+    "description": "widen the a tolerance",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        and 0.5 <= inp.rho * float(f[\"factor\"]) <= 1.5",
+    "new": "        and 0.4 <= inp.rho * float(f[\"factor\"]) <= 1.6",
+    "killing_test": "test_34_split_with_a_outside_tolerance_no_explanation"
+  },
+  {
+    "id": "M23",
+    "description": "never test MISDATED",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "            if distance is not None and abs(distance) <= 5 and _rel_close(\n                recorded, factor\n            ):",
+    "new": "            if False:",
+    "killing_test": "test_32_misdated_split_offset"
+  },
+  {
+    "id": "M24",
+    "description": "identity does not override",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "            if _in_half_open(when, inp.p, inp.t):",
+    "new": "            if False:",
+    "killing_test": "test_40_ticker_reassignment_overrides_matching_split"
+  },
+  {
+    "id": "M25",
+    "description": "resolve conflicts by precedence",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if categories > 1:",
+    "new": "    if False:",
+    "killing_test": "test_42_two_explanations_conflict"
+  },
+  {
+    "id": "M26",
+    "description": "disagreement resolved to the worker outcome",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if worker.key() == planner.key():\n        return worker\n    return Outcome(OUTCOME_UNRESOLVED, REASON_REVIEWER_DISAGREEMENT)",
+    "new": "    return worker",
+    "killing_test": "test_44_blind_extraction_agreement_and_disagreement"
+  },
+  {
+    "id": "M27",
+    "description": "accept unlisted event types",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    allowed = DIRECTION_TABLE.get(event_type)\n    if allowed is None:\n        return False",
+    "new": "    allowed = DIRECTION_TABLE.get(event_type, frozenset({\"up\", \"down\"}))\n    if allowed is None:\n        return False",
+    "killing_test": "test_39_unlisted_event_type_does_not_decide"
+  },
+  {
+    "id": "M28",
+    "description": "ignore the direction table",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    return _direction(rho) in allowed",
+    "new": "    return True",
+    "killing_test": "test_38_direction_table_blocks_wrong_direction"
+  },
+  {
+    "id": "M29",
+    "description": "accept AFTER_CLOSE on t",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    if event_date == t and timing != \"AFTER_CLOSE\":",
+    "new": "    if event_date == t:",
+    "killing_test": "test_37_timing_rules"
+  },
+  {
+    "id": "M30",
+    "description": "Tiingo-only evidence yields GENUINE_MOVE_DOCUMENTED",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    facts = [f for f in inp.facts if f.get(\"source\") == \"E1\"]",
+    "new": "    facts = [f for f in inp.facts if f.get(\"source\") == \"E1\"] + tiingo_context_facts(context)",
+    "killing_test": "test_45_tiingo_context_alone_never_decides"
+  },
+  {
+    "id": "M31",
+    "description": "ignore DATA_ERRORs in S2",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    has_data_error = any(\n        r.outcome in DATA_ERROR_OUTCOMES for r in records\n    )",
+    "new": "    has_data_error = any(\n        r.outcome in DATA_ERROR_OUTCOMES for r in records if r.stratum != \"S2\"\n    )",
+    "killing_test": "test_47_one_s2_data_error_gives_hold"
+  },
+  {
+    "id": "M32",
+    "description": "r1 threshold 58",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    elif r1 < min(59, math.ceil(n1 / 2)) or any(",
+    "new": "    elif r1 < min(58, math.ceil(n1 / 2)) or any(",
+    "killing_test": "test_49_inconclusive_boundaries"
+  },
+  {
+    "id": "M33",
+    "description": "drop UNRESOLVED from counts",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    n1 = len(s1)",
+    "new": "    n1 = _resolved(s1)",
+    "killing_test": "test_50_pass_and_unresolved_stay_in_counts"
+  },
+  {
+    "id": "M34",
+    "description": "force PASS despite INCONCLUSIVE",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    elif r1 < min(59, math.ceil(n1 / 2)) or any(\n        resolved < min(16, math.ceil(n_b / 2))\n        for n_b, resolved in band_counts.values()\n    ):",
+    "new": "    elif False:",
+    "killing_test": "test_49_inconclusive_boundaries"
+  },
+  {
+    "id": "M35",
+    "description": "skip specimen-hash verification",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    actual = specimen_sha256(specimen_set)\n    if actual != expected:",
+    "new": "    actual = specimen_sha256(specimen_set)\n    if False:",
+    "killing_test": "test_22_specimen_and_fetch_plan_hash_verified"
+  },
+  {
+    "id": "M36",
+    "description": "skip reconciliation",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "    total = sum(counts.values())\n    if total != specimen_size:",
+    "new": "    total = sum(counts.values())\n    if False:",
+    "killing_test": "test_52_reconciliation_mismatch_fails_closed"
+  },
+  {
+    "id": "M37",
+    "description": "the Git summary leaks rho",
+    "file": "smart_beta/dataset_v1/gate6_audit.py",
+    "old": "        f\"- decision: {artifacts['decision']}\",",
+    "new": "        f\"- decision: {artifacts['decision']}\",\n        f\"- rho: {artifacts.get('procedure', {}).get('rho_example')}\",",
+    "killing_test": "test_53_artifacts_deterministic_and_git_summary_data_free"
+  },
+  {
+    "id": "M38",
+    "description": "allow URLs outside the plan",
+    "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
+    "old": "        if filename not in self._allowed:",
+    "new": "        if False:",
+    "killing_test": "test_55_host_path_allowlist_refuses_off_plan"
+  },
+  {
+    "id": "M39",
+    "description": "write the contact to the log",
+    "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
+    "old": "                    \"outcome\": record.outcome,",
+    "new": "                    \"outcome\": record.outcome,\n                    \"contact\": self._contact,",
+    "killing_test": "test_57_contact_required_and_never_logged"
+  },
+  {
+    "id": "M40",
+    "description": "no rate limit",
+    "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
+    "old": "            if elapsed < self._min_interval:",
+    "new": "            if False:",
+    "killing_test": "test_58_rate_retries_and_request_cap"
+  },
+  {
+    "id": "M41",
+    "description": "retry 404",
+    "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
+    "old": "            retryable = (\n                status in RETRY_STATUS",
+    "new": "            retryable = (\n                status in RETRY_STATUS\n                or status == 404",
+    "killing_test": "test_58_rate_retries_and_request_cap"
+  },
+  {
+    "id": "M42",
+    "description": "ignore the request cap",
+    "file": "smart_beta/dataset_v1/gate6_sec_fetch.py",
+    "old": "        if self._requests >= self._max_requests:",
+    "new": "        if False:",
+    "killing_test": "test_58_rate_retries_and_request_cap"
+  }
+]
