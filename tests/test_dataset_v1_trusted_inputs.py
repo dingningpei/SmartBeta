@@ -1112,11 +1112,19 @@ def test_item33_common_and_no_exclusion_admitted(tmp_path: Path) -> None:
 def test_item34_cutoff_is_prev_row_not_row(tmp_path: Path) -> None:
     store, key = _mask_store(tmp_path, "s")
     store.class_seg(key, date(2019, 1, 2), "COMMON_STOCK")
-    # A transition dated exactly d = 2020-01-06 must not affect row d.
+    # A class transition dated exactly d = 2020-01-06 must not affect row d.
     store.class_seg(key, date(2020, 1, 6), "NON_COMMON")
     inputs = _load(store)
     assert _value(inputs, T.INPUT_DAILY_TOTAL_RETURN, key, date(2020, 1, 6)) == pytest.approx(0.1)
     assert _row_is_nan(inputs, T.INPUT_DAILY_TOTAL_RETURN, key, date(2020, 1, 7))
+
+    # G1: the same must hold for the policy cutoff.  A policy transition dated
+    # exactly d = 2020-01-06 must leave row d admitted and only mask next(d).
+    store2, key2 = _mask_store(tmp_path, "s2")
+    store2.policy_seg(key2, date(2020, 1, 6), T.POLICY_EXCLUDED)
+    inputs2 = _load(store2)
+    assert _value(inputs2, T.INPUT_DAILY_TOTAL_RETURN, key2, date(2020, 1, 6)) == pytest.approx(0.1)
+    assert _row_is_nan(inputs2, T.INPUT_DAILY_TOTAL_RETURN, key2, date(2020, 1, 7))
 
 
 def test_item35_future_transition_leaves_earlier_rows_unchanged(tmp_path: Path) -> None:
@@ -1223,6 +1231,15 @@ def test_item40_break_session_and_later_unlagged_nan(tmp_path: Path) -> None:
     assert _row_is_nan(inputs, T.INPUT_TOTAL_RETURN_INDEX, key, _next(TRI_B))
     for d in (date(2020, 1, 10), TRI_LAST, date(2020, 1, 14)):
         assert _row_is_nan(inputs, T.INPUT_TOTAL_RETURN_INDEX, key, d)
+    # G2 INDEPENDENCE: the TRI suppression applies only to total_return_index.
+    # daily_total_return and dollar_volume follow their own validity rules and
+    # must be non-NaN again after the gap when independently valid and admitted.
+    assert _value(inputs, T.INPUT_DAILY_TOTAL_RETURN, key, date(2020, 1, 13)) == pytest.approx(15.4 / 14.0 - 1.0)
+    assert _value(inputs, T.INPUT_DOLLAR_VOLUME, key, date(2020, 1, 13)) == pytest.approx(15.4 * 100.0)
+    assert _value(inputs, T.INPUT_DAILY_TOTAL_RETURN, key, date(2020, 1, 14)) == pytest.approx(16.94 / 15.4 - 1.0)
+    assert _value(inputs, T.INPUT_DOLLAR_VOLUME, key, date(2020, 1, 14)) == pytest.approx(16.94 * 100.0)
+    assert _row_is_nan(inputs, T.INPUT_TOTAL_RETURN_INDEX, key, date(2020, 1, 13))
+    assert _row_is_nan(inputs, T.INPUT_TOTAL_RETURN_INDEX, key, date(2020, 1, 14))
 
 
 def test_item41_row_b_carries_tri_b_minus_1(tmp_path: Path) -> None:
