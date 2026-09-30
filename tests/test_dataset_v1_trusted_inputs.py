@@ -1508,13 +1508,9 @@ def test_item57_resolver_refuses_forbidden_and_nonallowlisted_paths(tmp_path: Pa
         resolver.resolve("derived/identity/i-not-allowlisted/identity_assignment.parquet")
     with pytest.raises(T.D7cInputError):
         resolver.resolve("../escape.parquet")
-    # Addendum A2: a D-SC query with a cutoff after 2023-06-29 fails closed,
-    # while the last permitted cutoff still passes through to the frozen D-SC
-    # query function.
-    with pytest.raises(T.ReserveFirewallError):
-        T._guarded_class_state_at({}, "K1", date(2023, 7, 3))
-    with pytest.raises(T.ReserveFirewallError):
-        T._guarded_policy_state_at({}, "K1", date(2023, 7, 3))
+    # Addendum A2/A4(b): the exact boundary for BOTH guarded helpers.
+    # Cutoff 2023-06-29 is the last permitted D-SC query and passes through to
+    # the frozen query function; 2023-06-30 and later fail closed.
     assert T._guarded_class_state_at({}, "K1", T.LAST_SOURCE_DATE) == (
         "CLASS_UNRESOLVED",
         "NO_ADMISSIBLE_EVIDENCE",
@@ -1523,6 +1519,11 @@ def test_item57_resolver_refuses_forbidden_and_nonallowlisted_paths(tmp_path: Pa
         T.POLICY_NO_EXCLUSION,
         frozenset(),
     )
+    for helper in (T._guarded_class_state_at, T._guarded_policy_state_at):
+        with pytest.raises(T.ReserveFirewallError):
+            helper({}, "K1", date(2023, 6, 30))
+        with pytest.raises(T.ReserveFirewallError):
+            helper({}, "K1", date(2023, 7, 3))
 
 
 def test_item58_injected_reserve_dated_row_raises(tmp_path: Path) -> None:
