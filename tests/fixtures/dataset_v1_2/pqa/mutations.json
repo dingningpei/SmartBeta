@@ -1,0 +1,482 @@
+[
+  {
+    "id": "A1",
+    "description": "one-endpoint rule (close(s) only)",
+    "edits": [
+      {
+        "old": "        for target in (prev_session, session, next_session):",
+        "new": "        for target in (session,):"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item02_daily_return_states_exact"
+  },
+  {
+    "id": "A2",
+    "description": "omit next(s) for daily_total_return",
+    "edits": [
+      {
+        "old": "        for target in (prev_session, session, next_session):",
+        "new": "        for target in (prev_session, session):"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item02_daily_return_states_exact"
+  },
+  {
+    "id": "A3",
+    "description": "include next(s) for dollar_volume",
+    "edits": [
+      {
+        "old": "        for target in (prev_session, session):",
+        "new": "        for target in (prev_session, session, next_session):"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item03_dollar_volume_states_exact"
+  },
+  {
+    "id": "A4",
+    "description": "prev/next by calendar day",
+    "edits": [
+      {
+        "old": "            candidate = sessions[i - 1]",
+        "new": "            candidate = date.fromordinal(session.toordinal() - 1)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item01_flag_sessions_boundaries"
+  },
+  {
+    "id": "A5",
+    "description": "prev/next ignoring the D4 interval",
+    "edits": [
+      {
+        "old": "            candidate = sessions[i - 1]\n            if (start is None or candidate >= start) and (\n                end is None or candidate <= end\n            ):\n                prev_session = candidate",
+        "new": "            candidate = sessions[i - 1]\n            if True:\n                prev_session = candidate"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item01_flag_sessions_boundaries"
+  },
+  {
+    "id": "A6",
+    "description": "TRI clears after segment re-anchor or after N sessions",
+    "edits": [
+      {
+        "old": "            if anchor < session[1] <= last and session[1] >= hits[0]:",
+        "new": "            if anchor < session[1] <= last and session[1] == hits[0]:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item04_tri_propagation"
+  },
+  {
+    "id": "A7",
+    "description": "TRI propagation starts at v >= anchor (anchor tainted)",
+    "edits": [
+      {
+        "old": "            if anchor < session[1] <= last and session[1] >= hits[0]:",
+        "new": "            if anchor <= session[1] <= last and session[1] >= anchor:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item04_tri_propagation"
+  },
+  {
+    "id": "A8",
+    "description": "TRI ignores the admitted flag",
+    "edits": [
+      {
+        "old": "        if not bool(segment.get(\"admitted\", False)):\n            continue",
+        "new": "        if False:\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item04_tri_propagation"
+  },
+  {
+    "id": "A9",
+    "description": "double lag on state panels",
+    "edits": [
+      {
+        "old": "            source = _to_date(row.source_session)",
+        "new": "            source = date.fromordinal(_to_date(row.source_session).toordinal() - 1)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item06_lag_alignment_no_double_lag"
+  },
+  {
+    "id": "A10",
+    "description": "zero lag",
+    "edits": [
+      {
+        "old": "            source = _to_date(row.source_session)",
+        "new": "            source = _to_date(row.row_date)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item06_lag_alignment_no_double_lag"
+  },
+  {
+    "id": "A11",
+    "description": "rolling window off by one",
+    "edits": [
+      {
+        "old": "            start = i - window + 1",
+        "new": "            start = i - window + 2"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item07_nan_shadow_matches_oracle"
+  },
+  {
+    "id": "A12",
+    "description": "lag shift sign reversed",
+    "edits": [
+      {
+        "old": "            shifted[node.periods:] = child[: -node.periods]",
+        "new": "            shifted[: -node.periods] = child[node.periods:]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item07_nan_shadow_matches_oracle"
+  },
+  {
+    "id": "A13",
+    "description": "cross-sectional op taints the whole row",
+    "edits": [
+      {
+        "old": "        return np.where(\n            child == STATE_QUARANTINED,\n            STATE_PROPAGATED,\n            child,\n        )",
+        "new": "        return np.full_like(child, STATE_PROPAGATED)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item08_cross_sectional_own_cell_and_residual"
+  },
+  {
+    "id": "A14",
+    "description": "cross-sectional op clears the own-cell state",
+    "edits": [
+      {
+        "old": "        return np.where(\n            child == STATE_QUARANTINED,\n            STATE_PROPAGATED,\n            child,\n        )",
+        "new": "        return np.where(\n            child == STATE_QUARANTINED,\n            STATE_CLEAN,\n            child,\n        )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item08_cross_sectional_own_cell_and_residual"
+  },
+  {
+    "id": "A15",
+    "description": "Literal treated as quarantined",
+    "edits": [
+      {
+        "old": "    if isinstance(node, Literal):\n        return _zeros(template)",
+        "new": "    if isinstance(node, Literal):\n        return np.full(template.shape, STATE_PROPAGATED, dtype=np.int64)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item07_nan_shadow_matches_oracle"
+  },
+  {
+    "id": "A16",
+    "description": "an unsupported node silently CLEAN",
+    "edits": [
+      {
+        "old": "    raise UnsupportedQuarantineNode(\n        f\"node type {type(node).__name__} is outside the Q3.3 closed set\"\n    )",
+        "new": "    return _zeros(template)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item07b_unsupported_node"
+  },
+  {
+    "id": "A17",
+    "description": "quarantine overwrites NOT_APPLICABLE",
+    "edits": [
+      {
+        "old": "        if (key, session) not in present.get(primitive, set()):\n            return",
+        "new": "        if False:\n            return"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item05_absent_cells_not_applicable"
+  },
+  {
+    "id": "A18",
+    "description": "cross-sectional over-taint, or the residual count dropped",
+    "edits": [
+      {
+        "old": "    residual = (\n        (finite_mask & (~shadow_nan) & (values.to_numpy() != shadow.to_numpy()))\n        .sum(axis=1)\n    )",
+        "new": "    residual = np.zeros(len(values.index), dtype=np.int64)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item08_cross_sectional_own_cell_and_residual"
+  },
+  {
+    "id": "A19",
+    "description": "factor values modified (shadow leaked)",
+    "edits": [
+      {
+        "old": "    frame.attrs[\"values\"] = values",
+        "new": "    frame.attrs[\"values\"] = shadow"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item09_factor_values_unchanged"
+  },
+  {
+    "id": "A20",
+    "description": "label s in [f, e-prime] (formation flag included)",
+    "edits": [
+      {
+        "old": "                if formation < flag_session <= effective_end:",
+        "new": "                if formation <= flag_session <= effective_end:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item10_label_rules"
+  },
+  {
+    "id": "A21",
+    "description": "label s in (f, e-prime) (endpoint excluded)",
+    "edits": [
+      {
+        "old": "                if formation < flag_session <= effective_end:",
+        "new": "                if formation < flag_session < effective_end:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item10_label_rules"
+  },
+  {
+    "id": "A22",
+    "description": "drop the prev(s) label condition",
+    "edits": [
+      {
+        "old": "                if prev_session is not None and formation <= prev_session <= effective_end:\n                    reason = \"ENDPOINT_OR_FORMATION_CLOSE\"\n                    break",
+        "new": "                if False:\n                    reason = \"ENDPOINT_OR_FORMATION_CLOSE\"\n                    break"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item10_label_rules"
+  },
+  {
+    "id": "A23",
+    "description": "the boundary label treated as CLEAN",
+    "edits": [
+      {
+        "old": "        if effective_end == DEVELOPMENT_END:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item10b_label_reserve_and_empty_path"
+  },
+  {
+    "id": "A24",
+    "description": "a reserve-crossing label quarantined (overwrite)",
+    "edits": [
+      {
+        "old": "        if crosses.get((formation, h), False):\n            continue",
+        "new": "        if False:\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item10b_label_reserve_and_empty_path"
+  },
+  {
+    "id": "A25",
+    "description": "the liquidity exposure filters membership",
+    "edits": [
+      {
+        "old": "        records.append((formation, key, bool(exposed)))",
+        "new": "        if exposed:\n            records.append((formation, key, bool(exposed)))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item11_liquidity_exposure_report_only"
+  },
+  {
+    "id": "A26",
+    "description": "the resolver allows reserve_sealed",
+    "edits": [
+      {
+        "old": "        if any(\n            part in {\"reserve_sealed\", \"raw\", \"dsc_evidence\"} for part in pure.parts\n        ):",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item12_resolver_rejects_reserve_and_paths"
+  },
+  {
+    "id": "A27",
+    "description": "skip the post-load date assertion",
+    "edits": [
+      {
+        "old": "def _assert_dates_development(frame: pd.DataFrame, columns: Sequence[str]) -> None:\n    for column in columns:",
+        "new": "def _assert_dates_development(frame: pd.DataFrame, columns: Sequence[str]) -> None:\n    return\n    for column in columns:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item12_resolver_rejects_reserve_and_paths"
+  },
+  {
+    "id": "A28",
+    "description": "skip the binding hash check",
+    "edits": [
+      {
+        "old": "        if actual != code.sha256:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item16_pinned_hash_checks"
+  },
+  {
+    "id": "A29",
+    "description": "resolve the latest artifact",
+    "edits": [
+      {
+        "old": "        if raw not in self._allow:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item12_resolver_rejects_reserve_and_paths"
+  },
+  {
+    "id": "A30",
+    "description": "the flag count guard is disabled",
+    "edits": [
+      {
+        "old": "    if (\n        bindings.expected_flag_count is not None\n        and suspect_count != bindings.expected_flag_count\n    ):",
+        "new": "    if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item17_flag_count_guard"
+  },
+  {
+    "id": "A31",
+    "description": "skip flags outside current factors",
+    "edits": [
+      {
+        "old": "    suspect = day_flags[\n        day_flags[\"class_or_flag\"] == \"CORP_ACTION_SUSPECT\"\n    ]",
+        "new": "    suspect = day_flags[\n        day_flags[\"class_or_flag\"] == \"CORP_ACTION_SUSPECT\"\n    ].head(1)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item01_flag_sessions_boundaries"
+  },
+  {
+    "id": "A32",
+    "description": "the identity omits quarantine_rule_hash",
+    "edits": [
+      {
+        "old": "        \"amendment\": {\"path\": AMENDMENT_PATH, \"sha256\": AMENDMENT_SHA256},\n        \"quarantine_rule_hash\": QUARANTINE_RULE_HASH,\n        \"parent_dataset_id\": PARENT_DATASET_ID,",
+        "new": "        \"amendment\": {\"path\": AMENDMENT_PATH, \"sha256\": AMENDMENT_SHA256},\n        \"parent_dataset_id\": PARENT_DATASET_ID,"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item13_identity_record_and_mutations"
+  },
+  {
+    "id": "A33",
+    "description": "the identity uses the c-d386 D-SC id",
+    "edits": [
+      {
+        "old": "    \"c-27b6dabd0db0cb15\": (\n        \"2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60\"\n    ),",
+        "new": "    \"c-d386c342dcd1f4b4\": (\n        \"2ee4940c14a85048fddd9e3e675c3e9a6f40a11c8887192a5e61939adfc62b60\"\n    ),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item13_identity_record_and_mutations"
+  },
+  {
+    "id": "A34",
+    "description": "the identity skips the K-log check",
+    "edits": [
+      {
+        "old": "    log_path = knowledge_log_path or _default_knowledge_log(root)\n    records = read_records_fn(log_path)",
+        "new": "    return compute_identity_hash(payload)\n    log_path = knowledge_log_path or _default_knowledge_log(root)\n    records = read_records_fn(log_path)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item13_identity_record_and_mutations"
+  },
+  {
+    "id": "A35",
+    "description": "the K-log opened for append",
+    "edits": [
+      {
+        "old": "    records = read_records_fn(log_path)",
+        "new": "    records = _knowledge.KnowledgeLog(log_path).read()"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item14_klog_read_only"
+  },
+  {
+    "id": "A36",
+    "description": "a timestamp in the manifest",
+    "edits": [
+      {
+        "old": "        \"row_counts\": row_counts,\n        \"scope\": \"DEVELOPMENT_ONLY\",\n    }",
+        "new": "        \"row_counts\": row_counts,\n        \"scope\": \"DEVELOPMENT_ONLY\",\n        \"built_at\": \"2020-01-01T00:00:00Z\",\n    }"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item18_no_timestamps_or_paths"
+  },
+  {
+    "id": "A37",
+    "description": "unsorted output rows",
+    "edits": [
+      {
+        "old": "    if len(frame):\n        frame = frame.sort_values(\n            [\"primitive\", \"security_key\", \"session\"], kind=\"mergesort\"\n        ).reset_index(drop=True)\n    return frame",
+        "new": "    if len(frame):\n        frame = frame.sort_values(\n            [\"primitive\", \"security_key\", \"session\"], kind=\"mergesort\", ascending=False\n        ).reset_index(drop=True)\n    return frame"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item18_no_timestamps_or_paths"
+  },
+  {
+    "id": "A38",
+    "description": "overwrite an existing pq_id directory",
+    "edits": [
+      {
+        "old": "    if manifest_path.exists():",
+        "new": "    if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item15_determinism"
+  },
+  {
+    "id": "A39",
+    "description": "source_session assertion skipped",
+    "edits": [
+      {
+        "old": "            if source_session != expected:",
+        "new": "            if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item19b_source_session_assertion"
+  },
+  {
+    "id": "A40",
+    "description": "the sparse file includes CLEAN rows with a wrong code",
+    "edits": [
+      {
+        "old": "            state = lookup.get((input_name, key, source))\n            if state in (STATE_QUARANTINED, STATE_PROPAGATED):\n                records.append(\n                    (input_name, _to_date(row.row_date), key, source, state)\n                )",
+        "new": "            state = lookup.get((input_name, key, source), STATE_CLEAN)\n            records.append(\n                (input_name, _to_date(row.row_date), key, source, state)\n            )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item19_sparse_completeness"
+  }
+]
