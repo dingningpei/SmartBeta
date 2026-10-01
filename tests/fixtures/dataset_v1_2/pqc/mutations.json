@@ -1,0 +1,222 @@
+[
+  {
+    "id": "G1",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "compress before the lag sums (adjacency pairing)",
+    "edits": [
+      {
+        "old": "        left = residuals[: n_index - k]\n        right = residuals[k:]\n        mask = finite[: n_index - k] & finite[k:]\n        gamma_k = float(np.dot(left[mask], right[mask]))",
+        "new": "        compressed = residuals[positions]\n        gamma_k = (\n            float(np.dot(compressed[: compressed.size - k], compressed[k:]))\n            if k < compressed.size\n            else 0.0\n        )"
+      }
+    ]
+  },
+  {
+    "id": "G2",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "pair across gaps using rank positions",
+    "edits": [
+      {
+        "old": "        left = residuals[: n_index - k]\n        right = residuals[k:]\n        mask = finite[: n_index - k] & finite[k:]\n        gamma_k = float(np.dot(left[mask], right[mask]))",
+        "new": "        compressed = residuals[positions]\n        gamma_k = 0.0\n        for j in range(compressed.size - k):\n            gamma_k += compressed[j] * compressed[j + k]\n        gamma_k = float(gamma_k)"
+      }
+    ]
+  },
+  {
+    "id": "G3",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "drop the Bartlett weights (uniform)",
+    "edits": [
+      {
+        "old": "        long_run += 2.0 * weight * gamma_k",
+        "new": "        long_run += 2.0 * gamma_k"
+      }
+    ]
+  },
+  {
+    "id": "G4",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "Bartlett w_k = 1 - k/L",
+    "edits": [
+      {
+        "old": "        weight = 1.0 - k / (resolved_lags + 1.0)",
+        "new": "        weight = 1.0 - k / resolved_lags if resolved_lags else 1.0"
+      }
+    ]
+  },
+  {
+    "id": "G5",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "lag range k = 0 ... L-1",
+    "edits": [
+      {
+        "old": "    for k in range(1, resolved_lags + 1):",
+        "new": "    for k in range(0, resolved_lags):"
+      }
+    ]
+  },
+  {
+    "id": "G6",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "one-sided covariance (missing factor 2)",
+    "edits": [
+      {
+        "old": "        long_run += 2.0 * weight * gamma_k",
+        "new": "        long_run += weight * gamma_k"
+      }
+    ]
+  },
+  {
+    "id": "G7",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "divide by n-1 instead of the parity-defined c",
+    "edits": [
+      {
+        "old": "    variance = _SMALL_SAMPLE_C * long_run / (n_obs**2)",
+        "new": "    variance = _SMALL_SAMPLE_C * long_run / (n_obs * (n_obs - 1))"
+      }
+    ]
+  },
+  {
+    "id": "G8",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "omit c",
+    "edits": [
+      {
+        "old": "    variance = _SMALL_SAMPLE_C * long_run / (n_obs**2)",
+        "new": "    variance = long_run / (n_obs**2)"
+      }
+    ]
+  },
+  {
+    "id": "G9",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "fallback to newey_west_ols when gaps exist",
+    "edits": [
+      {
+        "old": "    residuals = np.zeros(n_index, dtype=\"float64\")\n    residuals[positions] = available - mean",
+        "new": "    if n_interior_gaps > 0 or n_obs != n_index:\n        from smart_beta.engines.inference import newey_west_ols\n\n        fit = newey_west_ols(available, np.ones((n_obs, 1)), resolved_lags)\n        return GapAwareHACResult(\n            mean,\n            float(fit.tvalues[0]),\n            n_obs,\n            n_index,\n            n_interior_gaps,\n            STATUS_OK,\n            resolved_lags,\n        )\n    residuals = np.zeros(n_index, dtype=\"float64\")\n    residuals[positions] = available - mean"
+      }
+    ]
+  },
+  {
+    "id": "G10",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "clip a negative S to 0 and return t = +/-inf or a finite value",
+    "edits": [
+      {
+        "old": "    variance = _SMALL_SAMPLE_C * long_run / (n_obs**2)\n    if long_run <= 0.0 or not np.isfinite(long_run) or not np.isfinite(variance):",
+        "new": "    if long_run <= 0.0:\n        long_run = 0.0\n    variance = _SMALL_SAMPLE_C * long_run / (n_obs**2)\n    if long_run <= 0.0 or not np.isfinite(long_run) or not np.isfinite(variance):"
+      }
+    ]
+  },
+  {
+    "id": "G11",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "return a finite t on ZERO_RANGE",
+    "edits": [
+      {
+        "old": "    if float(np.ptp(available)) == 0.0:\n        return GapAwareHACResult(\n            mean,\n            float(\"nan\"),",
+        "new": "    if float(np.ptp(available)) == 0.0:\n        return GapAwareHACResult(\n            mean,\n            0.0,"
+      }
+    ]
+  },
+  {
+    "id": "G12",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "n < 2 returns a finite mean",
+    "edits": [
+      {
+        "old": "    if n_obs < 2:\n        return GapAwareHACResult(\n            float(\"nan\"),\n            float(\"nan\"),",
+        "new": "    if n_obs < 2:\n        return GapAwareHACResult(\n            0.0,\n            float(\"nan\"),"
+      }
+    ]
+  },
+  {
+    "id": "G13",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "treat inf as a value",
+    "edits": [
+      {
+        "old": "    finite = np.isfinite(arr)",
+        "new": "    finite = ~np.isnan(arr)"
+      }
+    ]
+  },
+  {
+    "id": "G14",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "mean over all positions with NaN = 0",
+    "edits": [
+      {
+        "old": "    available = arr[positions]\n    mean = float(available.mean())",
+        "new": "    available = np.where(finite, arr, 0.0)\n    mean = float(available.mean())"
+      }
+    ]
+  },
+  {
+    "id": "G15",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "default L hard-coded to a value other than the settings value",
+    "edits": [
+      {
+        "old": "        return int(DEFAULT_SETTINGS.newey_west_lags)",
+        "new": "        return 4"
+      }
+    ]
+  },
+  {
+    "id": "G16",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "reorder the input by value",
+    "edits": [
+      {
+        "old": "    available = arr[positions]\n    mean = float(available.mean())",
+        "new": "    available = np.sort(arr[positions])\n    mean = float(available.mean())"
+      }
+    ]
+  },
+  {
+    "id": "G17",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "mutate the caller's array",
+    "edits": [
+      {
+        "old": "    arr = np.asarray(values_on_index, dtype=\"float64\")\n    if arr.ndim > 1:",
+        "new": "    arr = np.asarray(values_on_index, dtype=\"float64\")\n    arr += 1.0\n    if arr.ndim > 1:"
+      }
+    ]
+  },
+  {
+    "id": "G18",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "count leading or trailing NaN as interior gaps",
+    "edits": [
+      {
+        "old": "    if n_obs == 0:\n        n_interior_gaps = 0\n    else:\n        first = int(positions[0])\n        last = int(positions[-1])\n        n_interior_gaps = (last - first + 1) - n_obs",
+        "new": "    if n_obs == 0:\n        n_interior_gaps = n_index\n    else:\n        n_interior_gaps = n_index - n_obs"
+      }
+    ]
+  },
+  {
+    "id": "G19",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "L inferred from array length",
+    "edits": [
+      {
+        "old": "    finite = np.isfinite(arr)",
+        "new": "    if lags is None:\n        resolved_lags = max(0, n_index - 1)\n    finite = np.isfinite(arr)"
+      }
+    ]
+  },
+  {
+    "id": "G20",
+    "file": "smart_beta/engines/gap_hac.py",
+    "description": "use the residuals of the compressed mean of a different subset",
+    "edits": [
+      {
+        "old": "    residuals[positions] = available - mean",
+        "new": "    residuals[positions] = available - available[0]"
+      }
+    ]
+  }
+]
