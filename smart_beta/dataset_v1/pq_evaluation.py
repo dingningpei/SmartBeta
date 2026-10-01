@@ -71,6 +71,7 @@ __all__ = [
     "B_RECONCILIATION_FAILED",
     "A_STATISTIC_NOT_ASSESSED",
     "A_SCREEN_NOT_ASSESSED",
+    "B_SCREEN_NOT_ASSESSED",
     "SCREEN_MISSING",
     "SCREEN_MISMATCH",
     "PATH_GAP",
@@ -133,6 +134,7 @@ FACTOR_PANEL_MISMATCH = "FACTOR_PANEL_MISMATCH"
 B_RECONCILIATION_FAILED = "B_RECONCILIATION_FAILED"
 A_STATISTIC_NOT_ASSESSED = "A_STATISTIC_NOT_ASSESSED"
 A_SCREEN_NOT_ASSESSED = "A_SCREEN_NOT_ASSESSED"
+B_SCREEN_NOT_ASSESSED = "B_SCREEN_NOT_ASSESSED"
 SCREEN_MISSING = "SCREEN_MISSING"
 SCREEN_MISMATCH = "SCREEN_MISMATCH"
 PATH_GAP = "PATH_GAP"
@@ -799,6 +801,7 @@ def _compute_availability(
     q_l_ratios: list[float] = []
     flagged_formations = 0
     previous_members: set[str] = set()
+    previous_formation: date | None = None
     for formation in formations:
         members = by[formation]
         all_members = set(members)
@@ -813,9 +816,10 @@ def _compute_availability(
         long_available = not any_flag(long_members)
         short_available = not any_flag(short_members)
         gross[formation] = long_available and short_available
-        composition_members = all_members | previous_members
         composition_clean = not any(
-            (formation, key) in input_flag for key in composition_members
+            (formation, key) in input_flag for key in all_members
+        ) and not any(
+            (previous_formation, key) in input_flag for key in previous_members
         )
         net[formation] = gross[formation] and composition_clean
         ic[formation] = not any_flag(all_members)
@@ -839,6 +843,7 @@ def _compute_availability(
         if any((formation, key) in input_flag for key in all_members):
             flagged_formations += 1
         previous_members = all_members
+        previous_formation = formation
     return _Availability(
         formations=formations,
         gross=gross,
@@ -1427,6 +1432,8 @@ def classify_pq(
         return finish(STATUS_NOT_ASSESSED, A_STATISTIC_NOT_ASSESSED)
     if a_t0.value is None or a_ts.value is None:
         return finish(STATUS_NOT_ASSESSED, A_STATISTIC_NOT_ASSESSED)
+    if by_cell["B-T0"].passed is None or by_cell["B-TS"].passed is None:
+        return finish(STATUS_NOT_ASSESSED, B_SCREEN_NOT_ASSESSED)
     if by_cell["A-T0"].passed is None or by_cell["A-TS"].passed is None:
         return finish(STATUS_NOT_ASSESSED, A_SCREEN_NOT_ASSESSED)
 

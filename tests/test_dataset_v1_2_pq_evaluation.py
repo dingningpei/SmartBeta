@@ -1107,8 +1107,23 @@ def test_item08_composition_includes_previous() -> None:
         (F2, "C"): 1.0,
         (F2, "D"): 2.0,
     }
-    input_flag = {(F2, "A")}
-    availability = PQ._compute_availability(groups, input_flag, set(), 2, 1)
+    # A is contaminated at F1 and leaves at F2: the F2 cost is still tainted
+    # because U_{t-1} is tested against its flag at t-1.
+    availability = PQ._compute_availability(groups, {(F1, "A")}, set(), 2, 1)
+    assert availability.gross[F2] is True
+    assert availability.net[F2] is False
+
+
+def test_item08_composition_previous_stayer() -> None:
+    groups = {
+        (F1, "A"): 1.0,
+        (F1, "B"): 2.0,
+        (F2, "A"): 1.0,
+        (F2, "B"): 2.0,
+    }
+    # A is contaminated at F1 and stays in U_F2: net[F2] is unavailable even
+    # though the F2 input flag is clean.
+    availability = PQ._compute_availability(groups, {(F1, "A")}, set(), 2, 1)
     assert availability.gross[F2] is True
     assert availability.net[F2] is False
 
@@ -1233,6 +1248,17 @@ def test_item11_a_screen_none_blocks() -> None:
     record = PQ.classify_pq(diagnostics, _screens(diagnostics, a_t0=None))
     assert record.status == PQ.STATUS_NOT_ASSESSED
     assert record.not_assessed_reason == PQ.A_SCREEN_NOT_ASSESSED
+
+
+def test_item11_b_screen_none_blocks() -> None:
+    diagnostics = _make_diagnostics()
+    screens = [
+        dataclasses.replace(s, passed=None) if s.cell == "B-T0" else s
+        for s in _screens(diagnostics)
+    ]
+    record = PQ.classify_pq(diagnostics, screens)
+    assert record.status == PQ.STATUS_NOT_ASSESSED
+    assert record.not_assessed_reason == PQ.B_SCREEN_NOT_ASSESSED
 
 
 def test_item11_screen_missing_and_mismatch() -> None:
@@ -1657,8 +1683,8 @@ def test_item_purged_index_includes_purged(tmp_path: Path) -> None:
 def test_mutation_fixture_contract() -> None:
     path = REPO_ROOT / "tests/fixtures/dataset_v1_2/pqb/mutations.json"
     mutations = json.loads(path.read_text(encoding="utf-8"))
-    assert len(mutations) == 40
-    assert [m["id"] for m in mutations] == [f"B{i}" for i in range(1, 41)]
+    assert len(mutations) == 42
+    assert [m["id"] for m in mutations] == [f"B{i}" for i in range(1, 43)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/dataset_v1/pq_evaluation.py"

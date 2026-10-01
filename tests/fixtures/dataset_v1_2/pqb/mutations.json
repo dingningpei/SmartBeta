@@ -184,8 +184,8 @@
     "description": "the composition flag ignores U_{t-1}",
     "edits": [
       {
-        "old": "        composition_members = all_members | previous_members",
-        "new": "        composition_members = all_members"
+        "old": "        composition_clean = not any(\n            (formation, key) in input_flag for key in all_members\n        ) and not any(\n            (previous_formation, key) in input_flag for key in previous_members\n        )",
+        "new": "        composition_clean = not any(\n            (formation, key) in input_flag for key in all_members\n        )"
       }
     ],
     "file": "smart_beta/dataset_v1/pq_evaluation.py",
@@ -482,5 +482,29 @@
     ],
     "file": "smart_beta/dataset_v1/pq_evaluation.py",
     "test": "test_item_purged_index_includes_purged"
+  },
+  {
+    "id": "B41",
+    "description": "composition uses flags at t for U_{t-1}",
+    "edits": [
+      {
+        "old": "            (previous_formation, key) in input_flag for key in previous_members",
+        "new": "            (formation, key) in input_flag for key in previous_members"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item08_composition_includes_previous"
+  },
+  {
+    "id": "B42",
+    "description": "B screen None coerced to False",
+    "edits": [
+      {
+        "old": "    if by_cell[\"B-T0\"].passed is None or by_cell[\"B-TS\"].passed is None:\n        return finish(STATUS_NOT_ASSESSED, B_SCREEN_NOT_ASSESSED)\n    if by_cell[\"A-T0\"].passed is None or by_cell[\"A-TS\"].passed is None:",
+        "new": "    if by_cell[\"A-T0\"].passed is None or by_cell[\"A-TS\"].passed is None:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item11_b_screen_none_blocks"
   }
 ]
