@@ -140,6 +140,10 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _to_date(value: Any):
+    return Q._to_date(value)
+
+
 def _write_parquet(root: Path, rel: str, frame: pd.DataFrame) -> str:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,8 +307,16 @@ class _Store:
         self.identity.append((sk, ticker, listed_start, listed_end, "INTERVAL_ASSIGNED"))
         return sk
 
-    def flag(self, ticker: str, session: date) -> None:
-        self.flags.append((ticker, session, "CORP_ACTION_SUSPECT", "UNCERTIFIED_SEMANTICS"))
+    def flag(self, ticker: str, session: date, *, security_key: str | None = None) -> None:
+        key = security_key
+        if key is None:
+            for sk, tk, _start, _end, _state in self.identity:
+                if tk == ticker:
+                    key = sk
+                    break
+        if key is None:
+            raise AssertionError(f"no identity for ticker {ticker!r}")
+        self.flags.append((key, ticker, session, "CORP_ACTION_SUSPECT", "UNCERTIFIED_SEMANTICS"))
 
     def primitive(self, input_name: str, key: str, session: date, value: float = 1.0) -> None:
         row_date = _next(session)
@@ -338,10 +350,11 @@ class _Store:
         root = self.root
         day_flags = pd.DataFrame(
             {
-                "ticker": pd.Series([r[0] for r in self.flags], dtype="string"),
-                "date": pd.Series([r[1] for r in self.flags], dtype="datetime64[ns]"),
-                "class_or_flag": pd.Series([r[2] for r in self.flags], dtype="string"),
-                "disposition": pd.Series([r[3] for r in self.flags], dtype="string"),
+                "security_key": pd.Series([r[0] for r in self.flags], dtype="string"),
+                "ticker": pd.Series([r[1] for r in self.flags], dtype="string"),
+                "date": pd.Series([r[2] for r in self.flags], dtype="datetime64[ns]"),
+                "class_or_flag": pd.Series([r[3] for r in self.flags], dtype="string"),
+                "disposition": pd.Series([r[4] for r in self.flags], dtype="string"),
             }
         )
         identity = pd.DataFrame(
@@ -514,7 +527,8 @@ def test_item01_flag_sessions_boundaries() -> None:
     key = "TIINGO:AAA"
     day_flags = pd.DataFrame(
         {
-            "ticker": ["AAA", "AAA", "AAA", "AAA", "CCC", "DDD"],
+            "security_key": ["TIINGO:BBB", key, key, key, "TIINGO:CCC", "TIINGO:DDD"],
+            "ticker": ["BBB", "AAA", "AAA", "AAA", "CCC", "DDD"],
             "date": pd.to_datetime(
                 [date(2020, 1, 8), date(2019, 1, 2), date(2020, 1, 3),
                  date(2020, 1, 6), date(2023, 6, 30), date(2020, 1, 7)]
@@ -1279,8 +1293,8 @@ def test_item19_sparse_completeness(tmp_path: Path) -> None:
 def test_mutation_fixture_contract() -> None:
     path = Q._REPO_ROOT / "tests/fixtures/dataset_v1_2/pqa/mutations.json"
     mutations = json.loads(path.read_text(encoding="utf-8"))
-    assert len(mutations) == 40
-    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 41)]
+    assert len(mutations) == 48
+    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 49)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/dataset_v1/quarantine.py"
@@ -1316,3 +1330,338 @@ def test_item07b_unsupported_node() -> None:
 
     with pytest.raises(Q.UnsupportedQuarantineNode):
         Q._oracle_node(_Unsupported(), spec, overlay, inputs, template)
+
+
+# ===========================================================================
+# D1. flag key from D5 day_flags.security_key; fail closed on unmappable keys
+# ===========================================================================
+
+
+def _mini_day_flags(rows) -> pd.DataFrame:
+    return pd.DataFrame(
+        rows,
+        columns=["security_key", "ticker", "date", "class_or_flag", "disposition"],
+    )
+
+
+MINI_IDENTITY = pd.DataFrame(
+    {
+        "security_key": ["TIINGO:AAA"],
+        "ticker": ["AAA"],
+        "listed_start": pd.to_datetime([date(2019, 1, 2)]),
+        "listed_end": pd.to_datetime([date(2023, 6, 30)]),
+        "state": ["INTERVAL_ASSIGNED"],
+    }
+)
+
+
+def test_item20_flag_key_from_day_flags() -> None:
+    # security_key is authoritative; the (stale) ticker must be ignored.
+    day_flags = _mini_day_flags(
+        [("TIINGO:AAA", "ZZZ-NOT-IN-IDENTITY", date(2020, 1, 6),
+          "CORP_ACTION_SUSPECT", "x")]
+    )
+    flags = Q.compute_flag_panel(day_flags, MINI_IDENTITY, SESSIONS)
+    assert len(flags) == 1
+    assert flags.iloc[0].security_key == "TIINGO:AAA"
+
+
+def test_item20b_unmappable_key_raises() -> None:
+    day_flags = _mini_day_flags(
+        [("TIINGO:UNKNOWN", "UNKNOWN", date(2020, 1, 6),
+          "CORP_ACTION_SUSPECT", "x")]
+    )
+    with pytest.raises(Q.QuarantineInputError):
+        Q.compute_flag_panel(day_flags, MINI_IDENTITY, SESSIONS)
+
+
+def test_item20c_out_of_interval_raises() -> None:
+    # a trusted session that lies after the key's D4 interval end
+    day_flags = _mini_day_flags(
+        [("TIINGO:AAA", "AAA", date(2023, 7, 3),
+          "CORP_ACTION_SUSPECT", "x")]
+    )
+    with pytest.raises(Q.QuarantineInputError):
+        Q.compute_flag_panel(day_flags, MINI_IDENTITY, SESSIONS)
+
+
+def test_item20e_null_key_raises() -> None:
+    day_flags = _mini_day_flags(
+        [(None, "AAA", date(2020, 1, 6), "CORP_ACTION_SUSPECT", "x")]
+    )
+    with pytest.raises(Q.QuarantineInputError):
+        Q.compute_flag_panel(day_flags, MINI_IDENTITY, SESSIONS)
+
+
+def test_item20d_produced_flag_count_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _build_store(tmp_path, "produced", flag_session=date(2020, 1, 6))
+    original = Q.compute_flag_panel
+
+    def _drop_one(day_flags, identity, sessions):
+        frame = original(day_flags, identity, sessions)
+        return frame.iloc[:-1].reset_index(drop=True)
+
+    monkeypatch.setattr(Q, "compute_flag_panel", _drop_one)
+    with pytest.raises(Q.QuarantineInputError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+# ===========================================================================
+# D2. indexed logic equals the flat reference; scale budget
+# ===========================================================================
+
+
+def _reference_flag_panel(day_flags, identity_assignment, sessions):
+    sessions = list(sessions)
+    pos = {s: i for i, s in enumerate(sessions)}
+    intervals = [
+        (str(row.security_key), _to_date(row.listed_start), _to_date(row.listed_end))
+        for row in identity_assignment.itertuples(index=False)
+    ]
+    out = []
+    for row in day_flags.itertuples(index=False):
+        if row.class_or_flag != "CORP_ACTION_SUSPECT":
+            continue
+        key = str(row.security_key)
+        session = _to_date(row.date)
+        start = end = None
+        found = False
+        for sk, s0, s1 in intervals:
+            if sk != key:
+                continue
+            if s0 is not None and session < s0:
+                continue
+            if s1 is not None and session > s1:
+                continue
+            start, end, found = s0, s1, True
+            break
+        assert found, key
+        i = pos[session]
+        prev_session = next_session = None
+        if i > 0:
+            c = sessions[i - 1]
+            if (start is None or c >= start) and (end is None or c <= end):
+                prev_session = c
+        if i + 1 < len(sessions):
+            c = sessions[i + 1]
+            if (c <= Q.DEVELOPMENT_END and (start is None or c >= start)
+                    and (end is None or c <= end)):
+                next_session = c
+        beyond = bool(i + 1 < len(sessions) and sessions[i + 1] >= Q.RESERVE_START)
+        out.append((key, session, prev_session, next_session, beyond))
+    frame = pd.DataFrame(
+        out,
+        columns=["security_key", "flag_session", "prev_session", "next_session",
+                 "next_beyond_development"],
+    )
+    if len(frame):
+        frame = frame.sort_values(
+            ["security_key", "flag_session"], kind="mergesort"
+        ).reset_index(drop=True)
+    return frame
+
+
+def _reference_primitive_states(flags, present, tri_segments):
+    records: dict[tuple[str, str, date], tuple[int, str]] = {}
+
+    def _mark(p, k, s, state, reason):
+        if (k, s) not in present.get(p, set()):
+            return
+        current = records.get((p, k, s))
+        if current is None or current[0] < state:
+            records[(p, k, s)] = (state, reason)
+
+    for row in flags.itertuples(index=False):
+        key = str(row.security_key)
+        s = _to_date(row.flag_session)
+        pv = _to_date(row.prev_session)
+        nx = _to_date(row.next_session)
+        for t in (pv, s, nx):
+            if t is not None:
+                _mark(Q.INPUT_DAILY_TOTAL_RETURN, key, t, Q.STATE_QUARANTINED, "FLAG_ENDPOINT")
+        for t in (pv, s):
+            if t is not None:
+                _mark(Q.INPUT_DOLLAR_VOLUME, key, t, Q.STATE_QUARANTINED, "FLAG_ENDPOINT")
+    qd: dict[str, set] = {}
+    for (p, k, s), (_st, _rs) in records.items():
+        if p == Q.INPUT_DAILY_TOTAL_RETURN:
+            qd.setdefault(k, set()).add(s)
+    for seg in tri_segments:
+        if not bool(seg.get("admitted", False)):
+            continue
+        k = str(seg["security_key"])
+        a = _to_date(seg["anchor_session"])
+        l = _to_date(seg["last_session"])
+        if k not in qd or a is None or l is None:
+            continue
+        hits = sorted(s for s in qd[k] if a < s <= l)
+        if not hits:
+            continue
+        for k2, s2 in present.get(Q.INPUT_TOTAL_RETURN_INDEX, set()):
+            if k2 != k:
+                continue
+            if a < s2 <= l and s2 >= hits[0]:
+                records[(Q.INPUT_TOTAL_RETURN_INDEX, k, s2)] = (
+                    Q.STATE_PROPAGATED, "TRI_SEGMENT_PROPAGATION"
+                )
+    rows = [(p, k, s, st, rs) for (p, k, s), (st, rs) in records.items()]
+    frame = pd.DataFrame(
+        rows, columns=["primitive", "security_key", "session", "state", "reason"]
+    )
+    if len(frame):
+        frame = frame.sort_values(
+            ["primitive", "security_key", "session"], kind="mergesort"
+        ).reset_index(drop=True)
+    return frame
+
+
+def _medium_fixture(keys: int = 50, sessions: int = 60):
+    session_list = SESSIONS[100:100 + sessions]
+    pos = {s: i for i, s in enumerate(session_list)}
+    keys = [f"K{i}" for i in range(keys)]
+    rng = np.random.default_rng(11)
+    rows = []
+    tri_present = set()
+    daily_present = set()
+    dv_present = set()
+    segments = []
+    for key in keys:
+        for s in session_list:
+            daily_present.add((key, s))
+            dv_present.add((key, s))
+            tri_present.add((key, s))
+        for _ in range(2):
+            i = int(rng.integers(2, sessions - 2))
+            s = session_list[i]
+            rows.append((key, key, pd.Timestamp(s), "CORP_ACTION_SUSPECT", "x"))
+        a = session_list[0]
+        b = session_list[sessions // 2]
+        c = session_list[-1]
+        segments.append({"security_key": key, "anchor_session": a,
+                         "last_session": b, "admitted": True})
+        segments.append({"security_key": key, "anchor_session": b,
+                         "last_session": c, "admitted": True})
+    day_flags = pd.DataFrame(
+        rows,
+        columns=["security_key", "ticker", "date", "class_or_flag", "disposition"],
+    )
+    identity = pd.DataFrame(
+        {
+            "security_key": keys,
+            "ticker": keys,
+            "listed_start": pd.to_datetime([session_list[0]] * len(keys)),
+            "listed_end": pd.to_datetime([session_list[-1]] * len(keys)),
+            "state": ["INTERVAL_ASSIGNED"] * len(keys),
+        }
+    )
+    present = {
+        Q.INPUT_DAILY_TOTAL_RETURN: daily_present,
+        Q.INPUT_DOLLAR_VOLUME: dv_present,
+        Q.INPUT_TOTAL_RETURN_INDEX: tri_present,
+    }
+    return day_flags, identity, session_list, present, segments
+
+
+def test_item21_indexed_equivalence_to_reference() -> None:
+    # on the existing item-01 fixture shape
+    key = "TIINGO:AAA"
+    small_day = pd.DataFrame(
+        {
+            "security_key": ["TIINGO:BBB", key, key, key, "TIINGO:CCC", "TIINGO:DDD"],
+            "ticker": ["BBB", "AAA", "AAA", "AAA", "CCC", "DDD"],
+            "date": pd.to_datetime(
+                [date(2020, 1, 8), date(2019, 1, 2), date(2020, 1, 3),
+                 date(2020, 1, 6), date(2023, 6, 30), date(2020, 1, 7)]
+            ),
+            "class_or_flag": ["CORP_ACTION_SUSPECT"] * 6,
+            "disposition": ["x"] * 6,
+        }
+    )
+    small_identity = pd.DataFrame(
+        {
+            "security_key": [key, "TIINGO:BBB", "TIINGO:CCC", "TIINGO:DDD"],
+            "ticker": ["AAA", "BBB", "CCC", "DDD"],
+            "listed_start": pd.to_datetime(
+                [date(2019, 1, 2), date(2019, 1, 2), date(2019, 1, 2), date(2020, 1, 7)]
+            ),
+            "listed_end": pd.to_datetime(
+                [date(2020, 1, 6), date(2023, 6, 30), date(2023, 6, 30), date(2020, 1, 31)]
+            ),
+            "state": ["INTERVAL_ASSIGNED"] * 4,
+        }
+    )
+    small_flags = Q.compute_flag_panel(small_day, small_identity, SESSIONS)
+    pd.testing.assert_frame_equal(
+        small_flags, _reference_flag_panel(small_day, small_identity, SESSIONS)
+    )
+
+    day_flags, identity, sessions, present, segments = _medium_fixture()
+    flags = Q.compute_flag_panel(day_flags, identity, sessions)
+    reference_flags = _reference_flag_panel(day_flags, identity, sessions)
+    pd.testing.assert_frame_equal(flags, reference_flags)
+    states = Q.compute_primitive_states(flags, present=present, tri_segments=segments)
+    reference_states = _reference_primitive_states(flags, present, segments)
+    pd.testing.assert_frame_equal(states, reference_states)
+
+
+def test_item22_scale_within_budget() -> None:
+    import time
+
+    day_flags, identity, sessions, present, segments = _medium_fixture(
+        keys=2000, sessions=500
+    )
+    start = time.perf_counter()
+    flags = Q.compute_flag_panel(day_flags, identity, sessions)
+    states = Q.compute_primitive_states(flags, present=present, tri_segments=segments)
+    elapsed = time.perf_counter() - start
+    assert len(flags) == 4000
+    assert len(states) > 0
+    assert elapsed < 60.0, f"indexed build took {elapsed:.1f}s (> 60s budget)"
+
+
+# ===========================================================================
+# D3. D7a label consistency, fail closed
+# ===========================================================================
+
+
+def test_item23_label_consistency(tmp_path: Path) -> None:
+    key = "K1"
+    f = date(2020, 1, 2)
+    e = date(2020, 2, 3)
+    sessions = _sessions_between(date(2019, 12, 1), date(2020, 3, 1))
+    flags = pd.DataFrame(
+        columns=["security_key", "flag_session", "prev_session", "next_session",
+                 "next_beyond_development"],
+    )
+    columns = ["formation_date", "security_key", "h", "endpoint", "label_state",
+               "observed_segment_end"]
+    horizons = pd.DataFrame(
+        [(f, 21, e, False)],
+        columns=["formation_date", "h", "endpoint", "crosses_reserve"],
+    )
+    # observed end after endpoint fails closed
+    labels = pd.DataFrame(
+        [(f, key, 21, e, "OBSERVED_PATH_COMPLETE", date(2020, 2, 10))],
+        columns=columns,
+    )
+    with pytest.raises(Q.QuarantineConsistencyError):
+        Q.compute_label_states(labels, horizons, flags, sessions=sessions)
+    # observed end null on a non-EMPTY label with no determinable endpoint
+    labels2 = pd.DataFrame(
+        [(f, key, 21, None, "OBSERVED_PATH_COMPLETE", None)],
+        columns=columns,
+    )
+    horizons2 = pd.DataFrame(
+        [(f, 21, None, False)],
+        columns=["formation_date", "h", "endpoint", "crosses_reserve"],
+    )
+    with pytest.raises(Q.QuarantineConsistencyError):
+        Q.compute_label_states(labels2, horizons2, flags, sessions=sessions)
+    # observed end null but a determinable endpoint is usable (D7a clipping)
+    labels3 = pd.DataFrame(
+        [(f, key, 21, e, "OBSERVED_PATH_COMPLETE", None)],
+        columns=columns,
+    )
+    out = Q.compute_label_states(labels3, horizons, flags, sessions=sessions)
+    assert out.empty
+

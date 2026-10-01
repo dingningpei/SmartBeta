@@ -64,8 +64,8 @@
     "description": "TRI clears after segment re-anchor or after N sessions",
     "edits": [
       {
-        "old": "            if anchor < session[1] <= last and session[1] >= hits[0]:",
-        "new": "            if anchor < session[1] <= last and session[1] == hits[0]:"
+        "old": "        start = bisect.bisect_left(cells, first_hit)",
+        "new": "        start = bisect.bisect_right(cells, first_hit)"
       }
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
@@ -76,8 +76,8 @@
     "description": "TRI propagation starts at v >= anchor (anchor tainted)",
     "edits": [
       {
-        "old": "            if anchor < session[1] <= last and session[1] >= hits[0]:",
-        "new": "            if anchor <= session[1] <= last and session[1] >= anchor:"
+        "old": "        start = bisect.bisect_left(cells, first_hit)",
+        "new": "        start = bisect.bisect_left(cells, anchor)"
       }
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
@@ -352,8 +352,8 @@
     "description": "the flag count guard is disabled",
     "edits": [
       {
-        "old": "    if (\n        bindings.expected_flag_count is not None\n        and suspect_count != bindings.expected_flag_count\n    ):",
-        "new": "    if False:"
+        "old": "    if bindings.expected_flag_count is not None:\n        if suspect_count != bindings.expected_flag_count:\n            raise QuarantineInputError(\n                f\"CORP_ACTION_SUSPECT row count {suspect_count} != \"\n                f\"{bindings.expected_flag_count}\"\n            )\n        if len(flags) != bindings.expected_flag_count:\n            raise QuarantineInputError(\n                f\"produced flag count {len(flags)} != \"\n                f\"{bindings.expected_flag_count}\"\n            )",
+        "new": "    if False:\n        pass"
       }
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
@@ -478,5 +478,101 @@
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
     "test": "test_item19_sparse_completeness"
+  },
+  {
+    "id": "A41",
+    "description": "the flag key is re-derived from ticker (not D5 security_key)",
+    "edits": [
+      {
+        "old": "        raw_key = row.security_key",
+        "new": "        raw_key = row.ticker"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item20_flag_key_from_day_flags"
+  },
+  {
+    "id": "A42",
+    "description": "an out-of-interval flag key is skipped instead of failing closed",
+    "edits": [
+      {
+        "old": "        raise QuarantineInputError(\n            f\"CORP_ACTION_SUSPECT key {key!r} at {session} lies outside its \"\n            \"D4 interval\"\n        )",
+        "new": "        return None, None"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item20c_out_of_interval_raises"
+  },
+  {
+    "id": "A43",
+    "description": "a null flag key is skipped instead of failing closed",
+    "edits": [
+      {
+        "old": "        if raw_key is None or (isinstance(raw_key, float) and np.isnan(raw_key)):\n            raise QuarantineInputError(\n                \"a CORP_ACTION_SUSPECT row carries a null security_key\"\n            )",
+        "new": "        if raw_key is None or (isinstance(raw_key, float) and np.isnan(raw_key)):\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item20e_null_key_raises"
+  },
+  {
+    "id": "A44",
+    "description": "the produced-flag count guard is disabled",
+    "edits": [
+      {
+        "old": "        if len(flags) != bindings.expected_flag_count:\n            raise QuarantineInputError(\n                f\"produced flag count {len(flags)} != \"\n                f\"{bindings.expected_flag_count}\"\n            )",
+        "new": "        if False:\n            raise QuarantineInputError(\n                f\"produced flag count {len(flags)} != \"\n                f\"{bindings.expected_flag_count}\"\n            )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item20d_produced_flag_count_guard"
+  },
+  {
+    "id": "A45",
+    "description": "indexed TRI propagation starts at the segment anchor",
+    "edits": [
+      {
+        "old": "        for session in cells[start:end]:",
+        "new": "        for session in cells:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item04_tri_propagation"
+  },
+  {
+    "id": "A46",
+    "description": "indexed TRI propagation excludes the segment end",
+    "edits": [
+      {
+        "old": "        end = bisect.bisect_right(cells, last)",
+        "new": "        end = bisect.bisect_left(cells, last)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item04_tri_propagation"
+  },
+  {
+    "id": "A47",
+    "description": "the observed-end-after-endpoint label check is skipped",
+    "edits": [
+      {
+        "old": "                raise QuarantineConsistencyError(\n                    f\"label ({key}, f={formation}, h={h}) observed end \"\n                    f\"{observed_end} is after endpoint {endpoint}\"\n                )",
+        "new": "                pass"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item23_label_consistency"
+  },
+  {
+    "id": "A48",
+    "description": "the missing-endpoint label fail-closed is skipped",
+    "edits": [
+      {
+        "old": "            if endpoint is None:\n                raise QuarantineConsistencyError(\n                    f\"label ({key}, f={formation}, h={h}) has neither an \"\n                    \"observed segment end nor a determinable endpoint\"\n                )\n            effective_end = endpoint",
+        "new": "            effective_end = endpoint if endpoint is not None else formation"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item23_label_consistency"
   }
 ]

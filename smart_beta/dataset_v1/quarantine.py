@@ -21,6 +21,7 @@ no reserve read, and no Knowledge-PIT append.
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import os
@@ -771,34 +772,42 @@ def compute_flag_panel(
     identity_assignment: pd.DataFrame,
     sessions: Sequence[date],
 ) -> pd.DataFrame:
-    """Build the suspect-flag panel with trusted prev/next sessions."""
+    """Build the suspect-flag panel with trusted prev/next sessions.
+
+    The flag key is the D5 ``day_flags`` ``security_key`` (never re-derived
+    from ``ticker``).  Every ``CORP_ACTION_SUSPECT`` row produces exactly one
+    flag; a missing/blank key, an unknown key or an out-of-interval session
+    fails closed with :class:`QuarantineInputError` rather than being skipped.
+    """
+    if "security_key" not in day_flags.columns:
+        raise QuarantineInputError("D5 day_flags lacks the security_key column")
     sessions = list(sessions)
     pos = {s: i for i, s in enumerate(sessions)}
 
-    intervals: list[dict[str, Any]] = []
+    intervals_by_key: dict[str, list[tuple[date | None, date | None]]] = {}
     for row in identity_assignment.itertuples(index=False):
-        intervals.append(
-            {
-                "security_key": str(row.security_key),
-                "ticker": str(row.ticker),
-                "listed_start": _to_date(row.listed_start),
-                "listed_end": _to_date(row.listed_end),
-            }
+        key = str(row.security_key)
+        intervals_by_key.setdefault(key, []).append(
+            (_to_date(row.listed_start), _to_date(row.listed_end))
         )
-    intervals.sort(key=lambda item: (item["security_key"], item["listed_start"] or date.min))
+    for key in intervals_by_key:
+        intervals_by_key[key].sort(key=lambda item: (item[0] or date.min, item[1] or date.max))
 
-    def _key_for(ticker: str, session: date) -> str | None:
-        for item in intervals:
-            if item["ticker"] != ticker:
-                continue
-            start = item["listed_start"]
-            end = item["listed_end"]
+    def _containing_interval(key: str, session: date) -> tuple[date | None, date | None]:
+        for start, end in intervals_by_key.get(key, ()):
             if start is not None and session < start:
                 continue
             if end is not None and session > end:
                 continue
-            return item["security_key"]
-        return None
+            return start, end
+        if key not in intervals_by_key:
+            raise QuarantineInputError(
+                f"CORP_ACTION_SUSPECT key {key!r} is not in the D4 identity set"
+            )
+        raise QuarantineInputError(
+            f"CORP_ACTION_SUSPECT key {key!r} at {session} lies outside its "
+            "D4 interval"
+        )
 
     flags: list[tuple] = []
     suspect = day_flags[
@@ -806,29 +815,35 @@ def compute_flag_panel(
     ]
     for row in suspect.itertuples(index=False):
         session = _to_date(row.date)
-        ticker = str(row.ticker)
+        raw_key = row.security_key
+        if raw_key is None or (isinstance(raw_key, float) and np.isnan(raw_key)):
+            raise QuarantineInputError(
+                "a CORP_ACTION_SUSPECT row carries a null security_key"
+            )
+        security_key = str(raw_key)
+        if not security_key:
+            raise QuarantineInputError(
+                "a CORP_ACTION_SUSPECT row carries a blank security_key"
+            )
         if session is None:
-            continue
-        security_key = _key_for(ticker, session)
-        if security_key is None:
-            continue
-        start = None
-        end = None
-        for item in intervals:
-            if item["security_key"] == security_key:
-                start = item["listed_start"]
-                end = item["listed_end"]
-                break
+            raise QuarantineInputError(
+                f"CORP_ACTION_SUSPECT key {security_key!r} carries a null date"
+            )
+        start, end = _containing_interval(security_key, session)
         i = pos.get(session)
+        if i is None:
+            raise QuarantineInputError(
+                f"CORP_ACTION_SUSPECT session {session} is not a trusted session"
+            )
         prev_session = None
         next_session = None
-        if i is not None and i > 0:
+        if i > 0:
             candidate = sessions[i - 1]
             if (start is None or candidate >= start) and (
                 end is None or candidate <= end
             ):
                 prev_session = candidate
-        if i is not None and i + 1 < len(sessions):
+        if i + 1 < len(sessions):
             candidate = sessions[i + 1]
             if (
                 candidate <= DEVELOPMENT_END
@@ -837,9 +852,7 @@ def compute_flag_panel(
             ):
                 next_session = candidate
         beyond = bool(
-            i is not None
-            and i + 1 < len(sessions)
-            and sessions[i + 1] >= RESERVE_START
+            i + 1 < len(sessions) and sessions[i + 1] >= RESERVE_START
         )
         flags.append(
             (security_key, session, prev_session, next_session, beyond)
@@ -896,33 +909,44 @@ def compute_primitive_states(
                 )
 
     # TRI: structural propagation from an admitted segment anchor onward.
-    quarantined_daily: dict[str, set[date]] = {}
+    # Indexed per key (sorted sessions + bisect) so the build stays tractable
+    # at the real grid size; the result is identical to the flat scan.
+    quarantined_daily: dict[str, list[date]] = {}
     for (primitive, key, session), (state, _reason) in records.items():
         if primitive == INPUT_DAILY_TOTAL_RETURN:
-            quarantined_daily.setdefault(key, set()).add(session)
+            quarantined_daily.setdefault(key, []).append(session)
+    for key in quarantined_daily:
+        quarantined_daily[key].sort()
+    tri_present: dict[str, list[date]] = {}
+    for key, session in present.get(INPUT_TOTAL_RETURN_INDEX, set()):
+        tri_present.setdefault(key, []).append(session)
+    for key in tri_present:
+        tri_present[key].sort()
     for segment in tri_segments:
         if not bool(segment.get("admitted", False)):
             continue
         key = str(segment["security_key"])
         anchor = _to_date(segment["anchor_session"])
         last = _to_date(segment["last_session"])
-        if key not in quarantined_daily or anchor is None or last is None:
+        hits = quarantined_daily.get(key)
+        if not hits or anchor is None or last is None:
             continue
-        hits = sorted(
-            session
-            for session in quarantined_daily[key]
-            if anchor < session <= last
-        )
-        if not hits:
+        first_index = bisect.bisect_right(hits, anchor)
+        if first_index >= len(hits):
             continue
-        for session in present.get(INPUT_TOTAL_RETURN_INDEX, set()):
-            if session[0] != key:
-                continue
-            if anchor < session[1] <= last and session[1] >= hits[0]:
-                records[(INPUT_TOTAL_RETURN_INDEX, key, session[1])] = (
-                    STATE_PROPAGATED,
-                    "TRI_SEGMENT_PROPAGATION",
-                )
+        first_hit = hits[first_index]
+        if first_hit > last:
+            continue
+        cells = tri_present.get(key)
+        if not cells:
+            continue
+        start = bisect.bisect_left(cells, first_hit)
+        end = bisect.bisect_right(cells, last)
+        for session in cells[start:end]:
+            records[(INPUT_TOTAL_RETURN_INDEX, key, session)] = (
+                STATE_PROPAGATED,
+                "TRI_SEGMENT_PROPAGATION",
+            )
 
     rows = [
         (primitive, key, session, state, reason)
@@ -1007,16 +1031,32 @@ def compute_label_states(
         label_state = str(getattr(row, "label_state", ""))
         endpoint = _to_date(getattr(row, "endpoint", None))
         listed_end = _to_date(getattr(row, "listed_end", None))
+        if formation is None:
+            raise QuarantineConsistencyError(
+                f"label ({key}, h={h}) has no formation date"
+            )
         if label_state == "EMPTY_OBSERVED_PATH_IDENTITY":
             effective_end = formation
         elif observed_end is not None:
+            if endpoint is not None and observed_end > endpoint:
+                raise QuarantineConsistencyError(
+                    f"label ({key}, f={formation}, h={h}) observed end "
+                    f"{observed_end} is after endpoint {endpoint}"
+                )
             effective_end = observed_end
         else:
+            if endpoint is None:
+                raise QuarantineConsistencyError(
+                    f"label ({key}, f={formation}, h={h}) has neither an "
+                    "observed segment end nor a determinable endpoint"
+                )
             effective_end = endpoint
-            if listed_end is not None and effective_end is not None:
+            if listed_end is not None:
                 effective_end = min(effective_end, listed_end)
-        if formation is None or effective_end is None:
-            continue
+        if effective_end is None:
+            raise QuarantineConsistencyError(
+                f"label ({key}, f={formation}, h={h}) has no determinable end"
+            )
         reason: str | None = None
         if effective_end == DEVELOPMENT_END:
             reason = "UNDETERMINABLE_RESERVE_BOUNDARY"
@@ -1591,7 +1631,7 @@ def build_overlay(
 
     day_flags = resolver.read_parquet(
         _stage_file(bindings, "D5", 0),
-        columns=["ticker", "date", "class_or_flag", "disposition"],
+        columns=["security_key", "ticker", "date", "class_or_flag", "disposition"],
     )
     identity = resolver.read_parquet(
         _stage_file(bindings, "D4", 0),
@@ -1663,14 +1703,17 @@ def build_overlay(
     suspect_count = int(
         (day_flags["class_or_flag"] == "CORP_ACTION_SUSPECT").sum()
     )
-    if (
-        bindings.expected_flag_count is not None
-        and suspect_count != bindings.expected_flag_count
-    ):
-        raise QuarantineInputError(
-            f"CORP_ACTION_SUSPECT flag count {suspect_count} != "
-            f"{bindings.expected_flag_count}"
-        )
+    if bindings.expected_flag_count is not None:
+        if suspect_count != bindings.expected_flag_count:
+            raise QuarantineInputError(
+                f"CORP_ACTION_SUSPECT row count {suspect_count} != "
+                f"{bindings.expected_flag_count}"
+            )
+        if len(flags) != bindings.expected_flag_count:
+            raise QuarantineInputError(
+                f"produced flag count {len(flags)} != "
+                f"{bindings.expected_flag_count}"
+            )
     present: dict[str, set[tuple[str, date]]] = {}
     for name, long in long_rows.items():
         cells: set[tuple[str, date]] = set()
