@@ -1,0 +1,486 @@
+[
+  {
+    "id": "B1",
+    "description": "recompute the group mean without the flagged member (renormalize)",
+    "edits": [
+      {
+        "old": "    out = np.full(b.shape, float(\"nan\"), dtype=\"float64\")\n    np.copyto(out, b, where=avail)",
+        "new": "    out = np.full(b.shape, float(\"nan\"), dtype=\"float64\")\n    np.copyto(out, b, where=avail)\n    out[~avail] = float(np.nanmean(b))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item01_a_equals_b_bitwise_random"
+  },
+  {
+    "id": "B2",
+    "description": "set a flagged member's return to 0",
+    "edits": [
+      {
+        "old": "    out = np.full(b.shape, float(\"nan\"), dtype=\"float64\")\n    np.copyto(out, b, where=avail)",
+        "new": "    out = np.full(b.shape, float(\"nan\"), dtype=\"float64\")\n    np.copyto(out, b, where=avail)\n    out[~avail] = 0.0"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item01_a_equals_b_bitwise_random"
+  },
+  {
+    "id": "B3",
+    "description": "treat flagged weight as cash (scale down)",
+    "edits": [
+      {
+        "old": "    np.copyto(out, b, where=avail)",
+        "new": "    np.copyto(out, b * 0.5, where=avail)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item01_a_equals_b_bitwise_random"
+  },
+  {
+    "id": "B4",
+    "description": "regroup after removing flagged members",
+    "edits": [
+      {
+        "old": "        members = by[formation]",
+        "new": "        members = {\n            k: g\n            for k, g in by[formation].items()\n            if (formation, k) not in input_flag\n            and (formation, k) not in label_flag\n        }"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item03_single_flag_drops_group_period"
+  },
+  {
+    "id": "B5",
+    "description": "winsorize/leg-select after removal",
+    "edits": [
+      {
+        "old": "        long_members = [key for key, group in members.items() if group == long_group]",
+        "new": "        long_members = [\n            key\n            for key, group in members.items()\n            if group == long_group\n            and (formation, key) not in input_flag\n            and (formation, key) not in label_flag\n        ]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item03_single_flag_drops_group_period"
+  },
+  {
+    "id": "B6",
+    "description": "IC pairwise deletion",
+    "edits": [
+      {
+        "old": "        ic[formation] = not any_flag(all_members)",
+        "new": "        ic[formation] = True"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item05_ic_period_availability"
+  },
+  {
+    "id": "B7",
+    "description": "rank-IC re-rank survivors",
+    "edits": [
+      {
+        "old": "    if metric in (_spec.MetricKey.IC, _spec.MetricKey.RANK_IC):\n        return availability.ic",
+        "new": "    if metric is _spec.MetricKey.RANK_IC:\n        return availability.gross\n    if metric is _spec.MetricKey.IC:\n        return availability.ic"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item05_rank_ic_uses_same_mask"
+  },
+  {
+    "id": "B8",
+    "description": "compressed newey_west_ols for A",
+    "edits": [
+      {
+        "old": "        result: GapAwareHACResult = gap_aware_mean_tstat(a, lags=lags)",
+        "new": "        _m, _t, _n = _metrics._newey_west_aggregate(a)\n        result = GapAwareHACResult(\n            float(_m), float(_t), int(_n), int(a.size), 0, \"OK\",\n            int(lags) if lags is not None else 0,\n        )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item06_gap_hac_never_calls_compressed"
+  },
+  {
+    "id": "B9",
+    "description": "fall back to compressed HAC when the PQC status is not OK",
+    "edits": [
+      {
+        "old": "        if result.status != \"OK\":\n            if sign == -1 and value is not None:",
+        "new": "        if result.status != \"OK\":\n            _m, _t, _n = _metrics._newey_west_aggregate(a)\n            return _AStat(\n                _finite_or_none(_m), _finite_or_none(_m), _finite_or_none(_t),\n                None, int(_n), mask,\n            )\n        if result.status != \"OK\":\n            if sign == -1 and value is not None:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item06_no_fallback_on_non_ok"
+  },
+  {
+    "id": "B10",
+    "description": "stitch the drawdown across gaps",
+    "edits": [
+      {
+        "old": "        if interior_gaps(a) > 0:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item07_drawdown_path_gap"
+  },
+  {
+    "id": "B11",
+    "description": "the drawdown ignores interior gaps",
+    "edits": [
+      {
+        "old": "        if interior_gaps(a) > 0:",
+        "new": "        if interior_gaps(a) < 0:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item07_drawdown_path_gap"
+  },
+  {
+    "id": "B12",
+    "description": "the long-short requires only one leg",
+    "edits": [
+      {
+        "old": "        gross[formation] = long_available and short_available",
+        "new": "        gross[formation] = long_available or short_available"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item08_availability_requires_both_legs"
+  },
+  {
+    "id": "B13",
+    "description": "group availability checks label flags only",
+    "edits": [
+      {
+        "old": "        any_flag = lambda keys: any(\n            (formation, key) in input_flag or (formation, key) in label_flag\n            for key in keys\n        )",
+        "new": "        any_flag = lambda keys: any(\n            (formation, key) in label_flag\n            for key in keys\n        )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item03_single_flag_drops_group_period"
+  },
+  {
+    "id": "B14",
+    "description": "checks input flags only",
+    "edits": [
+      {
+        "old": "        any_flag = lambda keys: any(\n            (formation, key) in input_flag or (formation, key) in label_flag\n            for key in keys\n        )",
+        "new": "        any_flag = lambda keys: any(\n            (formation, key) in input_flag\n            for key in keys\n        )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item03_label_flag_drops_group_period"
+  },
+  {
+    "id": "B15",
+    "description": "IC availability checks leg members only",
+    "edits": [
+      {
+        "old": "        ic[formation] = not any_flag(all_members)",
+        "new": "        ic[formation] = not (any_flag(long_members) and any_flag(short_members))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item03_short_leg_flag_drops_ic"
+  },
+  {
+    "id": "B16",
+    "description": "the composition flag ignores U_{t-1}",
+    "edits": [
+      {
+        "old": "        composition_members = all_members | previous_members",
+        "new": "        composition_members = all_members"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item08_composition_includes_previous"
+  },
+  {
+    "id": "B17",
+    "description": "net available when only gross is clean",
+    "edits": [
+      {
+        "old": "        net[formation] = gross[formation] and composition_clean",
+        "new": "        net[formation] = gross[formation]"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item08_composition_includes_previous"
+  },
+  {
+    "id": "B18",
+    "description": "cost recomputed from survivors",
+    "edits": [
+      {
+        "old": "    if metric is _spec.MetricKey.TURNOVER_COST_ADJUSTED:\n        return scenario.net",
+        "new": "    if metric is _spec.MetricKey.TURNOVER_COST_ADJUSTED:\n        return scenario.gross"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item08_net_uses_cost_series"
+  },
+  {
+    "id": "B19",
+    "description": "A value taken from a recomputation instead of the B mask",
+    "edits": [
+      {
+        "old": "    np.copyto(out, b, where=avail)",
+        "new": "    np.copyto(out, b + 1.0, where=avail)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item01_a_equals_b_bitwise_random"
+  },
+  {
+    "id": "B20",
+    "description": "flags differ between T0 and TS",
+    "edits": [
+      {
+        "old": "        available = np.array(\n            [_available_for_metric(availability, metric).get(f, False) for f in index],\n            dtype=bool,\n        )",
+        "new": "        if scenario_name == SCENARIO_TS:\n            available = np.ones(len(index), dtype=bool)\n        else:\n            available = np.array(\n                [_available_for_metric(availability, metric).get(f, False) for f in index],\n                dtype=bool,\n            )"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item04_flags_shared_across_scenarios"
+  },
+  {
+    "id": "B21",
+    "description": "per-estimand parameter override accepted",
+    "edits": [
+      {
+        "old": "        if tuple(self.estimands) != ESTIMANDS:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item13_declaration_rejects_per_estimand_override"
+  },
+  {
+    "id": "B22",
+    "description": "the A screen NOT_ASSESSED treated as failed",
+    "edits": [
+      {
+        "old": "    if by_cell[\"A-T0\"].passed is None or by_cell[\"A-TS\"].passed is None:\n        return finish(STATUS_NOT_ASSESSED, A_SCREEN_NOT_ASSESSED)",
+        "new": "    if by_cell[\"A-T0\"].passed is False or by_cell[\"A-TS\"].passed is False:\n        return finish(STATUS_NOT_ASSESSED, A_SCREEN_NOT_ASSESSED)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item11_a_screen_none_blocks"
+  },
+  {
+    "id": "B23",
+    "description": "the A screen NOT_ASSESSED treated as passed",
+    "edits": [
+      {
+        "old": "    if by_cell[\"A-T0\"].passed is None or by_cell[\"A-TS\"].passed is None:\n        return finish(STATUS_NOT_ASSESSED, A_SCREEN_NOT_ASSESSED)",
+        "new": "    if False:\n        return finish(STATUS_NOT_ASSESSED, A_SCREEN_NOT_ASSESSED)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item11_a_screen_none_blocks"
+  },
+  {
+    "id": "B24",
+    "description": "clause (c) uses >=",
+    "edits": [
+      {
+        "old": "            (q_s is not None and q_s > KAPPA * q_b)",
+        "new": "            (q_s is not None and q_s >= KAPPA * q_b)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item10_clause_c_boundaries"
+  },
+  {
+    "id": "B25",
+    "description": "clause (c) omits the long leg",
+    "edits": [
+      {
+        "old": "            (q_s is not None and q_s > KAPPA * q_b)\n            or (q_l is not None and q_l > KAPPA * q_b)",
+        "new": "            (q_s is not None and q_s > KAPPA * q_b)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item10_clause_c_boundaries"
+  },
+  {
+    "id": "B26",
+    "description": "clause (c) omits the Q_B = 0 branch",
+    "edits": [
+      {
+        "old": "            (q_s is not None and q_s > KAPPA * q_b)\n            or (q_l is not None and q_l > KAPPA * q_b)\n            or (q_b == 0.0 and ((q_s or 0.0) > 0.0 or (q_l or 0.0) > 0.0))",
+        "new": "            (q_b != 0.0 and q_s is not None and q_s > KAPPA * q_b)\n            or (q_b != 0.0 and q_l is not None and q_l > KAPPA * q_b)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item10_clause_c_boundaries"
+  },
+  {
+    "id": "B27",
+    "description": "clause (b) only one direction",
+    "edits": [
+      {
+        "old": "    clause_b_t0 = bool(screens[\"A-T0\"].passed) != bool(screens[\"B-T0\"].passed)",
+        "new": "    clause_b_t0 = bool(screens[\"B-T0\"].passed) and not bool(screens[\"A-T0\"].passed)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item10_clause_b_either_direction"
+  },
+  {
+    "id": "B28",
+    "description": "add an effect-size clause",
+    "edits": [
+      {
+        "old": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts",
+        "new": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts\n    clause_c = clause_c or abs((a_t0.value or 0.0) - (b_t0.value or 0.0)) > 0.5\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item10_no_effect_size_clause"
+  },
+  {
+    "id": "B29",
+    "description": "complement statistics enter the classification",
+    "edits": [
+      {
+        "old": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts",
+        "new": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts\n    clause_c = clause_c or any(\n        value is not None and value != 0.0 for _name, value in diagnostics.cs3\n    )\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item09_classification_invariant_to_complement"
+  },
+  {
+    "id": "B30",
+    "description": "CS-2 decision",
+    "edits": [
+      {
+        "old": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts",
+        "new": "    clause_a = clause_a_t0 or clause_a_ts\n    clause_b = clause_b_t0 or clause_b_ts or any(\n        value is not None for _name, value in diagnostics.cs3\n    )\n    return clause_a, clause_b, clause_c, clause_a_t0, clause_a_ts, clause_b_t0, clause_b_ts"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item09_classification_invariant_to_complement"
+  },
+  {
+    "id": "B31",
+    "description": "DELISTING for A skipped",
+    "edits": [
+      {
+        "old": "    delisting_a = _delisting_status(\n        a_t0.value,\n        a_ts.value,\n        diagnostics.e_s,\n        diagnostics.b,\n        by_cell[\"A-T0\"].passed,\n        by_cell[\"A-TS\"].passed,\n    )",
+        "new": "    delisting_a = DELISTING_NOT_SENSITIVE"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item12_delisting_coexistence"
+  },
+  {
+    "id": "B32",
+    "description": "DELISTING for B skipped",
+    "edits": [
+      {
+        "old": "        delisting_b = _d7b.classify_delisting_sensitivity(\n            diag_b, screen_b_t0, screen_b_ts\n        ).status",
+        "new": "        delisting_b = DELISTING_NOT_SENSITIVE"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item12_delisting_coexistence"
+  },
+  {
+    "id": "B33",
+    "description": "advancement unblocked on NOT_ASSESSED",
+    "edits": [
+      {
+        "old": "        advancement_blocked = not (\n            status != STATUS_NOT_ASSESSED\n            and not quarantine_sensitive",
+        "new": "        advancement_blocked = not (\n            not quarantine_sensitive"
+      },
+      {
+        "old": "        delisting_a: str = DELISTING_NOT_ASSESSED,\n        delisting_b: str = DELISTING_NOT_ASSESSED,",
+        "new": "        delisting_a: str = DELISTING_NOT_SENSITIVE,\n        delisting_b: str = DELISTING_NOT_SENSITIVE,"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item11_a_statistic_not_assessed_blocks"
+  },
+  {
+    "id": "B34",
+    "description": "holdout fold evaluated",
+    "edits": [
+      {
+        "old": "    if diag_b.not_assessed is not None:",
+        "new": "    if diag_b.not_assessed is not None and diag_b.not_assessed != _d7b.NOT_ASSESSED_FINAL_HOLDOUT_OVERLAP:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item14_holdout_fold_not_assessed"
+  },
+  {
+    "id": "B35",
+    "description": "skip the identity verification",
+    "edits": [
+      {
+        "old": "        identity_hash = _pqa.verify_dataset_v1_2_identity(\n            root,\n            bindings=pq_bindings,\n            repo_root=pq_repo_root,\n            knowledge_log_path=pq_knowledge_log_path,\n            read_records_fn=pq_read_records_fn,\n        )",
+        "new": "        identity_hash = declaration.dataset_identity_hash"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item13_wrong_dataset_identity"
+  },
+  {
+    "id": "B36",
+    "description": "skip the overlay hash check",
+    "edits": [
+      {
+        "old": "    if overlay.pq_id != declaration.pq_id or overlay.pq_hash != declaration.pq_hash:",
+        "new": "    if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item13_wrong_overlay_hash"
+  },
+  {
+    "id": "B37",
+    "description": "accept the wrong quarantine_rule_hash",
+    "edits": [
+      {
+        "old": "    if declaration.quarantine_rule_hash != QUARANTINE_RULE_HASH:\n        return QUARANTINE_RULE_HASH_MISMATCH",
+        "new": "    if False:\n        return QUARANTINE_RULE_HASH_MISMATCH"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item13_wrong_rule_hash"
+  },
+  {
+    "id": "B38",
+    "description": "skip B reconciliation",
+    "edits": [
+      {
+        "old": "    _reconcile_b((scenario_t0, scenario_ts), diag_b, sign=int(factor_spec.sign))",
+        "new": "    pass"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item16_b_reconciliation_failure"
+  },
+  {
+    "id": "B39",
+    "description": "factor-panel mismatch tolerated",
+    "edits": [
+      {
+        "old": ") -> bool:\n    allowed = set(formations)",
+        "new": ") -> bool:\n    return True\n    allowed = set(formations)"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item15_factor_panel_mismatch"
+  },
+  {
+    "id": "B40",
+    "description": "purged formations removed from the index (compression via index)",
+    "edits": [
+      {
+        "old": "    index = tuple(sorted(set(diag_b.formations) | purged_dates))",
+        "new": "    index = tuple(sorted(set(diag_b.formations)))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "test": "test_item_purged_index_includes_purged"
+  }
+]
