@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from smart_beta.dataset_v1 import delisting_bridge as _d7b
+from smart_beta.dataset_v1 import pq_reporting as _pq_reporting
 from smart_beta.dataset_v1 import quarantine as _pqa
 from smart_beta.engines.gap_hac import GapAwareHACResult, gap_aware_mean_tstat
 from smart_beta.evaluation import metrics as _metrics
@@ -193,6 +194,9 @@ PINNED_CODE: dict[str, str] = {
     # merged commits' bytes.
     "smart_beta/dataset_v1/quarantine.py": (
         "3d3bff02294b452d797c262f8232a4abaa51d55d05b521f2635156dec3323a1c"
+    ),
+    "smart_beta/dataset_v1/pq_reporting.py": (
+        "8a892999a4b887b92a212a53571f1e28cbec63ca976741f13175b75a432341dd"
     ),
     "smart_beta/engines/gap_hac.py": (
         "d0dd6298aabfeb82e0ce7d7ed62937616cc47e5a40e4a2e38bfea0ea9ee85424"
@@ -1232,11 +1236,11 @@ def build_pq_diagnostics(
         ).sum()
     )
 
-    # Step 12 - residual cross-sectional influence.
-    residual_total = 0
-    residual_map = states.attrs.get("residual_cs_cells", {})
-    for value in residual_map.values():
-        residual_total += int(value)
+    # Step 12 - residual cross-sectional influence (O1 structural definition).
+    residual_frame = _pq_reporting.structural_residual_cs(
+        factor_spec, overlay=overlay, inputs=inputs
+    )
+    residual_total = int(residual_frame.attrs["total_residual_cs_cells"])
 
     # Step 13 - liquidity exposure (report-only).
     liquidity = overlay.liquidity_exposure
