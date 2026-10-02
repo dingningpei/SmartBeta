@@ -63,6 +63,9 @@ __all__ = [
     "STATE_PROPAGATED",
     "STATE_NOT_APPLICABLE",
     "INPUT_NAMES",
+    "CLASS_S_COLUMNS",
+    "CLASS_M_COLUMNS",
+    "CLASS_E_COLUMNS",
     "DATASET_ID",
     "PARENT_DATASET_ID",
     "QUARANTINE_RULE_HASH",
@@ -130,6 +133,29 @@ INPUT_NAMES = (
     INPUT_TOTAL_RETURN_INDEX,
     INPUT_DOLLAR_VOLUME,
 )
+
+# E3.2 corrected post-load reserve assertion: the date columns read by
+# :func:`build_overlay` fall into three classes.  Class S is strict (every
+# non-null value must be <= 2023-06-30); class M (D4 listing intervals) is
+# loaded as metadata and clipped to the development window before use; class E
+# (calendar-derived endpoints) is allowed past the boundary only on a horizon
+# that crosses the reserve.
+CLASS_S_COLUMNS: Mapping[str, tuple[str, ...]] = {
+    "day_flags": ("date",),
+    "labels": ("formation_date", "observed_segment_end"),
+    "members": ("formation_date", "listed_end_dev"),
+    "horizons": ("formation_date",),
+    "universe": ("formation_date",),
+    "segments": ("anchor_session", "last_session"),
+    "long_rows": ("row_date", "source_session"),
+}
+CLASS_M_COLUMNS: Mapping[str, tuple[str, ...]] = {
+    "identity": ("listed_start", "listed_end"),
+}
+CLASS_E_COLUMNS: Mapping[str, tuple[str, ...]] = {
+    "labels": ("endpoint",),
+    "horizons": ("endpoint",),
+}
 
 DATASET_ID = "discovery_dataset_v1_2"
 PARENT_DATASET_ID = "discovery_dataset_v1_1"
@@ -598,6 +624,8 @@ def _to_date(value: Any) -> date | None:
     if isinstance(value, float) and np.isnan(value):
         return None
     if isinstance(value, datetime):
+        if pd.isna(value):
+            return None
         return value.date()
     if isinstance(value, date):
         return value
@@ -620,6 +648,72 @@ def _assert_dates_development(frame: pd.DataFrame, columns: Sequence[str]) -> No
                 raise ReserveFirewallError(
                     f"{column} holds a reserve date {value}"
                 )
+
+
+def _development_intervals(
+    identity_assignment: pd.DataFrame,
+) -> dict[str, list[tuple[date | None, date | None]]]:
+    """Clip D4 listing intervals to the development window (E3.2 class M).
+
+    ``listed_end`` is loaded as metadata and clipped to 2023-06-30 before use;
+    a key whose ``listed_start`` lies after the boundary has no development
+    interval and is omitted from the map, so a development flag on it fails
+    closed.  No session after 2023-06-30 can be derived from these values.
+    """
+    intervals_by_key: dict[str, list[tuple[date | None, date | None]]] = {}
+    for row in identity_assignment.itertuples(index=False):
+        key = str(row.security_key)
+        start = _to_date(row.listed_start)
+        end = _to_date(row.listed_end)
+        if start is not None and start > DEVELOPMENT_END:
+            continue
+        if end is None:
+            end = DEVELOPMENT_END
+        else:
+            end = min(end, DEVELOPMENT_END)
+        intervals_by_key.setdefault(key, []).append((start, end))
+    for key in intervals_by_key:
+        intervals_by_key[key].sort(
+            key=lambda item: (item[0] or date.min, item[1] or date.max)
+        )
+    return intervals_by_key
+
+
+def _assert_endpoints_class_e(
+    labels: pd.DataFrame, horizons: pd.DataFrame
+) -> None:
+    """Allow a post-boundary calendar endpoint only on a crossing horizon.
+
+    Class E of E3.2: ``endpoint`` is calendar-derived and may exceed the
+    development window.  Every such value must belong to a ``(formation, h)``
+    whose horizon has ``crosses_reserve == true``; otherwise the build fails
+    closed.  Reserve-crossing labels stay excluded from the label calculus.
+    """
+    crossing: set[tuple[date | None, int]] = set()
+    for row in horizons.itertuples(index=False):
+        if bool(row.crosses_reserve):
+            crossing.add((_to_date(row.formation_date), int(row.h)))
+    for row in horizons.itertuples(index=False):
+        endpoint = _to_date(row.endpoint)
+        if (
+            endpoint is not None
+            and endpoint >= RESERVE_START
+            and not bool(row.crosses_reserve)
+        ):
+            raise ReserveFirewallError(
+                f"horizon endpoint {endpoint} is a reserve date but its "
+                "horizon does not cross the reserve"
+            )
+    for row in labels.itertuples(index=False):
+        endpoint = _to_date(row.endpoint)
+        if endpoint is None or endpoint < RESERVE_START:
+            continue
+        key = (_to_date(row.formation_date), int(row.h))
+        if key not in crossing:
+            raise ReserveFirewallError(
+                f"label endpoint {endpoint} is a reserve date but its "
+                "horizon does not cross the reserve"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -825,14 +919,7 @@ def compute_flag_panel(
     sessions = list(sessions)
     pos = {s: i for i, s in enumerate(sessions)}
 
-    intervals_by_key: dict[str, list[tuple[date | None, date | None]]] = {}
-    for row in identity_assignment.itertuples(index=False):
-        key = str(row.security_key)
-        intervals_by_key.setdefault(key, []).append(
-            (_to_date(row.listed_start), _to_date(row.listed_end))
-        )
-    for key in intervals_by_key:
-        intervals_by_key[key].sort(key=lambda item: (item[0] or date.min, item[1] or date.max))
+    intervals_by_key = _development_intervals(identity_assignment)
 
     def _containing_interval(key: str, session: date) -> tuple[date | None, date | None]:
         for start, end in intervals_by_key.get(key, ()):
@@ -886,10 +973,10 @@ def compute_flag_panel(
                 prev_session = candidate
         if i + 1 < len(sessions):
             candidate = sessions[i + 1]
-            if (
-                candidate <= DEVELOPMENT_END
-                and (start is None or candidate >= start)
-                and (end is None or candidate <= end)
+            # ``end`` is clipped to DEVELOPMENT_END (E3.2 class M), so a
+            # reserve session can never become next(s).
+            if (start is None or candidate >= start) and (
+                end is None or candidate <= end
             ):
                 next_session = candidate
         beyond = bool(
@@ -1718,16 +1805,18 @@ def build_overlay(
             columns=["row_date", "security_key", "source_session", "value"],
         )
 
-    for frame in (
-        day_flags, identity, labels, members, horizons, universe, segments,
-        *long_rows.values(),
-    ):
-        _assert_dates_development(
-            frame,
-            ("date", "listed_start", "listed_end", "formation_date", "endpoint",
-             "observed_segment_end", "anchor_session", "last_session", "row_date",
-             "source_session"),
-        )
+    # E3.2 class S — strict market / event / schedule-in-development dates.
+    _assert_dates_development(day_flags, CLASS_S_COLUMNS["day_flags"])
+    _assert_dates_development(labels, CLASS_S_COLUMNS["labels"])
+    _assert_dates_development(members, CLASS_S_COLUMNS["members"])
+    _assert_dates_development(horizons, CLASS_S_COLUMNS["horizons"])
+    _assert_dates_development(universe, CLASS_S_COLUMNS["universe"])
+    _assert_dates_development(segments, CLASS_S_COLUMNS["segments"])
+    for long in long_rows.values():
+        _assert_dates_development(long, CLASS_S_COLUMNS["long_rows"])
+
+    # E3.2 class E — calendar-derived endpoints (post-boundary only on crossings).
+    _assert_endpoints_class_e(labels, horizons)
 
     session_pos = {s: i for i, s in enumerate(sessions)}
     for name in INPUT_NAMES:

@@ -646,5 +646,77 @@
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
     "test": "test_item24_production_bindings_complete"
+  },
+  {
+    "id": "A55",
+    "description": "apply the strict assertion to D4 listed_start / listed_end (the original defect)",
+    "edits": [
+      {
+        "old": "    _assert_dates_development(day_flags, CLASS_S_COLUMNS[\"day_flags\"])",
+        "new": "    _assert_dates_development(day_flags, CLASS_S_COLUMNS[\"day_flags\"])\n    _assert_dates_development(identity, CLASS_M_COLUMNS[\"identity\"])"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item29_e3_class_m_clipping"
+  },
+  {
+    "id": "A56",
+    "description": "skip the strict assertion for D5 date",
+    "edits": [
+      {
+        "old": "    _assert_dates_development(day_flags, CLASS_S_COLUMNS[\"day_flags\"])",
+        "new": "    _assert_dates_development(day_flags, ())"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item28_e3_class_s_flags"
+  },
+  {
+    "id": "A57",
+    "description": "skip the strict assertion for D7c row_date",
+    "edits": [
+      {
+        "old": "        _assert_dates_development(long, CLASS_S_COLUMNS[\"long_rows\"])",
+        "new": "        _assert_dates_development(long, (\"source_session\",))"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item28b_e3_class_s_d7c_rows"
+  },
+  {
+    "id": "A58",
+    "description": "accept a post-boundary endpoint on a non-crossing horizon",
+    "edits": [
+      {
+        "old": "        if key not in crossing:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item30_e3_class_e_endpoints"
+  },
+  {
+    "id": "A59",
+    "description": "use the unclipped D4 listed_end when deriving next(s)",
+    "edits": [
+      {
+        "old": "            end = min(end, DEVELOPMENT_END)",
+        "new": "            end = end"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item29_e3_class_m_clipping"
+  },
+  {
+    "id": "A60",
+    "description": "keep a key with a post-boundary listed_start in the interval map",
+    "edits": [
+      {
+        "old": "        if start is not None and start > DEVELOPMENT_END:\n            continue",
+        "new": "        if False:\n            continue"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item29_e3_class_m_clipping"
   }
 ]

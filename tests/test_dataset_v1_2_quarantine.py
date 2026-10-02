@@ -337,12 +337,20 @@ class _Store:
         observed_end: date | None,
         label_state: str = "OBSERVED_PATH_COMPLETE",
         crosses: bool = False,
+        horizon_endpoint: date | None = None,
     ) -> None:
         self.labels.append((formation, key, h, endpoint, label_state, observed_end))
-        self.horizons.append((formation, h, endpoint, crosses))
+        self.horizons.append(
+            (formation, h, endpoint if horizon_endpoint is None else horizon_endpoint, crosses)
+        )
 
-    def member(self, formation: date, key: str) -> None:
-        self.members.append((formation, key))
+    def member(
+        self,
+        formation: date,
+        key: str,
+        listed_end_dev: date = date(2023, 6, 30),
+    ) -> None:
+        self.members.append((formation, key, listed_end_dev))
 
     # -- materialise -----------------------------------------------------
 
@@ -380,7 +388,7 @@ class _Store:
             {
                 "formation_date": pd.Series([r[0] for r in self.members], dtype="datetime64[ns]"),
                 "security_key": pd.Series([r[1] for r in self.members], dtype="string"),
-                "listed_end_dev": pd.Series([date(2023, 6, 30)] * len(self.members), dtype="datetime64[ns]"),
+                "listed_end_dev": pd.Series([r[2] for r in self.members], dtype="datetime64[ns]"),
             }
         )
         horizons = pd.DataFrame(
@@ -1399,6 +1407,168 @@ def test_item27_d4_field_uses_field_value_not_file_hash() -> None:
 
 
 # ===========================================================================
+# E3. Scope of the post-load reserve assertion (erratum E3)
+# ===========================================================================
+
+
+def test_item28_e3_class_s_flags(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_flags", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.flags.append(
+        (key, "AAA", date(2023, 7, 3), "CORP_ACTION_SUSPECT", "x")
+    )
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28b_e3_class_s_d7c_rows(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_d7c", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.long[Q.INPUT_DAILY_TOTAL_RETURN].append(
+        (date(2023, 7, 3), key, date(2023, 6, 30), 1.0)
+    )
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28c_e3_class_s_segments(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_seg", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.segments.append((key, 2, date(2019, 1, 2), date(2023, 7, 3), True))
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28d_e3_class_s_labels(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_label", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.labels.append(
+        (date(2020, 6, 2), key, 5, date(2020, 7, 2),
+         "OBSERVED_PATH_COMPLETE", date(2023, 7, 3))
+    )
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28e_e3_class_s_members(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_member", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.member(date(2020, 1, 2), key, listed_end_dev=date(2023, 7, 3))
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28f_e3_class_s_horizons(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_horizon", flag_session=date(2020, 1, 6))
+    store.horizons.append((date(2023, 7, 3), 5, date(2023, 7, 3), False))
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item28g_e3_class_s_d6(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3s_d6", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.member(date(2023, 7, 3), key)
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store.root, bindings=store.build())
+
+
+def test_item29_e3_class_m_clipping(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "e3m", flag_session=date(2023, 6, 30))
+    key = store.identity[0][0]
+    # Class M: the D4 interval end is past the development window.
+    store.identity[0] = (
+        key, "AAA", date(2019, 1, 2), date(2025, 4, 7), "INTERVAL_ASSIGNED"
+    )
+    bindings = store.build()
+    Q.build_overlay(store.root, bindings=bindings)
+    flags = pd.read_parquet(
+        Q._overlay_directory(store.root, bindings) / "flags.parquet"
+    )
+    row = flags[flags["security_key"] == key].iloc[0]
+    # The clipped listed_end never yields a reserve session as next(s).
+    assert Q._to_date(row["next_session"]) is None
+    assert bool(row["next_beyond_development"]) is True
+    # A key whose listed_start is past the boundary has no development interval.
+    late = pd.DataFrame(
+        {
+            "security_key": ["TIINGO:LATE"],
+            "listed_start": pd.to_datetime([date(2025, 4, 7)]),
+            "listed_end": pd.to_datetime([date(2025, 4, 7)]),
+        }
+    )
+    assert "TIINGO:LATE" not in Q._development_intervals(late)
+    # A development flag on that key still fails closed.
+    day_flags = pd.DataFrame(
+        {
+            "security_key": ["TIINGO:LATE"],
+            "ticker": ["LATE"],
+            "date": pd.to_datetime([date(2020, 1, 6)]),
+            "class_or_flag": ["CORP_ACTION_SUSPECT"],
+            "disposition": ["x"],
+        }
+    )
+    with pytest.raises(Q.QuarantineInputError):
+        Q.compute_flag_panel(day_flags, late, SESSIONS)
+
+
+def test_item30_e3_class_e_endpoints(tmp_path: Path) -> None:
+    # A post-boundary endpoint on a crossing horizon is accepted and excluded.
+    store = _build_store(tmp_path, "e3e_ok", flag_session=date(2020, 1, 6))
+    key = store.identity[0][0]
+    store.label(
+        date(2020, 6, 2), key, 5, endpoint=date(2025, 4, 7),
+        observed_end=None, crosses=True,
+    )
+    bindings = store.build()
+    Q.build_overlay(store.root, bindings=bindings)
+    labels = pd.read_parquet(
+        Q._overlay_directory(store.root, bindings) / "label_states.parquet"
+    )
+    if len(labels):
+        assert not (
+            (labels["formation_date"] == pd.Timestamp(date(2020, 6, 2)))
+            & (labels["security_key"] == key)
+        ).any()
+    # A post-boundary label endpoint on a non-crossing horizon fails closed.
+    store2 = _build_store(tmp_path, "e3e_bad", flag_session=date(2020, 1, 6))
+    key2 = store2.identity[0][0]
+    store2.label(
+        date(2020, 6, 2), key2, 5, endpoint=date(2025, 4, 7),
+        observed_end=None, crosses=False, horizon_endpoint=date(2020, 7, 2),
+    )
+    with pytest.raises(Q.ReserveFirewallError):
+        Q.build_overlay(store2.root, bindings=store2.build())
+
+
+def test_item31_e3_exhaustive_column_classes() -> None:
+    import inspect
+    import re
+
+    source = inspect.getsource(Q.build_overlay)
+    read_columns: set[str] = set()
+    for match in re.finditer(r"columns=\[([^\]]*)\]", source):
+        read_columns |= set(re.findall(r'"([^"]+)"', match.group(1)))
+    non_date = {
+        "security_key", "ticker", "class_or_flag", "disposition", "state",
+        "h", "label_state", "segment_id", "admitted", "crosses_reserve",
+        "value",
+    }
+    class_of: dict[str, set[str]] = {}
+    for name, mapping in (
+        ("S", Q.CLASS_S_COLUMNS),
+        ("M", Q.CLASS_M_COLUMNS),
+        ("E", Q.CLASS_E_COLUMNS),
+    ):
+        for columns in mapping.values():
+            for column in columns:
+                class_of.setdefault(column, set()).add(name)
+    # Every date column read by build_overlay is assigned exactly one class.
+    assert read_columns - non_date == set(class_of)
+    assert all(len(classes) == 1 for classes in class_of.values())
+
+
+# ===========================================================================
 # 17. Flag-count guard
 # ===========================================================================
 
@@ -1488,8 +1658,8 @@ def test_item19_sparse_completeness(tmp_path: Path) -> None:
 def test_mutation_fixture_contract() -> None:
     path = Q._REPO_ROOT / "tests/fixtures/dataset_v1_2/pqa/mutations.json"
     mutations = json.loads(path.read_text(encoding="utf-8"))
-    assert len(mutations) == 54
-    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 55)]
+    assert len(mutations) == 60
+    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 61)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/dataset_v1/quarantine.py"
