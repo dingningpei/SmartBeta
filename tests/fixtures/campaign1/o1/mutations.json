@@ -1,0 +1,122 @@
+[
+  {
+    "id": "O1-M1",
+    "description": "numeric-difference definition reintroduced (structural taint ignored)",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "    counted = eligible & taint\n",
+        "new": "    counted = eligible\n"
+      }
+    ],
+    "test": "test_item01_pure_time_series_zero"
+  },
+  {
+    "id": "O1-M2",
+    "description": "tolerance-based definition (NOT_APPLICABLE treated as quarantined)",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "        row_seed = np.isin(operand_state, _QUARANTINED_STATES).any(axis=1)\n",
+        "new": "        row_seed = (operand_state > _pqa.STATE_CLEAN).any(axis=1)\n"
+      }
+    ],
+    "test": "test_item07_nan_and_not_applicable_never_counted"
+  },
+  {
+    "id": "O1-M3",
+    "description": "counting quarantined cells",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "    eligible = clean & finite\n",
+        "new": "    eligible = (final_state != _pqa.STATE_NOT_APPLICABLE) & finite\n"
+      }
+    ],
+    "test": "test_item02_rank_row_seed"
+  },
+  {
+    "id": "O1-M4",
+    "description": "counting NaN (non-finite) cells",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "    eligible = clean & finite\n",
+        "new": "    eligible = clean\n"
+      }
+    ],
+    "test": "test_item07_nan_and_not_applicable_never_counted"
+  },
+  {
+    "id": "O1-M5",
+    "description": "ignoring the lag shift",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "        shifted = np.zeros_like(child)\n        if node.periods < child.shape[0]:\n            shifted[node.periods :] = child[: -node.periods]\n        return shifted\n",
+        "new": "        shifted = np.zeros_like(child)\n        shifted[:] = child\n        return shifted\n"
+      }
+    ],
+    "test": "test_item03_lag_shifts_influence"
+  },
+  {
+    "id": "O1-M6",
+    "description": "ignoring the rolling window",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "            out[i] = child[start : i + 1].any(axis=0)\n",
+        "new": "            out[i] = child[i]\n"
+      }
+    ],
+    "test": "test_item04_rolling_spreads_influence"
+  },
+  {
+    "id": "O1-M7",
+    "description": "seeding at time-series nodes",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "        child = _structural_taint(node.operand, spec, overlay, inputs, template)\n        out = np.zeros_like(child)\n        window = int(node.window)\n        for i in range(child.shape[0]):\n            start = i - window + 1\n            if start < 0:\n                continue\n            out[i] = child[start : i + 1].any(axis=0)\n        return out\n",
+        "new": "        operand_state = _pqa._oracle_node(\n            node.operand, spec, overlay, inputs, template\n        )\n        quarantined = np.isin(operand_state, _QUARANTINED_STATES)\n        row_q = quarantined.any(axis=1)\n        out = np.zeros((template.shape[0], template.shape[1]), dtype=bool)\n        window = int(node.window)\n        for i in range(out.shape[0]):\n            start = i - window + 1\n            if start < 0:\n                continue\n            out[i] = row_q[start : i + 1].any()\n        return out\n"
+      }
+    ],
+    "test": "test_item01_pure_time_series_zero"
+  },
+  {
+    "id": "O1-M8",
+    "description": "counting influence when the operand row has no quarantined cell",
+    "file": "smart_beta/dataset_v1/pq_reporting.py",
+    "edits": [
+      {
+        "old": "        row_seed = np.isin(operand_state, _QUARANTINED_STATES).any(axis=1)\n",
+        "new": "        row_seed = np.ones(operand_state.shape[0], dtype=bool)\n"
+      }
+    ],
+    "test": "test_item02_rank_row_seed"
+  },
+  {
+    "id": "O1-M9",
+    "description": "PQB reading the legacy residual_cs_cells attribute",
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "edits": [
+      {
+        "old": "    # Step 12 - residual cross-sectional influence (O1 structural definition).\n    residual_frame = _pq_reporting.structural_residual_cs(\n        factor_spec, overlay=overlay, inputs=inputs\n    )\n    residual_total = int(residual_frame.attrs[\"total_residual_cs_cells\"])\n",
+        "new": "    # Step 12 - residual cross-sectional influence.\n    residual_total = 0\n    residual_map = states.attrs.get(\"residual_cs_cells\", {})\n    for value in residual_map.values():\n        residual_total += int(value)\n"
+      }
+    ],
+    "test": "test_item09_pqb_never_reads_legacy_attribute"
+  },
+  {
+    "id": "O1-M10",
+    "description": "the pq_reporting.py pin skipped",
+    "file": "smart_beta/dataset_v1/pq_evaluation.py",
+    "edits": [
+      {
+        "old": "    \"smart_beta/dataset_v1/pq_reporting.py\": (\n        \"8a892999a4b887b92a212a53571f1e28cbec63ca976741f13175b75a432341dd\"\n    ),\n",
+        "new": ""
+      }
+    ],
+    "test": "test_item10_sealed_hashes"
+  }
+]
