@@ -405,8 +405,15 @@ def default_bindings() -> Bindings:
         manifest_hash=(
             "3d63e51b983096f0ae579cd1e382c613d9329d239c3f848cc785dee2d61cdfc3"
         ),
-        manifest_sha256="",
-        files=(FileBinding(_D5_FLAGS, ""),),
+        manifest_sha256=(
+            "16c582900b77a328ffaee8fdb78b8bc4b7920a0b48ebbc98f7a2e7e62c769ae1"
+        ),
+        files=(
+            FileBinding(
+                _D5_FLAGS,
+                "f4010ebeabf5cfae2684f3658a5f19f922f15e2c8898410049f2148440cf7891",
+            ),
+        ),
     )
     d4 = StageBinding(
         stage="D4",
@@ -416,10 +423,17 @@ def default_bindings() -> Bindings:
         ),
         manifest_hash_field="identity_hash",
         manifest_hash=(
+            "1023dbca39fd061d52fd26eeb6302f4a8dec467a8ea996b1903da801306ae730"
+        ),
+        manifest_sha256=(
             "b8ed3d23979f8cbb9f320fae96a8cea968b16332fd1000fa1cdedca15df43aa4"
         ),
-        manifest_sha256="",
-        files=(FileBinding(_D4_IDENT, ""),),
+        files=(
+            FileBinding(
+                _D4_IDENT,
+                "fee4614009095773f75fb832343a5fa9b87b9de1cf363125567222b08fad3f8b",
+            ),
+        ),
     )
     d7c = StageBinding(
         stage="D7C",
@@ -429,7 +443,9 @@ def default_bindings() -> Bindings:
         manifest_hash=(
             "30ee0c51602cf792e8cb7654c2501f52c7d664675dbf78845c903df6683c2ae6"
         ),
-        manifest_sha256="",
+        manifest_sha256=(
+            "d8d40099ba978604727a7d316274a2d3e7f8210baf8cb35e4ca687435fd8f8f0"
+        ),
         files=(
             FileBinding(f"{_D7C_BASE}/daily_total_return.parquet",
                         "511bcf4ac4ea2bd02158438732e0fdf19c04d783b88ca7a01ff5a364ec8e688c"),
@@ -449,7 +465,9 @@ def default_bindings() -> Bindings:
         manifest_hash=(
             "4c487e47fd613f3f272109d14b43a27e061f9cc31e5b6d6bcefd4abc97994861"
         ),
-        manifest_sha256="",
+        manifest_sha256=(
+            "6093bec9730e5bd0a6e9e1410db165fca148e3be1b01ef2534db12e34370886e"
+        ),
         files=(
             FileBinding(f"{_D7A_BASE}/labels.parquet",
                         "262b8b1d445dfb329d33359966a9deba67bd5999ccdc01dd8183eda6f4f2645e"),
@@ -467,7 +485,9 @@ def default_bindings() -> Bindings:
         manifest_hash=(
             "6e8539b7acb4ed4559846234b0b26e6f1d4e6d34f7e0a5d1e2290134d563ed87"
         ),
-        manifest_sha256="",
+        manifest_sha256=(
+            "8e5e4ecd1729c2bbf75b1ac1bdd5d497f9f2a360061edb407fc323feb433d737"
+        ),
         files=(
             FileBinding(f"{_D6_BASE}/universe_development.parquet",
                         "f933a67ff8c83ad9f6c7937a76136d93419cedb0ec79cec617df8205b3d38d8b"),
@@ -651,17 +671,38 @@ def _verify_pinned_code(bindings: Bindings, repo_root: Path) -> None:
             )
 
 
+def _require_stage_hashes(stage: StageBinding) -> None:
+    """Fail closed on any empty or missing expected stage binding hash.
+
+    The check runs before any data file is opened, so an empty expected hash
+    can never silently disable a binding (E2.1).
+    """
+    if not stage.manifest_sha256:
+        raise QuarantineBindingError(
+            f"{stage.stage} manifest-file hash is empty"
+        )
+    if not stage.manifest_hash:
+        raise QuarantineBindingError(
+            f"{stage.stage} manifest field {stage.manifest_hash_field} is empty"
+        )
+    for binding in stage.files:
+        if not binding.sha256:
+            raise QuarantineBindingError(
+                f"{binding.relative_path} data-file hash is empty"
+            )
+
+
 def _verify_stage_manifest(
     root: Path, resolver: QuarantineResolver, stage: StageBinding
 ) -> dict[str, Any]:
+    _require_stage_hashes(stage)
     blob = resolver.read_bytes(stage.manifest_relative_path)
-    if stage.manifest_sha256:
-        actual = _sha256_hex(blob)
-        if actual != stage.manifest_sha256:
-            raise QuarantineBindingError(
-                f"{stage.stage} manifest hash {actual} != "
-                f"bound {stage.manifest_sha256}"
-            )
+    actual = _sha256_hex(blob)
+    if actual != stage.manifest_sha256:
+        raise QuarantineBindingError(
+            f"{stage.stage} manifest hash {actual} != "
+            f"bound {stage.manifest_sha256}"
+        )
     try:
         manifest = json.loads(blob.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -683,7 +724,7 @@ def _verify_stage_manifest(
             raise QuarantineInputError(
                 f"cannot read {binding.relative_path}: {exc}"
             ) from exc
-        if binding.sha256 and actual != binding.sha256:
+        if actual != binding.sha256:
             raise QuarantineBindingError(
                 f"{binding.relative_path} hash {actual} != bound {binding.sha256}"
             )
@@ -1623,6 +1664,8 @@ def build_overlay(
     code_sha = _sha256_file(Path(__file__))
 
     resolver = QuarantineResolver(root, bindings)
+    for stage in bindings.stages():
+        _require_stage_hashes(stage)
     _verify_parent_authority(repo_root)
     _verify_documents(bindings, repo_root)
     _verify_pinned_code(bindings, repo_root)
