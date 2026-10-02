@@ -1,0 +1,493 @@
+{
+ "schema": "campaign1-factorspecs-v1",
+ "sign_convention": "FactorSpec.sign = +1 for every hypothesis; expected economic direction positive after construction",
+ "specs": [
+  {
+   "factor_spec_canonical_json": {
+    "description": "Medium-horizon momentum: compound total return over sessions (f-253, f-22]",
+    "expression": {
+     "left": {
+      "op": "lag",
+      "operand": {
+       "op": "field",
+       "role": "tri"
+      },
+      "periods": 21
+     },
+     "op": "div",
+     "right": {
+      "op": "lag",
+      "operand": {
+       "op": "field",
+       "role": "tri"
+      },
+      "periods": 252
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H1",
+    "id": "c1_h1_mom_252_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "9b27eb881a7b31bfe123866f82996638315be6257c333fcf04cfcae3a02f037c",
+   "hypothesis_label": "C1-H1"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Medium-horizon momentum: compound total return over sessions (f-127, f-22]",
+    "expression": {
+     "left": {
+      "op": "lag",
+      "operand": {
+       "op": "field",
+       "role": "tri"
+      },
+      "periods": 21
+     },
+     "op": "div",
+     "right": {
+      "op": "lag",
+      "operand": {
+       "op": "field",
+       "role": "tri"
+      },
+      "periods": 126
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H2",
+    "id": "c1_h2_mom_126_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "85a7166bf2953fd9240037dc5189cb63dd3ae93690b2574c2f6d0567136d54fc",
+   "hypothesis_label": "C1-H2"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Short-horizon reversal: minus compound total return over sessions (f-22, f-1]",
+    "expression": {
+     "left": {
+      "op": "const",
+      "value": -1.0
+     },
+     "op": "mul",
+     "right": {
+      "left": {
+       "op": "field",
+       "role": "tri"
+      },
+      "op": "div",
+      "right": {
+       "op": "lag",
+       "operand": {
+        "op": "field",
+        "role": "tri"
+       },
+       "periods": 21
+      }
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H3",
+    "id": "c1_h3_rev_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "78a6d4547aecee3615841408be1df040fdb33037fe465b790bcd75c5d76fe99f",
+   "hypothesis_label": "C1-H3"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Volume-confirmed momentum: standardized C1-H1 signal times cross-sectional rank of 21/252-session mean dollar-volume ratio",
+    "expression": {
+     "left": {
+      "fn": "standardize",
+      "op": "cross_section",
+      "operand": {
+       "left": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 21
+       },
+       "op": "div",
+       "right": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 252
+       }
+      }
+     },
+     "op": "mul",
+     "right": {
+      "fn": "rank",
+      "op": "cross_section",
+      "operand": {
+       "left": {
+        "fn": "mean",
+        "op": "rolling",
+        "operand": {
+         "op": "field",
+         "role": "dv"
+        },
+        "window": 21
+       },
+       "op": "div",
+       "right": {
+        "fn": "mean",
+        "op": "rolling",
+        "operand": {
+         "op": "field",
+         "role": "dv"
+        },
+        "window": 252
+       }
+      }
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H4",
+    "id": "c1_h4_vcmom_252_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     },
+     {
+      "alias": "dv",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "period",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "dollar_volume",
+       "units": null
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "54b7edf3c0f00e5c53c8d87eee7a9c9bfd26287e15b04dc8ac38f57d3e4f1a6f",
+   "hypothesis_label": "C1-H4"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Volume-confirmed momentum: standardized C1-H2 signal times cross-sectional rank of 21/252-session mean dollar-volume ratio",
+    "expression": {
+     "left": {
+      "fn": "standardize",
+      "op": "cross_section",
+      "operand": {
+       "left": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 21
+       },
+       "op": "div",
+       "right": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 126
+       }
+      }
+     },
+     "op": "mul",
+     "right": {
+      "fn": "rank",
+      "op": "cross_section",
+      "operand": {
+       "left": {
+        "fn": "mean",
+        "op": "rolling",
+        "operand": {
+         "op": "field",
+         "role": "dv"
+        },
+        "window": 21
+       },
+       "op": "div",
+       "right": {
+        "fn": "mean",
+        "op": "rolling",
+        "operand": {
+         "op": "field",
+         "role": "dv"
+        },
+        "window": 252
+       }
+      }
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H5",
+    "id": "c1_h5_vcmom_126_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     },
+     {
+      "alias": "dv",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "period",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "dollar_volume",
+       "units": null
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "ee5b8ea8f57262945828d545910584b6b49546af344c9a2bfbd2164380564f26",
+   "hypothesis_label": "C1-H5"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Volatility-scaled momentum: (C1-H1 ratio - 1) / std of the 231 daily total returns in the same window",
+    "expression": {
+     "left": {
+      "left": {
+       "left": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 21
+       },
+       "op": "div",
+       "right": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 252
+       }
+      },
+      "op": "sub",
+      "right": {
+       "op": "const",
+       "value": 1.0
+      }
+     },
+     "op": "div",
+     "right": {
+      "op": "lag",
+      "operand": {
+       "fn": "std",
+       "op": "rolling",
+       "operand": {
+        "op": "field",
+        "role": "ret"
+       },
+       "window": 231
+      },
+      "periods": 21
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H6",
+    "id": "c1_h6_vsmom_252_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     },
+     {
+      "alias": "ret",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "period",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "daily_total_return",
+       "units": null
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "42605a13a41cf0c9a04b614424b4bee1643bd565b1ec5b67c58a4b6d6ed816a1",
+   "hypothesis_label": "C1-H6"
+  },
+  {
+   "factor_spec_canonical_json": {
+    "description": "Volatility-scaled momentum: (C1-H2 ratio - 1) / std of the 105 daily total returns in the same window",
+    "expression": {
+     "left": {
+      "left": {
+       "left": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 21
+       },
+       "op": "div",
+       "right": {
+        "op": "lag",
+        "operand": {
+         "op": "field",
+         "role": "tri"
+        },
+        "periods": 126
+       }
+      },
+      "op": "sub",
+      "right": {
+       "op": "const",
+       "value": 1.0
+      }
+     },
+     "op": "div",
+     "right": {
+      "op": "lag",
+      "operand": {
+       "fn": "std",
+       "op": "rolling",
+       "operand": {
+        "op": "field",
+        "role": "ret"
+       },
+       "window": 105
+      },
+      "periods": 21
+     }
+    },
+    "frequency": "daily",
+    "hypothesis": "C1-H7",
+    "id": "c1_h7_vsmom_126_21",
+    "inputs": [
+     {
+      "alias": "tri",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "instant",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "total_return_index",
+       "units": "ratio"
+      }
+     },
+     {
+      "alias": "ret",
+      "requirement": {
+       "frequency": "daily",
+       "lookback": 0,
+       "observation_period": "period",
+       "require_knowledge_date": true,
+       "require_positive_vintage_identity": false,
+       "revision_policy": "point_in_time",
+       "semantic_id": "daily_total_return",
+       "units": null
+      }
+     }
+    ],
+    "missing_policy": "propagate",
+    "sign": 1
+   },
+   "factor_spec_canonical_sha256": "32678dfda88647a666994e62697742955f7903b141431a628b3df98895be66b0",
+   "hypothesis_label": "C1-H7"
+  }
+ ]
+}
