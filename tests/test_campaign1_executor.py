@@ -14,6 +14,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -29,6 +30,14 @@ from smart_beta.experiment.registry import (
 )
 from smart_beta.science.contracts import RecordKind
 from smart_beta.science.knowledge import GENESIS_PREV_HASH, KnowledgeRecord
+from smart_beta.spec.engine import EvidenceClass, TrustedInput
+from smart_beta.spec.requirements import (
+    DataCapability,
+    Frequency,
+    ObservationPeriod,
+    RevisionPolicy,
+    Unit,
+)
 
 DECL = "d" * 64
 ZERO = "0" * 64
@@ -182,6 +191,7 @@ def _make_executor(
     knowledge_log_path=None,
 ):
     ledger = L.CampaignLedger(Path(tmp_path) / "ledger.jsonl")
+    _LEDGER_PATHS.append(ledger.path)
     if o2_count_of is None:
         o2_count_of = lambda spec: 0  # noqa: E731
     return C.CampaignExecutor(
@@ -198,6 +208,30 @@ def _make_executor(
         knowledge_log_path=knowledge_log_path,
         labels=labels,
     )
+
+
+_LEDGER_PATHS: list[Path] = []
+
+
+def _assert_ledger_invariant(path: Path) -> None:
+    """E3.3 test 5: OPEN first/once, STOP at most once and last."""
+    entries = L.CampaignLedger(path).verify()
+    types = [entry.record_type for entry in entries]
+    if not types:
+        return
+    assert types[0] == "CAMPAIGN_OPEN", types
+    assert types.count("CAMPAIGN_OPEN") == 1, types
+    assert types.count("CAMPAIGN_STOP") <= 1, types
+    if "CAMPAIGN_STOP" in types:
+        assert types[-1] == "CAMPAIGN_STOP", types
+
+
+@pytest.fixture(autouse=True)
+def _ledger_invariant():
+    _LEDGER_PATHS.clear()
+    yield
+    for path in _LEDGER_PATHS:
+        _assert_ledger_invariant(path)
 
 
 def _install_stubs(
@@ -499,6 +533,18 @@ def test_full_campaign_records_and_budgets(tmp_path, monkeypatch):
     }
 
 
+def _open_ledger(executor):
+    """Open a campaign without running it (OPEN and no STOP)."""
+    executor._replay_counters()
+    executor._ensure_adapters()
+    provenance = {
+        label: executor.provenance_of(executor._spec_by_label[label])
+        for label in C.EXPECTED_LABELS
+    }
+    identities = C._identity_records(executor.factor_specs, provenance)
+    return executor._open_campaign(C.KpitPreflight(True, None, ()), identities)
+
+
 def test_replay_identical_consumes_no_slot(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
     first = _make_executor(tmp_path)
@@ -525,32 +571,43 @@ def test_replay_returns_replay_identical(tmp_path, monkeypatch):
     second._replay_counters()
     stop = second._process_label("C1-H1", C.campaign1_id(second.bindings))
     assert stop == C.REPLAY_IDENTICAL
+    assert second.counters.statistical_slots_used == 1
+    assert second.counters.proposal_used == 1
 
 
-def test_mismatched_replay_fails_closed(tmp_path, monkeypatch):
+def test_mismatched_replay_on_open_ledger_fails_closed(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    first = _make_executor(tmp_path)
-    first.run()
-    records_before = L.CampaignLedger(first.ledger.path).records()
+    first = _make_executor(tmp_path, labels=("C1-H1",))
+    campaign_id = _open_ledger(first)
+    first._process_label("C1-H1", campaign_id)
+    path = first.ledger.path
+    before = path.read_bytes()
 
     def changed(spec, universe, fold):
         panel = _panel(spec, universe, fold)
         panel["value"] = panel["value"] + 1.0
         return panel
 
-    second = _make_executor(tmp_path, panel_of=changed)
+    second = _make_executor(tmp_path, labels=("C1-H1",), panel_of=changed)
+    _open_ledger(second)
     with pytest.raises(L.C1ReplayMismatchError):
-        second.run()
-    assert L.CampaignLedger(second.ledger.path).records() == records_before
+        second._process_label("C1-H1", campaign_id)
+    assert path.read_bytes() == before
 
 
 def test_lock_conflict_stops_with_governance_conflict(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
     first = _make_executor(tmp_path)
-    first.run()
-    second = _make_executor(tmp_path, bindings=_bindings(pq_hash="9" * 64))
+    _open_ledger(first)  # OPEN with no STOP
+    second = _make_executor(
+        tmp_path, bindings=_bindings(pq_hash="9" * 64), labels=()
+    )
     result = second.run()
     assert result.stop_reason == C.C1StopReason.GOVERNANCE_CONFLICT
+    ledger = L.CampaignLedger(second.ledger.path)
+    assert ledger.records("CAMPAIGN_STOP")[-1]["stop_reason"] == (
+        "GOVERNANCE_CONFLICT"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +979,7 @@ def test_diagnostics_never_screened_or_classified(tmp_path, monkeypatch):
 
 def _identities():
     provenance = {spec.hypothesis: _provenance(spec) for spec in C.FACTOR_SPECS}
-    return C.hypothesis_identities(C.FACTOR_SPECS, provenance)
+    return C._identity_records(C.FACTOR_SPECS, provenance)
 
 
 def test_kpit_valid_order_accepted(tmp_path):
@@ -1013,7 +1070,24 @@ def test_executor_records_kpit_hashes_on_open(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_stage_a_identity_failure_leaves_no_attempt(tmp_path, monkeypatch):
+def test_stage_a_preopen_provenance_failure_writes_nothing(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+
+    def failing(spec):
+        raise C.C1BindingError("provenance failure")
+
+    executor = _make_executor(tmp_path, provenance_of=failing)
+    result = executor.run()
+    assert result.stop_reason == (
+        C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    path = executor.ledger.path
+    assert (not path.exists()) or path.read_bytes() == b""
+    assert L.CampaignLedger(path).records() == ()
+    assert result.counters["proposal_used"] == 0
+
+
+def test_stage_a_postopen_identity_failure_appends_one_stop(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
     calls: dict[str, int] = {}
 
@@ -1034,7 +1108,9 @@ def test_stage_a_identity_failure_leaves_no_attempt(tmp_path, monkeypatch):
     assert ledger.records("PRIMARY_ATTEMPT") == ()
     assert result.counters["proposal_used"] == 0
     assert result.counters["statistical_slots_used"] == 0
-    assert ledger.records("CAMPAIGN_STOP")[-1]["stop_reason"] == (
+    stops = ledger.records("CAMPAIGN_STOP")
+    assert len(stops) == 1
+    assert stops[-1]["stop_reason"] == (
         "INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
     )
 
@@ -1081,20 +1157,68 @@ def test_stage_c_returned_not_assessed_continues(tmp_path, monkeypatch):
     assert result.counters["statistical_slots_used"] == 2
 
 
-def test_stage_b_replay_with_cause_removed_fails_closed(tmp_path, monkeypatch):
+def test_terminal_ledger_after_stage_b_appends_nothing(tmp_path, monkeypatch):
     def raising(*args, **kwargs):
         raise PQ.PQBindingError("pinned code mismatch")
 
     _install_stubs(monkeypatch, build=raising)
     first = _make_executor(tmp_path, labels=("C1-H1",))
     first.run()
-    records_before = L.CampaignLedger(first.ledger.path).records()
+    path = first.ledger.path
+    before = path.read_bytes()
+    assert before
 
     _install_stubs(monkeypatch)  # cause removed
     second = _make_executor(tmp_path, labels=("C1-H1",))
-    with pytest.raises(L.C1ReplayMismatchError):
-        second.run()
-    assert L.CampaignLedger(second.ledger.path).records() == records_before
+    result = second.run()
+    assert path.read_bytes() == before
+    assert result.stop_reason == (
+        C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+
+
+def test_terminal_ledger_after_untyped_stop_appends_nothing(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    calls: dict[str, int] = {}
+
+    def exploding(spec):
+        calls[spec.hypothesis] = calls.get(spec.hypothesis, 0) + 1
+        if spec.hypothesis == "C1-H1" and calls[spec.hypothesis] >= 2:
+            raise RuntimeError("boom")
+        return _provenance(spec)
+
+    first = _make_executor(
+        tmp_path, provenance_of=exploding, labels=("C1-H1",)
+    )
+    with pytest.raises(RuntimeError):
+        first.run()
+    path = first.ledger.path
+    before = path.read_bytes()
+    assert before
+    assert L.CampaignLedger(path).records("CAMPAIGN_STOP")
+
+    second = _make_executor(tmp_path, labels=("C1-H1",))
+    result = second.run()
+    assert path.read_bytes() == before
+    assert result.stop_reason == (
+        C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+
+
+def test_terminal_ledger_after_normal_close_appends_nothing(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    first = _make_executor(tmp_path, labels=("C1-H1",))
+    first_result = first.run()
+    path = first.ledger.path
+    before = path.read_bytes()
+
+    second = _make_executor(tmp_path, labels=("C1-H1",))
+    second_result = second.run()
+    assert path.read_bytes() == before
+    assert first_result.stop_reason == (
+        C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
+    )
+    assert second_result.stop_reason == first_result.stop_reason
 
 
 # ---------------------------------------------------------------------------
@@ -1231,3 +1355,254 @@ def test_cell_mapping_matches_dataset_v1_2():
         "A-T0": "QUARANTINED-T0",
         "A-TS": "QUARANTINED-TS",
     }
+
+
+# ---------------------------------------------------------------------------
+# 16. F3 real-input adapters (synthetic TrustedInput fixtures only)
+# ---------------------------------------------------------------------------
+
+
+def _simple_spec():
+    return C._spec_from_dict(
+        {
+            "id": "synth_lag_tri",
+            "description": "synthetic lagged total return index",
+            "hypothesis": "SYNTH-H1",
+            "expression": {
+                "op": "lag",
+                "operand": {"op": "field", "role": "tri"},
+                "periods": 1,
+            },
+            "inputs": [
+                {
+                    "alias": "tri",
+                    "requirement": {
+                        "frequency": "daily",
+                        "lookback": 0,
+                        "observation_period": "instant",
+                        "require_knowledge_date": True,
+                        "require_positive_vintage_identity": False,
+                        "revision_policy": "point_in_time",
+                        "semantic_id": "total_return_index",
+                        "units": "ratio",
+                    },
+                }
+            ],
+            "frequency": "daily",
+            "missing_policy": "propagate",
+            "sign": 1,
+        }
+    )
+
+
+def _o2_spec():
+    return C._spec_from_dict(
+        {
+            "id": "synth_o2",
+            "description": "synthetic O2 denominator spec",
+            "hypothesis": "SYNTH-H6",
+            "expression": {
+                "op": "div",
+                "left": {"op": "const", "value": 1.0},
+                "right": {
+                    "op": "lag",
+                    "operand": {
+                        "fn": "std",
+                        "op": "rolling",
+                        "operand": {"op": "field", "role": "ret"},
+                        "window": 2,
+                    },
+                    "periods": 1,
+                },
+            },
+            "inputs": [
+                {
+                    "alias": "ret",
+                    "requirement": {
+                        "frequency": "daily",
+                        "lookback": 0,
+                        "observation_period": "period",
+                        "require_knowledge_date": True,
+                        "require_positive_vintage_identity": False,
+                        "revision_policy": "point_in_time",
+                        "semantic_id": "daily_total_return",
+                        "units": None,
+                    },
+                }
+            ],
+            "frequency": "daily",
+            "missing_policy": "propagate",
+            "sign": 1,
+        }
+    )
+
+
+def _capability(semantic: str, *, period, units, history: int):
+    return DataCapability(
+        semantic_id=semantic,
+        observation_period=period,
+        units=units,
+        frequency=Frequency.DAILY,
+        history=history,
+        has_knowledge_date=True,
+        has_positive_vintage_identity=False,
+        revision_policies=frozenset({RevisionPolicy.POINT_IN_TIME}),
+    )
+
+
+def _tri_inputs():
+    frame = pd.DataFrame(
+        {
+            "AAA": [100.0, 101.0, 102.0, 103.0],
+            "BBB": [50.0, 51.0, 50.0, 52.0],
+        },
+        index=pd.to_datetime(
+            ["2016-01-04", "2016-01-05", "2016-01-06", "2016-01-07"]
+        ),
+    )
+    return {
+        "total_return_index": TrustedInput(
+            values=frame,
+            capability=_capability(
+                "total_return_index",
+                period=ObservationPeriod.INSTANT,
+                units=Unit.RATIO,
+                history=4,
+            ),
+            evidence_class=EvidenceClass.LIVE_RECORDED,
+        )
+    }
+
+
+def _ret_inputs():
+    frame = pd.DataFrame(
+        {
+            "AAA": [0.0, 0.0, 0.0, 0.0],
+            "BBB": [0.0, 0.0, 0.0, 0.0],
+        },
+        index=pd.to_datetime(
+            ["2016-01-04", "2016-01-05", "2016-01-06", "2016-01-07"]
+        ),
+    )
+    return {
+        "daily_total_return": TrustedInput(
+            values=frame,
+            capability=_capability(
+                "daily_total_return",
+                period=ObservationPeriod.PERIOD,
+                units=None,
+                history=4,
+            ),
+            evidence_class=EvidenceClass.LIVE_RECORDED,
+        )
+    }
+
+
+def _overlay():
+    empty = pd.DataFrame()
+    return C._pqa.Overlay(
+        flags=empty,
+        primitive_states=empty,
+        input_states=empty,
+        label_states=empty,
+        liquidity_exposure=empty,
+        identity={},
+        pq_id="pq-test",
+        pq_hash="d" * 64,
+    )
+
+
+def test_factor_provenance_hash_matches_phase6():
+    spec = _simple_spec()
+    inputs = _tri_inputs()
+    expected = C._evaluate_factor(
+        spec, C._pqa._alias_inputs(spec, inputs)
+    ).content_hash
+    assert C.factor_provenance_hash(spec, inputs) == expected
+    assert len(expected) == 64
+
+
+def test_hypothesis_identities_from_inputs_without_loading_root(tmp_path):
+    spec = _simple_spec()
+    inputs = _tri_inputs()
+    identities = C.hypothesis_identities(
+        tmp_path / "never-loaded",
+        inputs=inputs,
+        factor_specs=(spec,),
+    )
+    assert len(identities) == 1
+    item = identities[0]
+    assert item["label"] == "SYNTH-H1"
+    assert item["factor_spec_hash"] == spec.version
+    assert item["factor_provenance_hash"] == C.factor_provenance_hash(
+        spec, inputs
+    )
+    assert item["hypothesis_id"] == hypothesis_id_for(
+        item["factor_provenance_hash"]
+    )
+
+
+def test_build_fold_panel_and_pqb_match():
+    values = pd.DataFrame(
+        {"AAA": [1.0, 2.0], "BBB": [float("nan"), 4.0]},
+        index=pd.to_datetime(["2016-01-04", "2016-01-05"]),
+    )
+    formations = [d.date() for d in values.index]
+    members = {
+        formations[0]: ["AAA", "BBB", "CCC"],
+        formations[1]: ["AAA", "BBB"],
+    }
+    panel = C.build_fold_panel(values, formations, members)
+    assert list(panel.columns) == ["date", "stock_id", "value"]
+    assert len(panel) == 5
+    assert C._pqb._factor_panel_matches(panel, values, formations)
+    missing = panel[panel["stock_id"] == "CCC"]
+    assert missing["value"].isna().all()
+
+
+def test_build_fold_panel_satisfies_d7b_validate():
+    values = pd.DataFrame(
+        {"AAA": [1.0, 2.0]},
+        index=pd.to_datetime(["2016-01-04", "2016-01-05"]),
+    )
+    formations = [d.date() for d in values.index]
+    members = {formations[0]: ["AAA"], formations[1]: ["AAA"]}
+    panel = C.build_fold_panel(values, formations, members)
+    declaration = C.build_declaration(
+        spec=_simple_spec(),
+        panel=panel,
+        fold=C.build_partition().folds[0],
+        universe="TOP_500",
+        bindings=_bindings(),
+        screen_id=C.SCREEN_ID,
+        screen_policy_hash=C.SCREEN_POLICY_SHA256,
+    )
+    validated = C._d7b._validate_factor_panel(
+        panel,
+        declaration=declaration,
+        formations=formations,
+        universe_by_formation=members,
+    )
+    assert len(validated) == 2
+
+
+def test_o2_denominator_spec_extracts_right_operand():
+    spec = _o2_spec()
+    sub = C.o2_denominator_spec(spec)
+    assert sub.to_dict()["expression"] == spec.to_dict()["expression"]["right"]
+    assert sub.sign == 1
+
+
+def test_evaluate_o2_count_over_synthetic_inputs():
+    spec = _o2_spec()
+    inputs = _ret_inputs()
+    formations = [pd.Timestamp("2016-01-07").date()]
+    members = {formations[0]: ["AAA", "BBB"]}
+    count = C.evaluate_o2_count(
+        spec,
+        overlay=_overlay(),
+        inputs=inputs,
+        formations=formations,
+        members_by_formation=members,
+    )
+    assert count == 2

@@ -33,7 +33,7 @@
     "new": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            self.counters.consume_primary()\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)"
    }
   ],
-  "test": "tests/test_campaign1_executor.py::test_replay_identical_consumes_no_slot"
+  "test": "tests/test_campaign1_executor.py::test_replay_returns_replay_identical"
  },
  {
   "id": "LX-M4",
@@ -45,7 +45,7 @@
     "new": "            if False:  # mismatched replay accepted\n                raise C1ReplayMismatchError(\n                    \"a re-run of a recorded attempt produced a different payload\"\n                )"
    }
   ],
-  "test": "tests/test_campaign1_executor.py::test_mismatched_replay_fails_closed"
+  "test": "tests/test_campaign1_executor.py::test_mismatched_replay_on_open_ledger_fails_closed"
  },
  {
   "id": "LX-M5",
@@ -321,10 +321,46 @@
   "file": "smart_beta/campaign/campaign1.py",
   "edits": [
    {
-    "old": "        except C1BindingError:\n            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE",
-    "new": "        except C1BindingError:\n            self.ledger.append(\n                _json_safe(\n                    {\n                        \"record_type\": \"PRIMARY_ATTEMPT\",\n                        \"campaign_attempt_id\": \"fabricated\",\n                        \"label\": label,\n                    }\n                )\n            )\n            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
+    "old": "        except C1BindingError as exc:\n            raise _StageAFailure(\n                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE\n            ) from exc",
+    "new": "        except C1BindingError as exc:\n            self.ledger.append(\n                _json_safe(\n                    {\n                        \"record_type\": \"PRIMARY_ATTEMPT\",\n                        \"campaign_attempt_id\": \"fabricated\",\n                        \"label\": label,\n                    }\n                )\n            )\n            raise _StageAFailure(\n                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE\n            ) from exc"
    }
   ],
-  "test": "tests/test_campaign1_executor.py::test_stage_a_identity_failure_leaves_no_attempt"
+  "test": "tests/test_campaign1_executor.py::test_stage_a_postopen_identity_failure_appends_one_stop"
+ },
+ {
+  "id": "LX-E3-M1",
+  "description": "the terminal-ledger check is removed (a stopped ledger accepts new records)",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        recorded_stop = self._existing_stop()\n        if recorded_stop is not None:\n            self.ledger.verify()",
+    "new": "        recorded_stop = self._existing_stop()\n        if False:\n            self.ledger.verify()"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_terminal_ledger_after_untyped_stop_appends_nothing"
+ },
+ {
+  "id": "LX-E3-M2",
+  "description": "a pre-open failure appends CAMPAIGN_STOP",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        if self._ledger_is_post_open():",
+    "new": "        if True:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_a_preopen_provenance_failure_writes_nothing"
+ },
+ {
+  "id": "LX-E3-M3",
+  "description": "a post-open Stage-A failure returns without appending CAMPAIGN_STOP",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            self._append_stage_a_stop(reason)",
+    "new": "            pass"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_a_postopen_identity_failure_appends_one_stop"
  }
 ]

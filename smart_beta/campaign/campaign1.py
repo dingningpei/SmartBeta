@@ -49,6 +49,8 @@ from smart_beta.dataset_v1.delisting_bridge import (
     _canonical_factor_hash,
     fold_key as _fold_key,
 )
+from smart_beta.dataset_v1.trusted_inputs import load_trusted_inputs
+from smart_beta.data.schema import DATE_COL, STOCK_COL, VALUE_COL
 from smart_beta.evaluation.partition import Fold, FoldRole, Partition
 from smart_beta.experiment.policy import (
     BudgetExhaustion,
@@ -72,6 +74,7 @@ from smart_beta.science.preregistration import (
 )
 from smart_beta.spec.factor_spec import FactorSpec, factor_spec_hash
 from smart_beta.spec.factor_spec import from_dict as _spec_from_dict
+from smart_beta.spec.engine import evaluate_factor as _evaluate_factor
 
 __all__ = [
     # constants
@@ -129,6 +132,10 @@ __all__ = [
     "campaign_design_hash",
     "campaign_attempt_id",
     "hypothesis_identities",
+    "factor_provenance_hash",
+    "build_fold_panel",
+    "evaluate_o2_count",
+    "RealInputAdapter",
     "verify_kpit_ordering",
     "assert_not_sealed_fold",
     "build_declaration",
@@ -312,6 +319,14 @@ class C1GovernanceConflict(C1CampaignError):
 
 class C1SealedFoldError(C1CampaignError):
     """A declaration was requested for the DEVELOPMENT_SEALED_FOLD."""
+
+
+class _StageAFailure(Exception):
+    """Internal: a post-open Stage-A identity failure (E3.1)."""
+
+    def __init__(self, reason: "C1StopReason") -> None:
+        self.reason = reason
+        super().__init__(reason.value)
 
 
 class C1Stop(C1CampaignError):
@@ -773,7 +788,7 @@ def campaign_attempt_id(
     )
 
 
-def hypothesis_identities(
+def _identity_records(
     factor_specs: Sequence[FactorSpec],
     provenance_by_label: Mapping[str, str],
 ) -> tuple[dict[str, str], ...]:
@@ -791,6 +806,42 @@ def hypothesis_identities(
             }
         )
     return tuple(identities)
+
+
+def factor_provenance_hash(
+    spec: FactorSpec, inputs: Mapping[str, Any]
+) -> str:
+    """The Phase-6 provenance hash: ``evaluate_factor(spec, aliased).content_hash``.
+
+    Uses exactly the same D7c aliasing path PQA uses
+    (``quarantine._alias_inputs``) and never inspects, logs or reports factor
+    values.
+    """
+    aliased = _pqa._alias_inputs(spec, inputs)
+    return _evaluate_factor(spec, aliased).content_hash
+
+
+def hypothesis_identities(
+    root: Path | str,
+    *,
+    inputs: Mapping[str, Any] | None = None,
+    factor_specs: Sequence[FactorSpec] | None = None,
+) -> tuple[dict[str, str], ...]:
+    """The frozen C1-LX section 9 ``hypothesis_identities(root)`` adapter.
+
+    Real D7c inputs are loaded from ``root`` (via ``load_trusted_inputs``)
+    only when ``inputs`` is not supplied; the identities are otherwise a pure
+    function of the supplied synthetic trusted inputs.
+    """
+    specs = tuple(factor_specs) if factor_specs is not None else FACTOR_SPECS
+    resolved_inputs = inputs
+    if resolved_inputs is None:
+        resolved_inputs = load_trusted_inputs(root)
+    provenance = {
+        (spec.hypothesis or spec.id): factor_provenance_hash(spec, resolved_inputs)
+        for spec in specs
+    }
+    return _identity_records(specs, provenance)
 
 
 # ---------------------------------------------------------------------------
@@ -1117,6 +1168,16 @@ def o2_denominator_spec(spec: FactorSpec) -> FactorSpec:
     )
 
 
+def _wide_index_key(values: pd.DataFrame, formation: Any) -> Any | None:
+    """Resolve a formation in a wide frame whose index is dates or Timestamps."""
+    if formation in values.index:
+        return formation
+    stamp = pd.Timestamp(formation)
+    if stamp in values.index:
+        return stamp
+    return None
+
+
 def count_o2_cells(
     values: pd.DataFrame,
     formations: Sequence[date],
@@ -1125,13 +1186,14 @@ def count_o2_cells(
     """Count finite sub-threshold cells in the O2 denominator (integer only)."""
     count = 0
     for formation in formations:
-        if formation not in values.index:
+        key = _wide_index_key(values, formation)
+        if key is None:
             continue
         members = members_by_formation.get(formation, ())
         for member in members:
             if member not in values.columns:
                 continue
-            value = values.at[formation, member]
+            value = values.at[key, member]
             try:
                 finite = math.isfinite(float(value))
             except (TypeError, ValueError):
@@ -1139,6 +1201,154 @@ def count_o2_cells(
             if finite and float(value) < O2_THRESHOLD:
                 count += 1
     return count
+
+
+def build_fold_panel(
+    values: pd.DataFrame,
+    formations: Sequence[date],
+    members_by_formation: Mapping[date, Sequence[str]],
+) -> pd.DataFrame:
+    """The C1-LX section 3 fold panel: one row per (formation, member).
+
+    ``values`` is the Phase-6 wide value frame (dates x stock ids); the cell
+    value is the wide value at (formation, member) or NaN. The returned frame
+    carries exactly ``date``/``stock_id``/``value`` and is built to satisfy
+    both D7b ``_validate_factor_panel`` and PQB ``_factor_panel_matches``.
+    """
+    records: list[tuple[date, str, float]] = []
+    for formation in formations:
+        key = _wide_index_key(values, formation)
+        for member in members_by_formation.get(formation, ()):
+            value = float("nan")
+            if key is not None and member in values.columns:
+                raw = values.at[key, member]
+                try:
+                    number = float(raw)
+                except (TypeError, ValueError):
+                    number = float("nan")
+                if math.isfinite(number):
+                    value = number
+            records.append((formation, str(member), value))
+    panel = pd.DataFrame(records, columns=[DATE_COL, STOCK_COL, VALUE_COL])
+    panel[DATE_COL] = pd.to_datetime(panel[DATE_COL])
+    panel[STOCK_COL] = panel[STOCK_COL].astype("string")
+    panel[VALUE_COL] = panel[VALUE_COL].astype("float64")
+    return panel
+
+
+def evaluate_o2_count(
+    spec: FactorSpec,
+    *,
+    overlay: Any,
+    inputs: Mapping[str, Any],
+    formations: Sequence[date],
+    members_by_formation: Mapping[date, Sequence[str]],
+) -> int:
+    """The C1-LX section 4 O2 count over the frozen denominator sub-spec."""
+    states = _pqa.factor_input_states(
+        o2_denominator_spec(spec), overlay=overlay, inputs=inputs
+    )
+    return count_o2_cells(
+        states.attrs["values"], formations, members_by_formation
+    )
+
+
+def _placeholder_declaration(
+    partition_id: str,
+    universe: str,
+    fold: Fold,
+) -> CampaignEvaluationDeclaration:
+    """A declaration used only to obtain D7b/D6 fold membership."""
+    return CampaignEvaluationDeclaration(
+        precommitment_ref=(
+            "docs/campaign1_precommitment.md@" + PRECOMMITMENT_SHA256
+        ),
+        factor_spec_version=EXPECTED_FAMILY_ID,
+        factor_panel_sha256=EXPECTED_FAMILY_ID,
+        partition_id=partition_id,
+        fold_key=_fold_key(fold),
+        universe=universe,
+        horizon=HORIZON,
+        n_groups=N_GROUPS,
+        winsorization=WINSORIZATION,
+        transaction_cost_bps=TRANSACTION_COST_BPS,
+        periods_per_year=PERIODS_PER_YEAR,
+        weighting=WEIGHTING,
+        primary_metric=PRIMARY_METRIC,
+        basis=BASIS,
+        screen_id=SCREEN_ID,
+        screen_policy_hash=SCREEN_POLICY_SHA256,
+    )
+
+
+class RealInputAdapter:
+    """The executor's real-input default for provenance, panels and the O2 count.
+
+    Inputs are the D7c ``TrustedInput`` mapping loaded lazily from ``root`` via
+    the existing :func:`~smart_beta.dataset_v1.trusted_inputs.load_trusted_inputs`
+    and fold membership comes from the existing D7b/D6 loader. Nothing here is
+    read at construction; a test that injects callables never triggers a load.
+    """
+
+    def __init__(
+        self,
+        *,
+        root: Path | str,
+        partition: Partition,
+        overlay: Any,
+        partition_id: str = EXPECTED_PARTITION_ID,
+        inputs: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._root = Path(root)
+        self._partition = partition
+        self._overlay = overlay
+        self._partition_id = partition_id
+        self._inputs = inputs
+
+    @property
+    def inputs(self) -> Mapping[str, Any]:
+        if self._inputs is None:
+            self._inputs = load_trusted_inputs(self._root)
+        return self._inputs
+
+    def provenance_of(self, spec: FactorSpec) -> str:
+        return factor_provenance_hash(spec, self.inputs)
+
+    def panel_of(self, spec: FactorSpec, universe: str, fold: Fold) -> pd.DataFrame:
+        loaded = self._load(universe, fold)
+        states = _pqa.factor_input_states(
+            spec, overlay=self._overlay, inputs=self.inputs
+        )
+        return build_fold_panel(
+            states.attrs["values"],
+            loaded.formations,
+            loaded.universe_by_formation,
+        )
+
+    def o2_count_of(self, spec: FactorSpec) -> int:
+        formations: list[date] = []
+        members_by_formation: dict[date, Sequence[str]] = {}
+        for role in (FoldRole.IS, FoldRole.OOS):
+            loaded = self._load("TOP_500", _fold(self._partition, role))
+            formations.extend(loaded.formations)
+            members_by_formation.update(loaded.universe_by_formation)
+        return evaluate_o2_count(
+            spec,
+            overlay=self._overlay,
+            inputs=self.inputs,
+            formations=formations,
+            members_by_formation=members_by_formation,
+        )
+
+    def _load(self, universe: str, fold: Fold) -> Any:
+        bindings = _d7b.DEFAULT_BINDINGS
+        resolver = _d7b._Resolver(self._root, bindings)
+        declaration = _placeholder_declaration(
+            self._partition_id, universe, fold
+        )
+        return _d7b._load_d7a(
+            resolver, bindings, declaration, self._partition, fold
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1171,11 +1381,11 @@ class CampaignExecutor:
         ledger: CampaignLedger,
         bindings: CampaignBindings,
         partition: Partition,
-        factor_specs: Sequence[FactorSpec],
-        provenance_of: Callable[[FactorSpec], str],
-        panel_of: Callable[[FactorSpec, str, Fold], pd.DataFrame],
-        overlay: Any,
-        root: Path | str,
+        factor_specs: Sequence[FactorSpec] | None = None,
+        provenance_of: Callable[[FactorSpec], str] | None = None,
+        panel_of: Callable[[FactorSpec, str, Fold], pd.DataFrame] | None = None,
+        overlay: Any = None,
+        root: Path | str = ".",
         inputs_by_semantic: Mapping[str, Any] | None = None,
         o2_count_of: Callable[[FactorSpec], int] | None = None,
         knowledge_log_path: Path | str | None = None,
@@ -1185,12 +1395,16 @@ class CampaignExecutor:
         self.ledger = ledger
         self.bindings = bindings
         self.partition = partition
-        self.factor_specs = tuple(factor_specs)
+        self.factor_specs = tuple(
+            factor_specs if factor_specs is not None else FACTOR_SPECS
+        )
         self.provenance_of = provenance_of
         self.panel_of = panel_of
         self.overlay = overlay
         self.root = Path(root)
-        self.inputs_by_semantic = dict(inputs_by_semantic or {})
+        self.inputs_by_semantic = (
+            None if inputs_by_semantic is None else dict(inputs_by_semantic)
+        )
         self.o2_count_of = o2_count_of
         self.knowledge_log_path = (
             Path(knowledge_log_path) if knowledge_log_path is not None else None
@@ -1199,18 +1413,59 @@ class CampaignExecutor:
         self.require_kpit = require_kpit
         self.counters = BudgetCounters(limits=BudgetLimits(**BUDGET_LIMITS))
         self._attempt_ordinal = 0
+        self._adapter: RealInputAdapter | None = None
         self._spec_by_label = {
             (spec.hypothesis or spec.id): spec for spec in self.factor_specs
         }
 
+    def _ensure_adapters(self) -> None:
+        """Fill any missing dependency with the real-input default adapter.
+
+        A test that injects all three callables never constructs or touches
+        :class:`RealInputAdapter`, so no D7c data is loaded by the tests.
+        """
+        if (
+            self.provenance_of is not None
+            and self.panel_of is not None
+            and self.o2_count_of is not None
+        ):
+            return
+        if self._adapter is None:
+            self._adapter = RealInputAdapter(
+                root=self.root,
+                partition=self.partition,
+                overlay=self.overlay,
+                partition_id=self.bindings.partition_id,
+                inputs=self.inputs_by_semantic,
+            )
+        if self.provenance_of is None:
+            self.provenance_of = self._adapter.provenance_of
+        if self.panel_of is None:
+            self.panel_of = self._adapter.panel_of
+        if self.o2_count_of is None:
+            self.o2_count_of = self._adapter.o2_count_of
+        if self.inputs_by_semantic is None:
+            self.inputs_by_semantic = self._adapter.inputs
+
     # -- public ----------------------------------------------------------
     def run(self) -> CampaignRunResult:
+        # E3.2: a ledger containing CAMPAIGN_STOP is terminal. Verify the
+        # chain (read-only) and append nothing whatsoever.
         recorded_stop = self._existing_stop()
+        if recorded_stop is not None:
+            self.ledger.verify()
+            self._replay_counters()
+            return CampaignRunResult(
+                stop_reason=recorded_stop,
+                campaign1_id=self._existing_campaign1_id(),
+                counters=self.counters.to_dict(),
+                ledger_path=str(self.ledger.path),
+            )
+
         self._replay_counters()
+        self._ensure_adapters()
 
-        def terminal(reason: C1StopReason) -> CampaignRunResult:
-            return self._terminal(reason, recorded_stop)
-
+        # E3.1 pre-open Stage-A: no CAMPAIGN_OPEN yet, so write nothing.
         try:
             provenance = {
                 label: self.provenance_of(self._spec_by_label[label])
@@ -1218,10 +1473,10 @@ class CampaignExecutor:
                 if label in self._spec_by_label
             }
         except C1BindingError:
-            return self._fatal(
+            return self._stage_a_result(
                 C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
             )
-        identities = hypothesis_identities(self.factor_specs, provenance)
+        identities = _identity_records(self.factor_specs, provenance)
 
         if self.require_kpit and self.knowledge_log_path is not None:
             preflight = verify_kpit_ordering(
@@ -1232,66 +1487,69 @@ class CampaignExecutor:
         else:
             preflight = KpitPreflight(True, None, ())
         if not preflight.ok:
-            self.ledger.verify()
-            return CampaignRunResult(
-                stop_reason=C1StopReason.GOVERNANCE_CONFLICT,
-                campaign1_id=None,
-                counters=self.counters.to_dict(),
-                ledger_path=str(self.ledger.path),
-            )
+            return self._stage_a_result(C1StopReason.GOVERNANCE_CONFLICT)
 
         try:
             campaign_id = self._open_campaign(preflight, identities)
         except C1GovernanceConflict:
-            return CampaignRunResult(
-                stop_reason=C1StopReason.GOVERNANCE_CONFLICT,
-                campaign1_id=self._existing_campaign1_id(),
-                counters=self.counters.to_dict(),
-                ledger_path=str(self.ledger.path),
-            )
+            return self._stage_a_result(C1StopReason.GOVERNANCE_CONFLICT)
         except C1BindingError:
-            return terminal(
+            return self._stage_a_result(
                 C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
             )
 
+        # Post-open: CAMPAIGN_OPEN is durably recorded, so a Stage-A failure
+        # (and every other typed stop) appends exactly one CAMPAIGN_STOP.
         try:
             for label in self.labels:
                 stop = self._process_label(label, campaign_id)
                 if stop is None or stop == REPLAY_IDENTICAL:
                     continue
-                return terminal(stop)
+                return self._stop(stop, campaign_id)
+        except _StageAFailure as failure:
+            return self._stage_a_result(failure.reason)
         except _d7b.ReserveFirewallError:
-            return terminal(C1StopReason.RESERVE_OR_FIREWALL_VIOLATION)
+            return self._stop(C1StopReason.RESERVE_OR_FIREWALL_VIOLATION, campaign_id)
         except C1SealedFoldError:
-            return terminal(C1StopReason.SEALED_FOLD_ACCESS_ATTEMPT)
+            return self._stop(C1StopReason.SEALED_FOLD_ACCESS_ATTEMPT, campaign_id)
         except C1GovernanceConflict:
-            return terminal(C1StopReason.GOVERNANCE_CONFLICT)
+            return self._stop(C1StopReason.GOVERNANCE_CONFLICT, campaign_id)
         except (C1BindingError, _d7b.D7bBindingError, _pqb.PQBindingError):
-            return terminal(
-                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+            return self._stop(
+                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE,
+                campaign_id,
             )
         except C1Stop as stop:
-            return terminal(stop.reason)
+            return self._stop(stop.reason, campaign_id)
         except C1ReplayMismatchError:
-            # E2.3: the ledger is unchanged; the mismatch itself is fatal.
+            # E3.2: the ledger is unchanged; the mismatch itself is fatal.
             raise
         except Exception:
-            if recorded_stop is None:
-                self.ledger.append(
-                    _json_safe(
-                        {
-                            "record_type": "CAMPAIGN_STOP",
-                            "stop_reason": (
-                                C1StopReason
-                                .INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE.value
-                            ),
-                            "budget_counters": self.counters.to_dict(),
-                        }
-                    )
-                )
+            self._append_stop(
+                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+            )
             raise
 
-        return terminal(C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED)
+        return self._stop(
+            C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED, campaign_id
+        )
+
+    def _ledger_is_post_open(self) -> bool:
+        return bool(self.ledger.records("CAMPAIGN_OPEN"))
+
+    def _stage_a_result(self, reason: C1StopReason) -> CampaignRunResult:
+        """E3.1: pre-open writes nothing; post-open appends one CAMPAIGN_STOP."""
+        if self._ledger_is_post_open():
+            self._append_stage_a_stop(reason)
+        return CampaignRunResult(
+            stop_reason=reason,
+            campaign1_id=self._existing_campaign1_id(),
+            counters=self.counters.to_dict(),
+            ledger_path=str(self.ledger.path),
+        )
+
+    def _append_stage_a_stop(self, reason: C1StopReason) -> None:
+        self._append_stop(reason)
 
     # -- campaign open / lock -------------------------------------------
     def _open_campaign(
@@ -1334,8 +1592,10 @@ class CampaignExecutor:
         try:
             provenance = self.provenance_of(spec)
             hypothesis_id = hypothesis_id_for(provenance)
-        except C1BindingError:
-            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+        except C1BindingError as exc:
+            raise _StageAFailure(
+                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+            ) from exc
 
         is_fold = _fold(self.partition, FoldRole.IS)
         oos_fold = _fold(self.partition, FoldRole.OOS)
@@ -1751,17 +2011,7 @@ class CampaignExecutor:
         if opens:
             self._attempt_ordinal = 0
 
-    def _terminal(
-        self, reason: C1StopReason, recorded_stop: C1StopReason | None
-    ) -> CampaignRunResult:
-        """Return the terminal result, never appending a second CAMPAIGN_STOP."""
-        if recorded_stop is not None:
-            return CampaignRunResult(
-                stop_reason=recorded_stop,
-                campaign1_id=self._existing_campaign1_id(),
-                counters=self.counters.to_dict(),
-                ledger_path=str(self.ledger.path),
-            )
+    def _append_stop(self, reason: C1StopReason) -> None:
         self.ledger.append(
             _json_safe(
                 {
@@ -1770,48 +2020,12 @@ class CampaignExecutor:
                     "budget_counters": self.counters.to_dict(),
                 }
             )
-        )
-        return CampaignRunResult(
-            stop_reason=reason,
-            campaign1_id=self._existing_campaign1_id(),
-            counters=self.counters.to_dict(),
-            ledger_path=str(self.ledger.path),
-        )
-
-    def _fatal(
-        self,
-        reason: C1StopReason,
-        *,
-        campaign_id: str | None = None,
-    ) -> CampaignRunResult:
-        self.ledger.append(
-            _json_safe(
-                {
-                    "record_type": "CAMPAIGN_STOP",
-                    "stop_reason": reason.value,
-                    "budget_counters": self.counters.to_dict(),
-                }
-            )
-        )
-        return CampaignRunResult(
-            stop_reason=reason,
-            campaign1_id=campaign_id,
-            counters=self.counters.to_dict(),
-            ledger_path=str(self.ledger.path),
         )
 
     def _stop(
         self, reason: C1StopReason, campaign_id: str
     ) -> CampaignRunResult:
-        self.ledger.append(
-            _json_safe(
-                {
-                    "record_type": "CAMPAIGN_STOP",
-                    "stop_reason": reason.value,
-                    "budget_counters": self.counters.to_dict(),
-                }
-            )
-        )
+        self._append_stop(reason)
         return CampaignRunResult(
             stop_reason=reason,
             campaign1_id=campaign_id,
