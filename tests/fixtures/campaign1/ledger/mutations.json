@@ -1,0 +1,366 @@
+[
+ {
+  "id": "LX-M1",
+  "description": "critical value uses a two-sided quantile instead of the one-sided asymptotic normal",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "CRITICAL_VALUE: float = float(norm.ppf(1.0 - SEARCH_POLICY.alpha_per_test))",
+    "new": "CRITICAL_VALUE: float = float(norm.ppf(1.0 - 0.5 * SEARCH_POLICY.alpha_per_test))"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_constants_and_hashes"
+ },
+ {
+  "id": "LX-M2",
+  "description": "m read as 6 instead of the frozen family_budget_m=7",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        family_budget_m=7,",
+    "new": "        family_budget_m=6,"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_constants_and_hashes"
+ },
+ {
+  "id": "LX-M3",
+  "description": "an identical replay consumes a statistical/proposal/experiment slot",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)",
+    "new": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            self.counters.consume_primary()\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_replay_returns_replay_identical"
+ },
+ {
+  "id": "LX-M4",
+  "description": "a mismatched replay is accepted instead of failing closed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            if canonical_json(existing) != canonical_json(_json_safe(record)):\n                raise C1ReplayMismatchError(\n                    \"a re-run of a recorded attempt produced a different payload\"\n                )",
+    "new": "            if False:  # mismatched replay accepted\n                raise C1ReplayMismatchError(\n                    \"a re-run of a recorded attempt produced a different payload\"\n                )"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_mismatched_replay_on_open_ledger_fails_closed"
+ },
+ {
+  "id": "LX-M5",
+  "description": "a diagnostic evaluation consumes a statistical slot",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            self.counters.consume_diagnostic()",
+    "new": "            self.counters.consume_primary()"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_full_campaign_records_and_budgets"
+ },
+ {
+  "id": "LX-M6",
+  "description": "a diagnostic evaluation gets a disposition",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "                \"binding_failure\": binding_failure,",
+    "new": "                \"binding_failure\": binding_failure,\n                \"disposition\": DISPOSITION_PASS,"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_diagnostics_never_screened_or_classified"
+ },
+ {
+  "id": "LX-M7",
+  "description": "the IS rule drops the inclusive boundary (>= becomes >)",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        return bool(cell.t_stat >= CRITICAL_VALUE)",
+    "new": "        return bool(cell.t_stat > CRITICAL_VALUE)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_is_screen_boundary_t_equals_c"
+ },
+ {
+  "id": "LX-M8",
+  "description": "the OOS directional rule uses >= 0 instead of > 0",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    return bool(cell.value > 0.0)",
+    "new": "    return bool(cell.value >= 0.0)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_oos_value_zero_fails"
+ },
+ {
+  "id": "LX-M9",
+  "description": "a None screen verdict is treated as failure instead of NOT_ASSESSED",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if _has_none_screen(screens_is) or _has_none_screen(screens_oos):",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_disposition_none_verdict_is_not_assessed"
+ },
+ {
+  "id": "LX-M10",
+  "description": "DELISTING_SENSITIVE is ignored in the disposition",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if _delisting_sensitive(classify_is) or _delisting_sensitive(classify_oos):",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_disposition_delisting_sensitive_blocks"
+ },
+ {
+  "id": "LX-M11",
+  "description": "QUARANTINE_SENSITIVE is ignored in the disposition",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if quarantine_sensitive:\n        fail_reasons.append(\"QUARANTINE_SENSITIVE\")",
+    "new": "    if False:\n        fail_reasons.append(\"QUARANTINE_SENSITIVE\")"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_disposition_quarantine_sensitive_blocks"
+ },
+ {
+  "id": "LX-M12",
+  "description": "the sealed-fold refusal is removed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if fold.role is FoldRole.HOLDOUT:",
+    "new": "    if False:"
+   },
+   {
+    "old": "    if \"holdout\" in _fold_key(fold):",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_sealed_fold_is_refused_before_any_pqb"
+ },
+ {
+  "id": "LX-M13",
+  "description": "the K-PIT ordering check accepts HYPOTHESIS_FREEZE before PROGRAM_FREEZE",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if any(record.seq <= program_freeze_record.seq for record in hyp_records):",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_kpit_rejects_hypothesis_before_program_freeze"
+ },
+ {
+  "id": "LX-M14",
+  "description": "the ledger record-hash chain check is skipped",
+  "file": "smart_beta/campaign/ledger.py",
+  "edits": [
+   {
+    "old": "            if payload[\"record_hash\"] != expected:",
+    "new": "            if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_ledger.py::test_tamper_detected"
+ },
+ {
+  "id": "LX-M15",
+  "description": "the CAMPAIGN_OPEN family lock is not enforced",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            if not _lock_matches(existing[0], record):",
+    "new": "            if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_lock_conflict_stops_with_governance_conflict"
+ },
+ {
+  "id": "LX-M16",
+  "description": "the O2 guard is bypassed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            if count > 0:",
+    "new": "            if count > 10**9:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_o2_guard_skips_pqb_and_not_assessed"
+ },
+ {
+  "id": "LX-M17",
+  "description": "the precommitment file hash check is skipped",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if digest != PRECOMMITMENT_SHA256:",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_precommitment_hash_check_is_enforced"
+ },
+ {
+  "id": "LX-E1-M1",
+  "description": "the cosmetic display name is used as the family identity input",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"domain\": \"campaign1-search-family\",",
+    "new": "        \"domain\": FAMILY_DISPLAY_LABEL,"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_family_id_from_frozen_inputs"
+ },
+ {
+  "id": "LX-E1-M2",
+  "description": "the family members are sorted instead of using the frozen C1-H1..H7 order",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    members = [factor_spec_hash(spec) for spec in factor_specs]",
+    "new": "    members = sorted(factor_spec_hash(spec) for spec in factor_specs)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_family_id_from_frozen_inputs"
+ },
+ {
+  "id": "LX-E1-M3",
+  "description": "campaign1_id is mixed into the family declaration",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"lineage\": None,",
+    "new": "        \"lineage\": None,\n        \"campaign1_id\": \"0\" * 64,"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_family_id_from_frozen_inputs"
+ },
+ {
+  "id": "LX-E1-M4",
+  "description": "alpha_i is computed locally as family_alpha/6 instead of alpha_per_test",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "CRITICAL_VALUE: float = float(norm.ppf(1.0 - SEARCH_POLICY.alpha_per_test))",
+    "new": "CRITICAL_VALUE: float = float(norm.ppf(1.0 - SEARCH_POLICY.family_alpha / 6))"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_alpha_comes_from_policy_and_no_local_division"
+ },
+ {
+  "id": "LX-E1-M5",
+  "description": "the equality assertion against the expected family_id is removed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    if family_id != expected_family_id:",
+    "new": "    if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_family_id_assertion_rejects_other_inputs"
+ },
+ {
+  "id": "LX-E1-M6",
+  "description": "the family lineage is altered from the frozen null",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"lineage\": None,",
+    "new": "        \"lineage\": \"unknown\","
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_family_id_from_frozen_inputs"
+ },
+ {
+  "id": "LX-E2-M1",
+  "description": "the A-cell assessed predicate reintroduces status == 'OK'",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    return cell.status is None",
+    "new": "    return cell.status == \"OK\""
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_is_assessed_predicate"
+ },
+ {
+  "id": "LX-E2-M2",
+  "description": "the Campaign module imports experiment_id_for from the Phase-8 registry",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    hypothesis_id_for,\n)",
+    "new": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    experiment_id_for,\n    hypothesis_id_for,\n)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_ast_import_and_call_bans"
+ },
+ {
+  "id": "LX-E2-M3a",
+  "description": "a Stage-B binding failure stops without appending the attempt record",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            self.ledger.append(_json_safe(record))\n            self.counters.consume_primary()\n            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE",
+    "new": "            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_b_binding_failure_is_accounted"
+ },
+ {
+  "id": "LX-E2-M3b",
+  "description": "a Stage-A identity failure fabricates an attempt record",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        except C1BindingError as exc:\n            raise _StageAFailure(\n                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE\n            ) from exc",
+    "new": "        except C1BindingError as exc:\n            self.ledger.append(\n                _json_safe(\n                    {\n                        \"record_type\": \"PRIMARY_ATTEMPT\",\n                        \"campaign_attempt_id\": \"fabricated\",\n                        \"label\": label,\n                    }\n                )\n            )\n            raise _StageAFailure(\n                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE\n            ) from exc"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_a_postopen_identity_failure_appends_one_stop"
+ },
+ {
+  "id": "LX-E3-M1",
+  "description": "the terminal-ledger check is removed (a stopped ledger accepts new records)",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        recorded_stop = self._existing_stop()\n        if recorded_stop is not None:\n            self.ledger.verify()",
+    "new": "        recorded_stop = self._existing_stop()\n        if False:\n            self.ledger.verify()"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_terminal_ledger_after_untyped_stop_appends_nothing"
+ },
+ {
+  "id": "LX-E3-M2",
+  "description": "a pre-open failure appends CAMPAIGN_STOP",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        if self._ledger_is_post_open():",
+    "new": "        if True:"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_a_preopen_provenance_failure_writes_nothing"
+ },
+ {
+  "id": "LX-E3-M3",
+  "description": "a post-open Stage-A failure returns without appending CAMPAIGN_STOP",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "            self._append_stage_a_stop(reason)",
+    "new": "            pass"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_stage_a_postopen_identity_failure_appends_one_stop"
+ }
+]
