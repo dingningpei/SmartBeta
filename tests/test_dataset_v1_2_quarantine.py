@@ -1204,6 +1204,201 @@ def test_item16_pinned_hash_checks(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# E2. Complete, fail-closed parent bindings (erratum E2)
+# ===========================================================================
+
+#: The exact E2.2 production binding table.
+_E2_2_EXPECTED = {
+    "D5": {
+        "manifest_relative_path": "derived/qc/q-5d1028655f8c82e1/qc_report.json",
+        "manifest_sha256": (
+            "16c582900b77a328ffaee8fdb78b8bc4b7920a0b48ebbc98f7a2e7e62c769ae1"
+        ),
+        "manifest_hash_field": "qc_hash",
+        "manifest_hash": (
+            "3d63e51b983096f0ae579cd1e382c613d9329d239c3f848cc785dee2d61cdfc3"
+        ),
+        "files": {
+            "derived/qc/q-5d1028655f8c82e1/day_flags.parquet": (
+                "f4010ebeabf5cfae2684f3658a5f19f922f15e2c8898410049f2148440cf7891"
+            ),
+        },
+    },
+    "D4": {
+        "manifest_relative_path": (
+            "derived/identity/i-a21f1e46621dee94/identity.json"
+        ),
+        "manifest_sha256": (
+            "b8ed3d23979f8cbb9f320fae96a8cea968b16332fd1000fa1cdedca15df43aa4"
+        ),
+        "manifest_hash_field": "identity_hash",
+        "manifest_hash": (
+            "1023dbca39fd061d52fd26eeb6302f4a8dec467a8ea996b1903da801306ae730"
+        ),
+        "files": {
+            "derived/identity/i-a21f1e46621dee94/identity_assignment.parquet": (
+                "fee4614009095773f75fb832343a5fa9b87b9de1cf363125567222b08fad3f8b"
+            ),
+        },
+    },
+    "D7C": {
+        "manifest_relative_path": (
+            "derived/trusted_inputs/ti-aa23fabd3db4e595/trusted_inputs.json"
+        ),
+        "manifest_sha256": (
+            "d8d40099ba978604727a7d316274a2d3e7f8210baf8cb35e4ca687435fd8f8f0"
+        ),
+        "manifest_hash_field": "ti_hash",
+        "manifest_hash": (
+            "30ee0c51602cf792e8cb7654c2501f52c7d664675dbf78845c903df6683c2ae6"
+        ),
+        "files": {
+            "derived/trusted_inputs/ti-aa23fabd3db4e595/daily_total_return.parquet": (
+                "511bcf4ac4ea2bd02158438732e0fdf19c04d783b88ca7a01ff5a364ec8e688c"
+            ),
+            "derived/trusted_inputs/ti-aa23fabd3db4e595/dollar_volume.parquet": (
+                "c8a632ef455ecec5f3caa95816ec0bb71789e3ed51b9447765021c697fa27780"
+            ),
+            "derived/trusted_inputs/ti-aa23fabd3db4e595/total_return_index.parquet": (
+                "53a48a65a70d16b80374b926b56c50922ebfc521d3f8c1677380343a8ccd5e8e"
+            ),
+            "derived/trusted_inputs/ti-aa23fabd3db4e595/segments.parquet": (
+                "4ea4df04c3e581f1750229c255ed1f5c5ec5055ad6fe954483cc7ae5b76cc384"
+            ),
+        },
+    },
+    "D7A": {
+        "manifest_relative_path": "derived/returns/r-34565f074d64ccda/returns.json",
+        "manifest_sha256": (
+            "6093bec9730e5bd0a6e9e1410db165fca148e3be1b01ef2534db12e34370886e"
+        ),
+        "manifest_hash_field": "returns_hash",
+        "manifest_hash": (
+            "4c487e47fd613f3f272109d14b43a27e061f9cc31e5b6d6bcefd4abc97994861"
+        ),
+        "files": {
+            "derived/returns/r-34565f074d64ccda/labels.parquet": (
+                "262b8b1d445dfb329d33359966a9deba67bd5999ccdc01dd8183eda6f4f2645e"
+            ),
+            "derived/returns/r-34565f074d64ccda/members.parquet": (
+                "fcb2c9df2918a7bd43399b220f9595fc94d8a5dc49542219698ecafb7c6b4488"
+            ),
+            "derived/returns/r-34565f074d64ccda/horizons.parquet": (
+                "61a2ac310021f153676445de7f0122ef74f67910e6506a6e5ef1e286f3d1ccbb"
+            ),
+        },
+    },
+    "D6": {
+        "manifest_relative_path": "derived/universe/u-6150bc6ac2866b7f/universe.json",
+        "manifest_sha256": (
+            "8e5e4ecd1729c2bbf75b1ac1bdd5d497f9f2a360061edb407fc323feb433d737"
+        ),
+        "manifest_hash_field": "universe_hash",
+        "manifest_hash": (
+            "6e8539b7acb4ed4559846234b0b26e6f1d4e6d34f7e0a5d1e2290134d563ed87"
+        ),
+        "files": {
+            "derived/universe/u-6150bc6ac2866b7f/universe_development.parquet": (
+                "f933a67ff8c83ad9f6c7937a76136d93419cedb0ec79cec617df8205b3d38d8b"
+            ),
+        },
+    },
+}
+
+
+class _StageSpy:
+    """A resolver double recording any attempt to open a bound data file."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def read_bytes(self, relative_path: str) -> bytes:
+        self.calls.append(str(relative_path))
+        raise AssertionError("a bound data file was opened before the guard")
+
+
+def test_item24_production_bindings_complete() -> None:
+    import re
+
+    bindings = Q.default_bindings()
+    assert {stage.stage for stage in bindings.stages()} == set(_E2_2_EXPECTED)
+    hex64 = re.compile(r"[0-9a-f]{64}\Z")
+    for stage in bindings.stages():
+        want = _E2_2_EXPECTED[stage.stage]
+        assert stage.manifest_relative_path == want["manifest_relative_path"]
+        assert stage.manifest_hash_field == want["manifest_hash_field"]
+        assert stage.manifest_sha256 == want["manifest_sha256"]
+        assert stage.manifest_hash == want["manifest_hash"]
+        assert {b.relative_path: b.sha256 for b in stage.files} == want["files"]
+        for value in (
+            stage.manifest_sha256,
+            stage.manifest_hash,
+            *(b.sha256 for b in stage.files),
+        ):
+            assert value, (stage.stage, value)
+            assert hex64.fullmatch(value), (stage.stage, value)
+
+
+def test_item25_empty_expected_hash_fails_closed(tmp_path: Path) -> None:
+    base = Q.default_bindings().d5
+    # Empty manifest-file hash: fails closed before any file is opened.
+    spy = _StageSpy()
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(
+            tmp_path, spy, replace(base, manifest_sha256="")
+        )
+    assert spy.calls == []
+    # Empty manifest-field value: fails closed before any file is opened.
+    spy = _StageSpy()
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(tmp_path, spy, replace(base, manifest_hash=""))
+    assert spy.calls == []
+    # Empty data-file hash: fails closed before any file is opened.
+    spy = _StageSpy()
+    empty_file = replace(base.files[0], sha256="")
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(tmp_path, spy, replace(base, files=(empty_file,)))
+    assert spy.calls == []
+
+
+def test_item26_wrong_expected_hash_fails_closed(tmp_path: Path) -> None:
+    store = _build_store(tmp_path, "wrong", flag_session=date(2020, 1, 6))
+    bindings = store.build()
+    resolver = Q.QuarantineResolver(store.root, bindings)
+    base = bindings.d5
+    # Wrong manifest-file hash.
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(
+            store.root, resolver, replace(base, manifest_sha256="0" * 64)
+        )
+    # Wrong manifest-field value.
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(
+            store.root, resolver, replace(base, manifest_hash="0" * 64)
+        )
+    # Wrong data-file hash.
+    wrong_file = replace(base.files[0], sha256="0" * 64)
+    with pytest.raises(Q.QuarantineBindingError):
+        Q._verify_stage_manifest(
+            store.root, resolver, replace(base, files=(wrong_file,))
+        )
+
+
+def test_item27_d4_field_uses_field_value_not_file_hash() -> None:
+    d4 = Q.default_bindings().d4
+    assert d4.manifest_hash_field == "identity_hash"
+    assert d4.manifest_hash == (
+        "1023dbca39fd061d52fd26eeb6302f4a8dec467a8ea996b1903da801306ae730"
+    )
+    assert d4.manifest_sha256 == (
+        "b8ed3d23979f8cbb9f320fae96a8cea968b16332fd1000fa1cdedca15df43aa4"
+    )
+    # The field value and the manifest-file SHA-256 are distinct; the binding
+    # must use the field value (E2.2 provenance).
+    assert d4.manifest_hash != d4.manifest_sha256
+
+
+# ===========================================================================
 # 17. Flag-count guard
 # ===========================================================================
 
@@ -1293,8 +1488,8 @@ def test_item19_sparse_completeness(tmp_path: Path) -> None:
 def test_mutation_fixture_contract() -> None:
     path = Q._REPO_ROOT / "tests/fixtures/dataset_v1_2/pqa/mutations.json"
     mutations = json.loads(path.read_text(encoding="utf-8"))
-    assert len(mutations) == 48
-    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 49)]
+    assert len(mutations) == 54
+    assert [m["id"] for m in mutations] == [f"A{i}" for i in range(1, 55)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/dataset_v1/quarantine.py"

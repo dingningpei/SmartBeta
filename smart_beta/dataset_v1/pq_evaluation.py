@@ -192,7 +192,7 @@ PINNED_CODE: dict[str, str] = {
     # The two merged task modules this bridge depends on, pinned to their
     # merged commits' bytes.
     "smart_beta/dataset_v1/quarantine.py": (
-        "490eb0a3be0a0ddeebff81ad27ac422c1d7a86c9cc63269d8fb8935aaddc391d"
+        "9cd5851f307a08fee018c9a61a4a702c2b11fc3fb1516902022faa78d5d68212"
     ),
     "smart_beta/engines/gap_hac.py": (
         "d0dd6298aabfeb82e0ce7d7ed62937616cc47e5a40e4a2e38bfea0ea9ee85424"

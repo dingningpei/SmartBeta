@@ -574,5 +574,77 @@
     ],
     "file": "smart_beta/dataset_v1/quarantine.py",
     "test": "test_item23_label_consistency"
+  },
+  {
+    "id": "A49",
+    "description": "skip a data-file hash when empty",
+    "edits": [
+      {
+        "old": "        if not binding.sha256:",
+        "new": "        if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item25_empty_expected_hash_fails_closed"
+  },
+  {
+    "id": "A50",
+    "description": "skip a manifest-file hash when empty",
+    "edits": [
+      {
+        "old": "    if not stage.manifest_sha256:",
+        "new": "    if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item25_empty_expected_hash_fails_closed"
+  },
+  {
+    "id": "A51",
+    "description": "skip the manifest-field check when empty",
+    "edits": [
+      {
+        "old": "    if not stage.manifest_hash:",
+        "new": "    if False:"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item25_empty_expected_hash_fails_closed"
+  },
+  {
+    "id": "A52",
+    "description": "the D4 field bound to the file SHA-256",
+    "edits": [
+      {
+        "old": "        manifest_hash=(\n            \"1023dbca39fd061d52fd26eeb6302f4a8dec467a8ea996b1903da801306ae730\"\n        ),",
+        "new": "        manifest_hash=(\n            \"b8ed3d23979f8cbb9f320fae96a8cea968b16332fd1000fa1cdedca15df43aa4\"\n        ),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item27_d4_field_uses_field_value_not_file_hash"
+  },
+  {
+    "id": "A53",
+    "description": "D5 day_flags hash removed from production bindings",
+    "edits": [
+      {
+        "old": "        files=(\n            FileBinding(\n                _D5_FLAGS,\n                \"f4010ebeabf5cfae2684f3658a5f19f922f15e2c8898410049f2148440cf7891\",\n            ),\n        ),",
+        "new": "        files=(),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item24_production_bindings_complete"
+  },
+  {
+    "id": "A54",
+    "description": "D4 identity_assignment hash removed from production bindings",
+    "edits": [
+      {
+        "old": "        files=(\n            FileBinding(\n                _D4_IDENT,\n                \"fee4614009095773f75fb832343a5fa9b87b9de1cf363125567222b08fad3f8b\",\n            ),\n        ),",
+        "new": "        files=(),"
+      }
+    ],
+    "file": "smart_beta/dataset_v1/quarantine.py",
+    "test": "test_item24_production_bindings_complete"
   }
 ]
