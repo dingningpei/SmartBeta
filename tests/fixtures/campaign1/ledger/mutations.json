@@ -29,8 +29,8 @@
   "file": "smart_beta/campaign/campaign1.py",
   "edits": [
    {
-    "old": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)",
-    "new": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            self.counters.consume_primary()\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)"
+    "old": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(\n            spec, label, hypothesis_id, campaign_id, realization\n        )",
+    "new": "                    \"a re-run of a recorded attempt produced a different payload\"\n                )\n            self.counters.consume_primary()\n            return REPLAY_IDENTICAL\n        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        self._run_diagnostics(\n            spec, label, hypothesis_id, campaign_id, realization\n        )"
    }
   ],
   "test": "tests/test_campaign1_executor.py::test_replay_returns_replay_identical"
@@ -297,8 +297,8 @@
   "file": "smart_beta/campaign/campaign1.py",
   "edits": [
    {
-    "old": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    hypothesis_id_for,\n)",
-    "new": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    experiment_id_for,\n    hypothesis_id_for,\n)"
+    "old": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n)",
+    "new": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    experiment_id_for,\n)"
    }
   ],
   "test": "tests/test_campaign1_executor.py::test_ast_import_and_call_bans"
@@ -309,8 +309,8 @@
   "file": "smart_beta/campaign/campaign1.py",
   "edits": [
    {
-    "old": "            self.ledger.append(_json_safe(record))\n            self.counters.consume_primary()\n            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE",
-    "new": "            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
+    "old": "        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE",
+    "new": "        return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
    }
   ],
   "test": "tests/test_campaign1_executor.py::test_stage_b_binding_failure_is_accounted"
@@ -362,5 +362,117 @@
    }
   ],
   "test": "tests/test_campaign1_executor.py::test_stage_a_postopen_identity_failure_appends_one_stop"
+ },
+ {
+  "id": "LX-E4-M1",
+  "description": "hypothesis_id is derived via hypothesis_id_for again",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n)",
+    "new": "from smart_beta.experiment.registry import (\n    canonical_json,\n    content_hash,\n    hypothesis_id_for,\n)"
+   },
+   {
+    "old": "    return content_hash(\n        {\n            \"domain\": HYPOTHESIS_ID_DOMAIN,\n            \"hypothesis_definition_hash\": definition_hash,\n        }\n    )",
+    "new": "    return hypothesis_id_for(definition_hash)"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_ast_import_and_call_bans"
+ },
+ {
+  "id": "LX-E4-M2",
+  "description": "manifest_sha256 is dropped from the hypothesis definition",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"trusted_inputs\": {\n            \"ti_id\": ti_id,\n            \"ti_hash\": ti_hash,\n            \"manifest_sha256\": manifest_sha256,\n        },",
+    "new": "        \"trusted_inputs\": {\n            \"ti_id\": ti_id,\n            \"ti_hash\": ti_hash,\n        },"
+   }
+  ],
+  "test": "tests/test_campaign1_identity.py::test_definitions_and_ids_reproduce_the_correction"
+ },
+ {
+  "id": "LX-E4-M3",
+  "description": "one engine-semantics file is dropped from ENGINE_SEMANTICS_FILES",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "    \"smart_beta/spec/transforms.py\",\n)",
+    "new": ")"
+   }
+  ],
+  "test": "tests/test_campaign1_identity.py::test_definitions_and_ids_reproduce_the_correction"
+ },
+ {
+  "id": "LX-E4-M4",
+  "description": "the hypothesis-id domain tag is changed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "HYPOTHESIS_ID_DOMAIN = \"campaign1-hypothesis-id-v1\"",
+    "new": "HYPOTHESIS_ID_DOMAIN = \"campaign1-hypothesis-id-v2\""
+   }
+  ],
+  "test": "tests/test_campaign1_identity.py::test_definitions_and_ids_reproduce_the_correction"
+ },
+ {
+  "id": "LX-E4-M5",
+  "description": "the realization is included in the definition (the id depends on factor values)",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"engine_semantics\": engine_semantics,\n    }",
+    "new": "        \"engine_semantics\": engine_semantics,\n        \"factor_realization_hash\": \"0\" * 64,\n    }"
+   }
+  ],
+  "test": "tests/test_campaign1_identity.py::test_definitions_and_ids_reproduce_the_correction"
+ },
+ {
+  "id": "LX-E4-M6",
+  "description": "a realization mismatch is ignored and the attempt proceeds to evaluation",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        if realization != expected:\n            return self._stage_b_attempt(",
+    "new": "        if False:\n            return self._stage_b_attempt("
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_realization_mismatch_is_stage_b_and_consumes_slot"
+ },
+ {
+  "id": "LX-E4-M7",
+  "description": "a realization mismatch is treated as a new hypothesis instead of Stage B",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        if realization != expected:\n            return self._stage_b_attempt(\n                existing=existing,\n                label=label,\n                hypothesis_id=hypothesis_id,",
+    "new": "        if realization != expected:\n            return self._stage_b_attempt(\n                existing=existing,\n                label=label,\n                hypothesis_id=campaign1_hypothesis_id(realization),"
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_realization_mismatch_never_creates_a_new_hypothesis"
+ },
+ {
+  "id": "LX-E4-M8",
+  "description": "the EXPECTED_HYPOTHESIS_IDS equality assertion is removed",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        if expected_ids.get(label) != hypothesis_id:",
+    "new": "        if False:"
+   }
+  ],
+  "test": "tests/test_campaign1_identity.py::test_hypothesis_identities_rejects_a_wrong_expected_id"
+ },
+ {
+  "id": "LX-E4-M9",
+  "description": "expected_realizations is not lock-compared in CAMPAIGN_OPEN",
+  "file": "smart_beta/campaign/campaign1.py",
+  "edits": [
+   {
+    "old": "        \"critical_value_repr\",\n        \"expected_factor_realizations\",\n        \"program_id\",",
+    "new": "        \"critical_value_repr\",\n        \"program_id\","
+   }
+  ],
+  "test": "tests/test_campaign1_executor.py::test_lock_conflict_on_realizations_stops_with_governance_conflict"
  }
 ]

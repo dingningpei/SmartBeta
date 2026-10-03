@@ -3,12 +3,15 @@
 Effective authority (in order): ``docs/campaign1_precommitment.md`` (copied
 verbatim here where frozen), the original frozen task
 ``worker_tasks/campaign1/task-c1-ledger-executor.md`` (C1-LX), C1-LX-E1
-(Phase-8 ``family_id`` identity and the αᵢ source) and C1-LX-E2 (PQCell
+(Phase-8 ``family_id`` identity and the αᵢ source), C1-LX-E2 (PQCell
 ``status is None`` assessed predicate, registry-import boundary, and the
-Stage A / Stage B / Stage C binding-failure handling).
+Stage A / Stage B / Stage C binding-failure handling), C1-LX-E3 (pre-open
+failures write nothing; a ledger with ``CAMPAIGN_STOP`` is terminal) and
+C1-LX-E4 (definition-based hypothesis identity and realization provenance),
+governed by ``docs/campaign1_identity_architecture_correction.md``.
 
 This module reuses the frozen existing value objects (Phase-8
-``SearchPolicy``/``hypothesis_id_for``/``registry.content_hash``, PQB
+``SearchPolicy``/``registry.content_hash``, PQB
 ``build_pq_diagnostics``/``classify_pq``/``PQScreenOutcome``, Phase-10
 ``EstimandPolicy``/``read_records``, Phase-7 ``Partition`` and D7b
 ``fold_key``/``_canonical_factor_hash``) and copies none of their logic.
@@ -62,7 +65,6 @@ from smart_beta.experiment.policy import (
 from smart_beta.experiment.registry import (
     canonical_json,
     content_hash,
-    hypothesis_id_for,
 )
 from smart_beta.research.policy import StopReason
 from smart_beta.science.contracts import EstimandKind, RecordKind
@@ -103,6 +105,11 @@ __all__ = [
     "BUDGET_LIMITS",
     "EXPECTED_LABELS",
     "FACTOR_SPECS",
+    "HYPOTHESIS_DEFINITION_SCHEMA",
+    "HYPOTHESIS_ID_DOMAIN",
+    "TI_MANIFEST_RELATIVE",
+    "ENGINE_SEMANTICS_FILES",
+    "EXPECTED_HYPOTHESIS_IDS",
     "CELL_MAPPING",
     "REPLAY_IDENTICAL",
     "PHASE9_STOP_REASON_MAP",
@@ -111,6 +118,7 @@ __all__ = [
     "C1BindingError",
     "C1GovernanceConflict",
     "C1SealedFoldError",
+    "C1RealizationError",
     "C1Stop",
     "C1BudgetExhausted",
     # values
@@ -131,8 +139,11 @@ __all__ = [
     "campaign1_id",
     "campaign_design_hash",
     "campaign_attempt_id",
+    "hypothesis_definition",
+    "hypothesis_definition_hash",
+    "campaign1_hypothesis_id",
     "hypothesis_identities",
-    "factor_provenance_hash",
+    "factor_realization_hash",
     "build_fold_panel",
     "evaluate_o2_count",
     "RealInputAdapter",
@@ -299,6 +310,62 @@ EXPECTED_PARTITION_ID = (
 
 EXPECTED_LABELS = tuple(f"C1-H{i}" for i in range(1, 8))
 
+# ---------------------------------------------------------------------------
+# E4 definition-based hypothesis identity (Correction sections 3-4)
+# ---------------------------------------------------------------------------
+
+#: The frozen HypothesisDefinition schema tag (Correction section 3).
+HYPOTHESIS_DEFINITION_SCHEMA = "campaign1-hypothesis-definition-v1"
+
+#: The frozen domain tag separating Campaign-1 IDs from the Phase-8 domain.
+HYPOTHESIS_ID_DOMAIN = "campaign1-hypothesis-id-v1"
+
+#: The D7c TrustedInputs manifest, relative to the dataset root.
+TI_MANIFEST_RELATIVE = (
+    "derived/trusted_inputs/ti-aa23fabd3db4e595/trusted_inputs.json"
+)
+
+#: The import closure of ``evaluate_factor``, in the frozen Correction order.
+ENGINE_SEMANTICS_FILES: tuple[str, ...] = (
+    "smart_beta/__init__.py",
+    "smart_beta/data/__init__.py",
+    "smart_beta/data/schema.py",
+    "smart_beta/spec/__init__.py",
+    "smart_beta/spec/engine.py",
+    "smart_beta/spec/evaluator.py",
+    "smart_beta/spec/expression.py",
+    "smart_beta/spec/factor_spec.py",
+    "smart_beta/spec/requirements.py",
+    "smart_beta/spec/transforms.py",
+)
+
+#: The 7 frozen Campaign-1 definition-domain hypothesis ids (Correction
+#: section 4). These are the check, never the source of the value; the code
+#: recomputes them from the frozen inputs and asserts equality.
+EXPECTED_HYPOTHESIS_IDS: dict[str, str] = {
+    "C1-H1": (
+        "b5e2ced5365c5963e7ca52ec839f9a356a629ee3d41ecbaa9ded3f5572826b6e"
+    ),
+    "C1-H2": (
+        "39f6ded371924f6c7d7d9d25c59950123b673a3837422d36fb0e15172762374f"
+    ),
+    "C1-H3": (
+        "4f6a7ddfdc67c3be4f6ddedb2f42c8ba1c52165bf01ede7ea84ff3f2cdcb53f9"
+    ),
+    "C1-H4": (
+        "b7dce1008472217507d3140e1ea9dd351ee11c532e9540a541f83e2f911b7a2c"
+    ),
+    "C1-H5": (
+        "a6de29a5a21930c249b010978f837557e287900ad0391b7d9bd9788584920e72"
+    ),
+    "C1-H6": (
+        "e34ecaf78791d9387a4e1b06f0d28e816e08f0dc2d19ebb5a3ceac9d5e39ed22"
+    ),
+    "C1-H7": (
+        "983189fe6c5c188c0e488c26d284b34853deadac8c4cba1e1e1eb5f33ccf3539"
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Typed errors / stop reasons
@@ -319,6 +386,10 @@ class C1GovernanceConflict(C1CampaignError):
 
 class C1SealedFoldError(C1CampaignError):
     """A declaration was requested for the DEVELOPMENT_SEALED_FOLD."""
+
+
+class C1RealizationError(C1CampaignError):
+    """A factor realization could not be computed (E4.2.4)."""
 
 
 class _StageAFailure(Exception):
@@ -788,60 +859,137 @@ def campaign_attempt_id(
     )
 
 
-def _identity_records(
+def hypothesis_definition(
+    spec: FactorSpec,
+    *,
+    root: Path | str,
+) -> dict[str, Any]:
+    """The E4/C1-LX-E4 HypothesisDefinition (Correction section 3).
+
+    Exactly the four frozen fields: ``schema``, ``factor_spec_hash``,
+    ``trusted_inputs`` and ``engine_semantics``. It reads only the D7c
+    manifest JSON bytes and the repository engine-semantics code files; it
+    reads no parquet and evaluates no factor. No Campaign-level field
+    (program, Campaign, estimand, universe, screen) enters the definition.
+    """
+    manifest_path = Path(root) / TI_MANIFEST_RELATIVE
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+    except OSError as exc:
+        raise C1BindingError(
+            f"trusted-inputs manifest unreadable: {exc}"
+        ) from exc
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise C1BindingError(
+            f"trusted-inputs manifest malformed: {exc}"
+        ) from exc
+    ti_id = manifest.get("ti_id") if isinstance(manifest, Mapping) else None
+    ti_hash = manifest.get("ti_hash") if isinstance(manifest, Mapping) else None
+    if not isinstance(ti_id, str) or not isinstance(ti_hash, str):
+        raise C1BindingError("trusted-inputs manifest lacks ti_id/ti_hash")
+    engine_semantics: dict[str, str] = {}
+    for relative in ENGINE_SEMANTICS_FILES:
+        try:
+            engine_semantics[relative] = _sha256_file(_REPO_ROOT / relative)
+        except OSError as exc:
+            raise C1BindingError(
+                f"engine-semantics file {relative} unreadable: {exc}"
+            ) from exc
+    return {
+        "schema": HYPOTHESIS_DEFINITION_SCHEMA,
+        "factor_spec_hash": factor_spec_hash(spec),
+        "trusted_inputs": {
+            "ti_id": ti_id,
+            "ti_hash": ti_hash,
+            "manifest_sha256": manifest_sha256,
+        },
+        "engine_semantics": engine_semantics,
+    }
+
+
+def hypothesis_definition_hash(definition: Mapping[str, Any]) -> str:
+    """``registry.content_hash`` of a HypothesisDefinition (E4.1)."""
+    return content_hash(definition)
+
+
+def campaign1_hypothesis_id(definition_hash: str) -> str:
+    """The Campaign-1 definition-domain hypothesis id (Correction section 3)."""
+    return content_hash(
+        {
+            "domain": HYPOTHESIS_ID_DOMAIN,
+            "hypothesis_definition_hash": definition_hash,
+        }
+    )
+
+
+def _hypothesis_identities_for(
     factor_specs: Sequence[FactorSpec],
-    provenance_by_label: Mapping[str, str],
+    *,
+    root: Path | str,
+    expected_ids: Mapping[str, str],
 ) -> tuple[dict[str, str], ...]:
-    """The C1-H1..H7 identity tuple (label, hashes, hypothesis id)."""
+    """The C1-H1..H7 identity tuple (label, spec, definition, hypothesis id)."""
     identities: list[dict[str, str]] = []
     for spec in factor_specs:
         label = spec.hypothesis or spec.id
-        provenance = provenance_by_label[label]
+        definition = hypothesis_definition(spec, root=root)
+        definition_hash = hypothesis_definition_hash(definition)
+        hypothesis_id = campaign1_hypothesis_id(definition_hash)
+        if expected_ids.get(label) != hypothesis_id:
+            raise C1BindingError(
+                f"hypothesis_id {hypothesis_id} for {label} != bound "
+                f"{expected_ids.get(label)}"
+            )
         identities.append(
             {
                 "label": label,
                 "factor_spec_hash": factor_spec_hash(spec),
-                "factor_provenance_hash": provenance,
-                "hypothesis_id": hypothesis_id_for(provenance),
+                "hypothesis_definition_hash": definition_hash,
+                "hypothesis_id": hypothesis_id,
             }
         )
     return tuple(identities)
 
 
-def factor_provenance_hash(
-    spec: FactorSpec, inputs: Mapping[str, Any]
-) -> str:
-    """The Phase-6 provenance hash: ``evaluate_factor(spec, aliased).content_hash``.
-
-    Uses exactly the same D7c aliasing path PQA uses
-    (``quarantine._alias_inputs``) and never inspects, logs or reports factor
-    values.
-    """
-    aliased = _pqa._alias_inputs(spec, inputs)
-    return _evaluate_factor(spec, aliased).content_hash
-
-
 def hypothesis_identities(
     root: Path | str,
     *,
-    inputs: Mapping[str, Any] | None = None,
     factor_specs: Sequence[FactorSpec] | None = None,
+    expected_ids: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, str], ...]:
-    """The frozen C1-LX section 9 ``hypothesis_identities(root)`` adapter.
+    """The E4 ``hypothesis_identities(root)`` adapter.
 
-    Real D7c inputs are loaded from ``root`` (via ``load_trusted_inputs``)
-    only when ``inputs`` is not supplied; the identities are otherwise a pure
-    function of the supplied synthetic trusted inputs.
+    Reproduces the 7 frozen definition-domain ids from the real D7c manifest
+    bytes and the repository engine-semantics files, with zero factor
+    evaluation. A mismatch raises :class:`C1BindingError` (a Stage-A failure).
     """
     specs = tuple(factor_specs) if factor_specs is not None else FACTOR_SPECS
-    resolved_inputs = inputs
-    if resolved_inputs is None:
-        resolved_inputs = load_trusted_inputs(root)
-    provenance = {
-        (spec.hypothesis or spec.id): factor_provenance_hash(spec, resolved_inputs)
-        for spec in specs
-    }
-    return _identity_records(specs, provenance)
+    expected = EXPECTED_HYPOTHESIS_IDS if expected_ids is None else expected_ids
+    return _hypothesis_identities_for(specs, root=root, expected_ids=expected)
+
+
+def factor_realization_hash(
+    spec: FactorSpec, inputs: Mapping[str, Any]
+) -> str:
+    """The Phase-6 realization hash: ``evaluate_factor(spec, aliased).content_hash``.
+
+    This is the former ``factor_provenance_hash`` with unchanged computation.
+    Uses exactly the same D7c aliasing path PQA uses
+    (``quarantine._alias_inputs``) and never inspects, logs or reports factor
+    values. A computation failure raises the typed :class:`C1RealizationError`.
+    """
+    try:
+        aliased = _pqa._alias_inputs(spec, inputs)
+        return _evaluate_factor(spec, aliased).content_hash
+    except C1RealizationError:
+        raise
+    except Exception as exc:
+        raise C1RealizationError(
+            f"factor realization failed for {spec.id}: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1281,8 +1429,47 @@ def _placeholder_declaration(
     )
 
 
+def _design_declaration(
+    *,
+    spec: FactorSpec,
+    fold: Fold,
+    universe: str,
+    bindings: CampaignBindings,
+    screen_id: str,
+    screen_policy_hash: str,
+) -> CampaignEvaluationDeclaration:
+    """A declaration used only to derive ``campaign_design_hash``.
+
+    ``campaign_design_hash`` excludes ``fold_key`` and ``factor_panel_sha256``
+    (C1-LX section 2.4), so this carries the real declaration fields with a
+    placeholder panel hash. No factor is evaluated and no panel is built, so
+    attempt identity establishment cannot depend on the realization (E4.2.3).
+    """
+    assert_not_sealed_fold(fold)
+    return CampaignEvaluationDeclaration(
+        precommitment_ref=(
+            "docs/campaign1_precommitment.md@" + PRECOMMITMENT_SHA256
+        ),
+        factor_spec_version=spec.version,
+        factor_panel_sha256="0" * 64,
+        partition_id=bindings.partition_id,
+        fold_key=_fold_key(fold),
+        universe=universe,
+        horizon=HORIZON,
+        n_groups=N_GROUPS,
+        winsorization=WINSORIZATION,
+        transaction_cost_bps=TRANSACTION_COST_BPS,
+        periods_per_year=PERIODS_PER_YEAR,
+        weighting=WEIGHTING,
+        primary_metric=PRIMARY_METRIC,
+        basis=BASIS,
+        screen_id=screen_id,
+        screen_policy_hash=screen_policy_hash,
+    )
+
+
 class RealInputAdapter:
-    """The executor's real-input default for provenance, panels and the O2 count.
+    """The executor's real-input default for realization, panels and O2 count.
 
     Inputs are the D7c ``TrustedInput`` mapping loaded lazily from ``root`` via
     the existing :func:`~smart_beta.dataset_v1.trusted_inputs.load_trusted_inputs`
@@ -1311,8 +1498,8 @@ class RealInputAdapter:
             self._inputs = load_trusted_inputs(self._root)
         return self._inputs
 
-    def provenance_of(self, spec: FactorSpec) -> str:
-        return factor_provenance_hash(spec, self.inputs)
+    def realization_of(self, spec: FactorSpec) -> str:
+        return factor_realization_hash(spec, self.inputs)
 
     def panel_of(self, spec: FactorSpec, universe: str, fold: Fold) -> pd.DataFrame:
         loaded = self._load(universe, fold)
@@ -1370,7 +1557,7 @@ class CampaignExecutor:
     """The C1-LX Campaign development executor.
 
     All real factor/PQB/D7b dependencies are injected so the executor is
-    exercised offline with synthetic fixtures. ``provenance_of`` returns the
+    exercised offline with synthetic fixtures. ``realization_of`` returns the
     Phase-6 ``EngineResult.content_hash`` for a spec; ``panel_of`` returns the
     fold/universe Phase-6 panel; ``o2_count_of`` returns the frozen O2 count.
     """
@@ -1382,12 +1569,13 @@ class CampaignExecutor:
         bindings: CampaignBindings,
         partition: Partition,
         factor_specs: Sequence[FactorSpec] | None = None,
-        provenance_of: Callable[[FactorSpec], str] | None = None,
+        realization_of: Callable[[FactorSpec], str] | None = None,
         panel_of: Callable[[FactorSpec, str, Fold], pd.DataFrame] | None = None,
         overlay: Any = None,
         root: Path | str = ".",
         inputs_by_semantic: Mapping[str, Any] | None = None,
         o2_count_of: Callable[[FactorSpec], int] | None = None,
+        expected_realizations: Mapping[str, str] | None = None,
         knowledge_log_path: Path | str | None = None,
         labels: Sequence[str] | None = None,
         require_kpit: bool = True,
@@ -1398,7 +1586,7 @@ class CampaignExecutor:
         self.factor_specs = tuple(
             factor_specs if factor_specs is not None else FACTOR_SPECS
         )
-        self.provenance_of = provenance_of
+        self.realization_of = realization_of
         self.panel_of = panel_of
         self.overlay = overlay
         self.root = Path(root)
@@ -1406,6 +1594,9 @@ class CampaignExecutor:
             None if inputs_by_semantic is None else dict(inputs_by_semantic)
         )
         self.o2_count_of = o2_count_of
+        self.expected_realizations = (
+            None if expected_realizations is None else dict(expected_realizations)
+        )
         self.knowledge_log_path = (
             Path(knowledge_log_path) if knowledge_log_path is not None else None
         )
@@ -1425,7 +1616,7 @@ class CampaignExecutor:
         :class:`RealInputAdapter`, so no D7c data is loaded by the tests.
         """
         if (
-            self.provenance_of is not None
+            self.realization_of is not None
             and self.panel_of is not None
             and self.o2_count_of is not None
         ):
@@ -1438,8 +1629,8 @@ class CampaignExecutor:
                 partition_id=self.bindings.partition_id,
                 inputs=self.inputs_by_semantic,
             )
-        if self.provenance_of is None:
-            self.provenance_of = self._adapter.provenance_of
+        if self.realization_of is None:
+            self.realization_of = self._adapter.realization_of
         if self.panel_of is None:
             self.panel_of = self._adapter.panel_of
         if self.o2_count_of is None:
@@ -1466,17 +1657,24 @@ class CampaignExecutor:
         self._ensure_adapters()
 
         # E3.1 pre-open Stage-A: no CAMPAIGN_OPEN yet, so write nothing.
+        # E4.2.2: a missing or incomplete expected-realization mapping is a
+        # pre-open Stage-A failure and writes nothing.
+        if not self._expected_realizations_complete():
+            return self._stage_a_result(
+                C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+            )
+        # E4.1: hypothesis identity is definition-based; no factor is
+        # evaluated and no D7c parquet is read.
         try:
-            provenance = {
-                label: self.provenance_of(self._spec_by_label[label])
-                for label in EXPECTED_LABELS
-                if label in self._spec_by_label
-            }
+            identities = _hypothesis_identities_for(
+                self.factor_specs,
+                root=self.root,
+                expected_ids=EXPECTED_HYPOTHESIS_IDS,
+            )
         except C1BindingError:
             return self._stage_a_result(
                 C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
             )
-        identities = _identity_records(self.factor_specs, provenance)
 
         if self.require_kpit and self.knowledge_log_path is not None:
             preflight = verify_kpit_ordering(
@@ -1537,6 +1735,16 @@ class CampaignExecutor:
     def _ledger_is_post_open(self) -> bool:
         return bool(self.ledger.records("CAMPAIGN_OPEN"))
 
+    def _expected_realizations_complete(self) -> bool:
+        """E4.2.2: the executor needs one expected realization per C1-H1..H7."""
+        mapping = self.expected_realizations
+        if mapping is None:
+            return False
+        return all(
+            isinstance(mapping.get(label), str) and mapping[label]
+            for label in EXPECTED_LABELS
+        )
+
     def _stage_a_result(self, reason: C1StopReason) -> CampaignRunResult:
         """E3.1: pre-open writes nothing; post-open appends one CAMPAIGN_STOP."""
         if self._ledger_is_post_open():
@@ -1570,6 +1778,9 @@ class CampaignExecutor:
             "critical_value": CRITICAL_VALUE,
             "critical_value_repr": repr(CRITICAL_VALUE),
             "estimand_policy": estimand_policy_content(),
+            "expected_factor_realizations": dict(
+                sorted((self.expected_realizations or {}).items())
+            ),
             "kpit_preflight_record_hashes": list(preflight.record_hashes),
         }
         existing = self.ledger.records("CAMPAIGN_OPEN")
@@ -1583,6 +1794,20 @@ class CampaignExecutor:
         return campaign_id
 
     # -- per-hypothesis --------------------------------------------------
+    def _hypothesis_identity(
+        self, spec: FactorSpec, label: str
+    ) -> tuple[str, str]:
+        """E4.1: the definition-based (definition_hash, hypothesis_id) pair."""
+        definition = hypothesis_definition(spec, root=self.root)
+        definition_hash = hypothesis_definition_hash(definition)
+        hypothesis_id = campaign1_hypothesis_id(definition_hash)
+        if EXPECTED_HYPOTHESIS_IDS.get(label) != hypothesis_id:
+            raise C1BindingError(
+                f"hypothesis_id {hypothesis_id} for {label} != bound "
+                f"{EXPECTED_HYPOTHESIS_IDS.get(label)}"
+            )
+        return definition_hash, hypothesis_id
+
     def _process_label(
         self, label: str, campaign_id: str
     ) -> C1StopReason | str | None:
@@ -1590,8 +1815,7 @@ class CampaignExecutor:
             raise C1GovernanceConflict(f"proposal {label!r} is not precommitted")
         spec = self._spec_by_label[label]
         try:
-            provenance = self.provenance_of(spec)
-            hypothesis_id = hypothesis_id_for(provenance)
+            _, hypothesis_id = self._hypothesis_identity(spec, label)
         except C1BindingError as exc:
             raise _StageAFailure(
                 C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
@@ -1599,10 +1823,11 @@ class CampaignExecutor:
 
         is_fold = _fold(self.partition, FoldRole.IS)
         oos_fold = _fold(self.partition, FoldRole.OOS)
-        panel_is = self.panel_of(spec, PRIMARY_UNIVERSE, is_fold)
-        declaration_is = build_declaration(
+        # The design hash excludes the factor panel hash (C1-LX section 2.4),
+        # so it is computed from metadata only; no factor is evaluated and the
+        # realization stays outside identity establishment (E4.2.3).
+        declaration_is = _design_declaration(
             spec=spec,
-            panel=panel_is,
             fold=is_fold,
             universe=PRIMARY_UNIVERSE,
             bindings=self.bindings,
@@ -1628,24 +1853,6 @@ class CampaignExecutor:
 
         self._attempt_ordinal += 1
         slot_index = self._attempt_ordinal
-
-        if label in ("C1-H6", "C1-H7"):
-            count = self._o2_count(spec)
-            guard = {
-                "record_type": "O2_GUARD",
-                "hypothesis_id": hypothesis_id,
-                "label": label,
-                "count": int(count),
-                "threshold": O2_THRESHOLD,
-                "triggered": bool(count > 0),
-            }
-            if existing is None:
-                self.ledger.append(_json_safe(guard))
-            if count > 0:
-                return self._finish_o2(
-                    existing, attempt_id, hypothesis_id, label, design_hash,
-                    slot_index, campaign_id,
-                )
 
         return self._run_primary(
             spec=spec,
@@ -1674,6 +1881,69 @@ class CampaignExecutor:
         oos_fold: Fold,
         existing: Mapping[str, Any] | None,
     ) -> C1StopReason | str | None:
+        expected = (self.expected_realizations or {}).get(label)
+        # E4.2.4: realization is computed after establishment and before any
+        # PQB build. A mismatch or a typed realization failure is Stage B.
+        try:
+            realization = self.realization_of(spec)
+        except C1RealizationError:
+            return self._stage_b_attempt(
+                existing=existing,
+                label=label,
+                hypothesis_id=hypothesis_id,
+                design_hash=design_hash,
+                attempt_id=attempt_id,
+                slot_index=slot_index,
+                factor_realization_hash=None,
+                expected_factor_realization_hash=expected,
+                failure_detail="REALIZATION_FAILURE",
+            )
+        if realization != expected:
+            return self._stage_b_attempt(
+                existing=existing,
+                label=label,
+                hypothesis_id=hypothesis_id,
+                design_hash=design_hash,
+                attempt_id=attempt_id,
+                slot_index=slot_index,
+                factor_realization_hash=realization,
+                expected_factor_realization_hash=expected,
+                failure_detail="REALIZATION_MISMATCH",
+            )
+
+        # The O2 guard (H6/H7) runs before any PQB build and is part of the
+        # primary attempt; a typed binding failure here is Stage B too.
+        if label in ("C1-H6", "C1-H7"):
+            try:
+                count = self._o2_count(spec)
+            except (C1BindingError, _d7b.D7bBindingError, _pqb.PQBindingError):
+                return self._stage_b_attempt(
+                    existing=existing,
+                    label=label,
+                    hypothesis_id=hypothesis_id,
+                    design_hash=design_hash,
+                    attempt_id=attempt_id,
+                    slot_index=slot_index,
+                    factor_realization_hash=realization,
+                    expected_factor_realization_hash=expected,
+                    failure_detail=None,
+                )
+            guard = {
+                "record_type": "O2_GUARD",
+                "hypothesis_id": hypothesis_id,
+                "label": label,
+                "count": int(count),
+                "threshold": O2_THRESHOLD,
+                "triggered": bool(count > 0),
+            }
+            if existing is None:
+                self.ledger.append(_json_safe(guard))
+            if count > 0:
+                return self._finish_o2(
+                    existing, attempt_id, hypothesis_id, label, design_hash,
+                    slot_index, campaign_id, realization=realization,
+                )
+
         try:
             record = self._primary_payload(
                 spec=spec,
@@ -1685,24 +1955,20 @@ class CampaignExecutor:
                 slot_index=slot_index,
                 is_fold=is_fold,
                 oos_fold=oos_fold,
+                realization=realization,
             )
         except (C1BindingError, _d7b.D7bBindingError, _pqb.PQBindingError):
-            record = self._stage_b_payload(
+            return self._stage_b_attempt(
+                existing=existing,
                 label=label,
                 hypothesis_id=hypothesis_id,
                 design_hash=design_hash,
                 attempt_id=attempt_id,
                 slot_index=slot_index,
+                factor_realization_hash=realization,
+                expected_factor_realization_hash=expected,
+                failure_detail=None,
             )
-            if existing is not None:
-                if canonical_json(existing) != canonical_json(_json_safe(record)):
-                    raise C1ReplayMismatchError(
-                        "stage-B replay produced a different record"
-                    )
-                return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
-            self.ledger.append(_json_safe(record))
-            self.counters.consume_primary()
-            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
 
         if existing is not None:
             if canonical_json(existing) != canonical_json(_json_safe(record)):
@@ -1712,8 +1978,43 @@ class CampaignExecutor:
             return REPLAY_IDENTICAL
         self.ledger.append(_json_safe(record))
         self.counters.consume_primary()
-        self._run_diagnostics(spec, label, hypothesis_id, campaign_id)
+        self._run_diagnostics(
+            spec, label, hypothesis_id, campaign_id, realization
+        )
         return None
+
+    def _stage_b_attempt(
+        self,
+        *,
+        existing: Mapping[str, Any] | None,
+        label: str,
+        hypothesis_id: str,
+        design_hash: str,
+        attempt_id: str,
+        slot_index: int,
+        factor_realization_hash: str | None,
+        expected_factor_realization_hash: str | None,
+        failure_detail: str | None,
+    ) -> C1StopReason | str | None:
+        record = self._stage_b_payload(
+            label=label,
+            hypothesis_id=hypothesis_id,
+            design_hash=design_hash,
+            attempt_id=attempt_id,
+            slot_index=slot_index,
+            factor_realization_hash=factor_realization_hash,
+            expected_factor_realization_hash=expected_factor_realization_hash,
+            failure_detail=failure_detail,
+        )
+        if existing is not None:
+            if canonical_json(existing) != canonical_json(_json_safe(record)):
+                raise C1ReplayMismatchError(
+                    "stage-B replay produced a different record"
+                )
+            return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+        self.ledger.append(_json_safe(record))
+        self.counters.consume_primary()
+        return C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
 
     def _finish_o2(
         self,
@@ -1724,6 +2025,8 @@ class CampaignExecutor:
         design_hash: str,
         slot_index: int,
         campaign_id: str,
+        *,
+        realization: str | None,
     ) -> C1StopReason | str | None:
         record = {
             "record_type": "PRIMARY_ATTEMPT",
@@ -1736,6 +2039,8 @@ class CampaignExecutor:
             "alpha": SEARCH_POLICY.alpha_per_test,
             "critical_value": CRITICAL_VALUE,
             "campaign_design_hash": design_hash,
+            "factor_realization_hash": realization,
+            "failure_detail": None,
             "declarations": {"is": None, "oos": None},
             "diagnostics": {"is": None, "oos": None},
             "screens": [],
@@ -1768,6 +2073,7 @@ class CampaignExecutor:
         slot_index: int,
         is_fold: Fold,
         oos_fold: Fold,
+        realization: str | None,
     ) -> dict[str, Any]:
         panel_is = self.panel_of(spec, PRIMARY_UNIVERSE, is_fold)
         panel_oos = self.panel_of(spec, PRIMARY_UNIVERSE, oos_fold)
@@ -1804,6 +2110,8 @@ class CampaignExecutor:
             "alpha": SEARCH_POLICY.alpha_per_test,
             "critical_value": CRITICAL_VALUE,
             "campaign_design_hash": design_hash,
+            "factor_realization_hash": realization,
+            "failure_detail": None,
             "declarations": {
                 "is": decl_is.declaration_hash,
                 "oos": decl_oos.declaration_hash,
@@ -1842,6 +2150,9 @@ class CampaignExecutor:
         design_hash: str,
         attempt_id: str,
         slot_index: int,
+        factor_realization_hash: str | None = None,
+        expected_factor_realization_hash: str | None = None,
+        failure_detail: str | None = None,
     ) -> dict[str, Any]:
         return {
             "record_type": "PRIMARY_ATTEMPT",
@@ -1854,6 +2165,9 @@ class CampaignExecutor:
             "alpha": SEARCH_POLICY.alpha_per_test,
             "critical_value": CRITICAL_VALUE,
             "campaign_design_hash": design_hash,
+            "factor_realization_hash": factor_realization_hash,
+            "expected_factor_realization_hash": expected_factor_realization_hash,
+            "failure_detail": failure_detail,
             "declarations": {"is": None, "oos": None},
             "diagnostics": {"is": None, "oos": None},
             "screens": [],
@@ -1907,6 +2221,7 @@ class CampaignExecutor:
         label: str,
         hypothesis_id: str,
         campaign_id: str,
+        realization: str | None,
     ) -> None:
         for universe in DIAGNOSTIC_UNIVERSES:
             is_fold = _fold(self.partition, FoldRole.IS)
@@ -1952,6 +2267,7 @@ class CampaignExecutor:
                 "label": label,
                 "universe": universe,
                 "campaign_design_hash": design_hash,
+                "factor_realization_hash": realization,
                 "declarations": {
                     "is": decl_is.declaration_hash,
                     "oos": decl_oos.declaration_hash,
@@ -2047,6 +2363,7 @@ def _lock_matches(existing: Mapping[str, Any], current: Mapping[str, Any]) -> bo
         "family_id",
         "budgets",
         "critical_value_repr",
+        "expected_factor_realizations",
         "program_id",
         "campaign1_id",
     ):
