@@ -1,8 +1,12 @@
 """C1-LX Campaign executor tests (synthetic fixtures only).
 
 Authority: ``worker_tasks/campaign1/task-c1-ledger-executor.md`` (C1-LX) plus
-errata C1-LX-E1 and C1-LX-E2. No provider/network calls, no reserve reads, no
-real factor evaluation, no real PQB build, no Knowledge-PIT append.
+errata C1-LX-E1, C1-LX-E2, C1-LX-E3 and C1-LX-E4, governed by
+``docs/campaign1_identity_architecture_correction.md``. No provider/network
+calls, no reserve reads, no real factor evaluation, no real PQB build, no
+Knowledge-PIT append. Hypothesis identity is exercised with a synthetic D7c
+manifest fixture (the real manifest is read only by
+``tests/test_campaign1_identity.py``).
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ import ast
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +46,75 @@ from smart_beta.spec.requirements import (
 
 DECL = "d" * 64
 ZERO = "0" * 64
+
+_REPO_ROOT = Path(C.__file__).resolve().parents[2]
+
+
+# ---------------------------------------------------------------------------
+# Synthetic D7c manifest fixture (E4 definition-based hypothesis identity)
+# ---------------------------------------------------------------------------
+
+_FIXTURE_MANIFEST: dict[str, str] = {
+    "ti_id": "ti-0000000000000000",
+    "ti_hash": "a" * 64,
+    "note": "synthetic E4 identity fixture",
+}
+_FIXTURE_MANIFEST_BYTES = (
+    canonical_json(_FIXTURE_MANIFEST) + "\n"
+).encode("utf-8")
+_FIXTURE_MANIFEST_SHA256 = hashlib.sha256(_FIXTURE_MANIFEST_BYTES).hexdigest()
+
+
+def _fixture_engine_semantics() -> dict[str, str]:
+    return {
+        relative: hashlib.sha256((_REPO_ROOT / relative).read_bytes()).hexdigest()
+        for relative in C.ENGINE_SEMANTICS_FILES
+    }
+
+
+def _fixture_definition(spec) -> dict:
+    return {
+        "schema": C.HYPOTHESIS_DEFINITION_SCHEMA,
+        "factor_spec_hash": C.factor_spec_hash(spec),
+        "trusted_inputs": {
+            "ti_id": _FIXTURE_MANIFEST["ti_id"],
+            "ti_hash": _FIXTURE_MANIFEST["ti_hash"],
+            "manifest_sha256": _FIXTURE_MANIFEST_SHA256,
+        },
+        "engine_semantics": _fixture_engine_semantics(),
+    }
+
+
+def _fixture_hypothesis_ids() -> dict[str, str]:
+    return {
+        spec.hypothesis: C.campaign1_hypothesis_id(
+            C.hypothesis_definition_hash(_fixture_definition(spec))
+        )
+        for spec in C.FACTOR_SPECS
+    }
+
+
+_FIXTURE_HYPOTHESIS_IDS = _fixture_hypothesis_ids()
+
+
+def _fixture_identity_records() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {
+            "label": spec.hypothesis,
+            "factor_spec_hash": C.factor_spec_hash(spec),
+            "hypothesis_definition_hash": C.hypothesis_definition_hash(
+                _fixture_definition(spec)
+            ),
+            "hypothesis_id": _FIXTURE_HYPOTHESIS_IDS[spec.hypothesis],
+        }
+        for spec in C.FACTOR_SPECS
+    )
+
+
+def _write_fixture_manifest(root) -> None:
+    path = Path(root) / C.TI_MANIFEST_RELATIVE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_FIXTURE_MANIFEST_BYTES)
 
 
 # ---------------------------------------------------------------------------
@@ -176,35 +250,42 @@ def _panel(spec, universe, fold) -> pd.DataFrame:
     )
 
 
-def _provenance(spec) -> str:
+def _realization(spec) -> str:
     return hashlib.sha256(spec.id.encode("utf-8")).hexdigest()
 
 
 def _make_executor(
     tmp_path,
     *,
-    provenance_of=_provenance,
+    realization_of=_realization,
     panel_of=_panel,
     o2_count_of=None,
     bindings=None,
     labels=None,
     knowledge_log_path=None,
+    expected_realizations=None,
 ):
+    _write_fixture_manifest(tmp_path)
     ledger = L.CampaignLedger(Path(tmp_path) / "ledger.jsonl")
     _LEDGER_PATHS.append(ledger.path)
     if o2_count_of is None:
         o2_count_of = lambda spec: 0  # noqa: E731
+    if expected_realizations is None:
+        expected_realizations = {
+            spec.hypothesis: realization_of(spec) for spec in C.FACTOR_SPECS
+        }
     return C.CampaignExecutor(
         ledger=ledger,
         bindings=bindings or _bindings(),
         partition=C.build_partition(),
         factor_specs=C.FACTOR_SPECS,
-        provenance_of=provenance_of,
+        realization_of=realization_of,
         panel_of=panel_of,
         overlay=object(),
         root=Path(tmp_path),
         inputs_by_semantic={},
         o2_count_of=o2_count_of,
+        expected_realizations=expected_realizations,
         knowledge_log_path=knowledge_log_path,
         labels=labels,
     )
@@ -232,6 +313,14 @@ def _ledger_invariant():
     yield
     for path in _LEDGER_PATHS:
         _assert_ledger_invariant(path)
+
+
+@pytest.fixture(autouse=True)
+def _fixture_identity_domain(monkeypatch):
+    """Pin the executor's expected hypothesis ids to the synthetic manifest."""
+    monkeypatch.setattr(
+        C, "EXPECTED_HYPOTHESIS_IDS", dict(_FIXTURE_HYPOTHESIS_IDS)
+    )
 
 
 def _install_stubs(
@@ -485,8 +574,14 @@ def test_identity_determinism_and_domain_separation():
     first = C.campaign1_id(bindings)
     assert first == C.campaign1_id(_bindings())
     assert first != C.campaign1_id(_bindings(pq_hash="9" * 64))
-    provenance = "3" * 64
-    hypothesis_id = hypothesis_id_for(provenance)
+    # E4: Campaign hypothesis ids live in the definition domain, never the
+    # Phase-8 factor-provenance domain.
+    definition_hash = C.hypothesis_definition_hash(
+        _fixture_definition(C.FACTOR_SPECS[0])
+    )
+    hypothesis_id = C.campaign1_hypothesis_id(definition_hash)
+    assert hypothesis_id != hypothesis_id_for(definition_hash)
+    assert hypothesis_id != hypothesis_id_for(hypothesis_id)
     design = "4" * 64
     attempt = C.campaign_attempt_id(
         domain="campaign1-development-attempt",
@@ -537,12 +632,7 @@ def _open_ledger(executor):
     """Open a campaign without running it (OPEN and no STOP)."""
     executor._replay_counters()
     executor._ensure_adapters()
-    provenance = {
-        label: executor.provenance_of(executor._spec_by_label[label])
-        for label in C.EXPECTED_LABELS
-    }
-    identities = C._identity_records(executor.factor_specs, provenance)
-    return executor._open_campaign(C.KpitPreflight(True, None, ()), identities)
+    return executor._open_campaign(C.KpitPreflight(True, None, ()), ())
 
 
 def test_replay_identical_consumes_no_slot(tmp_path, monkeypatch):
@@ -608,6 +698,18 @@ def test_lock_conflict_stops_with_governance_conflict(tmp_path, monkeypatch):
     assert ledger.records("CAMPAIGN_STOP")[-1]["stop_reason"] == (
         "GOVERNANCE_CONFLICT"
     )
+
+
+def test_lock_conflict_on_realizations_stops_with_governance_conflict(
+    tmp_path, monkeypatch
+):
+    _install_stubs(monkeypatch)
+    first = _make_executor(tmp_path)
+    _open_ledger(first)  # OPEN with no STOP
+    changed = {label: "e" * 64 for label in C.EXPECTED_LABELS}
+    second = _make_executor(tmp_path, expected_realizations=changed, labels=())
+    result = second.run()
+    assert result.stop_reason == C.C1StopReason.GOVERNANCE_CONFLICT
 
 
 # ---------------------------------------------------------------------------
@@ -978,8 +1080,7 @@ def test_diagnostics_never_screened_or_classified(tmp_path, monkeypatch):
 
 
 def _identities():
-    provenance = {spec.hypothesis: _provenance(spec) for spec in C.FACTOR_SPECS}
-    return C._identity_records(C.FACTOR_SPECS, provenance)
+    return _fixture_identity_records()
 
 
 def test_kpit_valid_order_accepted(tmp_path):
@@ -1071,12 +1172,10 @@ def test_executor_records_kpit_hashes_on_open(tmp_path, monkeypatch):
 
 
 def test_stage_a_preopen_provenance_failure_writes_nothing(tmp_path, monkeypatch):
+    # E4.2.2: the pre-open Stage-A failure is now a missing expected-
+    # realization mapping; factor provenance is no longer part of identity.
     _install_stubs(monkeypatch)
-
-    def failing(spec):
-        raise C.C1BindingError("provenance failure")
-
-    executor = _make_executor(tmp_path, provenance_of=failing)
+    executor = _make_executor(tmp_path, expected_realizations={})
     result = executor.run()
     assert result.stop_reason == (
         C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
@@ -1090,16 +1189,19 @@ def test_stage_a_preopen_provenance_failure_writes_nothing(tmp_path, monkeypatch
 def test_stage_a_postopen_identity_failure_appends_one_stop(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
     calls: dict[str, int] = {}
+    real_definition = C.hypothesis_definition
 
-    def failing(spec):
+    def failing(spec, *, root):
         # Succeed in the up-front identity pass, then fail while
         # re-establishing the hypothesis identity inside _process_label.
-        calls[spec.hypothesis] = calls.get(spec.hypothesis, 0) + 1
-        if spec.hypothesis == "C1-H1" and calls[spec.hypothesis] >= 2:
-            raise C.C1BindingError("provenance failure")
-        return _provenance(spec)
+        label = spec.hypothesis or spec.id
+        calls[label] = calls.get(label, 0) + 1
+        if label == "C1-H1" and calls[label] >= 2:
+            raise C.C1BindingError("identity failure")
+        return real_definition(spec, root=root)
 
-    executor = _make_executor(tmp_path, provenance_of=failing)
+    monkeypatch.setattr(C, "hypothesis_definition", failing)
+    executor = _make_executor(tmp_path, labels=("C1-H1",))
     result = executor.run()
     assert result.stop_reason == (
         C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
@@ -1137,6 +1239,112 @@ def test_stage_b_binding_failure_is_accounted(tmp_path, monkeypatch):
     assert ledger.records("CAMPAIGN_STOP")[-1]["stop_reason"] == (
         "INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
     )
+
+
+def test_primary_attempt_records_realization(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    attempt = ledger.records("PRIMARY_ATTEMPT")[0]
+    assert attempt["factor_realization_hash"] == _realization(C.FACTOR_SPECS[0])
+    assert attempt["failure_detail"] is None
+    diagnostics = ledger.records("DIAGNOSTIC_EVALUATION")
+    assert diagnostics
+    assert all(
+        record["factor_realization_hash"] == _realization(C.FACTOR_SPECS[0])
+        for record in diagnostics
+    )
+
+
+def test_realization_mismatch_is_stage_b_and_consumes_slot(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+
+    def mismatching(spec):
+        if spec.hypothesis == "C1-H1":
+            return "9" * 64
+        return _realization(spec)
+
+    expected = {spec.hypothesis: _realization(spec) for spec in C.FACTOR_SPECS}
+    executor = _make_executor(
+        tmp_path,
+        labels=("C1-H1",),
+        realization_of=mismatching,
+        expected_realizations=expected,
+    )
+    result = executor.run()
+    assert result.stop_reason == (
+        C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    ledger = L.CampaignLedger(executor.ledger.path)
+    attempts = ledger.records("PRIMARY_ATTEMPT")
+    assert len(attempts) == 1
+    assert attempts[0]["disposition"] == "NOT_ASSESSED"
+    assert attempts[0]["reasons"] == ["BINDING_OR_IDENTITY_FAILURE"]
+    assert attempts[0]["failure_detail"] == "REALIZATION_MISMATCH"
+    assert attempts[0]["factor_realization_hash"] == "9" * 64
+    assert attempts[0]["expected_factor_realization_hash"] == expected["C1-H1"]
+    assert result.counters["proposal_used"] == 1
+    assert result.counters["statistical_slots_used"] == 1
+    assert ledger.records("DIAGNOSTIC_EVALUATION") == ()
+    assert ledger.records("CAMPAIGN_STOP")[-1]["stop_reason"] == (
+        "INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
+    )
+
+
+def test_realization_failure_is_stage_b(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+
+    def failing(spec):
+        if spec.hypothesis == "C1-H1":
+            raise C.C1RealizationError("realization boom")
+        return _realization(spec)
+
+    expected = {label: "e" * 64 for label in C.EXPECTED_LABELS}
+    executor = _make_executor(
+        tmp_path,
+        labels=("C1-H1",),
+        realization_of=failing,
+        expected_realizations=expected,
+    )
+    result = executor.run()
+    assert result.stop_reason == (
+        C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    ledger = L.CampaignLedger(executor.ledger.path)
+    attempts = ledger.records("PRIMARY_ATTEMPT")
+    assert len(attempts) == 1
+    assert attempts[0]["reasons"] == ["BINDING_OR_IDENTITY_FAILURE"]
+    assert attempts[0]["failure_detail"] == "REALIZATION_FAILURE"
+    assert attempts[0]["factor_realization_hash"] is None
+    assert attempts[0]["expected_factor_realization_hash"] == "e" * 64
+    assert result.counters["statistical_slots_used"] == 1
+
+
+def test_realization_mismatch_never_creates_a_new_hypothesis(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+
+    def mismatching(spec):
+        return "9" * 64
+
+    expected = {spec.hypothesis: _realization(spec) for spec in C.FACTOR_SPECS}
+    executor = _make_executor(
+        tmp_path,
+        labels=("C1-H1",),
+        realization_of=mismatching,
+        expected_realizations=expected,
+    )
+    executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    attempts = ledger.records("PRIMARY_ATTEMPT")
+    assert len(attempts) == 1
+    # The recorded hypothesis id is the frozen definition-domain id, not a
+    # fresh one derived from the mismatched realization.
+    assert attempts[0]["hypothesis_id"] == _FIXTURE_HYPOTHESIS_IDS["C1-H1"]
+    open_record = ledger.records("CAMPAIGN_OPEN")[0]
+    assert open_record["expected_factor_realizations"] == {
+        spec.hypothesis: expected[spec.hypothesis] for spec in C.FACTOR_SPECS
+    }
 
 
 def test_stage_c_returned_not_assessed_continues(tmp_path, monkeypatch):
@@ -1179,16 +1387,18 @@ def test_terminal_ledger_after_stage_b_appends_nothing(tmp_path, monkeypatch):
 
 def test_terminal_ledger_after_untyped_stop_appends_nothing(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    calls: dict[str, int] = {}
 
     def exploding(spec):
-        calls[spec.hypothesis] = calls.get(spec.hypothesis, 0) + 1
-        if spec.hypothesis == "C1-H1" and calls[spec.hypothesis] >= 2:
+        if spec.hypothesis == "C1-H1":
             raise RuntimeError("boom")
-        return _provenance(spec)
+        return _realization(spec)
 
+    expected = {label: "e" * 64 for label in C.EXPECTED_LABELS}
     first = _make_executor(
-        tmp_path, provenance_of=exploding, labels=("C1-H1",)
+        tmp_path,
+        realization_of=exploding,
+        expected_realizations=expected,
+        labels=("C1-H1",),
     )
     with pytest.raises(RuntimeError):
         first.run()
@@ -1248,6 +1458,7 @@ def test_ast_import_and_call_bans():
         "DecisionEntry",
         "RegistrySnapshot",
         "experiment_id_for",
+        "hypothesis_id_for",
         "hypothesis_id_for_record",
         "experiment_id_for_record",
         "SearchLedger",
@@ -1260,7 +1471,9 @@ def test_ast_import_and_call_bans():
     }
     forbidden_modules = {"smart_beta.evaluation.engine", "smart_beta.experiment.search"}
     for module in (C, L):
-        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "hypothesis_id_for" not in source, module.__name__
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 assert node.module not in forbidden_modules
@@ -1275,6 +1488,7 @@ def test_ast_import_and_call_bans():
                     "record_program_freeze",
                     "record_hypothesis_freeze",
                     "evaluate",
+                    "hypothesis_id_for",
                 }
 
 
@@ -1286,7 +1500,7 @@ def test_registry_imports_are_exactly_permitted():
             "smart_beta.experiment.registry"
         ):
             names.update(alias.name for alias in node.names)
-    assert names <= {"content_hash", "canonical_json", "hypothesis_id_for"}
+    assert names <= {"content_hash", "canonical_json"}
 
 
 # ---------------------------------------------------------------------------
@@ -1512,34 +1726,39 @@ def _overlay():
     )
 
 
-def test_factor_provenance_hash_matches_phase6():
+def test_factor_realization_hash_matches_phase6():
     spec = _simple_spec()
     inputs = _tri_inputs()
     expected = C._evaluate_factor(
         spec, C._pqa._alias_inputs(spec, inputs)
     ).content_hash
-    assert C.factor_provenance_hash(spec, inputs) == expected
+    assert C.factor_realization_hash(spec, inputs) == expected
     assert len(expected) == 64
 
 
-def test_hypothesis_identities_from_inputs_without_loading_root(tmp_path):
-    spec = _simple_spec()
-    inputs = _tri_inputs()
+def test_realization_failure_is_typed(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(C, "_evaluate_factor", boom)
+    with pytest.raises(C.C1RealizationError):
+        C.factor_realization_hash(_simple_spec(), _tri_inputs())
+
+
+def test_hypothesis_identities_from_fixture_manifest(tmp_path):
+    _write_fixture_manifest(tmp_path)
     identities = C.hypothesis_identities(
-        tmp_path / "never-loaded",
-        inputs=inputs,
-        factor_specs=(spec,),
+        tmp_path,
+        factor_specs=C.FACTOR_SPECS,
+        expected_ids=_FIXTURE_HYPOTHESIS_IDS,
     )
-    assert len(identities) == 1
-    item = identities[0]
-    assert item["label"] == "SYNTH-H1"
-    assert item["factor_spec_hash"] == spec.version
-    assert item["factor_provenance_hash"] == C.factor_provenance_hash(
-        spec, inputs
-    )
-    assert item["hypothesis_id"] == hypothesis_id_for(
-        item["factor_provenance_hash"]
-    )
+    assert len(identities) == 7
+    for item in identities:
+        assert item["label"] in _FIXTURE_HYPOTHESIS_IDS
+        assert item["hypothesis_id"] == _FIXTURE_HYPOTHESIS_IDS[item["label"]]
+        assert "hypothesis_definition_hash" in item
+        # E4: the realization is no longer part of the identity tuple.
+        assert "factor_realization_hash" not in item
 
 
 def test_build_fold_panel_and_pqb_match():
