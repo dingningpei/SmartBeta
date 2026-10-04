@@ -264,6 +264,7 @@ def _make_executor(
     labels=None,
     knowledge_log_path=None,
     expected_realizations=None,
+    require_kpit=True,
 ):
     _write_fixture_manifest(tmp_path)
     ledger = L.CampaignLedger(Path(tmp_path) / "ledger.jsonl")
@@ -288,6 +289,7 @@ def _make_executor(
         expected_realizations=expected_realizations,
         knowledge_log_path=knowledge_log_path,
         labels=labels,
+        require_kpit=require_kpit,
     )
 
 
@@ -611,7 +613,7 @@ def _run_full(tmp_path, monkeypatch, **kwargs):
 
 
 def test_full_campaign_records_and_budgets(tmp_path, monkeypatch):
-    result, executor = _run_full(tmp_path, monkeypatch)
+    result, executor = _run_full(tmp_path, monkeypatch, require_kpit=False)
     assert result.stop_reason == C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
     ledger = L.CampaignLedger(executor.ledger.path)
     assert len(ledger.records("CAMPAIGN_OPEN")) == 1
@@ -637,10 +639,10 @@ def _open_ledger(executor):
 
 def test_replay_identical_consumes_no_slot(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    first = _make_executor(tmp_path)
+    first = _make_executor(tmp_path, require_kpit=False)
     first.run()
     records_before = len(L.CampaignLedger(first.ledger.path).records())
-    second = _make_executor(tmp_path)
+    second = _make_executor(tmp_path, require_kpit=False)
     result = second.run()
     records_after = len(L.CampaignLedger(second.ledger.path).records())
     assert records_after == records_before
@@ -655,7 +657,7 @@ def test_replay_identical_consumes_no_slot(tmp_path, monkeypatch):
 
 def test_replay_returns_replay_identical(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    first = _make_executor(tmp_path, labels=("C1-H1",))
+    first = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
     first.run()
     second = _make_executor(tmp_path, labels=("C1-H1",))
     second._replay_counters()
@@ -690,7 +692,10 @@ def test_lock_conflict_stops_with_governance_conflict(tmp_path, monkeypatch):
     first = _make_executor(tmp_path)
     _open_ledger(first)  # OPEN with no STOP
     second = _make_executor(
-        tmp_path, bindings=_bindings(pq_hash="9" * 64), labels=()
+        tmp_path,
+        bindings=_bindings(pq_hash="9" * 64),
+        labels=(),
+        require_kpit=False,
     )
     result = second.run()
     assert result.stop_reason == C.C1StopReason.GOVERNANCE_CONFLICT
@@ -707,7 +712,12 @@ def test_lock_conflict_on_realizations_stops_with_governance_conflict(
     first = _make_executor(tmp_path)
     _open_ledger(first)  # OPEN with no STOP
     changed = {label: "e" * 64 for label in C.EXPECTED_LABELS}
-    second = _make_executor(tmp_path, expected_realizations=changed, labels=())
+    second = _make_executor(
+        tmp_path,
+        expected_realizations=changed,
+        labels=(),
+        require_kpit=False,
+    )
     result = second.run()
     assert result.stop_reason == C.C1StopReason.GOVERNANCE_CONFLICT
 
@@ -1003,6 +1013,7 @@ def test_o2_guard_skips_pqb_and_not_assessed(tmp_path, monkeypatch):
         tmp_path,
         labels=("C1-H6",),
         o2_count_of=lambda spec: 3,
+        require_kpit=False,
     )
     result = executor.run()
     assert result.stop_reason == C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
@@ -1059,7 +1070,9 @@ def test_diagnostics_never_screened_or_classified(tmp_path, monkeypatch):
         monkeypatch,
         classify=lambda diag, screens: classify_calls.append(1) or _Classify(),
     )
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     executor.run()
     ledger = L.CampaignLedger(executor.ledger.path)
     diagnostics = ledger.records("DIAGNOSTIC_EVALUATION")
@@ -1166,6 +1179,36 @@ def test_executor_records_kpit_hashes_on_open(tmp_path, monkeypatch):
     assert len(opens[0]["kpit_preflight_record_hashes"]) == 9
 
 
+def test_kpit_none_path_fails_closed(tmp_path, monkeypatch):
+    """E5.4: the production default with no K-log must refuse to open."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    # The production default is retained by the helper; this test does not
+    # opt into the test-only fail-open switch.
+    assert executor.require_kpit is True
+    assert executor.knowledge_log_path is None
+    result = executor.run()
+    assert result.stop_reason == C.C1StopReason.GOVERNANCE_CONFLICT
+    path = executor.ledger.path
+    assert (not path.exists()) or path.read_bytes() == b""
+    assert L.CampaignLedger(path).records() == ()
+    assert result.counters["proposal_used"] == 0
+
+
+def test_require_kpit_false_is_the_only_fail_open_switch(
+    tmp_path, monkeypatch
+):
+    """E5.4: the silent preflight is reachable only via require_kpit=False."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
+    result = executor.run()
+    assert result.stop_reason == (
+        C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
+    )
+
+
 # ---------------------------------------------------------------------------
 # 12. E2 Stage A / B / C
 # ---------------------------------------------------------------------------
@@ -1201,7 +1244,9 @@ def test_stage_a_postopen_identity_failure_appends_one_stop(tmp_path, monkeypatc
         return real_definition(spec, root=root)
 
     monkeypatch.setattr(C, "hypothesis_definition", failing)
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     result = executor.run()
     assert result.stop_reason == (
         C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
@@ -1222,7 +1267,9 @@ def test_stage_b_binding_failure_is_accounted(tmp_path, monkeypatch):
         raise PQ.PQBindingError("pinned code mismatch")
 
     _install_stubs(monkeypatch, build=raising)
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     result = executor.run()
     assert result.stop_reason == (
         C.C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
@@ -1243,7 +1290,9 @@ def test_stage_b_binding_failure_is_accounted(tmp_path, monkeypatch):
 
 def test_primary_attempt_records_realization(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     executor.run()
     ledger = L.CampaignLedger(executor.ledger.path)
     attempt = ledger.records("PRIMARY_ATTEMPT")[0]
@@ -1271,6 +1320,7 @@ def test_realization_mismatch_is_stage_b_and_consumes_slot(tmp_path, monkeypatch
         labels=("C1-H1",),
         realization_of=mismatching,
         expected_realizations=expected,
+        require_kpit=False,
     )
     result = executor.run()
     assert result.stop_reason == (
@@ -1306,6 +1356,7 @@ def test_realization_failure_is_stage_b(tmp_path, monkeypatch):
         labels=("C1-H1",),
         realization_of=failing,
         expected_realizations=expected,
+        require_kpit=False,
     )
     result = executor.run()
     assert result.stop_reason == (
@@ -1333,6 +1384,7 @@ def test_realization_mismatch_never_creates_a_new_hypothesis(tmp_path, monkeypat
         labels=("C1-H1",),
         realization_of=mismatching,
         expected_realizations=expected,
+        require_kpit=False,
     )
     executor.run()
     ledger = L.CampaignLedger(executor.ledger.path)
@@ -1355,7 +1407,9 @@ def test_stage_c_returned_not_assessed_continues(tmp_path, monkeypatch):
             not_assessed="DATASET_IDENTITY_MISMATCH",
         ),
     )
-    executor = _make_executor(tmp_path, labels=("C1-H1", "C1-H2"))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1", "C1-H2"), require_kpit=False
+    )
     result = executor.run()
     assert result.stop_reason == C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
     ledger = L.CampaignLedger(executor.ledger.path)
@@ -1370,14 +1424,18 @@ def test_terminal_ledger_after_stage_b_appends_nothing(tmp_path, monkeypatch):
         raise PQ.PQBindingError("pinned code mismatch")
 
     _install_stubs(monkeypatch, build=raising)
-    first = _make_executor(tmp_path, labels=("C1-H1",))
+    first = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     first.run()
     path = first.ledger.path
     before = path.read_bytes()
     assert before
 
     _install_stubs(monkeypatch)  # cause removed
-    second = _make_executor(tmp_path, labels=("C1-H1",))
+    second = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     result = second.run()
     assert path.read_bytes() == before
     assert result.stop_reason == (
@@ -1399,6 +1457,7 @@ def test_terminal_ledger_after_untyped_stop_appends_nothing(tmp_path, monkeypatc
         realization_of=exploding,
         expected_realizations=expected,
         labels=("C1-H1",),
+        require_kpit=False,
     )
     with pytest.raises(RuntimeError):
         first.run()
@@ -1407,7 +1466,9 @@ def test_terminal_ledger_after_untyped_stop_appends_nothing(tmp_path, monkeypatc
     assert before
     assert L.CampaignLedger(path).records("CAMPAIGN_STOP")
 
-    second = _make_executor(tmp_path, labels=("C1-H1",))
+    second = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     result = second.run()
     assert path.read_bytes() == before
     assert result.stop_reason == (
@@ -1417,12 +1478,16 @@ def test_terminal_ledger_after_untyped_stop_appends_nothing(tmp_path, monkeypatc
 
 def test_terminal_ledger_after_normal_close_appends_nothing(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    first = _make_executor(tmp_path, labels=("C1-H1",))
+    first = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     first_result = first.run()
     path = first.ledger.path
     before = path.read_bytes()
 
-    second = _make_executor(tmp_path, labels=("C1-H1",))
+    second = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     second_result = second.run()
     assert path.read_bytes() == before
     assert first_result.stop_reason == (
@@ -1438,7 +1503,9 @@ def test_terminal_ledger_after_normal_close_appends_nothing(tmp_path, monkeypatc
 
 def test_forbidden_vocabulary_grep(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     executor.run()
     forbidden = ("ACCEPT", "REJECT", "DEFER", "EvaluationRecord", "DecisionRecord")
     for module in (C, L):
@@ -1510,7 +1577,9 @@ def test_registry_imports_are_exactly_permitted():
 
 def test_report_determinism_and_claim_boundary(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    executor = _make_executor(tmp_path, labels=("C1-H1",))
+    executor = _make_executor(
+        tmp_path, labels=("C1-H1",), require_kpit=False
+    )
     executor.run()
     json_bytes, markdown_bytes = C.render_report(executor.ledger.path)
     json_again, markdown_again = C.render_report(executor.ledger.path)
@@ -1527,7 +1596,7 @@ def test_report_determinism_and_claim_boundary(tmp_path, monkeypatch):
 
 def test_report_of_full_campaign_lists_every_hypothesis(tmp_path, monkeypatch):
     _install_stubs(monkeypatch)
-    executor = _make_executor(tmp_path)
+    executor = _make_executor(tmp_path, require_kpit=False)
     executor.run()
     json_bytes, _ = C.render_report(executor.ledger.path)
     payload = json.loads(json_bytes.decode("utf-8"))

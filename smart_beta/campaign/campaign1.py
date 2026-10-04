@@ -1676,7 +1676,14 @@ class CampaignExecutor:
                 C1StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
             )
 
-        if self.require_kpit and self.knowledge_log_path is not None:
+        # E5.4 fail-closed K-PIT preflight: a required K-PIT
+        # (``require_kpit=True``, the production default) with no knowledge
+        # log must refuse to open. The silent ``KpitPreflight(True, None, ())``
+        # path is reachable only through the explicit test-only
+        # ``require_kpit=False`` switch.
+        if self.require_kpit:
+            if self.knowledge_log_path is None:
+                return self._stage_a_result(C1StopReason.GOVERNANCE_CONFLICT)
             preflight = verify_kpit_ordering(
                 self.knowledge_log_path,
                 policy=estimand_policy(),
