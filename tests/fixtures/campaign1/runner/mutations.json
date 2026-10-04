@@ -1,0 +1,146 @@
+[
+  {
+    "id": "E5-M1",
+    "description": "the verify_overlay call is removed from load_campaign_overlay, so a tampered overlay file is accepted",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    root = Path(dataset_root)\n    try:\n        manifest = _pqa.verify_overlay(root)\n    except Exception as exc:  # noqa: BLE001 - re-typed, fail closed\n        raise C1BindingError(f\"overlay verification failed: {exc}\") from exc",
+        "new": "    root = Path(dataset_root)\n    manifest = json.loads(\n        (\n            _pqa._overlay_directory(root, _pqa.DEFAULT_BINDINGS) / \"pq.json\"\n        ).read_text(encoding=\"utf-8\")\n    )"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_overlay_loader_rejects_tampered_file"
+  },
+  {
+    "id": "E5-M2",
+    "description": "the pq_hash assertion in load_campaign_overlay is removed",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    _assert_equal(\"pq_id\", pq_id, EXPECTED_PQ_ID)\n    _assert_equal(\"pq_hash\", pq_hash, EXPECTED_PQ_HASH)\n    _assert_equal(\"identity_hash\", identity_hash, EXPECTED_DATASET_IDENTITY_HASH)",
+        "new": "    _assert_equal(\"pq_id\", pq_id, EXPECTED_PQ_ID)\n    _assert_equal(\"identity_hash\", identity_hash, EXPECTED_DATASET_IDENTITY_HASH)"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_overlay_loader_rejects_wrong_manifest_identity[pq_hash]"
+  },
+  {
+    "id": "E5-M3",
+    "description": "the overlay field mapping swaps input_states and primitive_states",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "        primitive_states=frames[\"primitive_states.parquet\"],\n        input_states=frames[\"input_states.parquet\"],",
+        "new": "        primitive_states=frames[\"input_states.parquet\"],\n        input_states=frames[\"primitive_states.parquet\"],"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_overlay_loader_succeeds_and_maps_fields"
+  },
+  {
+    "id": "E5-M4",
+    "description": "one binding assertion (pq_reporting_sha256) is removed from production_bindings",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    _assert_equal(\n        \"pq_reporting_sha256\",\n        _sha256_file(PQ_REPORTING_PATH),\n        EXPECTED_PQ_REPORTING_SHA256,\n    )\n    _assert_equal(\n        \"pq_evaluation_sha256\",",
+        "new": "    _assert_equal(\n        \"pq_evaluation_sha256\","
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_production_bindings_rejects_each_field_mismatch[pq_reporting_sha256]"
+  },
+  {
+    "id": "E5-M5",
+    "description": "r3_identity_hash is decoupled from dataset_identity_hash",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    r3_identity_hash = dataset_identity_hash\n    _assert_equal(\"r3_identity_hash\", r3_identity_hash, dataset_identity_hash)",
+        "new": "    r3_identity_hash = EXPECTED_PQ_HASH\n    _assert_equal(\"r3_identity_hash\", r3_identity_hash, EXPECTED_PQ_HASH)"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_production_bindings_succeeds_with_stubs"
+  },
+  {
+    "id": "E5-M6",
+    "description": "the evidence SHA-256 check is removed from expected_realizations_from_evidence",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    evidence_path = Path(path)\n    _assert_equal(\n        \"evidence sha256\",\n        _sha256_file(evidence_path),\n        EXPECTED_EVIDENCE_SHA256,\n    )\n    try:",
+        "new": "    evidence_path = Path(path)\n    try:"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_expected_realizations_rejects_modified_bytes"
+  },
+  {
+    "id": "E5-M7",
+    "description": "the parsed evidence map is not cross-checked against EXPECTED_FACTOR_REALIZATIONS",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    if parsed != EXPECTED_FACTOR_REALIZATIONS:\n        raise C1BindingError(\n            \"parsed evidence realizations != EXPECTED_FACTOR_REALIZATIONS\"\n        )\n    return parsed",
+        "new": "    return parsed"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_expected_realizations_rejects_map_not_matching_constant"
+  },
+  {
+    "id": "E5-M8",
+    "description": "the K-PIT fail-open is restored when knowledge_log_path is None",
+    "file": "smart_beta/campaign/campaign1.py",
+    "edits": [
+      {
+        "old": "        if self.require_kpit:\n            if self.knowledge_log_path is None:\n                return self._stage_a_result(C1StopReason.GOVERNANCE_CONFLICT)\n            preflight = verify_kpit_ordering(",
+        "new": "        if self.require_kpit and self.knowledge_log_path is not None:\n            preflight = verify_kpit_ordering("
+      }
+    ],
+    "test": "tests/test_campaign1_executor.py::test_kpit_none_path_fails_closed"
+  },
+  {
+    "id": "E5-M9",
+    "description": "the runner passes require_kpit=False to CampaignExecutor",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "        knowledge_log_path=knowledge_log_path,\n        require_kpit=True,\n    )",
+        "new": "        knowledge_log_path=knowledge_log_path,\n        require_kpit=False,\n    )"
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_runner_never_passes_require_kpit_false"
+  },
+  {
+    "id": "E5-M10",
+    "description": "the preflight creates the output directory instead of staying read-only",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    _assert_output_outside_git(output_root)\n\n    bindings = production_bindings(",
+        "new": "    _assert_output_outside_git(output_root)\n    Path(output_root).mkdir(parents=True, exist_ok=True)\n\n    bindings = production_bindings("
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_preflight_makes_zero_writes_and_no_forbidden_reads"
+  },
+  {
+    "id": "E5-M11",
+    "description": "an output directory inside the Git working tree is accepted",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    _assert_output_outside_git(output_root)\n\n    bindings = production_bindings(",
+        "new": "    bindings = production_bindings("
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_preflight_refuses_output_inside_git"
+  },
+  {
+    "id": "E5-M12",
+    "description": "an existing ledger is not refused by the preflight",
+    "file": "smart_beta/campaign/runner.py",
+    "edits": [
+      {
+        "old": "    ledger_path = Path(output_root) / campaign_id / \"ledger.jsonl\"\n    if ledger_path.exists():\n        raise C1BindingError(f\"a ledger already exists at {ledger_path}\")",
+        "new": "    ledger_path = Path(output_root) / campaign_id / \"ledger.jsonl\""
+      }
+    ],
+    "test": "tests/test_campaign1_runner.py::test_preflight_refuses_existing_ledger"
+  }
+]
