@@ -1,0 +1,78 @@
+{
+  "schema": "pqv2-dependency-frozen-table-v1",
+  "authority": "docs/discovery_dataset_v1_2_pq_v2_methodology.md M§10 (Campaign-1 dependency table) + M§15 (CE-ID)",
+  "offset_convention": "signed session offsets relative to row f (a field at row f is dated -1); a window (y, x] contains the returns at offsets u with y < u <= x",
+  "campaign1_factorspecs_sha256": "f93a218d1e8a5bc07a7e64b52e1ce66be09b6708479d5c76a5f9a2973d6d532c",
+  "entries": [
+    {
+      "hypothesis": "C1-H1",
+      "canonical_key": "977f42255b5482fae93fc84565faa8ee0e8d126e3b64f4c083c7d2712ac2f2d5",
+      "certified_class": "SIMPLE",
+      "algebraic": [[-253, -22]],
+      "numerical_returns": [],
+      "numerical_dv_short": [],
+      "numerical_dv_long": [],
+      "cross_sectional": false
+    },
+    {
+      "hypothesis": "C1-H2",
+      "canonical_key": "dd0cc3b4c55dcf237689cdf685847752c0f728a7f82a92de4875fe2f1d5f6868",
+      "certified_class": "SIMPLE",
+      "algebraic": [[-127, -22]],
+      "numerical_returns": [],
+      "numerical_dv_short": [],
+      "numerical_dv_long": [],
+      "cross_sectional": false
+    },
+    {
+      "hypothesis": "C1-H3",
+      "canonical_key": "c99d4b3b655dcd5b40542563da3fa748beb7151d86762bda9352d5b03576de5b",
+      "certified_class": "SIMPLE",
+      "algebraic": [[-22, -1]],
+      "numerical_returns": [],
+      "numerical_dv_short": [],
+      "numerical_dv_long": [],
+      "cross_sectional": false
+    },
+    {
+      "hypothesis": "C1-H4",
+      "canonical_key": "29d24b15c18e910c6733a9785b4827733217efe179230d404d886d02f1751182",
+      "certified_class": "STD_X_RANK",
+      "algebraic": [[-253, -22]],
+      "numerical_returns": [],
+      "numerical_dv_short": [[-22, -1]],
+      "numerical_dv_long": [[-253, -1]],
+      "cross_sectional": true
+    },
+    {
+      "hypothesis": "C1-H5",
+      "canonical_key": "c4df477b404bd7a0a789b3b6e8ae47a5ac0afa70b04bbea4235e12c41ba6b868",
+      "certified_class": "STD_X_RANK",
+      "algebraic": [[-127, -22]],
+      "numerical_returns": [],
+      "numerical_dv_short": [[-22, -1]],
+      "numerical_dv_long": [[-253, -1]],
+      "cross_sectional": true
+    },
+    {
+      "hypothesis": "C1-H6",
+      "canonical_key": "51759eeb41dfb60e02ce9930d693b18a0575140c77c2f5884fa8497e51cbbd1e",
+      "certified_class": "SIMPLE",
+      "algebraic": [[-253, -22]],
+      "numerical_returns": [[-253, -22]],
+      "numerical_dv_short": [],
+      "numerical_dv_long": [],
+      "cross_sectional": false
+    },
+    {
+      "hypothesis": "C1-H7",
+      "canonical_key": "746862a4d0a31ce601cce809a9df9d8104da8b6080ee962b85152cc08d722605",
+      "certified_class": "SIMPLE",
+      "algebraic": [[-127, -22]],
+      "numerical_returns": [[-127, -22]],
+      "numerical_dv_short": [],
+      "numerical_dv_long": [],
+      "cross_sectional": false
+    }
+  ]
+}

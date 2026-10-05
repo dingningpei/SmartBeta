@@ -1,0 +1,129 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the CE classifier test",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [],
+    "test": "tests/test_pqv2_dependency.py::test_certify_all_seven_and_hypotheses"
+  },
+  {
+    "id": "V2-M03",
+    "description": "MISDATED alternatives omitted from the per-flag algebraic branch set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if s_in == d_in:",
+        "new": "    if True:  # V2-M03: MISDATED alternatives omitted"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_full_window_H1_misdated_matches_oracle"
+  },
+  {
+    "id": "V2-M08",
+    "description": "TRI absorption: every flag from the segment anchor to x affects the cell (P-Q v1 lineage)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return y <= s_off <= x + 1",
+        "new": "    return s_off <= x + 1  # V2-M08: TRI absorption"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_prop2_flag_before_y_has_no_effect"
+  },
+  {
+    "id": "V2-M09",
+    "description": "window endpoints off by one: the rolling window starts one session too late",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return (-1 - window, -1)",
+        "new": "    return (-window, -1)  # V2-M09: window endpoints off by one"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_frozen_table_matches_dependency_windows"
+  },
+  {
+    "id": "C-M1",
+    "description": "s = next(x) omitted from the algebraic positions (the ending endpoint is dropped)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        if s_off == x + 1:",
+        "new": "        if False:  # C-M1: s = next(x) omitted"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_algebraic_flag_positions_match_oracle"
+  },
+  {
+    "id": "C-M2",
+    "description": "s = y given Q instead of Q^-1 (the anchor close direction is flipped)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "            return rel.inv()  # C2: the anchor close is in the denominator",
+        "new": "            return rel  # C-M2: y given Q instead of Q^-1"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_algebraic_flag_positions_match_oracle"
+  },
+  {
+    "id": "C-M3",
+    "description": "numerical ret window uses {s} only instead of {prev s, s, next s}",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    candidates = (prev_off, s_off, next_off)",
+        "new": "    candidates = (s_off,)  # C-M3: numerical window uses s only"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_numerical_rule_counts_prev_s_and_next_s"
+  },
+  {
+    "id": "C-M4",
+    "description": "dv kappa taken from the absolute S2 set (a CA-style transition factor) instead of the relative close-branch kappa",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    rel = transition.rel",
+        "new": "    rel = _core.s2_absolute(transition.m_obs)  # C-M4: CA-style absolute dv"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v_interval_equals_vertex_enumeration"
+  },
+  {
+    "id": "C-M5",
+    "description": "V extremes use a uniform kappa direction instead of splitting short-window and long-only cells",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    v_max = (n_long / n_short) * short_hi_sum / (short_hi_sum + long_only_lo_sum)",
+        "new": "    v_max = (n_long / n_short) * short_hi_sum / (short_hi_sum + long_only_hi_sum)  # C-M5: uniform kappa"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v_interval_equals_vertex_enumeration"
+  },
+  {
+    "id": "C-M6",
+    "description": "uncertainty computed only over the observed (universe) keys instead of the full cross-section passed in",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    for key in key_list:",
+        "new": "    for key in tuple(observed):  # C-M6: cross-section truncated"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_full_cross_section_keys_are_all_returned"
+  },
+  {
+    "id": "C-M7",
+    "description": "certify accepts by structure/hypothesis similarity instead of the exact canonical key",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    key = canonical_key(factor_spec)\n    entry = CERTIFIED.get(key)",
+        "new": "    key = canonical_key(factor_spec)\n    entry = CERTIFIED.get(key)\n    if entry is None and factor_spec.hypothesis is not None:\n        for _candidate in CERTIFIED.values():\n            if _candidate[1] == factor_spec.hypothesis:\n                entry = _candidate\n                break"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_certify_rejects_perturbed_window"
+  }
+]
