@@ -1,0 +1,75 @@
+[
+ {
+  "id": "G-CONTROL",
+  "description": "CONTROL: no edit applied; the named test must still pass (the mutation runner's negative control).",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [],
+  "test": "tests/test_pqv2_oracle_self.py::test_control_is_green",
+  "expected": "pass"
+ },
+ {
+  "id": "G-M1",
+  "description": "oracle standardize with ddof = 1 (killed by the transforms cross-check; this is the oracle half of V2-M10)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "def standardize(frame: np.ndarray, *, ddof: int = 0) -> np.ndarray:",
+    "new": "def standardize(frame: np.ndarray, *, ddof: int = 1) -> np.ndarray:"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_standardize_matches_production",
+  "expected": "killed"
+ },
+ {
+  "id": "G-M2",
+  "description": "oracle rank method first instead of average",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "df.rank(axis=1, method=\"average\", na_option=\"keep\")",
+    "new": "df.rank(axis=1, method=\"first\", na_option=\"keep\")"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_rank_matches_production",
+  "expected": "killed"
+ },
+ {
+  "id": "G-M3",
+  "description": "oracle winsorization using nearest interpolation",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "quantiles = df.quantile([q, 1.0 - q], axis=1, interpolation=\"linear\")",
+    "new": "quantiles = df.quantile([q, 1.0 - q], axis=1, interpolation=\"nearest\")"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_winsorize_matches_production",
+  "expected": "killed"
+ },
+ {
+  "id": "G-M4",
+  "description": "oracle turnover with a first period != 0",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        if previous is None or not previous:\n            values.append(0.0)",
+    "new": "        if previous is None or not previous:\n            values.append(1.0)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_turnover_matches_production",
+  "expected": "killed"
+ },
+ {
+  "id": "G-M5",
+  "description": "a CA correction multiplier applied twice (a single-lambda state no longer reproduces its one-branch transition; the NONE state is protected by the observe/observed sanity)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "                ph[p] *= fs.lam",
+    "new": "                ph[p] *= fs.lam * fs.lam"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_ca_branch_applies_lambda_once",
+  "expected": "killed"
+ }
+]
