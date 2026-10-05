@@ -321,6 +321,228 @@ def test_single_misdating_filter_is_opt_in() -> None:
     assert any(count_misdated(s) == 1 for s in single.states())
 
 
+# ---------------------------------------------------------------------------
+# E1 erratum: MISDATED alternatives are exclusive with the S2 correction of
+# the same flag (M§7 discrete hypotheses; M§8 Λ_s^tot = Λ_s ∪ {candidates}).
+# ---------------------------------------------------------------------------
+def _iter_flags(world):
+    for stock in world.stocks:
+        for s in sorted(stock.flags):
+            yield stock, s
+
+
+def _has_candidates(world) -> bool:
+    return any(
+        world._misdated_options(stock, s) for stock, s in _iter_flags(world)
+    )
+
+
+def _assert_misdated_states_are_exclusive(world) -> int:
+    """E1.2(1): no state composes MISDATED with a non-NONE branch/λ≠1."""
+    count = 0
+    for state in world.states():
+        for fs in state:
+            if fs.misdated is None:
+                continue
+            count += 1
+            assert fs.branch == O.BRANCH_NONE, (fs,)
+            assert fs.lam == 1.0, (fs,)
+    return count
+
+
+def _assert_factor_support(factors, union) -> None:
+    """The enumerated per-flag factors have exactly ``union`` as support."""
+    for value in factors:
+        assert any(
+            np.isclose(value, item, rtol=1e-9, atol=1e-12) for item in union
+        ), (value, union)
+    for item in union:
+        assert any(
+            np.isclose(value, item, rtol=1e-9, atol=1e-12) for value in factors
+        ), (item, factors)
+
+
+def _realistic_misdated_world() -> O.World:
+    """E1.2(2): flag s=7 inside (f,e*]=(5,8], dividend d=9 outside, φ_d=0.9.
+
+    ``m_s = close_7/close_6 = 2.0`` is a genuine D5 suspect, so
+    ``Q_s = [0.25, 1.0]``.  The candidate moves φ_d from d (outside the
+    label) to s (inside), so the pure alternative factor is φ_d = 0.9.
+    """
+    closes = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
+              100.0, 200.0, 210.0, 210.0, 210.0, 210.0]
+    stock = O._stock(
+        "S", closes, events=((9, "dividend", 0.9),), flags=(7,)
+    )
+    return O._union_world(
+        n=len(closes),
+        stocks=[stock],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=5,
+        universe=["S"],
+        h=3,
+    )
+
+
+def _outside_flag_inside_candidate_world() -> O.World:
+    """E1.2(3i): flag s=4 outside (f,e*]=(5,8], dividend d=7 inside."""
+    closes = [100.0] * 12
+    stock = O._stock(
+        "S", closes, events=((7, "dividend", 0.9),), flags=(4,)
+    )
+    return O._union_world(
+        n=len(closes),
+        stocks=[stock],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=5,
+        universe=["S"],
+        h=3,
+    )
+
+
+def _inverted_flag_inside_candidate_world() -> O.World:
+    """E1.2(3ii): flag at s=f=5 (Λ_s = Q_s⁻¹), dividend d=7 inside."""
+    closes = [100.0, 100.0, 100.0, 100.0, 100.0, 200.0,
+              200.0, 200.0, 200.0, 200.0, 200.0, 200.0]
+    stock = O._stock(
+        "S", closes, events=((7, "dividend", 0.2),), flags=(5,)
+    )
+    return O._union_world(
+        n=len(closes),
+        stocks=[stock],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=5,
+        universe=["S"],
+        h=3,
+    )
+
+
+def _next_endpoint_flag_inside_candidate_world() -> O.World:
+    """E1.2(3ii): flag at s=next(e*)=9 (Λ_s = Q_s⁻¹), dividend d=7."""
+    closes = [100.0, 100.0, 100.0, 100.0, 100.0, 200.0,
+              200.0, 200.0, 200.0, 150.0, 150.0, 150.0]
+    stock = O._stock(
+        "S", closes, events=((7, "dividend", 0.2),), flags=(9,)
+    )
+    return O._union_world(
+        n=len(closes),
+        stocks=[stock],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=5,
+        universe=["S"],
+        h=3,
+    )
+
+
+def _label_factor_multiset(world, security, f, e):
+    observed = world.view(()).label_R(security, f, e)
+    return (
+        observed,
+        [
+            (1.0 + world.view(state).label_R(security, f, e))
+            / (1.0 + observed)
+            for state in world.states()
+        ],
+    )
+
+
+def test_misdated_alternatives_are_exclusive_with_s2() -> None:
+    # E1.2(1): every M§16 world ...
+    for world in CASES.values():
+        _assert_misdated_states_are_exclusive(world)
+    # ... and the dedicated worlds that actually carry candidates.
+    dedicated = [
+        _realistic_misdated_world(),
+        _outside_flag_inside_candidate_world(),
+        _inverted_flag_inside_candidate_world(),
+        _next_endpoint_flag_inside_candidate_world(),
+    ]
+    for world in dedicated:
+        assert _has_candidates(world)
+        assert _assert_misdated_states_are_exclusive(world) > 0
+
+
+def test_misdated_realistic_counterexample_is_a_union_not_a_product() -> None:
+    # E1.2(2): realistic counterexample, s inside and d outside.
+    world = _realistic_misdated_world()
+    f, e, s = 5, 8, 7
+    observed, factors = _label_factor_multiset(world, "S", f, e)
+    assert observed == pytest.approx(1.1)
+    grid = world._lam_grid(world._observed_m(world.by_key["S"], s))
+    assert min(grid) == pytest.approx(0.25)
+    assert max(grid) == pytest.approx(1.0)
+    phi_d = 0.9
+    union = sorted(set(grid) | {phi_d})
+    got = O.label_extremes(world, "S", f, e)
+    assert isinstance(got, tuple)
+    assert got[0] == pytest.approx((1.0 + observed) * union[0] - 1.0)
+    assert got[1] == pytest.approx((1.0 + observed) * union[-1] - 1.0)
+    _assert_factor_support(factors, union)
+    # no simultaneous MISDATED x S2 product phi_d * lambda for lambda != 1
+    for lam in grid:
+        if lam == 1.0:
+            continue
+        assert not any(np.isclose(v, phi_d * lam) for v in factors)
+    assert sum(np.isclose(v, phi_d) for v in factors) == 1
+
+
+def test_misdated_outside_flag_inside_candidate_is_reciprocal() -> None:
+    # E1.2(3i): d inside and s outside -- the alternative factor is φ_d⁻¹,
+    # unioned with the flag's own Λ_s = 1 (s has no label dependency).
+    world = _outside_flag_inside_candidate_world()
+    _assert_misdated_states_are_exclusive(world)
+    f, e = 5, 8
+    observed, factors = _label_factor_multiset(world, "S", f, e)
+    assert observed == pytest.approx(-0.1)  # 1 + R_obs = 0.9
+    phi_d = 0.9
+    union = sorted({1.0, 1.0 / phi_d})
+    got = O.label_extremes(world, "S", f, e)
+    assert isinstance(got, tuple)
+    assert got[0] == pytest.approx((1.0 + observed) * union[0] - 1.0)
+    assert got[1] == pytest.approx((1.0 + observed) * union[-1] - 1.0)
+    _assert_factor_support(factors, union)
+
+
+def test_misdated_inverted_positions_are_a_union_not_a_product() -> None:
+    # E1.2(3ii): s = f and s = next(e*), both with Λ_s = Q_s⁻¹.  The
+    # candidate enters as φ_d⁻¹ (the dependency window contains d only).
+    for world, s in (
+        (_inverted_flag_inside_candidate_world(), 5),
+        (_next_endpoint_flag_inside_candidate_world(), 9),
+    ):
+        _assert_misdated_states_are_exclusive(world)
+        f, e = 5, 8
+        observed, factors = _label_factor_multiset(world, "S", f, e)
+        assert observed == pytest.approx(-0.8)  # 1 + R_obs = 0.2
+        m_obs = world._observed_m(world.by_key["S"], s)
+        q_inv = {1.0 / lam for lam in world._lam_grid(m_obs)}
+        phi_d = 0.2
+        union = sorted(q_inv | {1.0 / phi_d})
+        got = O.label_extremes(world, "S", f, e)
+        assert isinstance(got, tuple)
+        assert got[0] == pytest.approx((1.0 + observed) * union[0] - 1.0)
+        assert got[1] == pytest.approx((1.0 + observed) * union[-1] - 1.0)
+        _assert_factor_support(factors, union)
+        # no product state: candidate φ_d⁻¹ composed with an S2 factor
+        for lam in q_inv:
+            if lam == 1.0:
+                continue
+            assert not any(
+                np.isclose(v, (1.0 / phi_d) * lam) for v in factors
+            )
+
+
+def test_state_enumeration_is_deterministic_with_candidates() -> None:
+    # E1.2(4): determinism is unchanged.  1 NONE + 3 branches x 3 grid + 1
+    # MISDATED = 11 distinct states for the single-flag realistic world.
+    first = _realistic_misdated_world()
+    second = _realistic_misdated_world()
+    assert first.states() == second.states()
+    assert len(first.states()) == 11
+    assert len(set(first.states())) == 11
+    assert first.states() == first.states()
+
+
 def test_interior_close_correction_cancels_in_labels() -> None:
     world = _tiny_world(flag=5, event_factor=None)
     f = world.formations[0]

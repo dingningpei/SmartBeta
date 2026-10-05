@@ -84,5 +84,18 @@
   ],
   "test": "tests/test_pqv2_oracle_self.py::test_tri_segment1_only_matches_d7c",
   "expected": "killed"
+ },
+ {
+  "id": "G-M7",
+  "description": "a MISDATED state again allows a non-NONE branch / lambda != 1 (simultaneous MISDATED x S2 composition); E1 erratum: MISDATED alternatives are exclusive with the S2 correction of the same flag",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        for mis in misdated:\n            options.append(FlagState(stock.key, s, BRANCH_NONE, 1.0, mis))",
+    "new": "        for mis in misdated:\n            options.append(FlagState(stock.key, s, BRANCH_NONE, 1.0, mis))\n            for branch in (BRANCH_CA, BRANCH_CLOSE_PREV, BRANCH_CLOSE_S):\n                for lam in grid:\n                    options.append(FlagState(stock.key, s, branch, lam, mis))"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_misdated_alternatives_are_exclusive_with_s2",
+  "expected": "killed"
  }
 ]
