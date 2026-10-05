@@ -1,0 +1,105 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated source must pass the identity test",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [],
+    "test": "tests/test_pqv2_core.py::test_identity_constants_match_document"
+  },
+  {
+    "id": "V2-M05",
+    "description": "S1 instead of S2 in the set constructor (drop the observed-suspect extreme)",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    return PositiveInterval(min(S2_LO, m), max(S2_HI, m))",
+        "new": "    return PositiveInterval(S2_LO, S2_HI)"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_s2_absolute_and_relative_values"
+  },
+  {
+    "id": "V2-M15",
+    "description": "tie-at-cap omitted: floor(h)+1 instead of floor(h)+2 in the winsorization block check",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    position = math.floor(h) + 2",
+        "new": "    position = math.floor(h) + 1"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_winsor_block_uses_floor_h_plus_two_position"
+  },
+  {
+    "id": "V2-M19",
+    "description": "verify_authority skips the methodology-document hash check",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    if actual_methodology != METHODOLOGY_SHA256:",
+        "new": "    if False:  # V2-M19: document hash check bypassed"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_verify_authority_rejects_tampered_document"
+  },
+  {
+    "id": "A-M1",
+    "description": "leg_min_mean ignores NaN-filled choices (only the lowest finite values)",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    lower_a = max(0, n_take - nan_pool)",
+        "new": "    lower_a = upper_a"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_leg_extremum_counts_nan_filled_choices"
+  },
+  {
+    "id": "A-M2",
+    "description": "leg_min_mean does not detect an empty-leg configuration",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        if fixed + chosen_finite == 0:",
+        "new": "        if False:  # A-M2: empty-leg configuration not detected"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_leg_extremum_empty_configuration"
+  },
+  {
+    "id": "A-M3",
+    "description": "s2_relative returns the absolute interval instead of the relative one",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    return PositiveInterval(min(S2_LO, m) / m, max(S2_HI, m) / m)",
+        "new": "    return s2_absolute(m_obs)"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_s2_absolute_and_relative_values"
+  },
+  {
+    "id": "A-M4",
+    "description": "PositiveInterval accepts a non-positive lower bound",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        if not (0.0 < lo <= hi):",
+        "new": "        if not (lo <= hi):"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_positive_interval_rejects_invalid"
+  },
+  {
+    "id": "A-M5",
+    "description": "bucket_sizes off-by-one bucket assignment",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        bucket = ((rank - 1) * G) // n + 1",
+        "new": "        bucket = (rank * G) // n + 1"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_bucket_sizes_matches_assign_groups"
+  }
+]
