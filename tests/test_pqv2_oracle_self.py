@@ -233,6 +233,94 @@ def test_tri_telescoping_holds() -> None:
     assert tri[5] / tri[5] == pytest.approx(1.0)
 
 
+def test_tri_segment1_only_matches_d7c() -> None:
+    # Hand-computed D7c (trusted_inputs._compute_segments) values: TRI exists
+    # only on segment 1; the anchor has TRI == 1.0; after the first break the
+    # whole rest of the series is NaN even when later returns are valid.
+    closes = [100.0, 110.0, None, 120.0, 130.0, 140.0]
+    world = O.World(
+        sessions=tuple(range(len(closes))),
+        stocks=[O._stock("S", closes)],
+        universes={4: ["S"]},
+        expression=O.Expr("ratio", k1=1, k2=0),
+        h=1,
+    )
+    tri = world.view(()).tri["S"]
+    expected = np.array([1.0, 1.1, np.nan, np.nan, np.nan, np.nan])
+    assert np.allclose(tri, expected, equal_nan=True)
+
+    # Anchor is not forced to session 0: the first usable close/valid return
+    # pair may start later, and the later valid restart still stays NaN.
+    closes2 = [None, 100.0, 110.0, None, 120.0, 130.0]
+    world2 = O.World(
+        sessions=tuple(range(len(closes2))),
+        stocks=[O._stock("S", closes2)],
+        universes={4: ["S"]},
+        expression=O.Expr("ratio", k1=1, k2=0),
+        h=1,
+    )
+    tri2 = world2.view(()).tri["S"]
+    expected2 = np.array([np.nan, 1.0, 1.1, np.nan, np.nan, np.nan])
+    assert np.allclose(tri2, expected2, equal_nan=True)
+
+
+def test_misdated_options_filter_action_kind() -> None:
+    # D-G2: only recorded split / dividend events are MISDATED candidates.
+    stock = O._stock(
+        "S",
+        [100.0 + i for i in range(12)],
+        events=((3, "rights", 1.20), (5, "split", 1.10), (7, "dividend", 0.90)),
+        flags=(6,),
+    )
+    world = O._union_world(
+        n=12,
+        stocks=[stock],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=10,
+        universe=["S"],
+    )
+    options = world._misdated_options(world.by_key["S"], 6)
+    assert 3 not in options  # rights is not a MISDATED action type
+    assert 5 in options
+    assert 7 in options
+    for state in world.states():
+        for fs in state:
+            assert fs.misdated != 3
+
+
+def test_single_misdating_filter_is_opt_in() -> None:
+    # D-G3: default is per-flag Cartesian; the opt-in keeps <= 1 misdating.
+    stock_a = O._stock(
+        "A",
+        [100.0 + i for i in range(12)],
+        events=((3, "split", 1.10),),
+        flags=(5,),
+    )
+    stock_b = O._stock(
+        "B",
+        [100.0 + 2 * i for i in range(12)],
+        events=((4, "split", 1.20),),
+        flags=(6,),
+    )
+    common = dict(
+        n=12,
+        stocks=[stock_a, stock_b],
+        expression=O.Expr("ratio", k1=1, k2=0),
+        formation=10,
+        universe=["A", "B"],
+    )
+    cartesian = O._union_world(**common)
+    single = O._union_world(**common, single_misdating=True)
+
+    def count_misdated(state) -> int:
+        return sum(1 for fs in state if fs.misdated is not None)
+
+    assert max(count_misdated(s) for s in cartesian.states()) == 2
+    assert max(count_misdated(s) for s in single.states()) == 1
+    assert set(single.states()) <= set(cartesian.states())
+    assert any(count_misdated(s) == 1 for s in single.states())
+
+
 def test_interior_close_correction_cancels_in_labels() -> None:
     world = _tiny_world(flag=5, event_factor=None)
     f = world.formations[0]

@@ -262,6 +262,7 @@ class World:
         reserve_start: int | None = None,
         interior_points: int = 1,
         misdated: bool = True,
+        single_misdating: bool = False,
     ) -> None:
         self.sessions = tuple(int(s) for s in sessions)
         self.stocks = tuple(stocks)
@@ -278,6 +279,7 @@ class World:
         self.reserve_start = reserve_start
         self.interior_points = int(interior_points)
         self.misdated = bool(misdated)
+        self.single_misdating = bool(single_misdating)
 
         self._pos = {s: i for i, s in enumerate(self.sessions)}
         self.keys = tuple(stock.key for stock in self.stocks)
@@ -313,6 +315,9 @@ class World:
             return ()
         out = []
         for event in stock.events:
+            # M§7: only already-recorded split or cash-distribution events.
+            if event.kind not in ("split", "dividend"):
+                continue
             if event.session == s:
                 continue
             if abs(self._pos[event.session] - self._pos[s]) <= MISDATED_WINDOW:
@@ -358,7 +363,14 @@ class World:
             return self._states_cache
         combos = []
         for combo in product(*per_flag):
-            combos.append(tuple(sorted(combo, key=lambda fs: (fs.security, fs.s))))
+            ordered = tuple(
+                sorted(combo, key=lambda fs: (fs.security, fs.s))
+            )
+            if self.single_misdating and (
+                sum(1 for fs in ordered if fs.misdated is not None) > 1
+            ):
+                continue
+            combos.append(ordered)
         self._states_cache = tuple(combos)
         return self._states_cache
 
@@ -598,19 +610,32 @@ class _StateView:
 
 
 def _tri_from_m(m: np.ndarray) -> np.ndarray:
+    """D7c segment-1-only TRI (``trusted_inputs._compute_segments``).
+
+    The anchor is the first session ``j`` with a usable close at ``j`` and a
+    valid return at ``j + 1`` (a valid ``m[j + 1]`` already implies a usable
+    close at ``j``).  ``TRI(anchor) = 1.0`` and ``TRI(u)`` is the product of
+    ``m`` over ``(anchor, u]`` while returns stay valid.  After the first
+    break TRI is undefined for the rest of the series -- later segments are
+    discovered by D7c but **never** given TRI values, so they stay NaN here.
+    """
     out = np.full(m.shape, np.nan, dtype="float64")
+    n = m.shape[0]
+    anchor = None
+    for j in range(n - 1):
+        if np.isfinite(m[j + 1]):
+            anchor = j
+            break
+    if anchor is None:
+        return out
+    out[anchor] = 1.0
     running = 1.0
-    broken = True
-    for i, value in enumerate(m):
-        if np.isfinite(value):
-            if broken:
-                running = value
-                broken = False
-            else:
-                running *= value
-            out[i] = running
+    for u in range(anchor + 1, n):
+        if np.isfinite(m[u]):
+            running *= m[u]
+            out[u] = running
         else:
-            broken = True
+            break
     return out
 
 
@@ -757,6 +782,7 @@ def _union_world(
     cost: float = 0.0,
     interior_points: int = 1,
     misdated: bool = True,
+    single_misdating: bool = False,
     development_end: int | None = None,
     reserve_start: int | None = None,
     sign: int = 1,
@@ -778,6 +804,7 @@ def _union_world(
         reserve_start=reserve_start,
         interior_points=interior_points,
         misdated=misdated,
+        single_misdating=single_misdating,
     )
 
 

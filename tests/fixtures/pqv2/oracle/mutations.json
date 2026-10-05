@@ -71,5 +71,18 @@
   ],
   "test": "tests/test_pqv2_oracle_self.py::test_ca_branch_applies_lambda_once",
   "expected": "killed"
+ },
+ {
+  "id": "G-M6",
+  "description": "later TRI segments recomputed instead of staying NaN (D7c computes TRI on segment 1 only)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        if np.isfinite(m[u]):\n            running *= m[u]\n            out[u] = running\n        else:\n            break",
+    "new": "        if np.isfinite(m[u]):\n            running *= m[u]\n            out[u] = running\n        else:\n            running = 1.0\n            continue"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_self.py::test_tri_segment1_only_matches_d7c",
+  "expected": "killed"
  }
 ]
