@@ -1,0 +1,161 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated source must pass the required oracle-equality test",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [],
+    "test": "tests/test_pqv2_labels.py::test_oracle_equality_required_m16_cases"
+  },
+  {
+    "id": "V2-M01",
+    "description": "omit the formation-day (s = f) label dependency (M\u00a76 false negative)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if s == f:\n        return transition.rel.inv(), FORMATION_ENDPOINT",
+        "new": "    if False:  # V2-M01: s == f omitted\n        return transition.rel.inv(), FORMATION_ENDPOINT"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_formation_endpoint_uses_q_inverse"
+  },
+  {
+    "id": "V2-M02",
+    "description": "an interior flag also contributes Q^-1 (no interior cancellation)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "        return transition.rel, INTERIOR",
+        "new": "        return transition.rel.hull(transition.rel.inv()), INTERIOR"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_interior_flag_contributes_q_not_q_inverse"
+  },
+  {
+    "id": "V2-M03",
+    "description": "MISDATED candidates are dropped",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            candidates.setdefault(key, []).append(\n                MisdatedCandidate(security_key=key, s=s, d=d, phi_d=phi_d)\n            )",
+        "new": "            pass  # V2-M03: candidates dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_candidates_present"
+  },
+  {
+    "id": "V2-M04",
+    "description": "every +-5 trusted session is a candidate (phi = 1 sessions included)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        for d in sorted(key_events):",
+        "new": "        for d in [x for x in session_list if x != s and abs(position[x] - flag_position) <= MISDATED_WINDOW]:"
+      },
+      {
+        "old": "            day_events = key_events[d]",
+        "new": "            day_events = key_events.get(d, ())"
+      },
+      {
+        "old": "            if not any(is_candidate for _action, is_candidate, _factor in day_events):\n                continue",
+        "new": "            if day_events and not any(is_candidate for _action, is_candidate, _factor in day_events):\n                continue"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_no_recorded_event_is_never_a_candidate"
+  },
+  {
+    "id": "V2-M06",
+    "description": "the M8 firewall filter is removed (a +-5 window crossing the development end is accepted)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        if flag_position + MISDATED_WINDOW > dev_end_position:",
+        "new": "        if False:  # V2-M06: firewall removed"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reserve_firewall_marks_unknown"
+  },
+  {
+    "id": "V2-M07",
+    "description": "e' == DEVELOPMENT_END is treated as ENVELOPE instead of UNKNOWN_RESERVE",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if e_star == DEVELOPMENT_END:",
+        "new": "    if False:  # V2-M07: development-end firewall removed"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_reserve_unknown_firewall"
+  },
+  {
+    "id": "V2-M18",
+    "description": "an INCOMPLETE (typed NaN) label is given an envelope instead of staying NaN",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if state != _STATE_COMPLETE or formation is None:",
+        "new": "    if state == \"PURGED_RESERVE_CROSSING\" or formation is None:"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_factual_missing_never_bounded"
+  },
+  {
+    "id": "B-M1",
+    "description": "an EMPTY label consults flags instead of returning the [1, 1] identity",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if state == _STATE_EMPTY:",
+        "new": "    if False:  # B-M1: EMPTY no longer short-circuits"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_empty_label_status"
+  },
+  {
+    "id": "B-M2",
+    "description": "the ending endpoint next(e*) is given Q instead of Q^-1",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if s > e_star and transition.prev_s == e_star:\n        return transition.rel.inv(), ENDING_ENDPOINT",
+        "new": "    if s > e_star and transition.prev_s == e_star:\n        return transition.rel, ENDING_ENDPOINT"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_ending_endpoint_uses_q_inverse"
+  },
+  {
+    "id": "B-M3",
+    "description": "a MISDATED alternative uses the wrong exponent sign (phi_d^-1 for an s-inside candidate)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "            alternative = PositiveInterval(candidate.phi_d, candidate.phi_d)",
+        "new": "            alternative = PositiveInterval(1.0 / candidate.phi_d, 1.0 / candidate.phi_d)"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_misdated_alternative_exponent_sign"
+  },
+  {
+    "id": "B-M4",
+    "description": "phi_d uses the first same-day event factor only (same-day events not combined)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            phi_d = math.prod(factor for _action, _candidate, factor in day_events)",
+        "new": "            phi_d = day_events[0][2]"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_same_day_events_combined_factor"
+  },
+  {
+    "id": "B-M5",
+    "description": "the +-5 window is measured in calendar days instead of trusted sessions",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            if abs(d_position - flag_position) > MISDATED_WINDOW:",
+        "new": "            if abs((d - s).days) > MISDATED_WINDOW:"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_window_is_trusted_sessions_not_calendar_days"
+  }
+]
