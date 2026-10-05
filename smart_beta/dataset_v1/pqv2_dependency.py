@@ -586,15 +586,17 @@ def _flag_algebraic_multiplier(
 def _candidate_alternative(
     phi_d: float, s_in: bool, d_in: bool
 ) -> _core.PositiveInterval | None:
-    """The MISDATED branch's event-placement factor on top of the flag.
+    """The MISDATED alternative factor of a flag, returned as a point interval.
 
-    M§7: a candidate moves a recorded factor ``phi_d`` from ``d`` to ``s``.  W=
-    ``(y, x]`` contains exactly one of ``{s, d}`` -> the branch gains ``phi_d``
-    (``s`` only) or ``phi_d^-1`` (``d`` only); both in cancels, neither is a
-    no-op.  The branch multiplies the flag's S2 correction interval (the record
-    keeps its S2 price-error correction), so :func:`_m_interval` forms the hull
-    of ``{Lambda_s, Lambda_s * alternative}`` -- the frozen "hull of the finite
-    MISDATED union", which is the set the brute-force oracle reaches.
+    M§7: a candidate is a discrete **alternative** hypothesis that moves a
+    recorded factor ``phi_d`` from ``d`` to ``s``.  W = ``(y, x]`` contains
+    exactly one of ``{s, d}`` -> the alternative factor is ``phi_d`` (``s`` only)
+    or ``phi_d^-1`` (``d`` only); both in cancels, neither is a no-op.  It is a
+    *union* member of ``Lambda_s^tot = Lambda_s U {candidate factors}`` (M§8),
+    **not** composed with the flag's S2 correction interval (PQ2-G-E1: no state
+    combines a MISDATED choice with ``lambda != 1`` for the same flag).
+    :func:`_m_interval` therefore forms the hull of
+    ``{Lambda_s (or 1)} U {phi_d^{+/-1}}``.
     """
 
     if s_in == d_in:
@@ -752,11 +754,10 @@ def _m_interval(
         if transition is not None:
             base = _flag_algebraic_multiplier(transition.rel, windows.algebraic, s_off)
         base_interval = base if base is not None else _core.UNIT
-        # M§7: the MISDATED branch is the flag's S2 correction composed with the
-        # event-placement factor, so the per-flag set is
-        # ``{base_interval} U {base_interval * phi_d^{+/-1}}`` and its hull is the
-        # frozen "hull of the finite MISDATED union" (M§7, plan §6.3).
-        branches: list[_core.PositiveInterval] = [base_interval]
+        # M§7/M§8 (and PQ2-G-E1): the candidate is a discrete *alternative* to
+        # the flag's S2 correction, so the per-flag factor set is the UNION
+        # ``{base_interval} U {phi_d^{+/-1}}``; no state composes the two.
+        per_flag_set: list[_core.PositiveInterval] = [base_interval]
         for candidate in cands_by_s.get(session, ()):
             d_off = _offset(formation_pos, candidate.d)
             if d_off is None:
@@ -766,12 +767,12 @@ def _m_interval(
                     candidate.phi_d, y < s_off <= x, y < d_off <= x
                 )
                 if alternative is not None:
-                    branches.append(base_interval.mul(alternative))
-        if base is None and len(branches) == 1:
+                    per_flag_set.append(alternative)
+        if base is None and len(per_flag_set) == 1:
             continue
-        per_flag = branches[0]
-        for branch in branches[1:]:
-            per_flag = per_flag.hull(branch)
+        per_flag = per_flag_set[0]
+        for member in per_flag_set[1:]:
+            per_flag = per_flag.hull(member)
         if not per_flag.is_unit:
             factor = factor.mul(per_flag)
             affected = True

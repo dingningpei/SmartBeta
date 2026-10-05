@@ -125,5 +125,17 @@
       }
     ],
     "test": "tests/test_pqv2_dependency.py::test_certify_rejects_perturbed_window"
+  },
+  {
+    "id": "C-M8",
+    "description": "MISDATED alternative composed with the flag's S2 correction (Lambda_s * phi_d) instead of the frozen union {Lambda_s} U {phi_d^{+/-1}}",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "                    per_flag_set.append(alternative)",
+        "new": "                    per_flag_set.append(base_interval.mul(alternative))  # C-M8: product composition"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_algebraic_flag_positions_match_oracle"
   }
 ]

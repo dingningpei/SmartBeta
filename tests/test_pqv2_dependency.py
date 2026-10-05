@@ -363,19 +363,29 @@ def test_algebraic_flag_positions_match_oracle() -> None:
         ratio(lag(field("tri"), 2), lag(field("tri"), 5))
     )
     assert isinstance(windows, D.Windows)
+    # (flag offset, event offset or None, phi_d).  The MISDATED cases cover
+    # s inside / d outside, d inside / s outside, and the inverted positions
+    # s = y and s = next(x); phi_d is tested both inside Q_s and outside it, so
+    # a product composition (Lambda_s * phi_d) would widen the hull and fail.
     cases = {
-        "y": (-6, None),
-        "interior": (-4, None),
-        "next_x": (-2, None),
-        "interior_misdated": (-4, -6),
-        "y_misdated": (-6, -4),
-        "next_x_misdated": (-2, -6),
-        "outside_flag_inside_event": (-7, -4),
+        "y": (-6, None, 1.30),
+        "interior": (-4, None, 1.30),
+        "next_x": (-2, None, 1.30),
+        "s_in_d_out": (-4, -6, 1.30),
+        "s_in_d_out_after": (-4, -2, 2.50),
+        "s_in_d_out_low_phi": (-4, -6, 0.40),
+        "y_inverted_d_in": (-6, -4, 1.30),
+        "next_x_inverted_d_in": (-2, -4, 1.30),
+        "outside_flag_d_in": (-7, -4, 1.30),
     }
-    for label, (flag_off, event_off) in cases.items():
-        world, s = _ratio_world(2, 5, flag_off=flag_off, event_off=event_off)
+    for label, (flag_off, event_off, phi) in cases.items():
+        world, s = _ratio_world(
+            2, 5, flag_off=flag_off, event_off=event_off, phi=phi
+        )
         oracle_lo, oracle_hi = _oracle_M_range(world, 30)
-        source, _, M_obs = _source_set(world, 30, s, event_off=event_off)
+        source, _, M_obs = _source_set(
+            world, 30, s, event_off=event_off, phi=phi
+        )
         interval = _analytic_M(windows, source, 30, M_obs)
         assert interval.lo == pytest.approx(oracle_lo, rel=1e-12), label
         assert interval.hi == pytest.approx(oracle_hi, rel=1e-12), label
@@ -388,11 +398,13 @@ def test_full_window_H1_misdated_matches_oracle() -> None:
     windows = D.dependency_windows(spec.expression)
     assert isinstance(windows, D.Windows)
     # x = f-22 (inside), d = f-19 (outside the window), within +/-5 sessions.
+    # phi_d = 0.40 lies outside Q_s, so the union hull strictly widens (and an
+    # omitted alternative fails).
     world, s = _ratio_world(
-        21, 252, n=310, f=305, flag_off=-22, event_off=-19, phi=1.20
+        21, 252, n=310, f=305, flag_off=-22, event_off=-19, phi=0.40
     )
     oracle_lo, oracle_hi = _oracle_M_range(world, 305)
-    source, _, M_obs = _source_set(world, 305, s, event_off=-19, phi=1.20)
+    source, _, M_obs = _source_set(world, 305, s, event_off=-19, phi=0.40)
     interval = _analytic_M(windows, source, 305, M_obs)
     assert interval.lo == pytest.approx(oracle_lo, rel=1e-12)
     assert interval.hi == pytest.approx(oracle_hi, rel=1e-12)
@@ -876,6 +888,7 @@ def test_mutation_fixture_contract() -> None:
         "C-M5",
         "C-M6",
         "C-M7",
+        "C-M8",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_dependency.py").read_text(
         encoding="utf-8"
