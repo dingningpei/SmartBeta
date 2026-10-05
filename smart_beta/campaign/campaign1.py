@@ -38,6 +38,7 @@ from typing import Any, Callable, Mapping, Sequence
 import pandas as pd
 from scipy.stats import norm
 
+from smart_beta.campaign import diagnostics_store as _store
 from smart_beta.campaign.ledger import (
     CampaignLedger,
     C1LedgerIntegrityError,
@@ -2106,6 +2107,10 @@ class CampaignExecutor:
             classify_is=classify_is,
             classify_oos=classify_oos,
         )
+        # E6.4 write-ahead: both artifacts are durable before the
+        # PRIMARY_ATTEMPT record that references them is appended.
+        self._persist_diagnostics(diag_is)
+        self._persist_diagnostics(diag_oos)
         return {
             "record_type": "PRIMARY_ATTEMPT",
             "campaign1_id": campaign_id,
@@ -2222,6 +2227,24 @@ class CampaignExecutor:
             inputs=self.inputs_by_semantic,
         )
 
+    # -- E6 write-once diagnostics artifacts ----------------------------
+    def _diagnostics_dir(self) -> Path:
+        """``<ledger dir>/diagnostics`` (E6.2)."""
+        return Path(self.ledger.path).parent / _store.DIAGNOSTICS_DIRNAME
+
+    def _persist_diagnostics(self, diagnostics: Any) -> None:
+        """Persist one PQDiagnostics and its attached D7b object (E6.1).
+
+        Write-once and idempotent. A failure is a
+        :class:`diagnostics_store.C1DiagnosticsError`, which follows the
+        existing C1-LX section-8 untyped-failure path unchanged.
+        """
+        directory = self._diagnostics_dir()
+        _store.persist(diagnostics, directory)
+        attached = getattr(diagnostics, "b_diagnostics", None)
+        if attached is not None:
+            _store.persist(attached, directory)
+
     def _run_diagnostics(
         self,
         spec: FactorSpec,
@@ -2266,6 +2289,12 @@ class CampaignExecutor:
                 diag_is = None
                 diag_oos = None
                 binding_failure = True
+            # E6.4 write-ahead: persist before the DIAGNOSTIC_EVALUATION record
+            # that references these hashes is appended.
+            if diag_is is not None:
+                self._persist_diagnostics(diag_is)
+            if diag_oos is not None:
+                self._persist_diagnostics(diag_oos)
             record = {
                 "record_type": "DIAGNOSTIC_EVALUATION",
                 "campaign1_id": campaign_id,
@@ -2404,16 +2433,110 @@ _CLAIM_BOUNDARY = (
 _DIAGNOSTIC_LABEL = "DESCRIPTIVE — NOT JUDGED"
 
 
+def _diagnostics_detail(
+    diagnostics_dir: Path,
+    digest: str | None,
+) -> dict[str, Any] | None:
+    """Load, fully verify and flatten one diagnostics artifact (E6.5).
+
+    ``load_verified`` fails closed on a missing, wrong-hash or non-canonical
+    artifact. The D7b ``b_diagnostics_hash`` referenced from the verified
+    payload is loaded and verified as well.
+    """
+    if digest is None:
+        return None
+    payload = _store.load_verified(diagnostics_dir, digest)
+    b_digest = payload.get("b_diagnostics_hash")
+    b_payload = (
+        None
+        if b_digest is None
+        else _store.load_verified(diagnostics_dir, b_digest)
+    )
+    detail: dict[str, Any] = {
+        "diagnostics_hash": digest,
+        "b_diagnostics_hash": b_digest,
+        "not_assessed": payload.get("not_assessed"),
+        "support": payload.get("support"),
+        "cs3": payload.get("cs3"),
+        "cs3_status": payload.get("cs3_status"),
+        "q_b": payload.get("q_b"),
+        "q_s": payload.get("q_s"),
+        "q_l": payload.get("q_l"),
+        "n_flagged_formations": payload.get("n_flagged_formations"),
+        "residual_cs_cells": payload.get("residual_cs_cells"),
+        "liquidity_exposed": payload.get("liquidity_exposed"),
+        "n_interior_b_missing": payload.get("n_interior_b_missing"),
+        "cells": [
+            {
+                "cell": cell.get("cell"),
+                "scenario": cell.get("scenario"),
+                "estimand": cell.get("estimand"),
+                "value": cell.get("value"),
+                "raw_value": cell.get("raw_value"),
+                "t_stat": cell.get("t_stat"),
+                "status": cell.get("status"),
+                "n_obs": cell.get("n_obs"),
+                "n_index": cell.get("n_index"),
+            }
+            for cell in payload.get("cells", [])
+        ],
+    }
+    detail["d7b"] = (
+        None
+        if b_payload is None
+        else {
+            "e_s": b_payload.get("e_s"),
+            "b": b_payload.get("b"),
+            "e_l": b_payload.get("e_l"),
+            "n_b_formations": b_payload.get("n_b_formations"),
+            "n_es_formations": b_payload.get("n_es_formations"),
+            "n_el_formations": b_payload.get("n_el_formations"),
+            "purged_cell_count": len(b_payload.get("purged_cells", [])),
+            "t_t0": b_payload.get("t_t0"),
+            "t_ts": b_payload.get("t_ts"),
+            "n_obs_t0": b_payload.get("n_obs_t0"),
+            "n_obs_ts": b_payload.get("n_obs_ts"),
+        }
+    )
+    return detail
+
+
 def render_report(
     ledger_path: Path | str,
+    *,
+    diagnostics_dir: Path | str | None = None,
 ) -> tuple[bytes, bytes]:
     """Render the deterministic (json, markdown) report from the ledger."""
+    if diagnostics_dir is None:
+        diagnostics_dir = (
+            Path(ledger_path).parent / _store.DIAGNOSTICS_DIRNAME
+        )
+    diagnostics_dir = Path(diagnostics_dir)
     ledger = CampaignLedger(ledger_path)
     opens = ledger.records("CAMPAIGN_OPEN")
     attempts = ledger.records("PRIMARY_ATTEMPT")
     diagnostics = ledger.records("DIAGNOSTIC_EVALUATION")
     stops = ledger.records("CAMPAIGN_STOP")
     guards = ledger.records("O2_GUARD")
+
+    detail_cache: dict[str, dict[str, Any]] = {}
+
+    def detail_for(digest: str | None) -> dict[str, Any] | None:
+        if digest is None:
+            return None
+        if digest not in detail_cache:
+            detail_cache[digest] = _diagnostics_detail(diagnostics_dir, digest)
+        return detail_cache[digest]
+
+    # E6.5 fail closed: every non-null diagnostics hash referenced by a
+    # PRIMARY_ATTEMPT or DIAGNOSTIC_EVALUATION record (and every referenced
+    # b_diagnostics_hash) is loaded and verified before rendering.
+    for record in (*attempts, *diagnostics):
+        referenced = record.get("diagnostics")
+        if not isinstance(referenced, Mapping):
+            continue
+        detail_for(referenced.get("is"))
+        detail_for(referenced.get("oos"))
 
     by_label: dict[str, Mapping[str, Any]] = {
         str(record.get("label")): record for record in attempts
@@ -2476,6 +2599,18 @@ def render_report(
                     "diagnostics": (
                         None if attempt is None else attempt.get("diagnostics")
                     ),
+                    "diagnostics_detail": (
+                        None
+                        if attempt is None
+                        else {
+                            "is": detail_for(
+                                (attempt.get("diagnostics") or {}).get("is")
+                            ),
+                            "oos": detail_for(
+                                (attempt.get("diagnostics") or {}).get("oos")
+                            ),
+                        }
+                    ),
                     "screens": None if attempt is None else attempt.get("screens"),
                     "classifications": (
                         None if attempt is None else attempt.get("classifications")
@@ -2524,7 +2659,18 @@ def render_report(
             "label": _DIAGNOSTIC_LABEL,
             "record_type": "DIAGNOSTIC_EVALUATION",
             "evaluations": [
-                dict(record)
+                {
+                    **dict(record),
+                    "judged": False,
+                    "diagnostics_detail": {
+                        "is": detail_for(
+                            (record.get("diagnostics") or {}).get("is")
+                        ),
+                        "oos": detail_for(
+                            (record.get("diagnostics") or {}).get("oos")
+                        ),
+                    },
+                }
                 for label in EXPECTED_LABELS
                 for record in diag_by_label.get(label, [])
             ],

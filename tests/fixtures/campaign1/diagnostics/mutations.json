@@ -1,0 +1,126 @@
+[
+  {
+    "id": "E6-M1",
+    "description": "hash verification is skipped on an existing artifact",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if hashlib.sha256(blob).hexdigest() != digest:\n        raise C1DiagnosticsError(\n            f\"existing diagnostics artifact {path.name} is corrupt\"\n        )\n",
+        "new": "    if False:  # E6-M1: hash verification skipped\n        raise C1DiagnosticsError(\n            f\"existing diagnostics artifact {path.name} is corrupt\"\n        )\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_existing_corrupted_artifact_is_rejected_and_untouched"
+  },
+  {
+    "id": "E6-M2",
+    "description": "overwrite instead of fail-closed on an existing artifact",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if final.exists():\n        _verify_existing(final, digest)\n        return digest\n",
+        "new": "    if final.exists():\n        final.write_bytes(payload)  # E6-M2: overwrite\n        return digest\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_existing_corrupted_artifact_is_rejected_and_untouched"
+  },
+  {
+    "id": "E6-M3",
+    "description": "robustness (TOP_200/TOP_1000) diagnostics are not persisted",
+    "file": "smart_beta/campaign/campaign1.py",
+    "edits": [
+      {
+        "old": "            if diag_is is not None:\n                self._persist_diagnostics(diag_is)\n            if diag_oos is not None:\n                self._persist_diagnostics(diag_oos)\n            record = {\n",
+        "new": "            record = {\n"
+      }
+    ],
+    "test": "tests/test_campaign1_executor.py::test_executor_persists_diagnostic_artifacts"
+  },
+  {
+    "id": "E6-M4",
+    "description": "the attached D7b b_diagnostics is not persisted",
+    "file": "smart_beta/campaign/campaign1.py",
+    "edits": [
+      {
+        "old": "        attached = getattr(diagnostics, \"b_diagnostics\", None)\n        if attached is not None:\n            _store.persist(attached, directory)\n",
+        "new": "        # E6-M4: attached D7b diagnostics not persisted\n"
+      }
+    ],
+    "test": "tests/test_campaign1_executor.py::test_executor_persists_attached_d7b_artifact"
+  },
+  {
+    "id": "E6-M5",
+    "description": "the report accepts a missing artifact (silent omission)",
+    "file": "smart_beta/campaign/campaign1.py",
+    "edits": [
+      {
+        "old": "    payload = _store.load_verified(diagnostics_dir, digest)\n",
+        "new": "    try:\n        payload = _store.load_verified(diagnostics_dir, digest)\n    except _store.C1DiagnosticsError:\n        return None  # E6-M5: silent omission\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_report_refuses_missing_artifact"
+  },
+  {
+    "id": "E6-M6",
+    "description": "the report accepts a wrong-hash artifact",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if actual != digest:\n        raise C1DiagnosticsError(\n            f\"diagnostics artifact {digest} hash mismatch\"\n        )\n",
+        "new": "    if False:  # E6-M6: wrong-hash accepted\n        raise C1DiagnosticsError(\n            f\"diagnostics artifact {digest} hash mismatch\"\n        )\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_report_refuses_wrong_hash_artifact"
+  },
+  {
+    "id": "E6-M7",
+    "description": "the report bypasses canonical-bytes verification",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if _d7b.canonical_json(parsed).encode(\"utf-8\") != payload:\n        raise C1DiagnosticsError(\n            f\"diagnostics artifact {digest} is not canonical\"\n        )\n",
+        "new": "    if False:  # E6-M7: canonical check bypassed\n        raise C1DiagnosticsError(\n            f\"diagnostics artifact {digest} is not canonical\"\n        )\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_report_refuses_noncanonical_artifact"
+  },
+  {
+    "id": "E6-M8",
+    "description": "a non-atomic write (direct/replace to the final name)",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "            os.link(tmp, final)\n        except FileExistsError:\n",
+        "new": "            os.replace(tmp, final)  # E6-M8: non-atomic\n        except FileExistsError:\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_persist_uses_atomic_link"
+  },
+  {
+    "id": "E6-M9",
+    "description": "persistence happens after the ledger append (write-ahead broken)",
+    "file": "smart_beta/campaign/campaign1.py",
+    "edits": [
+      {
+        "old": "            if diag_is is not None:\n                self._persist_diagnostics(diag_is)\n            if diag_oos is not None:\n                self._persist_diagnostics(diag_oos)\n            record = {\n",
+        "new": "            record = {\n"
+      },
+      {
+        "old": "            self.ledger.append(_json_safe(record))\n            self.counters.consume_diagnostic()\n",
+        "new": "            self.ledger.append(_json_safe(record))\n            if diag_is is not None:\n                self._persist_diagnostics(diag_is)\n            if diag_oos is not None:\n                self._persist_diagnostics(diag_oos)\n            self.counters.consume_diagnostic()\n"
+      }
+    ],
+    "test": "tests/test_campaign1_executor.py::test_write_ahead_no_record_references_missing_artifact"
+  },
+  {
+    "id": "E6-M10",
+    "description": "the payload-hash vs diagnostics_hash assertion is removed",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if digest != obj.diagnostics_hash:\n        raise C1DiagnosticsError(\n            \"diagnostics payload hash does not match obj.diagnostics_hash\"\n        )\n",
+        "new": "    if False:  # E6-M10: assertion removed\n        raise C1DiagnosticsError(\n            \"diagnostics payload hash does not match obj.diagnostics_hash\"\n        )\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_persist_rejects_payload_hash_mismatch"
+  }
+]
