@@ -17,6 +17,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +25,9 @@ import pandas as pd
 import pytest
 
 from smart_beta.campaign import campaign1 as C
+from smart_beta.campaign import diagnostics_store as _store
 from smart_beta.campaign import ledger as L
+from smart_beta.dataset_v1 import delisting_bridge as B
 from smart_beta.dataset_v1 import pq_evaluation as PQ
 from smart_beta.experiment.policy import SearchPolicy, SearchPolicyError
 from smart_beta.experiment.registry import (
@@ -169,6 +172,7 @@ def _diag(
     orientation_rule: str = "PASSTHROUGH",
     screen_id: str = C.SCREEN_ID,
     screen_policy_hash: str = C.SCREEN_POLICY_SHA256,
+    b_diagnostics: B.DevelopmentDiagnostics | None = None,
 ) -> PQ.PQDiagnostics:
     if cells is None:
         cells = _default_cells(declaration_hash)
@@ -183,7 +187,9 @@ def _diag(
         screen_policy_hash=screen_policy_hash,
         index=(),
         cells=cells,
-        b_diagnostics_hash=None,
+        b_diagnostics_hash=(
+            None if b_diagnostics is None else b_diagnostics.diagnostics_hash
+        ),
         e_s=1.0,
         b=1.0,
         q_b=0.0,
@@ -196,7 +202,59 @@ def _diag(
         support=(),
         cs3=(),
         cs3_status=None,
-        b_diagnostics=None,
+        b_diagnostics=b_diagnostics,
+    )
+
+
+def _diag_b(declaration_hash: str = DECL) -> B.DevelopmentDiagnostics:
+    """A minimal synthetic D7b DevelopmentDiagnostics (E6.5 item 9)."""
+    return B.DevelopmentDiagnostics(
+        not_assessed=None,
+        declaration_hash=declaration_hash,
+        factor_spec_version="v1",
+        factor_panel_sha256="f" * 64,
+        partition_id="p",
+        fold_key="k",
+        fold_role="is",
+        fold_start=date(2016, 1, 29),
+        fold_end=date(2020, 7, 31),
+        universe="TOP_500",
+        horizon=21,
+        n_groups=5,
+        winsorization=0.01,
+        transaction_cost_bps=10.0,
+        periods_per_year=12,
+        primary_metric="turnover_cost_adjusted",
+        basis="NET",
+        sign=1,
+        orientation_rule="PASSTHROUGH",
+        screen_id="s",
+        screen_policy_hash="h" * 64,
+        d7a_artifact_id="art",
+        d7a_returns_hash="r" * 64,
+        d7a_file_hashes=(),
+        code_sha256=(),
+        document_hashes=(),
+        formations=(date(2016, 1, 29),),
+        purged_cells=(),
+        formation_accounting=(),
+        b=1.0,
+        e_s=0.0,
+        e_l=0.0,
+        n_b_formations=1,
+        n_es_formations=1,
+        n_el_formations=1,
+        value_t0=0.01,
+        value_ts=0.01,
+        t_t0=3.0,
+        t_ts=2.5,
+        n_obs_t0=30,
+        n_obs_ts=28,
+        economic_t0=0.01,
+        economic_ts=0.01,
+        reconciliation=(),
+        accounting_records_hash="h" * 64,
+        accounting_records=(),
     )
 
 
@@ -1607,6 +1665,289 @@ def test_report_of_full_campaign_lists_every_hypothesis(tmp_path, monkeypatch):
         for item in payload["hypotheses"]
     )
     assert payload["stop_reason"] == "ALL_PRECOMMITTED_HYPOTHESES_EVALUATED"
+
+
+# ---------------------------------------------------------------------------
+# 14b. E6 diagnostics persistence, write-ahead and report reconstruction
+# ---------------------------------------------------------------------------
+
+
+def _build_with_b(root, declaration, spec, panel, partition, *, overlay, inputs, **kw):
+    """A stub PQB build that attaches a synthetic D7b object (E6.1)."""
+    return _diag(
+        declaration_hash=declaration.declaration_hash,
+        b_diagnostics=_diag_b(declaration.declaration_hash),
+    )
+
+
+def _referenced_digests(ledger):
+    for record in (
+        *ledger.records("PRIMARY_ATTEMPT"),
+        *ledger.records("DIAGNOSTIC_EVALUATION"),
+    ):
+        referenced = record.get("diagnostics") or {}
+        for fold in ("is", "oos"):
+            digest = referenced.get(fold)
+            if digest:
+                yield digest
+
+
+def test_executor_persists_diagnostic_artifacts(tmp_path, monkeypatch):
+    """E6.6.10: primary, TOP_200 and TOP_1000 artifacts all persisted."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    diagnostics_dir = Path(executor.ledger.path).parent / "diagnostics"
+    digests = set(_referenced_digests(ledger))
+    # IS/OOS x {primary, TOP_200, TOP_1000} are all distinct content addresses.
+    assert len(digests) == 6
+    for digest in digests:
+        assert (diagnostics_dir / f"{digest}.json").is_file()
+        _store.load_verified(diagnostics_dir, digest)
+    universes = {
+        record.get("universe")
+        for record in ledger.records("DIAGNOSTIC_EVALUATION")
+    }
+    assert universes == {"TOP_200", "TOP_1000"}
+
+
+def test_executor_persists_attached_d7b_artifact(tmp_path, monkeypatch):
+    """E6.1/E6-M4: the attached D7b object is persisted alongside its PQB."""
+    _install_stubs(monkeypatch, build=_build_with_b)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    diagnostics_dir = Path(executor.ledger.path).parent / "diagnostics"
+    b_digests = set()
+    for digest in _referenced_digests(ledger):
+        payload = _store.load_verified(diagnostics_dir, digest)
+        b_digest = payload["b_diagnostics_hash"]
+        assert b_digest
+        assert (diagnostics_dir / f"{b_digest}.json").is_file()
+        assert _store.load_verified(diagnostics_dir, b_digest)["t_t0"] == 3.0
+        b_digests.add(b_digest)
+    assert len(b_digests) == 6
+
+
+def test_e61_parent_fsync_precedes_first_referencing_append(
+    tmp_path, monkeypatch
+):
+    """E6.1: on a fresh dir the parent fsync precedes the first referencing
+    ledger append (checked by an ordered spy on os.open/os.fsync/os.link and
+    the ledger append)."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    campaign_dir = Path(executor.ledger.path).parent
+    events: list[tuple[str, str]] = []
+    fd_path: dict[int, str] = {}
+    real_open, real_fsync, real_link = os.open, os.fsync, os.link
+
+    def spy_open(path, *args, **kwargs):
+        fd = real_open(path, *args, **kwargs)
+        fd_path[fd] = str(path)
+        events.append(("open", str(path)))
+        return fd
+
+    def spy_fsync(fd):
+        events.append(("fsync", fd_path.get(fd, "")))
+        return real_fsync(fd)
+
+    def spy_link(src, dst, *args, **kwargs):
+        events.append(("link", str(dst)))
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    monkeypatch.setattr(os, "link", spy_link)
+
+    real_append = executor.ledger.append
+
+    def spy_append(record):
+        referenced = record.get("diagnostics") or {}
+        if (
+            record.get("record_type") in (
+                "PRIMARY_ATTEMPT",
+                "DIAGNOSTIC_EVALUATION",
+            )
+            and (referenced.get("is") or referenced.get("oos"))
+        ):
+            events.append(("ledger_append", str(record.get("record_type"))))
+        return real_append(record)
+
+    monkeypatch.setattr(executor.ledger, "append", spy_append)
+    executor.run()
+
+    parent_fsync = next(
+        index
+        for index, (kind, name) in enumerate(events)
+        if kind == "fsync" and name == str(campaign_dir)
+    )
+    first_append = next(
+        index for index, (kind, _) in enumerate(events) if kind == "ledger_append"
+    )
+    first_link = next(
+        index for index, (kind, _) in enumerate(events) if kind == "link"
+    )
+    assert parent_fsync < first_link
+    assert parent_fsync < first_append
+
+
+def test_persistence_does_not_change_ledger_or_disposition(tmp_path, monkeypatch):
+    """E6.6.11: persistence only adds files; the ledger is byte-identical."""
+    _install_stubs(monkeypatch)
+    with monkeypatch.context() as context:
+        context.setattr(
+            C.CampaignExecutor, "_persist_diagnostics", lambda self, diag: None
+        )
+        without = _make_executor(tmp_path / "without", require_kpit=False)
+        result_without = without.run()
+        ledger_without = Path(without.ledger.path).read_bytes()
+        assert not (tmp_path / "without" / "diagnostics").exists()
+    with_persistence = _make_executor(tmp_path / "with", require_kpit=False)
+    result_with = with_persistence.run()
+    ledger_with = Path(with_persistence.ledger.path).read_bytes()
+    assert ledger_without == ledger_with
+    assert result_without.stop_reason == result_with.stop_reason
+    assert result_without.counters == result_with.counters
+    assert list((tmp_path / "with" / "diagnostics").glob("*.json"))
+
+
+def test_replay_consumes_no_slot_and_creates_no_artifact(tmp_path, monkeypatch):
+    """E6.6.12: an exact replay writes no ledger record and no artifact."""
+    _install_stubs(monkeypatch)
+    first = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    first.run()
+    diagnostics_dir = Path(first.ledger.path).parent / "diagnostics"
+    before = {
+        path.name: (path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in diagnostics_dir.glob("*.json")
+    }
+    records_before = len(L.CampaignLedger(first.ledger.path).records())
+    second = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    result = second.run()
+    after = {
+        path.name: (path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in diagnostics_dir.glob("*.json")
+    }
+    assert after == before
+    assert len(L.CampaignLedger(second.ledger.path).records()) == records_before
+    assert result.counters["statistical_slots_used"] == 1
+    assert result.counters["diagnostic_used"] == 2
+
+
+def test_write_ahead_no_record_references_missing_artifact(
+    tmp_path, monkeypatch
+):
+    """E6.6.13: artifacts are durable before the referencing append."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    diagnostics_dir = Path(executor.ledger.path).parent / "diagnostics"
+    real_append = executor.ledger.append
+
+    def checking_append(record):
+        if record.get("record_type") in (
+            "PRIMARY_ATTEMPT",
+            "DIAGNOSTIC_EVALUATION",
+        ):
+            referenced = record.get("diagnostics") or {}
+            for fold in ("is", "oos"):
+                digest = referenced.get(fold)
+                if digest is not None:
+                    assert (
+                        diagnostics_dir / f"{digest}.json"
+                    ).is_file(), (record.get("record_type"), fold)
+        return real_append(record)
+
+    monkeypatch.setattr(executor.ledger, "append", checking_append)
+    result = executor.run()
+    assert result.stop_reason == (
+        C.C1StopReason.ALL_PRECOMMITTED_HYPOTHESES_EVALUATED
+    )
+
+
+def test_crash_between_persist_and_append_leaves_only_orphans(
+    tmp_path, monkeypatch
+):
+    """E6.6.13: a crash after persist but before append is an orphan only."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    diagnostics_dir = Path(executor.ledger.path).parent / "diagnostics"
+    real_append = executor.ledger.append
+
+    class _Crash(Exception):
+        pass
+
+    def crashing_append(record):
+        if record.get("record_type") == "PRIMARY_ATTEMPT":
+            raise _Crash()
+        return real_append(record)
+
+    monkeypatch.setattr(executor.ledger, "append", crashing_append)
+    with pytest.raises(_Crash):
+        executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    # No attempt record exists, so no record references a missing artifact.
+    assert ledger.records("PRIMARY_ATTEMPT") == ()
+    assert list(_referenced_digests(ledger)) == []
+    # The write-ahead artifacts are durable orphans (valid, never referenced).
+    artifacts = list(diagnostics_dir.glob("*.json"))
+    assert artifacts
+    for path in artifacts:
+        _store.load_verified(diagnostics_dir, path.stem)
+
+
+def test_persistence_failure_follows_untyped_stop_path(tmp_path, monkeypatch):
+    """E6.4: a C1DiagnosticsError is the existing untyped stop, not a new one."""
+    _install_stubs(monkeypatch)
+
+    def boom(obj, directory):
+        raise _store.C1DiagnosticsError("injected persistence failure")
+
+    monkeypatch.setattr(_store, "persist", boom)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    with pytest.raises(_store.C1DiagnosticsError):
+        executor.run()
+    ledger = L.CampaignLedger(executor.ledger.path)
+    assert ledger.records("PRIMARY_ATTEMPT") == ()
+    stops = ledger.records("CAMPAIGN_STOP")
+    assert len(stops) == 1
+    assert stops[-1]["stop_reason"] == "INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE"
+    assert executor.counters.statistical_slots_used == 0
+
+
+def test_report_reconstructs_diagnostics_and_d7b_from_artifacts(
+    tmp_path, monkeypatch
+):
+    """E6.5/E6.6.9: the report renders verified artifact fields, fail closed."""
+    _install_stubs(monkeypatch, build=_build_with_b)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    executor.run()
+    json_bytes, _ = C.render_report(executor.ledger.path)
+    payload = json.loads(json_bytes.decode("utf-8"))
+    detail = payload["hypotheses"][0]["results"]["diagnostics_detail"]["is"]
+    assert detail["diagnostics_hash"]
+    assert detail["b_diagnostics_hash"]
+    assert detail["cells"][0]["value"] == 0.01
+    assert detail["d7b"]["t_t0"] == 3.0
+    assert detail["d7b"]["n_obs_ts"] == 28
+    evaluations = payload["diagnostics"]["evaluations"]
+    assert evaluations
+    assert all(item["judged"] is False for item in evaluations)
+    assert all(
+        item["diagnostics_detail"]["is"] is not None
+        for item in evaluations
+        if (item.get("diagnostics") or {}).get("is")
+    )
+    # Removing an artifact makes the report fail closed (no silent omission).
+    digest = detail["diagnostics_hash"]
+    (
+        Path(executor.ledger.path).parent
+        / "diagnostics"
+        / f"{digest}.json"
+    ).unlink()
+    with pytest.raises(_store.C1DiagnosticsError):
+        C.render_report(executor.ledger.path)
 
 
 # ---------------------------------------------------------------------------
