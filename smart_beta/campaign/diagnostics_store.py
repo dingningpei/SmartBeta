@@ -68,12 +68,38 @@ def _verify_existing(path: Path, digest: str) -> None:
         )
 
 
+def _ensure_diagnostics_dir(directory: Path) -> bool:
+    """Create ``diagnostics/`` non-recursively; return True if newly created.
+
+    E6.1: the parent Campaign directory must already exist. ``FileExistsError``
+    means the directory already existed (including a concurrent creator that
+    won the race); a missing parent is fail-closed.
+    """
+    try:
+        os.mkdir(directory)
+    except FileExistsError:
+        if not directory.is_dir():
+            raise C1DiagnosticsError(
+                f"diagnostics path {directory} exists and is not a directory"
+            )
+        return False
+    except FileNotFoundError as exc:
+        raise C1DiagnosticsError(
+            f"campaign directory {directory.parent} does not exist"
+        ) from exc
+    return True
+
+
 def persist(obj: Any, directory: Path | str) -> str:
     """Persist ``obj`` once at its content address; return the hash.
 
     E6.3: compute the payload and hash, assert the hash equals
     ``obj.diagnostics_hash``, then atomically create ``<hash>.json`` exactly
     once.  An existing final file is verified, never overwritten or repaired.
+
+    E6.1: when this call newly creates ``diagnostics/``, its directory entry
+    is durably fsynced in the parent Campaign directory *before* the temp-file
+    write and the atomic link publish any artifact beneath it.
     """
     payload = canonical_payload(obj)
     digest = hashlib.sha256(payload).hexdigest()
@@ -82,7 +108,9 @@ def persist(obj: Any, directory: Path | str) -> str:
             "diagnostics payload hash does not match obj.diagnostics_hash"
         )
     directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
+    created = _ensure_diagnostics_dir(directory)
+    if created:
+        _fsync_directory(directory.parent)
     final = artifact_path(directory, digest)
     if final.exists():
         _verify_existing(final, digest)

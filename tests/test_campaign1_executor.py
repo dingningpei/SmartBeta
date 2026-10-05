@@ -1730,6 +1730,69 @@ def test_executor_persists_attached_d7b_artifact(tmp_path, monkeypatch):
     assert len(b_digests) == 6
 
 
+def test_e61_parent_fsync_precedes_first_referencing_append(
+    tmp_path, monkeypatch
+):
+    """E6.1: on a fresh dir the parent fsync precedes the first referencing
+    ledger append (checked by an ordered spy on os.open/os.fsync/os.link and
+    the ledger append)."""
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    campaign_dir = Path(executor.ledger.path).parent
+    events: list[tuple[str, str]] = []
+    fd_path: dict[int, str] = {}
+    real_open, real_fsync, real_link = os.open, os.fsync, os.link
+
+    def spy_open(path, *args, **kwargs):
+        fd = real_open(path, *args, **kwargs)
+        fd_path[fd] = str(path)
+        events.append(("open", str(path)))
+        return fd
+
+    def spy_fsync(fd):
+        events.append(("fsync", fd_path.get(fd, "")))
+        return real_fsync(fd)
+
+    def spy_link(src, dst, *args, **kwargs):
+        events.append(("link", str(dst)))
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    monkeypatch.setattr(os, "link", spy_link)
+
+    real_append = executor.ledger.append
+
+    def spy_append(record):
+        referenced = record.get("diagnostics") or {}
+        if (
+            record.get("record_type") in (
+                "PRIMARY_ATTEMPT",
+                "DIAGNOSTIC_EVALUATION",
+            )
+            and (referenced.get("is") or referenced.get("oos"))
+        ):
+            events.append(("ledger_append", str(record.get("record_type"))))
+        return real_append(record)
+
+    monkeypatch.setattr(executor.ledger, "append", spy_append)
+    executor.run()
+
+    parent_fsync = next(
+        index
+        for index, (kind, name) in enumerate(events)
+        if kind == "fsync" and name == str(campaign_dir)
+    )
+    first_append = next(
+        index for index, (kind, _) in enumerate(events) if kind == "ledger_append"
+    )
+    first_link = next(
+        index for index, (kind, _) in enumerate(events) if kind == "link"
+    )
+    assert parent_fsync < first_link
+    assert parent_fsync < first_append
+
+
 def test_persistence_does_not_change_ledger_or_disposition(tmp_path, monkeypatch):
     """E6.6.11: persistence only adds files; the ledger is byte-identical."""
     _install_stubs(monkeypatch)

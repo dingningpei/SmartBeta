@@ -264,6 +264,96 @@ def test_persist_uses_atomic_link(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# E6.1 parent-directory durability on first creation of diagnostics/
+# ---------------------------------------------------------------------------
+
+
+def _install_fs_spies(monkeypatch):
+    """Ordered spies on os.open/os.fsync/os.link (transparent, fd-aware)."""
+    events: list[tuple[str, str]] = []
+    fd_path: dict[int, str] = {}
+    real_open, real_fsync, real_link = os.open, os.fsync, os.link
+
+    def spy_open(path, *args, **kwargs):
+        fd = real_open(path, *args, **kwargs)
+        fd_path[fd] = str(path)
+        events.append(("open", str(path)))
+        return fd
+
+    def spy_fsync(fd):
+        events.append(("fsync", fd_path.get(fd, "")))
+        return real_fsync(fd)
+
+    def spy_link(src, dst, *args, **kwargs):
+        events.append(("link", str(dst)))
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    monkeypatch.setattr(os, "link", spy_link)
+    return events
+
+
+def test_e61_case_a_existing_dir_no_parent_fsync(tmp_path: Path, monkeypatch):
+    """CASE A: an existing diagnostics/ is not parent-fsynced again."""
+    diagnostics_dir = tmp_path / "diagnostics"
+    diagnostics_dir.mkdir()
+    events = _install_fs_spies(monkeypatch)
+    S.persist(_diag(), diagnostics_dir)
+    fsync_paths = [name for kind, name in events if kind == "fsync"]
+    assert str(tmp_path) not in fsync_paths
+    assert str(diagnostics_dir) in fsync_paths
+
+
+def test_e61_case_b_new_dir_parent_fsync_before_temp_and_link(
+    tmp_path: Path, monkeypatch
+):
+    """CASE B: first creation fsyncs the parent before the temp write/link."""
+    diagnostics_dir = tmp_path / "diagnostics"
+    events = _install_fs_spies(monkeypatch)
+    S.persist(_diag(), diagnostics_dir)
+    parent_fsync = next(
+        index
+        for index, (kind, name) in enumerate(events)
+        if kind == "fsync" and name == str(tmp_path)
+    )
+    first_link = next(
+        index for index, (kind, _) in enumerate(events) if kind == "link"
+    )
+    temp_open = next(
+        index
+        for index, (kind, name) in enumerate(events)
+        if kind == "open" and Path(name).name.startswith(".")
+    )
+    assert parent_fsync < temp_open
+    assert parent_fsync < first_link
+    assert str(diagnostics_dir) in [
+        name for kind, name in events if kind == "fsync"
+    ]
+
+
+def test_e61_replay_does_not_fsync_parent_again(tmp_path: Path, monkeypatch):
+    """Exact replay finds diagnostics/ already present: no parent fsync."""
+    diagnostics_dir = tmp_path / "diagnostics"
+    S.persist(_diag(), diagnostics_dir)
+    events = _install_fs_spies(monkeypatch)
+    S.persist(_diag(), diagnostics_dir)
+    assert [
+        name
+        for kind, name in events
+        if kind == "fsync" and name == str(tmp_path)
+    ] == []
+
+
+def test_e61_missing_parent_raises_and_creates_nothing(tmp_path: Path):
+    """A missing parent Campaign directory is fail-closed."""
+    missing = tmp_path / "missing" / "diagnostics"
+    with pytest.raises(S.C1DiagnosticsError):
+        S.persist(_diag(), missing)
+    assert not (tmp_path / "missing").exists()
+
+
+# ---------------------------------------------------------------------------
 # load_verified (report verification primitive)
 # ---------------------------------------------------------------------------
 
@@ -454,7 +544,9 @@ def test_mutation_fixture_contract():
         / "mutations.json"
     )
     mutations = json.loads(path.read_text(encoding="utf-8"))
-    assert [m["id"] for m in mutations] == [f"E6-M{i}" for i in range(1, 11)]
+    assert [m["id"] for m in mutations] == [
+        f"E6-M{i}" for i in range(1, 11)
+    ] + ["E6.1-M1"]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] in (

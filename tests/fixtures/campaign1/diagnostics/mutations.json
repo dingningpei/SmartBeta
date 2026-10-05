@@ -122,5 +122,17 @@
       }
     ],
     "test": "tests/test_campaign1_diagnostics_store.py::test_persist_rejects_payload_hash_mismatch"
+  },
+  {
+    "id": "E6.1-M1",
+    "description": "the parent-directory fsync on first creation is removed or bypassed",
+    "file": "smart_beta/campaign/diagnostics_store.py",
+    "edits": [
+      {
+        "old": "    if created:\n        _fsync_directory(directory.parent)\n",
+        "new": "    if False:  # E6.1-M1: parent fsync bypassed\n        _fsync_directory(directory.parent)\n"
+      }
+    ],
+    "test": "tests/test_campaign1_diagnostics_store.py::test_e61_case_b_new_dir_parent_fsync_before_temp_and_link"
   }
 ]
