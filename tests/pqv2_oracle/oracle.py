@@ -20,13 +20,18 @@ Design
   winsorization quantile ``q``, the cost rate ``c``, the sign, and the
   expression form.
 
-A *correction state* is a per-flag choice of
+A *correction state* is a per-flag choice of either
 
-* a branch ``NONE | CA | CLOSE_PREV | CLOSE_S``,
-* a multiplier ``lambda`` drawn from a finite grid over the relative S2 set
-  ``Q_s`` (endpoints, ``1`` and interior points), and
-* a MISDATED alternative (none, or moving one recorded event at ``d`` with
-  ``|d - s| <= 5`` from ``d`` to ``s``).
+* an **ordinary S2 alternative**: a branch ``NONE | CA | CLOSE_PREV |
+  CLOSE_S`` with a multiplier ``lambda`` drawn from a finite grid over the
+  relative S2 set ``Q_s`` (endpoints, ``1`` and interior points); or
+* a **MISDATED alternative**: moving one recorded event at ``d`` with
+  ``|d - s| <= 5`` from ``d`` to ``s``, which forces ``branch = NONE`` and
+  ``lambda = 1``.
+
+The two are **exclusive per flag** (PQ2-G-E1, amending G §3): no state
+combines a MISDATED choice with a non-``NONE`` branch or ``lambda != 1`` for
+the same flag.  Different flags are still combined by a Cartesian product.
 
 The oracle enumerates the Cartesian product over flags and, for each state,
 recomputes ``m_d = close_d / close_{prev d} * phi_d`` (valid only when both
@@ -328,14 +333,17 @@ class World:
         m_obs = self._observed_m(stock, s)
         grid = self._lam_grid(m_obs)
         misdated = self._misdated_options(stock, s)
-        options: list[FlagState] = []
-        for mis in (None, *misdated):
-            options.append(
-                FlagState(stock.key, s, BRANCH_NONE, 1.0, mis)
-            )
-            for branch in (BRANCH_CA, BRANCH_CLOSE_PREV, BRANCH_CLOSE_S):
-                for lam in grid:
-                    options.append(FlagState(stock.key, s, branch, lam, mis))
+        # E1.1 (a): the ordinary S2 alternatives (unchanged).
+        options: list[FlagState] = [
+            FlagState(stock.key, s, BRANCH_NONE, 1.0, None)
+        ]
+        for branch in (BRANCH_CA, BRANCH_CLOSE_PREV, BRANCH_CLOSE_S):
+            for lam in grid:
+                options.append(FlagState(stock.key, s, branch, lam, None))
+        # E1.1 (b): a MISDATED alternative is exclusive with an S2 correction
+        # of the same flag: branch NONE and lambda = 1.
+        for mis in misdated:
+            options.append(FlagState(stock.key, s, BRANCH_NONE, 1.0, mis))
         return tuple(options)
 
     def _observed_m(self, stock: Stock, s: int) -> float:
