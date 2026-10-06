@@ -1,0 +1,129 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the simple-assignment smoke test",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [],
+    "test": "tests/test_pqv2_assign_simple.py::test_control_is_green"
+  },
+  {
+    "id": "D-M1",
+    "description": "j limited to 0..1 (the long leg never takes more than one uncertain member)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    n_clean = len(top_clean)\n    j_hi = min(len(uncertain_keys), s)",
+        "new": "    n_clean = len(top_clean)\n    j_hi = min(len(uncertain_keys), s, 1)  # D-M1"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M1_j_limited_to_one"
+  },
+  {
+    "id": "D-M2",
+    "description": "uncertain members excluded from the leg pool (treated as clean)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "            \"no feasible long-leg configuration\",\n        )\n    pool_values = [values[key] for key in uncertain_keys]",
+        "new": "            \"no feasible long-leg configuration\",\n        )\n    pool_values = [values[key] for key in ()]  # D-M2"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M2_uncertain_pool_dropped"
+  },
+  {
+    "id": "D-M3",
+    "description": "long leg built from the highest values instead of the lowest",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "        result = _core.leg_min_mean(forced_values, pool_values, j)",
+        "new": "        result = _core.leg_max_mean(forced_values, pool_values, j)  # D-M3"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M3_long_leg_high_instead_of_low"
+  },
+  {
+    "id": "D-M4",
+    "description": "D_t = G*|A_t| without the min with |U_t| (turnover cap dropped)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    D_t = min(n, G * len(uncertain_keys))",
+        "new": "    D_t = G * len(uncertain_keys)  # D-M4"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M4_turnover_bound_without_cap"
+  },
+  {
+    "id": "D-M5",
+    "description": "ties broken by value only (unstable: the row-order tie-break is dropped)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    clean_order = tuple(\n        sorted(clean_keys, key=lambda key: (values[key], rank[key]))\n    )",
+        "new": "    clean_order = tuple(\n        sorted(clean_keys, key=lambda key: values[key])  # D-M5\n    )"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M5_ties_value_only"
+  },
+  {
+    "id": "D-M6",
+    "description": "clean-order assumption removed (uncertain members enter the clean ordering)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    clean_order = tuple(\n        sorted(clean_keys, key=lambda key: (values[key], rank[key]))\n    )",
+        "new": "    clean_order = tuple(\n        sorted(key_list, key=lambda key: (values[key], rank[key]))  # D-M6\n    )"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M6_clean_order_assumption"
+  },
+  {
+    "id": "D-M7",
+    "description": "wrong top/bottom boundary: the long leg uses the bottom bucket size",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "        descending_clean, uncertain_keys, long_values, s_G",
+        "new": "        descending_clean, uncertain_keys, long_values, s_1  # D-M7"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M7_wrong_boundary"
+  },
+  {
+    "id": "D-M8",
+    "description": "member drop/regroup: the possible-long set drops the input-uncertain members",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    possible_long = frozenset(top_clean) | uncertain_set",
+        "new": "    possible_long = frozenset(top_clean)  # D-M8"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M8_possible_long_drops_uncertain"
+  },
+  {
+    "id": "D-M9",
+    "description": "wrong turnover bound: D_t loses the G*|A_t| factor entirely",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    D_t = min(n, G * len(uncertain_keys))",
+        "new": "    D_t = len(uncertain_keys)  # D-M9"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M9_turnover_bound_missing_G"
+  },
+  {
+    "id": "D-M10",
+    "description": "unsupported class accepted (the simple-only gate is removed)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    if str(cls) != SIMPLE:",
+        "new": "    if False:  # D-M10"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M10_class_gate_removed"
+  }
+]
