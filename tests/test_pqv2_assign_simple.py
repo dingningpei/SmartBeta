@@ -124,7 +124,7 @@ def test_no_suspect_matches_bucket_means() -> None:
     values = _values(10)
     result = _run(keys, values, G=5)
     assert isinstance(result, S.SimpleAssignment)
-    assert result.rule == SIMPLE
+    assert result.rule == C.SIMPLE_EXACT
     assert result.s_1 == 2 and result.s_G == 2
     assert result.uncertain_keys == ()
     assert result.top_clean == ("M9", "M8")
@@ -737,6 +737,7 @@ def test_mutation_fixture_contract() -> None:
         "D-M8",
         "D-M9",
         "D-M10",
+        "D-M11",
     ]
     source = SOURCE.read_text(encoding="utf-8")
     this_module = sys.modules[__name__]
@@ -766,7 +767,7 @@ def test_control_is_green() -> None:
     values = _values(6)
     result = _run(keys, values, uncertain={"M3": True}, G=3)
     assert isinstance(result, S.SimpleAssignment)
-    assert result.rule == SIMPLE
+    assert result.rule == C.SIMPLE_EXACT
 
 
 def test_kill_D_M1_j_limited_to_one() -> None:
