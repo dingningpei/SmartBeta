@@ -22,7 +22,7 @@ import json
 import math
 import socket
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -241,7 +241,7 @@ def test_clean_period_reconciles_with_b() -> None:
     period = series.periods[0]
     assert period.status_t0 == E.ASSESSED
     assert period.status_ts == E.ASSESSED
-    assert period.rule in (SIMPLE, C.SIMPLE_EXACT)
+    assert period.rule == C.SIMPLE_EXACT
     assert period.L_t0 == pytest.approx(period.LS_b_t0)
     assert period.L_ts == pytest.approx(period.LS_b_ts)
     assert period.L_t0 == pytest.approx(35.5 - 3.5)
@@ -659,6 +659,23 @@ def test_class_rule_mismatch_is_not_certified() -> None:
         cls=STD_X_RANK,
     )
     assert series.gate_reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_legacy_simple_rule_tag_fails_closed() -> None:
+    """PQ2-D-R1: the rule vocabulary is exact; a legacy ``SIMPLE`` rule fails."""
+
+    assignment = replace(_clean_simple(), rule=SIMPLE)
+    assert assignment.rule == SIMPLE
+    assert assignment.rule != C.SIMPLE_EXACT
+    labels = {0: _clean_labels()}
+    groups = {0: _groups_for(assignment)}
+    series = _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, labels, groups,
+        cls=SIMPLE,
+    )
+    assert series.gate_reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+    assert series.periods[0].reason_t0 == C.PQV2_EXPRESSION_NOT_CERTIFIED
+    assert series.periods[0].rule is None
 
 
 def test_authority_mismatch_raises(tmp_path: Path) -> None:
@@ -1290,6 +1307,7 @@ _EXPECTED_MUTATIONS = [
     "F-M16",
     "F-M17",
     "F-M18",
+    "F-M19",
 ]
 
 
@@ -1621,3 +1639,17 @@ def test_kill_F_M18_sandwich_treated_exact() -> None:
     )
     assert series.periods[0].rule == C.SANDWICH_CONSERVATIVE_SUPERSET
     assert series.periods[0].rule != C.SIMPLE_EXACT
+
+
+def test_kill_F_M19_legacy_simple_rule_readmitted() -> None:
+    """The legacy ``SIMPLE`` rule tag must be rejected (PQ2-D-R1)."""
+
+    assignment = replace(_clean_simple(), rule=SIMPLE)
+    labels = {0: _clean_labels()}
+    groups = {0: _groups_for(assignment)}
+    series = _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, labels, groups,
+        cls=SIMPLE,
+    )
+    assert series.gate_reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+    assert series.periods[0].reason_t0 == C.PQV2_EXPRESSION_NOT_CERTIFIED

@@ -94,18 +94,15 @@ _SHORT = "short"
 #: basis-points conversion (plan §6.3: ``cost = (cost_bps / 10^4) * TO``).
 _BPS = 1.0e4
 
-#: class -> the assignment rule tag(s) that class certifies (plan §6.3).
-#: The merged PQ2-D ``SimpleAssignment`` exports ``rule == SIMPLE`` (see the
-#: PQ2-D module and tests) while the plan names the simple rule
-#: ``SIMPLE_EXACT``; both spell the same certified rule, so F accepts either.
-_SIMPLE_RULE_TAGS = frozenset(
-    {SIMPLE, _core.AssignmentRule.SIMPLE_EXACT}
-)
+#: certified class (from ``pqv2_dependency``) -> the assignment rule tag that
+#: the frozen plan (M§15, plan §6.3) certifies for it.  The class vocabulary
+#: (``SIMPLE`` / ``STD_X_RANK``) and the rule vocabulary
+#: (``AssignmentRule.SIMPLE_EXACT`` / ``SANDWICH_CONSERVATIVE_SUPERSET``) are
+#: distinct and are never treated as interchangeable: the legacy ``SIMPLE``
+#: rule tag fails closed (PQ2-D-R1 planner ruling).
 _RULE_FOR_CLASS = {
-    SIMPLE: _SIMPLE_RULE_TAGS,
-    STD_X_RANK: frozenset(
-        {_core.AssignmentRule.SANDWICH_CONSERVATIVE_SUPERSET}
-    ),
+    SIMPLE: _core.AssignmentRule.SIMPLE_EXACT,
+    STD_X_RANK: _core.AssignmentRule.SANDWICH_CONSERVATIVE_SUPERSET,
 }
 
 #: accepted ``metric_basis`` spellings (enum name, enum value, plain string).
@@ -844,7 +841,7 @@ def _class_gate(cls: Any, assignments: Sequence[Any]) -> str | None:
         if isinstance(item, _core.NotAssessed):
             continue
         rule = getattr(item, "rule", None)
-        if rule not in expected_rule:
+        if rule != expected_rule:
             return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED
     return None
 

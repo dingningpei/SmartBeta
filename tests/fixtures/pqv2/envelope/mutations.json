@@ -104,7 +104,7 @@
   },
   {
     "id": "F-M6",
-    "description": "the M§11 winsorization-block check skipped",
+    "description": "the M\u00a711 winsorization-block check skipped",
     "file": "smart_beta/dataset_v1/pqv2_envelope.py",
     "edits": [
       {
@@ -225,7 +225,7 @@
     "edits": [
       {
         "old": "    expected_rule = _RULE_FOR_CLASS.get(cls)",
-        "new": "    expected_rule = _RULE_FOR_CLASS.get(cls, _SIMPLE_RULE_TAGS)  # F-M15"
+        "new": "    expected_rule = _RULE_FOR_CLASS.get(cls, _core.AssignmentRule.SIMPLE_EXACT)  # F-M15"
       }
     ],
     "test": "tests/test_pqv2_envelope.py::test_kill_F_M15_unsupported_class_accepted"
@@ -236,7 +236,7 @@
     "file": "smart_beta/dataset_v1/pqv2_envelope.py",
     "edits": [
       {
-        "old": "        if rule not in expected_rule:\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED",
+        "old": "        if rule != expected_rule:\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED",
         "new": "        if False:  # F-M16\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED"
       }
     ],
@@ -265,5 +265,17 @@
       }
     ],
     "test": "tests/test_pqv2_envelope.py::test_kill_F_M18_sandwich_treated_exact"
+  },
+  {
+    "id": "F-M19",
+    "description": "the legacy SIMPLE rule tag re-admitted alongside AssignmentRule.SIMPLE_EXACT",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        if rule != expected_rule:\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED",
+        "new": "        if rule != expected_rule and not (\n            cls == SIMPLE and rule == SIMPLE\n        ):  # F-M19\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M19_legacy_simple_rule_readmitted"
   }
 ]
