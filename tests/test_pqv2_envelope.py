@@ -1019,10 +1019,11 @@ def _sandwich_oracle_assignment(world: O.World, formation: int):
 def _clean_sandwich_world() -> O.World:
     """A clean ``std_x_rank`` world (no flags) whose M§11 block check passes.
 
-    The M§11 shared precondition is strict for the H4/H5 sandwich: every
-    suspect world available in the oracle case set fails it, so the certified
-    containment domain is exercised on the clean world below and the suspect
-    cases are asserted to fail closed (``test_sandwich_suspect_winsor_block``).
+    This is an additional certified-domain coverage case alongside the suspect
+    worlds built by :func:`_suspect_sandwich_world`.  The suspect worlds form
+    the oracle case list, which all fail the strict M§11 sandwich precondition;
+    they are kept in ``test_sandwich_suspect_winsor_block`` as documented
+    fail-closed cases.
     """
 
     n = 40
@@ -1078,7 +1079,162 @@ def test_sandwich_suspect_winsor_block(case: str) -> None:
     assert series.periods[0].reason_t0 == C.PQV2_WINSOR_BLOCK, case
 
 
-def test_oracle_coverage_sandwich() -> None:
+def _suspect_sandwich_world(
+    *,
+    n_clean: int = 24,
+    n_extra: int = 15,
+    grow: float = 1.15,
+    n_groups: int = 2,
+    q: float = 0.05,
+    extra_grow: float = 1.03,
+    seed_flag_offset: int = 2,
+    formations: tuple[int, ...] = (33,),
+) -> O.World:
+    """A suspect ``std_x_rank`` world whose M§11 block check passes.
+
+    Built through the oracle's public ``World``/``Stock``/``CaEvent``/``Expr``
+    API only (no oracle edits).  The extra ``X`` names are in the full
+    cross-section (they move μ and the V ranks) but not in the grouping
+    universe ``U_f`` -- the configuration under which the strict M§11 sandwich
+    precondition can still hold with an uncertain member.
+    """
+
+    n = 40
+    expr = O.Expr("std_x_rank", k1=4, k2=1, w_s=3, w_l=6)
+    stocks = [
+        O.Stock(
+            key=f"C{i}",
+            close={j: 100.0 * (1.01 * (1 + 0.02 * i)) ** j for j in range(n)},
+            volume={j: 1.0e6 * (1 + 0.2 * i) for j in range(n)},
+        )
+        for i in range(n_clean)
+    ]
+    flag_session = formations[0] - seed_flag_offset
+    stocks.append(
+        O.Stock(
+            key="SUS",
+            close={j: 100.0 * grow ** j for j in range(n)},
+            volume={j: 2.0e6 for j in range(n)},
+            events=(O.CaEvent(flag_session - 3, "split", 1.05),),
+            flags=frozenset((flag_session,)),
+        )
+    )
+    for i in range(n_extra):
+        stocks.append(
+            O.Stock(
+                key=f"X{i}",
+                close={
+                    j: 100.0 * (extra_grow * (1 + 0.01 * i)) ** j
+                    for j in range(n)
+                },
+                volume={j: 3.0e6 * (1 + 0.1 * i) for j in range(n)},
+            )
+        )
+    members = [
+        stock.key for stock in stocks if not stock.key.startswith("X")
+    ]
+    return O.World(
+        sessions=tuple(range(n)),
+        stocks=stocks,
+        universes={formation: members for formation in formations},
+        expression=expr,
+        h=1,
+        n_groups=n_groups,
+        q=q,
+        interior_points=2,
+    )
+
+
+SANDWICH_SUSPECT_WORLDS = {
+    "sandwich_suspect_g2": _suspect_sandwich_world(n_groups=2),
+    "sandwich_suspect_g3": _suspect_sandwich_world(n_groups=3),
+    "sandwich_suspect_two_formation": _suspect_sandwich_world(
+        n_groups=3, formations=(32, 33)
+    ),
+}
+
+
+def _cover_suspect_sandwich(world: O.World):
+    """Full oracle coverage over every formation of a suspect world.
+
+    Returns ``(series, {formation: (n_tops, n_bottoms)})`` and asserts the full
+    plan-§2 coverage on the certified domain (winsorization block passes,
+    both scenarios assessable, ``ls_min >= L`` and ``turnover_max <= TO^hi``).
+    """
+
+    formations = world.formations
+    assignments: dict[int, object] = {}
+    labels_by_period: dict[int, object] = {}
+    groups_by_period: dict[int, object] = {}
+    reach_counts: dict[int, tuple[int, int]] = {}
+    for formation in formations:
+        assignment, labels, b_groups = _sandwich_oracle_assignment(
+            world, formation
+        )
+        assert not isinstance(assignment, C.NotAssessed), (formation, assignment)
+        assert assignment.rule == C.SANDWICH_CONSERVATIVE_SUPERSET
+        score_lo = [assignment.g_lo[key] for key in sorted(assignment.g_lo)]
+        score_hi = [assignment.g_hi[key] for key in sorted(assignment.g_lo)]
+        assert C.winsor_block_ok(
+            score_lo, score_hi, world.q, assignment.s_bot, assignment.s_top
+        ), formation
+        assignments[formation] = assignment
+        labels_by_period[formation] = labels
+        groups_by_period[formation] = b_groups
+        reachable = O.reachable_assignments(world, formation)
+        tops = {tuple(sorted(top)) for top, _bottom in reachable}
+        bottoms = {tuple(sorted(bottom)) for _top, bottom in reachable}
+        reach_counts[formation] = (len(tops), len(bottoms))
+    series = _compose(
+        list(formations), E.NET, 1, world.cost, world.n_groups, world.q,
+        assignments, labels_by_period, groups_by_period, cls=STD_X_RANK,
+    )
+    for period in series.periods:
+        formation = period.period
+        assert period.status_t0 == E.ASSESSED, (formation, period)
+        assert period.status_ts == E.ASSESSED, (formation, period)
+        assert period.rule == C.SANDWICH_CONSERVATIVE_SUPERSET
+        for scenario, value in (("T0", period.L_t0), ("TS", period.L_ts)):
+            oracle_min = O.ls_min(world, formation, scenario)
+            if oracle_min is not None:
+                assert oracle_min >= value - 1e-9, (
+                    formation, scenario, oracle_min, value,
+                )
+        assert O.turnover_max(world, formation) <= period.TO_hi + 1e-9
+    return series, reach_counts
+
+
+@pytest.mark.parametrize("case", sorted(SANDWICH_SUSPECT_WORLDS))
+def test_oracle_coverage_sandwich_suspect(case: str) -> None:
+    """D1 fix: the H4/H5 lower envelope is checked where uncertainty exists."""
+
+    world = SANDWICH_SUSPECT_WORLDS[case]
+    series, reach_counts = _cover_suspect_sandwich(world)
+    # The oracle really does reach more than one top or bottom set here, so the
+    # containment assertions are not vacuous.
+    assert any(
+        tops > 1 or bottoms > 1 for tops, bottoms in reach_counts.values()
+    ), (case, reach_counts)
+    # At least one suspect period carries a non-trivial ambiguous-band D_t.
+    assert any(
+        period.D_t is not None and period.D_t > 0 for period in series.periods
+    ), case
+
+
+def test_oracle_coverage_sandwich_anti_vacuity() -> None:
+    """At least two suspect std_x_rank worlds receive full coverage."""
+
+    full: list[str] = []
+    for case, world in SANDWICH_SUSPECT_WORLDS.items():
+        _series, reach_counts = _cover_suspect_sandwich(world)
+        if any(
+            tops > 1 or bottoms > 1 for tops, bottoms in reach_counts.values()
+        ):
+            full.append(case)
+    assert len(full) >= 2, full
+
+
+def test_oracle_coverage_sandwich_clean() -> None:
     world = _clean_sandwich_world()
     for formation in world.formations:
         assignment, labels, b_groups = _sandwich_oracle_assignment(
