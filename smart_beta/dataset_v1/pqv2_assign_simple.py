@@ -392,7 +392,7 @@ def simple_assignment(
     )
 
     return SimpleAssignment(
-        rule=SIMPLE,
+        rule=_core.AssignmentRule.SIMPLE_EXACT,
         n=n,
         n_groups=G,
         s_1=s_1,

@@ -125,5 +125,17 @@
       }
     ],
     "test": "tests/test_pqv2_assign_simple.py::test_kill_D_M10_class_gate_removed"
+  },
+  {
+    "id": "D-M11",
+    "description": "the simple rule is tagged SIMPLE (the certified-class vocabulary) instead of SIMPLE_EXACT (the assignment-rule vocabulary)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "        rule=_core.AssignmentRule.SIMPLE_EXACT,",
+        "new": "        rule=SIMPLE,  # D-M11"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_no_suspect_matches_bucket_means"
   }
 ]
