@@ -594,6 +594,7 @@ def test_mutation_fixture_contract() -> None:
         "B-M3",
         "B-M4",
         "B-M5",
+        "B-M6",
     }
     allowed_files = {
         "smart_beta/dataset_v1/pqv2_sources.py",

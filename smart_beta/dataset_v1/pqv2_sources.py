@@ -401,16 +401,20 @@ def _event_index(
     positive finite factor, inside the key's D4 interval and no later than
     ``DEVELOPMENT_END``.  ``candidate`` is true only for the M§7 action types.
     A reserve-dated row or a non-trusted effective session fails closed.
+
+    D4 reuses tickers across distinct security keys (D7a selects a key's
+    ticker's events inside that key's ``[listed_start, min(listed_end,
+    DEVELOPMENT_END)]`` interval), so a validated event is appended to every
+    key carrying its ticker whose interval contains the event's effective
+    date; overlapping intervals deliberately share the event.
     """
 
     trusted = set(sessions)
-    ticker_to_key: dict[str, str] = {}
+    keys_by_ticker: dict[str, list[str]] = {}
     for key, ticker in index.ticker_by_key.items():
-        if ticker in ticker_to_key and ticker_to_key[ticker] != key:
-            raise PQv2InputError(
-                f"ticker {ticker!r} maps to multiple security keys"
-            )
-        ticker_to_key[ticker] = key
+        keys_by_ticker.setdefault(ticker, []).append(key)
+    for ticker_keys in keys_by_ticker.values():
+        ticker_keys.sort()
 
     out: dict[str, dict[date, list[tuple[str, bool, float]]]] = {}
     for record in ca_events.to_dict("records"):
@@ -445,15 +449,14 @@ def _event_index(
                 f"corporate action for {ticker!r} on {effective} has an invalid "
                 "adjustment_factor"
             )
-        key = ticker_to_key.get(ticker)
-        if key is None:
-            continue
-        if not _within_interval(index.intervals.get(key, ()), effective):
-            continue
         action = _as_str(record["action_type"]) or ""
-        out.setdefault(key, {}).setdefault(effective, []).append(
-            (action, action in MISDATED_ACTION_TYPES, factor)
-        )
+        candidate = action in MISDATED_ACTION_TYPES
+        for key in keys_by_ticker.get(ticker, ()):
+            if not _within_interval(index.intervals.get(key, ()), effective):
+                continue
+            out.setdefault(key, {}).setdefault(effective, []).append(
+                (action, candidate, factor)
+            )
     return {
         key: {session: tuple(values) for session, values in by_session.items()}
         for key, by_session in out.items()

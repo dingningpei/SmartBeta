@@ -157,5 +157,17 @@
       }
     ],
     "test": "tests/test_pqv2_sources.py::test_window_is_trusted_sessions_not_calendar_days"
+  },
+  {
+    "id": "B-M6",
+    "description": "the one-to-one ticker->key assumption is restored (only the first key per ticker is kept)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "    keys_by_ticker: dict[str, list[str]] = {}\n    for key, ticker in index.ticker_by_key.items():\n        keys_by_ticker.setdefault(ticker, []).append(key)",
+        "new": "    keys_by_ticker: dict[str, list[str]] = {}\n    for key, ticker in index.ticker_by_key.items():\n        keys_by_ticker.setdefault(ticker, [key])"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reused_ticker_overlapping_intervals"
   }
 ]
