@@ -4,7 +4,7 @@
   AUTHORIZED", on master `9083ac5203cf426ba649dde6be4879aa0705b255`.
 - **Amends:** `worker_tasks/pq_v2/task-pq2-d-simple-assignment.md` (committed in
   `b2db30b`, SHA-256
-  `9bb96668444db2708dd444f7e8c07d4ce1cd6995a03eb06b54b532a4c78e4d7c1`), §2 "Oracle containment" bullet only. It is a **task-spec defect**.
+  `9bb96668a6db2708dd444f7e8c07d4ce1cd6995a03eb06b54b532a4c78e4d7c1`), §2 "Oracle containment" bullet only. It is a **task-spec defect**.
   The methodology and CS/ED/CE IDs are unchanged.
 - **Defect:** D §2 requires oracle containment on `pqv2_oracle.CASES["nan"]`
   unconditionally.
