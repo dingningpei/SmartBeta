@@ -1,0 +1,143 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated source must pass the identity test",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_no_suspect_collapses_to_observed"
+  },
+  {
+    "id": "V2-M10",
+    "description": "sigma support via a ddof = 1 variance > 0 instead of the distinct-clean-value test",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    clean_m_values = sorted(\n        {box.lo for box in m_box.values() if box.lo == box.hi}\n    )\n    if len(clean_m_values) < 2:\n        return _core.NotAssessed(\n            _core.NotAssessedReason.SIGMA_SUPPORT,\n            \"fewer than two distinct clean momentum values over the cross-section\",\n        )",
+        "new": "    clean_m_values = sorted(\n        {box.lo for box in m_box.values() if box.lo == box.hi}\n    )\n    _support = False\n    if len(clean_m_values) >= 2:\n        _cm = math.fsum(clean_m_values) / len(clean_m_values)\n        _var = math.fsum((x - _cm) ** 2 for x in clean_m_values) / (\n            len(clean_m_values) - 1\n        )\n        _support = _var > 0.0\n    if not _support:\n        return _core.NotAssessed(\n            _core.NotAssessedReason.SIGMA_SUPPORT,\n            \"fewer than two distinct clean momentum values over the cross-section\",\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_sigma_support_ddof_equivalence",
+    "equivalent": true,
+    "justification": "For n >= 2 both the ddof=0 and ddof=1 variance are zero iff all clean values are equal, so 'variance > 0' is equivalent to 'at least two distinct finite clean values'; for n < 2 both reject. The equivalence is asserted mechanically by test_sigma_support_ddof_equivalence for both the arithmetic and the production function (V2-M10, plan section 8)."
+  },
+  {
+    "id": "V2-M11",
+    "description": "rank method min instead of average in the clean rank base (tie convention)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    base = left + 0.5 * equal_other + 1.0",
+        "new": "    base = left + 0.0 * equal_other + 1.0  # V2-M11"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_average_rank_ties_exact"
+  },
+  {
+    "id": "V2-M12",
+    "description": "suspect volume-rank movement ignored (every V box collapsed to its lower endpoint)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "        v_cell = _resolve_interval(V_obs.get(key), V_interval.get(key))\n        if v_cell is not None:\n            v_box[key] = v_cell",
+        "new": "        v_cell = _resolve_interval(V_obs.get(key), V_interval.get(key))\n        if v_cell is not None:\n            if v_cell.lo != v_cell.hi:\n                v_cell = _core.PositiveInterval(v_cell.lo, v_cell.lo)\n            v_box[key] = v_cell"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_suspect_rank_insertion_bounds"
+  },
+  {
+    "id": "V2-M13",
+    "description": "mu fixed at the observed mean (clean-clean crossing ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    mu_lo = (clean_sum + math.fsum(box.lo for box in suspect_m)) / n_m\n    mu_hi = (clean_sum + math.fsum(box.hi for box in suspect_m)) / n_m",
+        "new": "    _mu_obs = math.fsum(float(M_obs[k]) for k in m_keys) / n_m\n    mu_lo = _mu_obs\n    mu_hi = _mu_obs"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_clean_clean_crossing_mu"
+  },
+  {
+    "id": "V2-M14",
+    "description": "the sandwich rule is tagged SIMPLE_EXACT (treated as exact)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    rule: str = _core.AssignmentRule.SANDWICH_CONSERVATIVE_SUPERSET",
+        "new": "    rule: str = _core.AssignmentRule.SIMPLE_EXACT  # V2-M14"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_rule_never_exact"
+  },
+  {
+    "id": "E-M1",
+    "description": "C_top uses > instead of >= (ties not conservative)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "        if sum(1 for j in members if j != i and g_hi[j] >= g_lo[i]) < s_top",
+        "new": "        if sum(1 for j in members if j != i and g_hi[j] > g_lo[i]) < s_top  # E-M1"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_cp_tie_conservative"
+  },
+  {
+    "id": "E-M2",
+    "description": "score interval uses only the (M^lo, mu^hi) and (M^hi, mu^lo) vertices",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "        candidates = (\n            r_lo * (m_cell.lo - mu_lo),\n            r_lo * (m_cell.lo - mu_hi),\n            r_lo * (m_cell.hi - mu_lo),\n            r_lo * (m_cell.hi - mu_hi),\n            r_hi * (m_cell.lo - mu_lo),\n            r_hi * (m_cell.lo - mu_hi),\n            r_hi * (m_cell.hi - mu_lo),\n            r_hi * (m_cell.hi - mu_hi),\n        )",
+        "new": "        candidates = (\n            r_lo * (m_cell.lo - mu_hi),\n            r_hi * (m_cell.hi - mu_lo),\n        )  # E-M2"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_score_interval_all_vertices"
+  },
+  {
+    "id": "E-M3",
+    "description": "mu computed over universe members only instead of the full cross-section",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    mu_lo = (clean_sum + math.fsum(box.lo for box in suspect_m)) / n_m\n    mu_hi = (clean_sum + math.fsum(box.hi for box in suspect_m)) / n_m",
+        "new": "    _uni = set(universe)\n    _uni_m = [m_box[k] for k in sorted(m_box) if k in _uni]\n    _n_uni = len(_uni_m)\n    _clean_uni = math.fsum(box.lo for box in _uni_m if box.lo == box.hi)\n    _sus_uni = [box for box in _uni_m if box.lo != box.hi]\n    mu_lo = (_clean_uni + math.fsum(box.lo for box in _sus_uni)) / _n_uni\n    mu_hi = (_clean_uni + math.fsum(box.hi for box in _sus_uni)) / _n_uni  # E-M3"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_full_cross_section_mu"
+  },
+  {
+    "id": "E-M4",
+    "description": "D_t from the simple G*k formula instead of the ambiguous band",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    D_t = 0\n    for i in members:\n        r_min = 1 + sum(\n            1 for j in members if j != i and g_hi[j] < g_lo[i]\n        )\n        r_max = n_u - sum(\n            1 for j in members if g_lo[j] > g_hi[i]\n        )\n        possible = {_bucket(r, n_u, G) for r in range(r_min, r_max + 1)}\n        group = b_groups.get(i)\n        if group is None:\n            raise _core.PQv2InputError(\n                f\"missing B group for universe member {i!r}\"\n            )\n        group = int(group)\n        if group not in possible:\n            raise _core.PQv2InvariantError(\n                \"B's observed group is not reachable: \"\n                f\"key={i!r}, group={group}, possible={sorted(possible)}\"\n            )\n        if possible != {group}:\n            D_t += 1",
+        "new": "    _uncertain_ids = {\n        key\n        for key in members\n        if v_box[key].lo != v_box[key].hi or m_box[key].lo != m_box[key].hi\n    }\n    D_t = min(n_u, G * len(_uncertain_ids))  # E-M4"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_ambiguous_band_turnover"
+  },
+  {
+    "id": "E-M5",
+    "description": "sigma-support check counts suspects as clean momentum values",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    clean_m_values = sorted(\n        {box.lo for box in m_box.values() if box.lo == box.hi}\n    )",
+        "new": "    clean_m_values = sorted({box.lo for box in m_box.values()})  # E-M5"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_sigma_support_excludes_suspects"
+  },
+  {
+    "id": "E-M6",
+    "description": "the full cross-section is replaced by the universe for mu and the V ranks",
+    "file": "smart_beta/dataset_v1/pqv2_assign_sandwich.py",
+    "edits": [
+      {
+        "old": "    for key in cross:\n        m_cell = _resolve_interval(M_obs.get(key), M_interval.get(key))\n        if m_cell is not None:\n            m_box[key] = m_cell\n        v_cell = _resolve_interval(V_obs.get(key), V_interval.get(key))\n        if v_cell is not None:\n            v_box[key] = v_cell\n\n    # 1. σ support: at least two distinct *clean* (point) M values.",
+        "new": "    for key in cross:\n        m_cell = _resolve_interval(M_obs.get(key), M_interval.get(key))\n        if m_cell is not None:\n            m_box[key] = m_cell\n        v_cell = _resolve_interval(V_obs.get(key), V_interval.get(key))\n        if v_cell is not None:\n            v_box[key] = v_cell\n\n    _universe_set = set(universe)  # E-M6\n    m_box = {k: v for k, v in m_box.items() if k in _universe_set}\n    v_box = {k: v for k, v in v_box.items() if k in _universe_set}\n\n    # 1. σ support: at least two distinct *clean* (point) M values."
+      }
+    ],
+    "test": "tests/test_pqv2_assign_sandwich.py::test_full_cross_section_changes_volume_rank"
+  }
+]
