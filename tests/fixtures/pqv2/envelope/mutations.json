@@ -1,0 +1,269 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the envelope smoke test",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [],
+    "test": "tests/test_pqv2_envelope.py::test_control_is_green"
+  },
+  {
+    "id": "V2-M16",
+    "description": "old G*k turnover bound used for the sandwich class instead of PQ2-E's ambiguous band",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    D_t = int(assignment.D_t)\n    exposure = _exposure(assignment)",
+        "new": "    if isinstance(assignment, SandwichAssignment):\n        _n_unc = sum(\n            1 for _k in assignment.g_lo\n            if assignment.g_lo[_k] != assignment.g_hi[_k]\n        )\n        D_t = min(assignment.n_universe, G * _n_unc)  # V2-M16\n    else:\n        D_t = int(assignment.D_t)\n    exposure = _exposure(assignment)"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V2_M16_sandwich_Gk_turnover"
+  },
+  {
+    "id": "V2-M17",
+    "description": "sign -1 evaluated with the ordinary (unswapped) legs instead of NotAssessed",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if sign_int != 1:\n        gate = _core.NotAssessedReason.SIGN_NOT_CERTIFIED\n    elif metric is None:",
+        "new": "    if False:  # V2-M17\n        gate = _core.NotAssessedReason.SIGN_NOT_CERTIFIED\n    elif metric is None:"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V2_M17_sign_minus_one"
+  },
+  {
+    "id": "V2-M18",
+    "description": "a typed NaN member value replaced by the bounded value 0",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    return value",
+        "new": "    return 0.0 if not math.isfinite(value) else value  # V2-M18"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V2_M18_nan_replaced_by_zero"
+  },
+  {
+    "id": "F-M1",
+    "description": "D_{t-1} omitted from the TO^hi numerator",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        TO_hi = min(1.0, (changed_b + D_t + D_prev) / union_n)",
+        "new": "        TO_hi = min(1.0, (changed_b + D_t) / union_n)  # F-M1"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M1_D_prev_omitted"
+  },
+  {
+    "id": "F-M2",
+    "description": "the min(1, .) cap omitted from the TO^hi numerator",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        TO_hi = min(1.0, (changed_b + D_t + D_prev) / union_n)",
+        "new": "        TO_hi = (changed_b + D_t + D_prev) / union_n  # F-M2"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M2_min_cap_omitted"
+  },
+  {
+    "id": "F-M3",
+    "description": "the cost term applied for the GROSS metric as well",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    cost = cost_rate * TO_hi if net else 0.0",
+        "new": "    cost = cost_rate * TO_hi  # F-M3"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M3_cost_for_gross"
+  },
+  {
+    "id": "F-M4",
+    "description": "the first-period TO^hi uses D_t instead of the frozen 0.0",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if first:\n        TO_hi = 0.0\n    else:\n        D_prev = _previous_D(previous_assignment, previous_groups or {})\n        TO_hi = min(1.0, (changed_b + D_t + D_prev) / union_n)",
+        "new": "    if first:\n        TO_hi = min(1.0, (changed_b + D_t) / union_n)  # F-M4\n    else:\n        D_prev = _previous_D(previous_assignment, previous_groups or {})\n        TO_hi = min(1.0, (changed_b + D_t + D_prev) / union_n)"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M4_first_period_D_t"
+  },
+  {
+    "id": "F-M5",
+    "description": "the reserve check scans B's observed memberships instead of the possible leg sets",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in reserve_members\n            if _is_unknown_reserve(labels.get(key))\n        )\n    )",
+        "new": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in b_groups\n            if int(b_groups[key]) in (1, G)\n            and _is_unknown_reserve(labels.get(key))\n        )\n    )  # F-M5"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M5_reserve_over_b_legs_only"
+  },
+  {
+    "id": "F-M6",
+    "description": "the M§11 winsorization-block check skipped",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    winsor_ok = _core.winsor_block_ok(score_lo, score_hi, q, s_low, s_high)",
+        "new": "    winsor_ok = True  # F-M6"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M6_winsor_check_skipped"
+  },
+  {
+    "id": "F-M7",
+    "description": "T0/TS order reversed: T0 reads the TS fields and TS reads the T0 fields",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if scenario == _T0:\n        value = (\n            float(getattr(label, \"t0_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"t0_hi\"))\n        )\n    else:\n        value = (\n            float(getattr(label, \"ts_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"ts_hi\"))\n        )",
+        "new": "    if scenario == _T0:\n        value = (\n            float(getattr(label, \"ts_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"ts_hi\"))\n        )  # F-M7\n    else:\n        value = (\n            float(getattr(label, \"t0_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"t0_hi\"))\n        )  # F-M7"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M7_t0_ts_order_reversed"
+  },
+  {
+    "id": "F-M8",
+    "description": "wrong long extremum direction: the long leg takes the maximum instead of the minimum",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        result = _core.leg_min_mean(forced, pool, j)",
+        "new": "        result = _core.leg_max_mean(forced, pool, j)  # F-M8"
+      },
+      {
+        "old": "    return _core.leg_min_mean(forced, pool, int(assignment.s_top) - len(assignment.C_top))",
+        "new": "    return _core.leg_max_mean(forced, pool, int(assignment.s_top) - len(assignment.C_top))  # F-M8"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M8_wrong_long_direction"
+  },
+  {
+    "id": "F-M9",
+    "description": "wrong short extremum direction: the short leg takes the minimum instead of the maximum",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        result = _core.leg_max_mean(forced, pool, j)",
+        "new": "        result = _core.leg_min_mean(forced, pool, j)  # F-M9"
+      },
+      {
+        "old": "    return _core.leg_max_mean(forced, pool, int(assignment.s_bot) - len(assignment.C_bot))",
+        "new": "    return _core.leg_min_mean(forced, pool, int(assignment.s_bot) - len(assignment.C_bot))  # F-M9"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M9_wrong_short_direction"
+  },
+  {
+    "id": "F-M10",
+    "description": "wrong cost sign: the cost is added to L instead of subtracted",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    return float(lower) - float(upper) - cost, ASSESSED, None",
+        "new": "    return float(lower) - float(upper) + cost, ASSESSED, None  # F-M10"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M10_wrong_cost_sign"
+  },
+  {
+    "id": "F-M11",
+    "description": "an upstream typed NOT_ASSESSED is not propagated (converted to a numeric period)",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if isinstance(assignment, _core.NotAssessed):\n        return _not_assessed_period(",
+        "new": "    if False:  # F-M11\n        return _not_assessed_period("
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M11_upstream_not_assessed_to_numeric"
+  },
+  {
+    "id": "F-M12",
+    "description": "a NaN member value replaced by a large finite certified bound in the long value map",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    long_values = {\n        key: _label_scenario(label, scenario, _LONG)\n        for key, label in labels.items()\n    }",
+        "new": "    long_values = {\n        key: (\n            _label_scenario(label, scenario, _LONG)\n            if math.isfinite(_label_scenario(label, scenario, _LONG))\n            else 1.0e9\n        )  # F-M12\n        for key, label in labels.items()\n    }"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M12_nan_treated_as_bound"
+  },
+  {
+    "id": "F-M13",
+    "description": "B's observed value substituted for a NOT_ASSESSED L_t",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if status_t0 != ASSESSED:\n        L_t0 = math.nan\n    if status_ts != ASSESSED:\n        L_ts = math.nan",
+        "new": "    if status_t0 != ASSESSED:\n        L_t0 = LS_b_t0  # F-M13\n    if status_ts != ASSESSED:\n        L_ts = LS_b_ts  # F-M13"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M13_b_substituted_for_missing_l"
+  },
+  {
+    "id": "F-M14",
+    "description": "T0/TS combined: both scenarios read the T0 fields",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if scenario == _T0:\n        value = (\n            float(getattr(label, \"t0_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"t0_hi\"))\n        )\n    else:\n        value = (\n            float(getattr(label, \"ts_lo\"))\n            if side == _LONG\n            else float(getattr(label, \"ts_hi\"))\n        )",
+        "new": "    value = (\n        float(getattr(label, \"t0_lo\"))\n        if side == _LONG\n        else float(getattr(label, \"t0_hi\"))\n    )  # F-M14"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M14_t0_ts_combined"
+  },
+  {
+    "id": "F-M15",
+    "description": "an unsupported certified class accepted by defaulting to the simple rule",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    expected_rule = _RULE_FOR_CLASS.get(cls)",
+        "new": "    expected_rule = _RULE_FOR_CLASS.get(cls, _SIMPLE_RULE_TAGS)  # F-M15"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M15_unsupported_class_accepted"
+  },
+  {
+    "id": "F-M16",
+    "description": "the class/assignment-rule identity mismatch ignored",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        if rule not in expected_rule:\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED",
+        "new": "        if False:  # F-M16\n            return _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M16_class_rule_mismatch_ignored"
+  },
+  {
+    "id": "F-M17",
+    "description": "a reserve-UNKNOWN label member treated as clean (no reserve firewall)",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in reserve_members\n            if _is_unknown_reserve(labels.get(key))\n        )\n    )",
+        "new": "    unknown_members = ()  # F-M17"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M17_reserve_unknown_treated_clean"
+  },
+  {
+    "id": "F-M18",
+    "description": "the conservative sandwich rule reported as exact (SIMPLE_EXACT)",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        rule = getattr(assignment, \"rule\", None)",
+        "new": "        rule = _core.AssignmentRule.SIMPLE_EXACT  # F-M18"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F_M18_sandwich_treated_exact"
+  }
+]
