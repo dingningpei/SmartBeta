@@ -1,0 +1,303 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the smoke test",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [],
+    "test": "tests/test_pqv2_evaluation.py::test_control_is_green"
+  },
+  {
+    "id": "V2-M17",
+    "description": "sign -1 evaluated instead of NOT_ASSESSED (H side)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    certified = _dependency.certify(factor_spec)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(declaration, factor_spec, certified.reason)",
+        "new": "    certified = _dependency.certify(factor_spec)\n    if isinstance(certified, _core.NotAssessed) and certified.reason != _core.NotAssessedReason.SIGN_NOT_CERTIFIED:\n        return _blank_diagnostics(declaration, factor_spec, certified.reason)\n    if isinstance(certified, _core.NotAssessed):\n        certified = _dependency.CertifiedClass(_dependency.SIMPLE, \"C1-H1\")"
+      },
+      {
+        "old": "        declaration.base.primary_metric,\n        int(factor_spec.sign),\n        declaration.base.transaction_cost_bps,",
+        "new": "        declaration.base.primary_metric,\n        1,  # V2-M17\n        declaration.base.transaction_cost_bps,"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_sign_minus_one_stays_not_assessed"
+  },
+  {
+    "id": "V2-M19",
+    "description": "verify_authority call removed",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    _core.verify_authority(repo_root)",
+        "new": "    pass  # V2-M19 authority check removed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_authority_tamper_raises"
+  },
+  {
+    "id": "V2-M19b",
+    "description": "declaration identity comparison removed",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:\n    \"\"\"The typed identity-mismatch reason, or ``None`` when the declaration binds.\"\"\"\n\n    if declaration.pq_methodology != PQ_METHODOLOGY:",
+        "new": "def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:\n    \"\"\"The typed identity-mismatch reason, or ``None`` when the declaration binds.\"\"\"\n\n    return None  # V2-M19 declaration identity comparison removed\n    if declaration.pq_methodology != PQ_METHODOLOGY:"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_declaration_identity_mismatch_blank_and_no_reads"
+  },
+  {
+    "id": "H-M1",
+    "description": "L statistic computed over finite L periods only (dropping NOT_ASSESSED)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        value = item.value(scenario)\n        if not _is_finite(value):\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        values.append(float(value))",
+        "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            continue  # H-M1: drop the unassessable period\n        value = item.value(scenario)\n        if not _is_finite(value):\n            continue  # H-M1: skip the non-finite value\n        values.append(float(value))"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_l_period_not_assessed_first_middle_last"
+  },
+  {
+    "id": "H-M2",
+    "description": "the gap-aware HAC used for L",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    result = _metrics.long_short_mean_tstat(np.asarray(values, dtype=\"float64\"))",
+        "new": "    from smart_beta.engines.gap_hac import gap_aware_mean_tstat as _gap_aware_mean_tstat\n    _gap_result = _gap_aware_mean_tstat(np.asarray(values, dtype=\"float64\"))\n    result = _metrics.LongShortResult(\n        value=_gap_result.mean,\n        n_obs=int(_gap_result.n_obs),\n        t_stat=_gap_result.t_stat,\n        n_missing=0,\n    )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_gap_hac_not_imported_in_fresh_process"
+  },
+  {
+    "id": "H-M3",
+    "description": "B taken from the reconstruction without bit-equality reconciliation",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    _reconcile_b((scenario_t0, scenario_ts), diag_b, sign=int(factor_spec.sign))",
+        "new": "    pass  # H-M3 reconciliation removed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_reconciliation_failure_raises"
+  },
+  {
+    "id": "H-M4",
+    "description": "B FAIL / L PASS raises instead of the typed status",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if not b_passed and l_passed:\n        return _core.ClassificationStatus.INVARIANT_VIOLATION_FAIL_CLOSED, None, False",
+        "new": "    if not b_passed and l_passed:\n        raise _core.PQv2InvariantError(\"H-M4: B FAIL / L PASS raised\")"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_fail_l_pass_typed_never_raises"
+  },
+  {
+    "id": "H-M5",
+    "description": "B FAIL / L PASS classified as PASS",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if not b_passed and l_passed:\n        return _core.ClassificationStatus.INVARIANT_VIOLATION_FAIL_CLOSED, None, False",
+        "new": "    if not b_passed and l_passed:\n        return _core.ClassificationStatus.CORRECTION_SENSITIVITY_SCREEN_PASS, None, True"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_classification_table[False-True-CORRECTION_SENSITIVITY_SCREEN_PASS]"
+  },
+  {
+    "id": "H-M6",
+    "description": "accept / confirmation True for PASS",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        accept=False,\n        confirmation=False,",
+        "new": "        accept=True,  # H-M6\n        confirmation=True,  # H-M6"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_accept_and_confirmation_are_false"
+  },
+  {
+    "id": "H-M7",
+    "description": "the sub-expression consistency assertion removed",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            tolerance = _INVARIANT_TOL * max(1.0, abs(expected))\n            if abs(float(actual) - expected) > tolerance:\n                raise PQv2InvariantError(\n                    \"factor cell does not equal standardize(M)*rank(V): \"\n                    f\"{key} at {formation}: {actual!r} != {expected!r}\"\n                )",
+        "new": "            pass  # H-M7: sub-expression consistency assertion removed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_subexpression_consistency_assertion_raises"
+  },
+  {
+    "id": "H-M8",
+    "description": "b_diagnostics not attached / not hashed",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        b_diagnostics_hash=diag_b.diagnostics_hash,\n        b_diagnostics=diag_b,",
+        "new": "        b_diagnostics_hash=None,  # H-M8\n        b_diagnostics=None,  # H-M8"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_diagnostics_attached_and_hashed"
+  },
+  {
+    "id": "H-M9",
+    "description": "legacy SIMPLE rule tag accepted (gate_reason ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if envelope.gate_reason is not None:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n        )",
+        "new": "    if False:  # H-M9 legacy SIMPLE rule tag accepted\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_legacy_simple_rule_tag_fails_closed"
+  },
+  {
+    "id": "H-M10",
+    "description": "authority mismatch ignored",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    _core.verify_authority(repo_root)",
+        "new": "    pass  # H-M10 authority mismatch ignored"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_authority_tamper_raises"
+  },
+  {
+    "id": "H-M11",
+    "description": "upstream dataset identity hash mismatch ignored",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if identity_hash != declaration.dataset_identity_hash:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n        )",
+        "new": "    if False:  # H-M11 upstream dataset identity hash ignored\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_dataset_identity_mismatch_blank"
+  },
+  {
+    "id": "H-M12",
+    "description": "period-order mismatch ignored",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if tuple(periods) != tuple(b_lookup):\n        raise PQv2InvariantError(\n            \"B and L period identities or order differ: \"\n            f\"B={list(b_lookup)} L={list(periods)}\"\n        )",
+        "new": "    if False:  # H-M12 period-order mismatch ignored\n        raise PQv2InvariantError(\n            \"B and L period identities or order differ: \"\n            f\"B={list(b_lookup)} L={list(periods)}\"\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_l_order_mismatch_fails_closed"
+  },
+  {
+    "id": "H-M13",
+    "description": "duplicate period ignored",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if len(set(periods)) != len(periods):\n        raise PQv2InvariantError(\"composed L series has duplicate formation periods\")",
+        "new": "    if False:  # H-M13 duplicate period ignored\n        raise PQv2InvariantError(\"composed L series has duplicate formation periods\")"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_l_duplicate_period_fails_closed",
+    "equivalent": true,
+    "justification": "Equivalent to the control: a duplicated period identity can never equal B's unique finite-period index, so the independent period-identity/order check (tuple(periods) != tuple(b_lookup)) rejects it with the same PQv2InvariantError. The duplicate check is a redundant early guard, so removing it does not weaken the fail-closed guarantee."
+  },
+  {
+    "id": "H-M14",
+    "description": "typed NOT_ASSESSED reason collapsed",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,",
+        "new": "\"PQV2_NOT_ASSESSED\",  # H-M14 collapsed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_reserve_unknown_period_typed"
+  },
+  {
+    "id": "H-M15",
+    "description": "nondeterministic hash payload",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            \"b_diagnostics_hash\": self.b_diagnostics_hash,\n        }",
+        "new": "            \"b_diagnostics_hash\": self.b_diagnostics_hash,\n            \"nonce\": __import__(\"random\").random(),  # H-M15\n        }"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_deterministic_replay_identical_hash"
+  },
+  {
+    "id": "H-M16",
+    "description": "insufficient support silently accepted",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if not (math.isfinite(float(result.value)) and math.isfinite(float(result.t_stat))):\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n        )",
+        "new": "    if False:  # H-M16 insufficient support silently accepted\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_insufficient_support_not_assessed"
+  },
+  {
+    "id": "H-M17",
+    "description": "B substituted for L",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )",
+        "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            values.append(float(b_lookup[period]))  # H-M17 B substituted for L\n            continue"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_numeric_while_l_not_assessed_no_substitution"
+  },
+  {
+    "id": "H-M18",
+    "description": "zero substituted for L",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )",
+        "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            values.append(0.0)  # H-M18 zero substituted for L\n            continue"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_b_numeric_while_l_not_assessed_no_substitution"
+  },
+  {
+    "id": "H-M19",
+    "description": "NaN L value skipped by the estimator",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        value = item.value(scenario)\n        if not _is_finite(value):\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        values.append(float(value))",
+        "new": "        value = item.value(scenario)\n        values.append(float(value))  # H-M19: NaN skipped by the estimator"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_nan_l_value_fails_closed"
+  },
+  {
+    "id": "H-M20",
+    "description": "partial-period estimator",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    t_b = tuple(period for period in periods if _is_finite(b_lookup[period]))",
+        "new": "    t_b = tuple(period for period in periods if _is_finite(b_lookup[period]))[:-1]  # H-M20"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_all_numeric_l_computed_simple"
+  },
+  {
+    "id": "H-M21",
+    "description": "T0 / TS combined into one scenario",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        statuses.append(status)\n        reasons.append(reason)\n        b_screens.append(b_passed)\n        l_screens.append(l_passed)\n        advancement.append(permitted)",
+        "new": "        statuses.append(statuses[0] if statuses else status)  # H-M21\n        reasons.append(reasons[0] if reasons else reason)\n        b_screens.append(b_screens[0] if b_screens else b_passed)\n        l_screens.append(l_screens[0] if l_screens else l_passed)\n        advancement.append(advancement[0] if advancement else permitted)"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_scenarios_persisted_independently"
+  }
+]
