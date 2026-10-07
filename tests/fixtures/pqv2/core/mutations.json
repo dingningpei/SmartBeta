@@ -36,7 +36,7 @@
     "file": "smart_beta/dataset_v1/pqv2_core.py",
     "edits": [
       {
-        "old": "    if actual_methodology != METHODOLOGY_SHA256:",
+        "old": "    if actual_methodology != authority.methodology_sha256:",
         "new": "    if False:  # V2-M19: document hash check bypassed"
       }
     ],
@@ -101,5 +101,149 @@
       }
     ],
     "test": "tests/test_pqv2_core.py::test_bucket_sizes_matches_assign_groups"
+  },
+  {
+    "id": "V21-M12a",
+    "description": "primary chosen by canonical/insertion order instead of the frozen precedence",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        for reason in PERIOD_CAUSE_PRECEDENCE:",
+        "new": "        for reason in self.causes:  # V21-M12a: precedence removed"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_primary_source_over_sigma"
+  },
+  {
+    "id": "V21-M15",
+    "description": "v2 methodology hash kept as current instead of the v2.1 document hash",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        \"66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e\"",
+        "new": "        \"a31ed9c49cd3a03208ae28539a8b5f5531916e31fac32bbd60e2af07746fa56d\""
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_verify_authority_binds_v21_methodology_hash"
+  },
+  {
+    "id": "A21-M1",
+    "description": "SOURCE_UNRESOLVED aliased to the RESERVE string",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    SOURCE_UNRESOLVED = \"PQV2_SOURCE_UNRESOLVED\"",
+        "new": "    SOURCE_UNRESOLVED = \"PQV2_RESERVE_UNKNOWN\""
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_source_reason_serializes_exactly"
+  },
+  {
+    "id": "A21-M2",
+    "description": "cause_for_source_state(UNKNOWN_SOURCE) returns the RESERVE cause",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    if state == SourceState.UNKNOWN_SOURCE:\n        return NotAssessedReason.SOURCE_UNRESOLVED",
+        "new": "    if state == SourceState.UNKNOWN_SOURCE:\n        return NotAssessedReason.RESERVE_UNKNOWN"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_cause_for_source_state_mapping"
+  },
+  {
+    "id": "A21-M3",
+    "description": "CauseSet keeps only the primary cause",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    return tuple(sorted(set(materialized)))",
+        "new": "    for reason in PERIOD_CAUSE_PRECEDENCE:\n        if reason in materialized:\n            return (reason,)\n    return ()"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_retains_all_causes"
+  },
+  {
+    "id": "A21-M4",
+    "description": "canonical order is insertion order",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    return tuple(sorted(set(materialized)))",
+        "new": "    return tuple(dict.fromkeys(materialized))"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_is_insertion_order_independent"
+  },
+  {
+    "id": "A21-M5",
+    "description": "duplicate causes retained",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    return tuple(sorted(set(materialized)))",
+        "new": "    return tuple(sorted(materialized))"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_collapses_duplicates"
+  },
+  {
+    "id": "A21-M6",
+    "description": "precedence SOURCE > RESERVE",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.SOURCE_UNRESOLVED,",
+        "new": "    NotAssessedReason.SOURCE_UNRESOLVED,\n    NotAssessedReason.RESERVE_UNKNOWN,"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_primary_reserve_over_source"
+  },
+  {
+    "id": "A21-M7",
+    "description": "SIGMA_SUPPORT / WINSOR_BLOCK outrank SOURCE",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.SOURCE_UNRESOLVED,\n    NotAssessedReason.SIGMA_SUPPORT,\n    NotAssessedReason.WINSOR_BLOCK,\n    NotAssessedReason.EMPTY_LEG_CONFIGURATION,",
+        "new": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.SIGMA_SUPPORT,\n    NotAssessedReason.WINSOR_BLOCK,\n    NotAssessedReason.SOURCE_UNRESOLVED,\n    NotAssessedReason.EMPTY_LEG_CONFIGURATION,"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_causeset_primary_source_over_sigma"
+  },
+  {
+    "id": "A21-M8",
+    "description": "v2 ED-ID kept as current instead of the v2.1 ED-ID",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    ed_id=\"65bd7d1341e70674132bc7729870876adf5457fe9ce4c277d0f1148df343a4d6\",",
+        "new": "    ed_id=\"e979924ee4efc365155d8a79089fb940a28ebede7099f67373f0d654bd479aeb\","
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_v21_ed_id_frozen_value"
+  },
+  {
+    "id": "A21-M9",
+    "description": "CS_ID constant altered",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "CS_ID = CURRENT_AUTHORITY.cs_id",
+        "new": "CS_ID = CURRENT_AUTHORITY.ce_id"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_cs_id_frozen_value"
+  },
+  {
+    "id": "A21-M10",
+    "description": "CauseSet accepts RESOLVED",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        if reason not in PERIOD_CAUSE_PRECEDENCE:\n            raise PQv2InputError(f\"not a period cause: {reason!r}\")",
+        "new": "        if reason not in PERIOD_CAUSE_PRECEDENCE and reason != \"RESOLVED\":\n            raise PQv2InputError(f\"not a period cause: {reason!r}\")"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_resolved_and_non_period_reasons_rejected"
   }
 ]

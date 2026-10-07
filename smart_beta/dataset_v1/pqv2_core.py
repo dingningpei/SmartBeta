@@ -1,15 +1,21 @@
-"""P-Q v2 core: frozen identities, S2 correction sets, typed statuses and combinatorics.
+"""P-Q v2/v2.1 core: frozen identities, S2 correction sets, typed statuses and combinatorics.
 
 This module is the PQ2-A deliverable of the frozen P-Q v2 implementation plan
-(``docs/discovery_dataset_v1_2_pq_v2_implementation_plan.md``) and implements the
-core pieces of the frozen methodology
-(``docs/discovery_dataset_v1_2_pq_v2_methodology.md``):
+(``docs/discovery_dataset_v1_2_pq_v2_implementation_plan.md``) and its P-Q v2.1
+amendment (``docs/discovery_dataset_v1_2_pq_v2_1_implementation_plan.md``).  It
+implements the core pieces of the frozen methodology
+(``docs/discovery_dataset_v1_2_pq_v2_1_methodology.md``):
 
-* the four frozen identities (:data:`METHODOLOGY_SHA256`, :data:`CS_ID`,
-  :data:`ED_ID`, :data:`CE_ID`) and :func:`verify_authority`;
+* the versioned authorities (:class:`MethodologyAuthority`, :data:`AUTHORITY_V2`,
+  :data:`AUTHORITY_V2_1`, :data:`CURRENT_AUTHORITY`), the four frozen identities
+  (:data:`METHODOLOGY_SHA256`, :data:`CS_ID`, :data:`ED_ID`, :data:`CE_ID`),
+  :func:`verify_authority` and :func:`require_current_authority`;
 * the correction-sensitivity set S2 (M§3) as :class:`PositiveInterval`
   arithmetic with :func:`s2_absolute` / :func:`s2_relative` (no global K);
-* the exhaustive typed status vocabularies (M§14, M§15);
+* the exhaustive typed status vocabularies (M§14, M§15) plus the M§8A source
+  states and deterministic cause model (:class:`SourceState`,
+  :class:`CauseSet`, :func:`cause_for_source_state`,
+  :func:`label_status_for_causes`);
 * the source dataclasses handed from PQ2-B to PQ2-C/D/E/F;
 * the exact leg-extremum combinatorics of M§12 Prop. 7
   (:func:`leg_min_mean` / :func:`leg_max_mean`);
@@ -36,6 +42,10 @@ from typing import Any, ClassVar, Iterable, Mapping, Sequence
 
 __all__ = [
     # identities / constants
+    "MethodologyAuthority",
+    "AUTHORITY_V2",
+    "AUTHORITY_V2_1",
+    "CURRENT_AUTHORITY",
     "METHODOLOGY_SHA256",
     "CS_ID",
     "ED_ID",
@@ -54,6 +64,7 @@ __all__ = [
     "PQv2InvariantError",
     # authority
     "verify_authority",
+    "require_current_authority",
     "pqv2_code_sha256",
     "pqv2_code_manifest",
     "identity_lines",
@@ -69,12 +80,21 @@ __all__ = [
     "NotAssessedReason",
     "AssignmentRule",
     "ClassificationStatus",
+    "SourceState",
+    "CauseSet",
+    "EMPTY_CAUSES",
+    "PERIOD_CAUSE_PRECEDENCE",
+    "UNKNOWN_CAUSES",
+    "cause_for_source_state",
+    "label_status_for_causes",
+    "must_short_circuit",
     "LABEL_STATUSES",
     "NOT_ASSESSED_REASONS",
     "ASSIGNMENT_RULES",
     "CLASSIFICATION_STATUSES",
     # dataclasses
     "NotAssessed",
+    "UnresolvedFlag",
     "UncertainTransition",
     "MisdatedCandidate",
     "SourceSet",
@@ -90,14 +110,58 @@ __all__ = [
 # Frozen identity constants (plan header; M§3, M§15)
 # ---------------------------------------------------------------------------
 
-#: SHA-256 of ``docs/discovery_dataset_v1_2_pq_v2_methodology.md``.
-METHODOLOGY_SHA256 = "a31ed9c49cd3a03208ae28539a8b5f5531916e31fac32bbd60e2af07746fa56d"
-#: SHA-256 of the canonical correction-set line (M§3).
-CS_ID = "432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2"
-#: SHA-256 of the canonical exact-dependency line (M§15).
-ED_ID = "e979924ee4efc365155d8a79089fb940a28ebede7099f67373f0d654bd479aeb"
-#: SHA-256 of the canonical certified-expression line (M§15).
-CE_ID = "605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf"
+@dataclass(frozen=True)
+class MethodologyAuthority:
+    """A frozen, versioned methodology identity bundle.
+
+    Historical authorities stay reconstructable: v2 remains bound to its own
+    preserved (byte-identical) document and its old ED-ID, while
+    :data:`CURRENT_AUTHORITY` names the authority a fresh execution must bind.
+    """
+
+    version: str
+    methodology_relative: str
+    methodology_sha256: str
+    cs_id: str
+    ed_id: str
+    ce_id: str
+
+
+#: Historical P-Q v2 authority (document preserved byte-identical, M§17).
+AUTHORITY_V2 = MethodologyAuthority(
+    version="P-Q v2",
+    methodology_relative="docs/discovery_dataset_v1_2_pq_v2_methodology.md",
+    methodology_sha256=(
+        "a31ed9c49cd3a03208ae28539a8b5f5531916e31fac32bbd60e2af07746fa56d"
+    ),
+    cs_id="432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2",
+    ed_id="e979924ee4efc365155d8a79089fb940a28ebede7099f67373f0d654bd479aeb",
+    ce_id="605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf",
+)
+
+#: Current P-Q v2.1 authority (M§8A, M§15, M§17).
+AUTHORITY_V2_1 = MethodologyAuthority(
+    version="P-Q v2.1",
+    methodology_relative="docs/discovery_dataset_v1_2_pq_v2_1_methodology.md",
+    methodology_sha256=(
+        "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
+    ),
+    cs_id="432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2",
+    ed_id="65bd7d1341e70674132bc7729870876adf5457fe9ce4c277d0f1148df343a4d6",
+    ce_id="605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf",
+)
+
+#: The authority a fresh evaluation must bind.
+CURRENT_AUTHORITY = AUTHORITY_V2_1
+
+#: SHA-256 of the current methodology document.
+METHODOLOGY_SHA256 = CURRENT_AUTHORITY.methodology_sha256
+#: SHA-256 of the canonical correction-set line (M§3, unchanged in v2.1).
+CS_ID = CURRENT_AUTHORITY.cs_id
+#: SHA-256 of the canonical exact-dependency line (M§15, new in v2.1).
+ED_ID = CURRENT_AUTHORITY.ed_id
+#: SHA-256 of the canonical certified-expression line (M§15, unchanged).
+CE_ID = CURRENT_AUTHORITY.ce_id
 
 #: The frozen S2 window endpoints (M§3).  There is deliberately no global K.
 S2_LO = 0.5
@@ -152,7 +216,14 @@ PINNED_CODE: Mapping[str, str] = MappingProxyType(
     }
 )
 
-_METHODOLOGY_RELATIVE = "docs/discovery_dataset_v1_2_pq_v2_methodology.md"
+_METHODOLOGY_RELATIVE = CURRENT_AUTHORITY.methodology_relative
+
+#: Historical methodologies the current authority must keep byte-identical
+#: (M§17: the P-Q v2 document and its evidence are preserved, not rewritten).
+#: The current-authority check additionally binds their preservation because the
+#: v2 authority is the historical evidence a v2.1 evaluation supersedes.
+PRESERVED_AUTHORITIES: tuple[MethodologyAuthority, ...] = (AUTHORITY_V2,)
+
 
 #: The three identity headers whose first following fenced code block is hashed.
 IDENTITY_HEADERS: tuple[tuple[str, str], ...] = (
@@ -194,10 +265,13 @@ def _repo_root(repo_root: Path | str | None) -> Path:
     return Path(repo_root)
 
 
-def methodology_path(repo_root: Path | str | None = None) -> Path:
-    """Return the frozen methodology document path under ``repo_root``."""
+def methodology_path(
+    repo_root: Path | str | None = None,
+    authority: MethodologyAuthority = CURRENT_AUTHORITY,
+) -> Path:
+    """Return *authority*'s methodology document path under ``repo_root``."""
 
-    return _repo_root(repo_root) / _METHODOLOGY_RELATIVE
+    return _repo_root(repo_root) / authority.methodology_relative
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -240,10 +314,13 @@ def _extract_code_block_after(lines: Sequence[str], header: str) -> str:
     return "\n".join(block)
 
 
-def identity_lines(repo_root: Path | str | None = None) -> dict[str, str]:
+def identity_lines(
+    repo_root: Path | str | None = None,
+    authority: MethodologyAuthority = CURRENT_AUTHORITY,
+) -> dict[str, str]:
     """Return the canonical identity lines keyed ``"CS"``, ``"ED"``, ``"CE"``."""
 
-    text = methodology_path(repo_root).read_text(encoding="utf-8")
+    text = methodology_path(repo_root, authority).read_text(encoding="utf-8")
     lines = text.splitlines()
     return {
         key: _extract_code_block_after(lines, header)
@@ -251,39 +328,64 @@ def identity_lines(repo_root: Path | str | None = None) -> dict[str, str]:
     }
 
 
-def recompute_identity_hashes(repo_root: Path | str | None = None) -> dict[str, str]:
-    """Recompute the four frozen identities from the document on disk."""
+def recompute_identity_hashes(
+    repo_root: Path | str | None = None,
+    authority: MethodologyAuthority = CURRENT_AUTHORITY,
+) -> dict[str, str]:
+    """Recompute the four frozen identities from *authority*'s document."""
 
     root = _repo_root(repo_root)
-    lines = identity_lines(root)
+    lines = identity_lines(root, authority)
     return {
-        "methodology": _sha256_file(methodology_path(root)),
+        "methodology": _sha256_file(methodology_path(root, authority)),
         "CS": _sha256_bytes(lines["CS"].encode("utf-8")),
         "ED": _sha256_bytes(lines["ED"].encode("utf-8")),
         "CE": _sha256_bytes(lines["CE"].encode("utf-8")),
     }
 
 
-def verify_authority(repo_root: Path | str | None = None) -> None:
+def verify_authority(
+    repo_root: Path | str | None = None,
+    authority: MethodologyAuthority = CURRENT_AUTHORITY,
+) -> None:
     """Verify the plan §2 (a)-(c) authority bindings; raise on any mismatch.
 
-    (a) The methodology document SHA-256 equals :data:`METHODOLOGY_SHA256`.
-    (b) The three canonical identity lines' SHA-256 values equal
-        :data:`CS_ID`, :data:`ED_ID`, :data:`CE_ID`.
+    (a) The methodology document SHA-256 equals ``authority.methodology_sha256``.
+    (b) The three canonical identity lines' SHA-256 values equal ``authority``'s
+        CS/ED/CE ids.
     (c) Every file in :data:`PINNED_CODE` hashes to its pinned value.
+
+    The historical :data:`AUTHORITY_V2` still verifies on master because the v2
+    document is preserved byte-identical.
     """
 
     root = _repo_root(repo_root)
 
-    actual_methodology = _sha256_file(methodology_path(root))
-    if actual_methodology != METHODOLOGY_SHA256:
+    document = methodology_path(root, authority)
+    if not document.is_file():
+        raise PQv2BindingError(f"methodology document missing: {document}")
+    actual_methodology = _sha256_file(document)
+    if actual_methodology != authority.methodology_sha256:
         raise PQv2BindingError(
             "methodology document SHA-256 mismatch: "
-            f"{actual_methodology} != {METHODOLOGY_SHA256}"
+            f"{actual_methodology} != {authority.methodology_sha256}"
         )
 
-    lines = identity_lines(root)
-    expected = {"CS": CS_ID, "ED": ED_ID, "CE": CE_ID}
+    if authority is CURRENT_AUTHORITY:
+        for preserved in PRESERVED_AUTHORITIES:
+            preserved_path = root / preserved.methodology_relative
+            if not preserved_path.is_file():
+                continue
+            digest = _sha256_file(preserved_path)
+            if digest != preserved.methodology_sha256:
+                raise PQv2BindingError(
+                    f"preserved {preserved.version} document changed: "
+                    f"{preserved.methodology_relative} ({digest} != "
+                    f"{preserved.methodology_sha256})"
+                )
+
+    lines = identity_lines(root, authority)
+    expected = {"CS": authority.cs_id, "ED": authority.ed_id, "CE": authority.ce_id}
     for key, _header in IDENTITY_HEADERS:
         digest = _sha256_bytes(lines[key].encode("utf-8"))
         if digest != expected[key]:
@@ -300,6 +402,33 @@ def verify_authority(repo_root: Path | str | None = None) -> None:
             raise PQv2BindingError(
                 f"pinned file changed: {relative} ({digest} != {pinned})"
             )
+
+
+def require_current_authority(
+    methodology_sha256: str,
+    cs_id: str,
+    ed_id: str,
+    ce_id: str,
+) -> None:
+    """Fail closed unless all four identities bind :data:`CURRENT_AUTHORITY`.
+
+    A stale v2 methodology hash or the stale v2 ED-ID is rejected with
+    :class:`PQv2BindingError`.
+    """
+
+    expected = CURRENT_AUTHORITY
+    actual = (methodology_sha256, cs_id, ed_id, ce_id)
+    frozen = (
+        expected.methodology_sha256,
+        expected.cs_id,
+        expected.ed_id,
+        expected.ce_id,
+    )
+    if actual != frozen:
+        raise PQv2BindingError(
+            f"declaration does not bind the current authority {expected.version!r}: "
+            f"{actual!r} != {frozen!r}"
+        )
 
 
 def pqv2_code_manifest(repo_root: Path | str | None = None) -> tuple[tuple[str, str], ...]:
@@ -425,11 +554,13 @@ class LabelStatus:
     ENVELOPE = "ENVELOPE"
     EMPTY_NO_DEPENDENCY = "EMPTY_NO_DEPENDENCY"
     FACTUAL_MISSING = "FACTUAL_MISSING"
+    UNKNOWN_SOURCE = "UNKNOWN_SOURCE"
     UNKNOWN_RESERVE = "UNKNOWN_RESERVE"
     ALL: ClassVar[tuple[str, ...]] = (
         ENVELOPE,
         EMPTY_NO_DEPENDENCY,
         FACTUAL_MISSING,
+        UNKNOWN_SOURCE,
         UNKNOWN_RESERVE,
     )
 
@@ -446,6 +577,7 @@ class NotAssessedReason:
     METRIC_NOT_CERTIFIED = "PQV2_METRIC_NOT_CERTIFIED"
     # period preconditions
     RESERVE_UNKNOWN = "PQV2_RESERVE_UNKNOWN"
+    SOURCE_UNRESOLVED = "PQV2_SOURCE_UNRESOLVED"
     SIGMA_SUPPORT = "PQV2_SIGMA_SUPPORT"
     WINSOR_BLOCK = "PQV2_WINSOR_BLOCK"
     EMPTY_LEG_CONFIGURATION = "PQV2_EMPTY_LEG_CONFIGURATION"
@@ -461,6 +593,7 @@ class NotAssessedReason:
         SIGN_NOT_CERTIFIED,
         METRIC_NOT_CERTIFIED,
         RESERVE_UNKNOWN,
+        SOURCE_UNRESOLVED,
         SIGMA_SUPPORT,
         WINSOR_BLOCK,
         EMPTY_LEG_CONFIGURATION,
@@ -500,6 +633,7 @@ ENVELOPE = LabelStatus.ENVELOPE
 EMPTY_NO_DEPENDENCY = LabelStatus.EMPTY_NO_DEPENDENCY
 FACTUAL_MISSING = LabelStatus.FACTUAL_MISSING
 UNKNOWN_RESERVE = LabelStatus.UNKNOWN_RESERVE
+UNKNOWN_SOURCE = LabelStatus.UNKNOWN_SOURCE
 LABEL_STATUSES = LabelStatus.ALL
 
 PQV2_IDENTITY_MISMATCH = NotAssessedReason.IDENTITY_MISMATCH
@@ -509,6 +643,7 @@ PQV2_EXPRESSION_NOT_CERTIFIED = NotAssessedReason.EXPRESSION_NOT_CERTIFIED
 PQV2_SIGN_NOT_CERTIFIED = NotAssessedReason.SIGN_NOT_CERTIFIED
 PQV2_METRIC_NOT_CERTIFIED = NotAssessedReason.METRIC_NOT_CERTIFIED
 PQV2_RESERVE_UNKNOWN = NotAssessedReason.RESERVE_UNKNOWN
+PQV2_SOURCE_UNRESOLVED = NotAssessedReason.SOURCE_UNRESOLVED
 PQV2_SIGMA_SUPPORT = NotAssessedReason.SIGMA_SUPPORT
 PQV2_WINSOR_BLOCK = NotAssessedReason.WINSOR_BLOCK
 PQV2_EMPTY_LEG_CONFIGURATION = NotAssessedReason.EMPTY_LEG_CONFIGURATION
@@ -530,16 +665,224 @@ CLASSIFICATION_STATUSES = ClassificationStatus.ALL
 
 
 # ---------------------------------------------------------------------------
+# Source state and the period cause model (M§8A.1, M§8A.4)
+# --------------------------------------------------------------------------
+
+#: M§8A.4 period cause precedence, **highest priority first**.  Whole-evaluation
+#: gates and statistic-level reasons are deliberately absent: they are not period
+#: causes.
+PERIOD_CAUSE_PRECEDENCE: tuple[str, ...] = (
+    NotAssessedReason.RESERVE_UNKNOWN,
+    NotAssessedReason.SOURCE_UNRESOLVED,
+    NotAssessedReason.SIGMA_SUPPORT,
+    NotAssessedReason.WINSOR_BLOCK,
+    NotAssessedReason.EMPTY_LEG_CONFIGURATION,
+)
+
+#: The two UNKNOWN causes; a cell carrying either must short-circuit before any
+#: resolved-state precondition (M§8A.4).
+UNKNOWN_CAUSES: tuple[str, ...] = PERIOD_CAUSE_PRECEDENCE[:2]
+
+
+def _canonical_period_causes(reasons: Iterable[str]) -> tuple[str, ...]:
+    """Validate and canonicalize a period-cause collection (M§8A.4).
+
+    Every element must be a member of :data:`PERIOD_CAUSE_PRECEDENCE`; the
+    result is the sorted (canonical-string) tuple of the distinct reasons.
+    """
+
+    materialized = tuple(reasons)
+    for reason in materialized:
+        if reason not in PERIOD_CAUSE_PRECEDENCE:
+            raise PQv2InputError(f"not a period cause: {reason!r}")
+    return tuple(sorted(set(materialized)))
+
+
+@dataclass(frozen=True)
+class CauseSet:
+    """The distinct period causes attached to a cell (M§8A.4).
+
+    ``causes`` is always the canonical (ascending lexicographic) distinct tuple;
+    construction from any order yields the identical value.  ``primary`` is a
+    presentation/disposition field only and never replaces ``to_list()``.
+    """
+
+    causes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        canonical = _canonical_period_causes(self.causes)
+        object.__setattr__(self, "causes", canonical)
+
+    @classmethod
+    def of(cls, *reasons: str) -> "CauseSet":
+        """Build from reasons in any order; duplicates collapse."""
+
+        return cls(tuple(reasons))
+
+    @classmethod
+    def from_iterable(cls, reasons: Iterable[str]) -> "CauseSet":
+        """Build from an iterable of reasons in any order; duplicates collapse."""
+
+        return cls(tuple(reasons))
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.causes
+
+    @property
+    def has_unknown(self) -> bool:
+        return any(reason in self.causes for reason in UNKNOWN_CAUSES)
+
+    @property
+    def primary(self) -> str | None:
+        """The highest-precedence cause, or ``None`` when empty."""
+
+        for reason in PERIOD_CAUSE_PRECEDENCE:
+            if reason in self.causes:
+                return reason
+        return None
+
+    def union(self, other: "CauseSet") -> "CauseSet":
+        return CauseSet(self.causes + tuple(other.causes))
+
+    def to_list(self) -> list[str]:
+        """The canonical-order list; the full persisted representation."""
+
+        return list(self.causes)
+
+    def __iter__(self):
+        return iter(self.causes)
+
+    def __len__(self) -> int:
+        return len(self.causes)
+
+    def __contains__(self, reason: object) -> bool:
+        return reason in self.causes
+
+
+#: The empty cause set: no cause, i.e. assessable as far as causes go.
+EMPTY_CAUSES = CauseSet(())
+
+
+def must_short_circuit(cause_set: CauseSet) -> bool:
+    """True iff *cause_set* carries an UNKNOWN cause (M§8A.4).
+
+    Downstream layers must return NOT_ASSESSED **before** any resolved-state
+    precondition when this is True.
+    """
+
+    return cause_set.has_unknown
+
+
+class SourceState:
+    """Per-flag source resolvability (M§8A.1)."""
+
+    RESOLVED = "RESOLVED"
+    UNKNOWN_SOURCE = "UNKNOWN_SOURCE"
+    UNKNOWN_RESERVE = "UNKNOWN_RESERVE"
+    ALL: ClassVar[tuple[str, ...]] = (RESOLVED, UNKNOWN_SOURCE, UNKNOWN_RESERVE)
+    UNKNOWN: ClassVar[tuple[str, ...]] = (UNKNOWN_SOURCE, UNKNOWN_RESERVE)
+
+
+def cause_for_source_state(state: str) -> str:
+    """Map an UNKNOWN source state to its durable period cause (M§8A.1).
+
+    ``RESOLVED`` (and any other value) has no cause and is rejected.
+    """
+
+    if state == SourceState.UNKNOWN_SOURCE:
+        return NotAssessedReason.SOURCE_UNRESOLVED
+    if state == SourceState.UNKNOWN_RESERVE:
+        return NotAssessedReason.RESERVE_UNKNOWN
+    raise PQv2InputError(f"source state has no period cause: {state!r}")
+
+
+def label_status_for_causes(cause_set: CauseSet) -> str:
+    """The M§8A.4 label status for a non-empty cause set with an UNKNOWN cause."""
+
+    if not isinstance(cause_set, CauseSet):
+        raise PQv2InputError("cause_set must be a CauseSet")
+    if cause_set.is_empty or not cause_set.has_unknown:
+        raise PQv2InputError(
+            "a label status requires a non-empty cause set with an UNKNOWN cause"
+        )
+    if NotAssessedReason.RESERVE_UNKNOWN in cause_set:
+        return LabelStatus.UNKNOWN_RESERVE
+    return LabelStatus.UNKNOWN_SOURCE
+
+
+# ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class NotAssessed:
-    """A typed NOT_ASSESSED outcome."""
+    """A typed NOT_ASSESSED outcome.
+
+    ``causes`` is optional for backward compatibility: ``NotAssessed(reason,
+    detail)`` keeps working exactly as before.  When ``causes`` is supplied it
+    must be a non-empty :class:`CauseSet` whose ``primary`` equals ``reason``.
+    """
 
     reason: str
     detail: Any = None
+    causes: CauseSet | None = None
+
+    def __post_init__(self) -> None:
+        if self.causes is None:
+            return
+        if not isinstance(self.causes, CauseSet):
+            raise PQv2InvariantError("causes must be a CauseSet or None")
+        if self.reason != self.causes.primary:
+            raise PQv2InvariantError(
+                f"reason {self.reason!r} != cause-set primary "
+                f"{self.causes.primary!r}"
+            )
+
+    @classmethod
+    def from_causes(
+        cls, cause_set: CauseSet, detail: Any = None
+    ) -> "NotAssessed":
+        """Build from a non-empty :class:`CauseSet`, primary as ``reason``."""
+
+        if not isinstance(cause_set, CauseSet) or cause_set.is_empty:
+            raise PQv2InputError("from_causes requires a non-empty CauseSet")
+        return cls(cause_set.primary, detail, cause_set)
+
+    @property
+    def cause_set(self) -> CauseSet | None:
+        """The cause set: explicit ``causes``, else one derived from ``reason``."""
+
+        if self.causes is not None:
+            return self.causes
+        if self.reason in PERIOD_CAUSE_PRECEDENCE:
+            return CauseSet.of(self.reason)
+        return None
+
+
+@dataclass(frozen=True)
+class UnresolvedFlag:
+    """A D5 flag whose source state is UNKNOWN (M§8A.1, M§8A.2).
+
+    It deliberately carries no ``m_obs`` and no correction set, so an unresolved
+    flag can never carry a numerical correction.
+    """
+
+    security_key: str
+    s: Any
+    prev_s: Any
+    state: str
+
+    def __post_init__(self) -> None:
+        if self.state not in SourceState.UNKNOWN:
+            raise PQv2InputError(
+                f"UnresolvedFlag requires an UNKNOWN state, got {self.state!r}"
+            )
+
+    @property
+    def cause(self) -> str:
+        return cause_for_source_state(self.state)
 
 
 @dataclass(frozen=True)
