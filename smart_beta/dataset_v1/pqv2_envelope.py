@@ -8,10 +8,16 @@ implements the frozen methodology
 * the M§9 composition order (correct the observed component first, then apply
   the D7b T0/TS scenario transform) -- T0 and TS are computed **independently**
   and are never combined;
+* the M§8A.4 per-period cause model: an upstream ``NotAssessed`` keeps its
+  cause set, the possible-leg labels contribute their ``causes``, and a
+  non-empty cause set short-circuits both scenarios with the precedence
+  primary as ``reason`` **before** any resolved-state check (so the M§11
+  winsorization block is never evaluated under UNKNOWN);
 * the M§11 deterministic winsorization-block precondition, applied to the per
-  member ranking-score intervals that PQ2-D / PQ2-E export;
-* the M§8 / M§13 reserve firewall for *label* envelopes (a member whose label
-  status is ``UNKNOWN_RESERVE`` and which lies in a possible leg);
+  member ranking-score intervals that PQ2-D / PQ2-E export, and only when the
+  period cause set is empty;
+* the M§8A.2 / M§8A.4 label firewall for *both* UNKNOWN causes (a possible-leg
+  member whose label ``causes`` is non-empty);
 * the M§12 Proposition 7 leg envelopes for both certified classes, taking the
   long leg's lower extremum and the short leg's upper extremum;
 * the M§12 Proposition 8 turnover bound
@@ -40,8 +46,9 @@ Input contract
 * ``assignment_by_period`` -- ``period -> SimpleAssignment | SandwichAssignment
   | pqv2_core.NotAssessed`` (the PQ2-D / PQ2-E output);
 * ``labels_by_period`` -- ``period -> {member_key: LabelEnvelope}`` (the PQ2-B
-  output).  The label object must expose ``status``, ``lo``, ``hi`` and the
-  four scenario fields ``t0_lo``/``t0_hi``/``ts_lo``/``ts_hi``;
+  output).  The label object must expose ``status``, ``lo``, ``hi``, the four
+  scenario fields ``t0_lo``/``t0_hi``/``ts_lo``/``ts_hi`` and the cause set
+  ``causes`` (A's :class:`pqv2_core.CauseSet`);
 * ``b_groups_by_period`` -- ``period -> {member_key: group}``, B's observed
   group assignment (used for the turnover reconciliation and the Prop. 9
   invariant);
@@ -147,6 +154,9 @@ class EnvelopePeriod:
     exposure: Mapping[str, Any]
     label_counts: Mapping[str, int]
     n_unknown_reserve: int
+    causes_t0: tuple[str, ...] = ()
+    causes_ts: tuple[str, ...] = ()
+    n_unknown_source: int = 0
 
     def status(self, scenario: str) -> str:
         """The typed status (``ASSESSED`` / ``NOT_ASSESSED``) for ``scenario``."""
@@ -189,6 +199,9 @@ class EnvelopePeriod:
             "exposure": dict(self.exposure),
             "label_counts": dict(self.label_counts),
             "n_unknown_reserve": self.n_unknown_reserve,
+            "causes_t0": list(self.causes_t0),
+            "causes_ts": list(self.causes_ts),
+            "n_unknown_source": self.n_unknown_source,
         }
 
 
@@ -263,8 +276,56 @@ def _label_status(label: Any) -> str | None:
     return str(getattr(label, "status", ""))
 
 
-def _is_unknown_reserve(label: Any) -> bool:
-    return _label_status(label) == _core.LabelStatus.UNKNOWN_RESERVE
+def _assignment_causes(assignment: Any) -> _core.CauseSet | None:
+    """The period cause set carried by an upstream typed NOT_ASSESSED (M§8A.4).
+
+    Uses A's ``NotAssessed.cause_set`` when it is a non-empty
+    :class:`CauseSet`; otherwise falls back to ``CauseSet.of(reason)`` only when
+    the reason is a frozen period cause.  A reason outside the period-cause
+    vocabulary (a whole-evaluation gate) has no period cause set.
+    """
+
+    cause_set = getattr(assignment, "cause_set", None)
+    if isinstance(cause_set, _core.CauseSet) and not cause_set.is_empty:
+        return cause_set
+    reason = getattr(assignment, "reason", None)
+    if reason in _core.PERIOD_CAUSE_PRECEDENCE:
+        return _core.CauseSet.of(reason)
+    return None
+
+
+def _scenario_causes(status: str, reason: str | None) -> _core.CauseSet:
+    """The per-scenario period cause set (M§8A.4; empty when assessed)."""
+
+    if status == ASSESSED:
+        return _core.EMPTY_CAUSES
+    return _core.CauseSet.of(reason)
+
+
+def _label_cause_contribution(
+    labels: Mapping[str, Any], members: frozenset[str]
+) -> tuple[_core.CauseSet, int, int]:
+    """Accumulate the M§8A.2 causes of the labels of *members*.
+
+    Returns ``(causes, n_unknown_source, n_unknown_reserve)``.  Recognition is
+    through each label's ``causes`` (A's :class:`CauseSet`), never through a
+    status name, so both UNKNOWN_SOURCE and UNKNOWN_RESERVE are recognised.
+    Labels of members outside the possible sets have no effect.
+    """
+
+    causes = _core.EMPTY_CAUSES
+    n_unknown_source = 0
+    n_unknown_reserve = 0
+    for key in sorted(members):
+        label_causes = getattr(labels.get(key), "causes", None)
+        if not isinstance(label_causes, _core.CauseSet) or label_causes.is_empty:
+            continue
+        causes = causes.union(label_causes)
+        if _core.NotAssessedReason.SOURCE_UNRESOLVED in label_causes:
+            n_unknown_source += 1
+        if _core.NotAssessedReason.RESERVE_UNKNOWN in label_causes:
+            n_unknown_reserve += 1
+    return causes, n_unknown_source, n_unknown_reserve
 
 
 def _label_scenario(label: Any, scenario: str, side: str) -> float:
@@ -556,8 +617,9 @@ def _b_legs(
 
 def _not_assessed_period(
     period: Any,
-    reason: str,
+    causes: _core.CauseSet | None,
     *,
+    reason: str | None = None,
     rule: str | None,
     D_t: int | None,
     TO_b: float,
@@ -570,7 +632,18 @@ def _not_assessed_period(
     exposure: Mapping[str, Any],
     label_counts: Mapping[str, int],
     n_unknown_reserve: int,
+    n_unknown_source: int = 0,
 ) -> EnvelopePeriod:
+    """Build a NOT_ASSESSED period; the reason is the cause set's primary.
+
+    ``causes=None`` denotes a whole-evaluation gate: it carries an explicit
+    ``reason`` and an empty cause list, because gates are not period causes
+    (M§8A.4).
+    """
+
+    if causes is not None:
+        reason = causes.primary
+    cause_list = causes.to_list() if causes is not None else []
     return EnvelopePeriod(
         period=period,
         rule=rule,
@@ -588,9 +661,12 @@ def _not_assessed_period(
         status_ts=NOT_ASSESSED,
         reason_t0=reason,
         reason_ts=reason,
+        causes_t0=tuple(cause_list),
+        causes_ts=tuple(cause_list),
         exposure=dict(exposure),
         label_counts=dict(label_counts),
         n_unknown_reserve=n_unknown_reserve,
+        n_unknown_source=n_unknown_source,
     )
 
 
@@ -607,11 +683,14 @@ def compose_period(
     cost_rate: float,
     net: bool,
 ) -> EnvelopePeriod:
-    """Compose one formation period (M§9, M§11–M§13).
+    """Compose one formation period (M§8A.4, M§9, M§11–M§13).
 
-    The check order is exactly plan §6.3 step 1-6: winsorization block,
-    assignment NOT_ASSESSED propagation, label-reserve firewall, per-scenario
-    leg extrema, ``TO^hi``, and the Proposition 9 invariant.
+    The v2.1 order is: (1) an upstream typed NOT_ASSESSED keeps its cause set;
+    (2) the labels of the possible-leg members contribute their causes;
+    (3) a non-empty cause set short-circuits both scenarios before any
+    resolved-state check; (4) only then do the M§11 winsorization block, the
+    per-scenario leg envelopes, ``TO^hi`` and the Proposition 9 invariant
+    apply.
     """
 
     rule = None
@@ -625,11 +704,12 @@ def compose_period(
     LS_b_t0 = _observed_b_ls(b_groups, labels, _T0, G, cost_rate, net, TO_b)
     LS_b_ts = _observed_b_ls(b_groups, labels, _TS, G, cost_rate, net, TO_b)
 
-    # Step 2: an upstream typed NOT_ASSESSED propagates unchanged.
+    # Step 1: an upstream typed NOT_ASSESSED propagates its cause set unchanged.
     if isinstance(assignment, _core.NotAssessed):
         return _not_assessed_period(
             period,
-            assignment.reason,
+            _assignment_causes(assignment),
+            reason=assignment.reason,
             rule=rule,
             D_t=None,
             TO_b=TO_b,
@@ -648,23 +728,41 @@ def compose_period(
     exposure = _exposure(assignment)
     score_lo, score_hi, s_low, s_high = _winsor_inputs(assignment)
 
-    # Step 1: the M§11 deterministic winsorization-block check.
-    winsor_ok = _core.winsor_block_ok(score_lo, score_hi, q, s_low, s_high)
-
-    # Step 3: the label reserve firewall over the possible membership sets.
+    # Step 2: every possible-leg label contributes its own causes (M§8A.2).
     reserve_members = _reserve_members(assignment)
-    unknown_members = tuple(
-        sorted(
-            key
-            for key in reserve_members
-            if _is_unknown_reserve(labels.get(key))
-        )
+    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(
+        labels, reserve_members
     )
+
+    # Step 3: any cause short-circuits both scenarios before resolved-state
+    # checks; the theorem preconditions are undefined under UNKNOWN (M§8A.4).
+    if not label_causes.is_empty:
+        return _not_assessed_period(
+            period,
+            label_causes,
+            rule=rule,
+            D_t=D_t,
+            TO_b=TO_b,
+            TO_hi=math.nan,
+            changed_b=changed_b,
+            union=union_n,
+            LS_b_t0=LS_b_t0,
+            LS_b_ts=LS_b_ts,
+            winsor_ok=None,
+            exposure=exposure,
+            label_counts=label_counts,
+            n_unknown_source=n_unknown_source,
+            n_unknown_reserve=n_unknown_reserve,
+        )
+
+    # Step 4: the M§11 deterministic winsorization-block check, evaluated only
+    # when the cause set is empty.
+    winsor_ok = _core.winsor_block_ok(score_lo, score_hi, q, s_low, s_high)
 
     if not winsor_ok:
         return _not_assessed_period(
             period,
-            _core.NotAssessedReason.WINSOR_BLOCK,
+            _core.CauseSet.of(_core.NotAssessedReason.WINSOR_BLOCK),
             rule=rule,
             D_t=D_t,
             TO_b=TO_b,
@@ -676,24 +774,7 @@ def compose_period(
             winsor_ok=False,
             exposure=exposure,
             label_counts=label_counts,
-            n_unknown_reserve=len(unknown_members),
-        )
-    if unknown_members:
-        return _not_assessed_period(
-            period,
-            _core.NotAssessedReason.RESERVE_UNKNOWN,
-            rule=rule,
-            D_t=D_t,
-            TO_b=TO_b,
-            TO_hi=math.nan,
-            changed_b=changed_b,
-            union=union_n,
-            LS_b_t0=LS_b_t0,
-            LS_b_ts=LS_b_ts,
-            winsor_ok=True,
-            exposure=exposure,
-            label_counts=label_counts,
-            n_unknown_reserve=len(unknown_members),
+            n_unknown_reserve=0,
         )
 
     # Step 5: Prop. 8 turnover bound.  The first rebalance (or an empty
@@ -704,13 +785,16 @@ def compose_period(
         D_prev = _previous_D(previous_assignment, previous_groups or {})
         TO_hi = min(1.0, (changed_b + D_t + D_prev) / union_n)
 
-    # Step 4: per-scenario leg envelopes, computed independently.
+    # Step 4 (continued): per-scenario leg envelopes, computed independently.
     L_t0, status_t0, reason_t0 = _scenario_L(
         assignment, labels, _T0, TO_hi, cost_rate, net
     )
     L_ts, status_ts, reason_ts = _scenario_L(
         assignment, labels, _TS, TO_hi, cost_rate, net
     )
+
+    causes_t0 = _scenario_causes(status_t0, reason_t0)
+    causes_ts = _scenario_causes(status_ts, reason_ts)
 
     # A typed NOT_ASSESSED is never replaced by B's value or a numeric NaN.
     if status_t0 != ASSESSED:
@@ -737,11 +821,14 @@ def compose_period(
         L_ts=L_ts,
         status_t0=status_t0,
         status_ts=status_ts,
-        reason_t0=reason_t0,
-        reason_ts=reason_ts,
+        reason_t0=causes_t0.primary,
+        reason_ts=causes_ts.primary,
+        causes_t0=tuple(causes_t0.to_list()),
+        causes_ts=tuple(causes_ts.to_list()),
         exposure=exposure,
         label_counts=label_counts,
         n_unknown_reserve=0,
+        n_unknown_source=0,
     )
 
 
@@ -852,7 +939,8 @@ def _gated_periods(
     return tuple(
         _not_assessed_period(
             period,
-            reason,
+            None,
+            reason=reason,
             rule=rule,
             D_t=None,
             TO_b=math.nan,

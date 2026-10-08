@@ -252,6 +252,8 @@ def _call(
     G,
     long_values_lo,
     short_values_hi,
+    *,
+    causes=None,
 ):
     return S.sandwich_assignment(
         keys,
@@ -265,6 +267,7 @@ def _call(
         G,
         long_values_lo,
         short_values_hi,
+        causes=causes,
     )
 
 
@@ -990,14 +993,155 @@ def test_reserve_unknown_full_cross_section() -> None:
     M_int = {k: (v, v) for k, v in M_obs.items()}
     V_obs = {"A": 1.0, "B": 2.0, "OUT": 3.0}
     V_int = {k: (v, v) for k, v in V_obs.items()}
-    # OUT is *outside* the universe, but a reserve UNKNOWN there still fails
-    # the whole period (it moves μ and the ranks).
+    # OUT is *outside* the universe, but a reserve UNKNOWN cause there still
+    # fails the whole period (it moves μ and the ranks).
+    causes = {"OUT": C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)}
     result = _call(
         keys, M_obs, M_int, V_obs, V_int, {"OUT": True}, ["A", "B"],
-        {"A": 1, "B": 2}, 2, {}, {},
+        {"A": 1, "B": 2}, 2, {}, {}, causes=causes,
     )
     assert isinstance(result, C.NotAssessed)
     assert result.reason == C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set == C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)
+    assert result.detail == ["OUT"]
+
+
+# ---------------------------------------------------------------------------
+# 7b. v2.1 cause preservation (M§8A.2 / M§8A.4)
+# ---------------------------------------------------------------------------
+
+
+def _cause_case() -> dict[str, Any]:
+    """A clean, assessable formation with one non-universe cross-section key."""
+
+    keys = ["A", "B", "OUT"]
+    M_obs = {"A": 1.0, "B": 2.0, "OUT": 3.0}
+    M_int = {k: (v, v) for k, v in M_obs.items()}
+    V_obs = {"A": 1.0, "B": 2.0, "OUT": 3.0}
+    V_int = {k: (v, v) for k, v in V_obs.items()}
+    return {
+        "keys": keys,
+        "M_obs": M_obs,
+        "M_int": M_int,
+        "V_obs": V_obs,
+        "V_int": V_int,
+        "universe": ["A", "B"],
+        "b_groups": {"A": 1, "B": 2},
+        "G": 2,
+        "long_values_lo": {"A": 0.1, "B": 0.2},
+        "short_values_hi": {"A": -0.1, "B": -0.2},
+    }
+
+
+def _cause_call(data: dict[str, Any], unknown: Any, causes: Any) -> Any:
+    return _call(
+        data["keys"], data["M_obs"], data["M_int"], data["V_obs"],
+        data["V_int"], unknown, data["universe"], data["b_groups"],
+        data["G"], data["long_values_lo"], data["short_values_hi"],
+        causes=causes,
+    )
+
+
+def test_cause_source_on_non_universe_key() -> None:
+    """A SOURCE cause on a non-universe cross-section key fails closed."""
+
+    data = _cause_case()
+    causes = {"OUT": C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)}
+    result = _cause_call(data, {"OUT": True}, causes)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_SOURCE_UNRESOLVED
+    assert result.reason != C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set == C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)
+    assert result.cause_set.primary == C.PQV2_SOURCE_UNRESOLVED
+    assert result.detail == ["OUT"]
+
+
+def test_cause_reserve_only() -> None:
+    data = _cause_case()
+    causes = {"A": C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)}
+    result = _cause_call(data, {"A": True}, causes)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set == C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)
+    assert result.detail == ["A"]
+
+
+def test_cause_both_retained_primary_reserve() -> None:
+    """Both causes are retained; the primary is RESERVE (M§8A.4)."""
+
+    data = _cause_case()
+    causes = {
+        "A": C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED),
+        "B": C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN),
+    }
+    result = _cause_call(data, {"A": True, "B": True}, causes)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set == C.CauseSet.of(
+        C.PQV2_SOURCE_UNRESOLVED, C.PQV2_RESERVE_UNKNOWN
+    )
+    assert C.PQV2_SOURCE_UNRESOLVED in result.cause_set
+    assert result.detail == ["A", "B"]
+
+
+def test_cause_unknown_with_zero_sigma_is_cause() -> None:
+    """Under UNKNOWN, σ = 0 is never evaluated; the cause wins (E21-M2)."""
+
+    data = _cause_case()
+    # Replace the cross-section with all-equal momentum: σ support would fail
+    # if it were ever evaluated.
+    data["M_obs"] = {"A": 1.0, "B": 1.0, "OUT": 1.0}
+    data["M_int"] = {k: (1.0, 1.0) for k in data["M_obs"]}
+    causes = {"OUT": C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)}
+    result = _cause_call(data, {"OUT": True}, causes)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_SOURCE_UNRESOLVED
+    assert result.reason != C.PQV2_SIGMA_SUPPORT
+    assert result.cause_set == C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)
+
+
+def test_cause_inconsistent_unknown_raises() -> None:
+    data = _cause_case()
+    # unknown flags A, causes flags B.
+    with pytest.raises(C.PQv2InputError):
+        _cause_call(
+            data,
+            {"A": True},
+            {"B": C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)},
+        )
+    # unknown=False for a cell that carries a cause.
+    with pytest.raises(C.PQv2InputError):
+        _cause_call(
+            data,
+            {"A": False},
+            {"A": C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)},
+        )
+
+
+def test_cause_bool_only_raises() -> None:
+    """A bool-only UNKNOWN with no causes cannot be classified (E21-M3)."""
+
+    data = _cause_case()
+    with pytest.raises(C.PQv2InputError):
+        _cause_call(data, {"A": True}, None)
+    # No causes mapping at all must behave the same way.
+    with pytest.raises(C.PQv2InputError):
+        _call(
+            data["keys"], data["M_obs"], data["M_int"], data["V_obs"],
+            data["V_int"], {"A": True}, data["universe"], data["b_groups"],
+            data["G"], data["long_values_lo"], data["short_values_hi"],
+        )
+
+
+def test_cause_empty_identical_to_today() -> None:
+    data = _cause_case()
+    base = _cause_call(data, {}, None)
+    same = _cause_call(data, {}, {})
+    emptied = _cause_call(
+        data, {}, {key: C.EMPTY_CAUSES for key in data["keys"]}
+    )
+    assert not isinstance(base, C.NotAssessed)
+    assert base == same == emptied
 
 
 # ---------------------------------------------------------------------------
@@ -1306,6 +1450,11 @@ def test_mutation_fixture_contract() -> None:
         "E-M4",
         "E-M5",
         "E-M6",
+        "V21-M03e",
+        "V21-M06e",
+        "E21-M1",
+        "E21-M2",
+        "E21-M3",
     ]
     source = (
         REPO_ROOT / "smart_beta/dataset_v1/pqv2_assign_sandwich.py"
