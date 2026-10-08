@@ -236,6 +236,8 @@ class PQv2Cell:
     period_values: tuple[float, ...]
     period_reasons: tuple[str | None, ...]
     declaration_hash: str
+    period_causes: tuple[tuple[str, ...], ...] = ()
+    cause_union: tuple[str, ...] = ()
 
     def _body(self) -> dict[str, Any]:
         return {
@@ -255,6 +257,8 @@ class PQv2Cell:
             "period_values": list(self.period_values),
             "period_reasons": list(self.period_reasons),
             "declaration_hash": self.declaration_hash,
+            "period_causes": [list(item) for item in self.period_causes],
+            "cause_union": list(self.cause_union),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -293,6 +297,9 @@ class PQv2Period:
     sigma_ok: bool | None
     position_counts: Mapping[str, int]
     n_misdated: int
+    causes_t0: tuple[str, ...] = ()
+    causes_ts: tuple[str, ...] = ()
+    n_unknown_source: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -318,6 +325,9 @@ class PQv2Period:
             "position_counts": dict(self.position_counts),
             "n_misdated": int(self.n_misdated),
             "n_unknown_reserve": int(self.n_unknown_reserve),
+            "causes_t0": list(self.causes_t0),
+            "causes_ts": list(self.causes_ts),
+            "n_unknown_source": int(self.n_unknown_source),
         }
 
 
@@ -924,6 +934,7 @@ def _assignment_for_formation(
             long_values,
             short_values,
             cls=_dependency.SIMPLE,
+            causes=uncertainty.causes,
         )
 
     offsets = _dv_offsets(windows, formation_pos)
@@ -961,28 +972,39 @@ def _assignment_for_formation(
         G,
         long_values,
         short_values,
+        causes=uncertainty.causes,
     )
 
 
 def _session_only_source_set(source_set: _core.SourceSet) -> _core.SourceSet:
-    """A view of ``source_set`` with ``unknown_by_key`` normalized to sessions.
+    """A view of ``source_set`` whose ``unknown_by_key`` entries are flagged.
 
-    :func:`load_source_set` records ``(session, prev_session, reason)`` triples
-    because :func:`pqv2_labels.label_envelope` needs the previous session for
-    the ending-endpoint reserve firewall.  :func:`input_uncertainty` only
-    needs the session itself.  The label path keeps the raw source set; this
-    projection feeds the dependency layer without losing any session.
+    P-Q v2.1 forbids the legacy conversion of an arbitrary entry (a bare
+    session, or a ``(session, prev_session, reason)`` triple) into a session.
+    Every entry must already be A's :class:`pqv2_core.UnresolvedFlag`; it is
+    passed through unchanged so C sees the exact source state (and hence the
+    exact M§8A.2 cause).  Anything else fails closed with
+    :class:`pqv2_core.PQv2InputError`.
     """
 
-    unknown: dict[str, tuple[Any, ...]] = {}
+    unknown: dict[str, tuple[_core.UnresolvedFlag, ...]] = {}
     for key, value in source_set.unknown_by_key.items():
-        sessions: list[Any] = []
-        for entry in value:
-            if isinstance(entry, (tuple, list)):
-                sessions.append(entry[0])
-            else:
-                sessions.append(entry)
-        unknown[key] = tuple(sessions)
+        if isinstance(value, _core.UnresolvedFlag):
+            entries: tuple[Any, ...] = (value,)
+        elif isinstance(value, (tuple, list)):
+            entries = tuple(value)
+        else:
+            raise _core.PQv2InputError(
+                f"unknown_by_key[{key!r}] must be a tuple of UnresolvedFlag, "
+                f"got {value!r}"
+            )
+        for entry in entries:
+            if not isinstance(entry, _core.UnresolvedFlag):
+                raise _core.PQv2InputError(
+                    f"unknown_by_key[{key!r}] entry must be UnresolvedFlag, "
+                    f"got {entry!r}"
+                )
+        unknown[key] = entries
     return _core.SourceSet(
         transitions_by_key=source_set.transitions_by_key,
         candidates_by_key=source_set.candidates_by_key,
@@ -995,14 +1017,33 @@ def _session_only_source_set(source_set: _core.SourceSet) -> _core.SourceSet:
 # ---------------------------------------------------------------------------
 
 
+def _period_causes_of(period: Any, scenario: str) -> tuple[str, ...]:
+    """The canonical period cause list PQ21-F attached to *period* (M§8A.5)."""
+
+    raw = period.causes_t0 if scenario == SCENARIO_T0 else period.causes_ts
+    return tuple(str(item) for item in raw)
+
+
 def _estimate_l(
     envelope: _envelope.EnvelopeSeries,
     b_lookup: Mapping[date, float],
     scenario: str,
-) -> tuple[float | None, float | None, int, str | None, str | None]:
+) -> tuple[
+    float | None,
+    float | None,
+    int,
+    str | None,
+    str | None,
+    tuple[tuple[str, ...], ...],
+    tuple[str, ...],
+]:
     """Apply the Phase-7 estimator to the L series on B's finite-period index.
 
-    Returns ``(value, t_stat, n_obs, status, reason)``.
+    Returns ``(value, t_stat, n_obs, status, reason, period_causes,
+    cause_union)``.  ``period_causes`` is the per-period canonical cause list
+    over B's finite-period index (in period order); ``cause_union`` is the
+    canonical union list of all of them (M§8A.5: the persisted causes stay
+    auditable under the same-period rule).
     """
 
     periods = tuple(period.period for period in envelope.periods)
@@ -1015,26 +1056,49 @@ def _estimate_l(
         )
     by_period = {period.period: period for period in envelope.periods}
     t_b = tuple(period for period in periods if _is_finite(b_lookup[period]))
+    period_causes = tuple(
+        _period_causes_of(by_period[period], scenario) for period in t_b
+    )
+    cause_union = _core.CauseSet.from_iterable(
+        reason for causes in period_causes for reason in causes
+    )
+    cause_union_list = tuple(cause_union.to_list())
+
+    def _fail(reason: str) -> tuple[
+        None,
+        None,
+        int,
+        str,
+        str,
+        tuple[tuple[str, ...], ...],
+        tuple[str, ...],
+    ]:
+        if (
+            reason == _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED
+            and not cause_union_list
+        ):
+            raise PQv2InvariantError(
+                "L is NOT_ASSESSED for a period with no persisted cause "
+                f"(scenario={scenario})"
+            )
+        return (
+            None,
+            None,
+            len(t_b),
+            _envelope.NOT_ASSESSED,
+            reason,
+            period_causes,
+            cause_union_list,
+        )
+
     values: list[float] = []
     for period in t_b:
         item = by_period[period]
         if item.status(scenario) != _envelope.ASSESSED:
-            return (
-                None,
-                None,
-                len(t_b),
-                _envelope.NOT_ASSESSED,
-                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,
-            )
+            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)
         value = item.value(scenario)
         if not _is_finite(value):
-            return (
-                None,
-                None,
-                len(t_b),
-                _envelope.NOT_ASSESSED,
-                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,
-            )
+            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)
         values.append(float(value))
     result = _metrics.long_short_mean_tstat(np.asarray(values, dtype="float64"))
     if result.value is None or result.t_stat is None:
@@ -1044,6 +1108,8 @@ def _estimate_l(
             int(result.n_obs),
             _envelope.NOT_ASSESSED,
             _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,
+            period_causes,
+            cause_union_list,
         )
     if not (math.isfinite(float(result.value)) and math.isfinite(float(result.t_stat))):
         return (
@@ -1052,6 +1118,8 @@ def _estimate_l(
             int(result.n_obs),
             _envelope.NOT_ASSESSED,
             _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,
+            period_causes,
+            cause_union_list,
         )
     return (
         float(result.value),
@@ -1059,6 +1127,8 @@ def _estimate_l(
         int(result.n_obs),
         None,
         None,
+        period_causes,
+        cause_union_list,
     )
 
 
@@ -1392,7 +1462,18 @@ def build_pqv2_diagnostics(
         (SCENARIO_T0, diag_b.economic_t0, diag_b.t_t0, diag_b.n_obs_t0, b_series_t0),
         (SCENARIO_TS, diag_b.economic_ts, diag_b.t_ts, diag_b.n_obs_ts, b_series_ts),
     )
-    l_results: dict[str, tuple[float | None, float | None, int, str | None, str | None]] = {}
+    l_results: dict[
+        str,
+        tuple[
+            float | None,
+            float | None,
+            int,
+            str | None,
+            str | None,
+            tuple[tuple[str, ...], ...],
+            tuple[str, ...],
+        ],
+    ] = {}
     for scenario, value, t_stat, n_obs, b_series in b_values:
         b_available = value is not None and t_stat is not None
         identities, statuses, values_arr, reasons_arr = _period_cell_arrays(
@@ -1405,6 +1486,8 @@ def build_pqv2_diagnostics(
                 0,
                 _envelope.NOT_ASSESSED,
                 _core.NotAssessedReason.B_STATISTIC_UNAVAILABLE,
+                (),
+                (),
             )
         else:
             ordered_b = {
@@ -1434,7 +1517,9 @@ def build_pqv2_diagnostics(
                 declaration_hash=declaration.declaration_hash,
             )
         )
-        l_value, l_t, l_n, l_status, l_reason = l_results[scenario]
+        l_value, l_t, l_n, l_status, l_reason, l_period_causes, l_cause_union = (
+            l_results[scenario]
+        )
         cells.append(
             PQv2Cell(
                 cell=f"L-{scenario}",
@@ -1453,6 +1538,8 @@ def build_pqv2_diagnostics(
                 period_values=values_arr,
                 period_reasons=reasons_arr,
                 declaration_hash=declaration.declaration_hash,
+                period_causes=l_period_causes,
+                cause_union=l_cause_union,
             )
         )
 
@@ -1633,6 +1720,9 @@ def _period_record(
         sigma_ok=sigma_ok,
         position_counts=positions,
         n_misdated=n_misdated,
+        causes_t0=tuple(period.causes_t0),
+        causes_ts=tuple(period.causes_ts),
+        n_unknown_source=int(period.n_unknown_source),
     )
 
 
