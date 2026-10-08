@@ -777,7 +777,9 @@ def test_v_interval_contains_all_oracle_close_states() -> None:
 
 def test_firewall_unknown_flag_affecting_cell_is_unknown() -> None:
     windows = D.Windows(algebraic=((-6, -3),))
-    affecting = C.SourceSet(unknown_by_key={"SUS": (-4,)})
+    affecting = C.SourceSet(
+        unknown_by_key={"SUS": (C.UnresolvedFlag("SUS", -4, -5, C.SourceState.UNKNOWN_SOURCE),)}
+    )
     result = D.input_uncertainty(
         D.STD_X_RANK,
         windows,
@@ -787,9 +789,12 @@ def test_firewall_unknown_flag_affecting_cell_is_unknown() -> None:
         {"SUS": D.ObservedValues(M_obs=1.0)},
     )
     assert result.unknown["SUS"] is True
+    assert result.causes["SUS"].to_list() == [C.PQV2_SOURCE_UNRESOLVED]
 
     # A flag strictly before y does not affect this cell and is not UNKNOWN.
-    harmless = C.SourceSet(unknown_by_key={"SUS": (-8,)})
+    harmless = C.SourceSet(
+        unknown_by_key={"SUS": (C.UnresolvedFlag("SUS", -8, -9, C.SourceState.UNKNOWN_SOURCE),)}
+    )
     result_harmless = D.input_uncertainty(
         D.STD_X_RANK,
         windows,
@@ -799,6 +804,7 @@ def test_firewall_unknown_flag_affecting_cell_is_unknown() -> None:
         {"SUS": D.ObservedValues(M_obs=1.0)},
     )
     assert result_harmless.unknown["SUS"] is False
+    assert result_harmless.causes["SUS"].is_empty
 
 
 def test_firewall_unknown_dv_flag_is_unknown() -> None:
@@ -806,7 +812,9 @@ def test_firewall_unknown_dv_flag_is_unknown() -> None:
         numerical_dv_short=((-2, -1),),
         numerical_dv_long=((-4, -1),),
     )
-    source = C.SourceSet(unknown_by_key={"SUS": (-1,)})
+    source = C.SourceSet(
+        unknown_by_key={"SUS": (C.UnresolvedFlag("SUS", -1, -2, C.SourceState.UNKNOWN_RESERVE),)}
+    )
     result = D.input_uncertainty(
         D.STD_X_RANK,
         windows,
@@ -816,6 +824,7 @@ def test_firewall_unknown_dv_flag_is_unknown() -> None:
         {"SUS": D.ObservedValues(M_obs=1.0, dv={-1: 1.0})},
     )
     assert result.unknown["SUS"] is True
+    assert result.causes["SUS"].to_list() == [C.PQV2_RESERVE_UNKNOWN]
 
 
 def test_full_cross_section_keys_are_all_returned() -> None:
@@ -870,6 +879,238 @@ def test_unknown_class_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 6. P-Q v2.1 dependency-local cause propagation (M§8A.2, M§8A.4)
+# ---------------------------------------------------------------------------
+
+
+def _flag(
+    s: int,
+    state: str = C.SourceState.UNKNOWN_SOURCE,
+    *,
+    prev_s: int | None = None,
+    key: str = "SUS",
+) -> C.UnresolvedFlag:
+    return C.UnresolvedFlag(
+        security_key=key,
+        s=s,
+        prev_s=(s - 1 if prev_s is None else prev_s),
+        state=state,
+    )
+
+
+def _causes_for(
+    windows: D.Windows,
+    flags: tuple[C.UnresolvedFlag, ...],
+    *,
+    cls: str = D.SIMPLE,
+    key: str = "SUS",
+    candidates: tuple[C.MisdatedCandidate, ...] = (),
+    observed: D.ObservedValues | None = None,
+) -> C.CauseSet:
+    source = C.SourceSet(
+        candidates_by_key={key: candidates},
+        unknown_by_key={key: flags},
+    )
+    result = D.input_uncertainty(
+        cls,
+        windows,
+        source,
+        0,
+        [key],
+        None if observed is None else {key: observed},
+    )
+    return result.causes[key]
+
+
+def test_v21_unrelated_source_flag_has_empty_causes() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    causes = _causes_for(windows, (_flag(-10),))
+    assert causes.is_empty
+    assert causes.to_list() == []
+    assert causes.primary is None
+
+
+def test_v21_reached_source_flag_cause_is_source_unresolved() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    causes = _causes_for(windows, (_flag(-4),))
+    assert causes.to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+    assert causes.primary == C.PQV2_SOURCE_UNRESOLVED
+
+
+def test_v21_reached_reserve_flag_cause_is_reserve_unknown() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    causes = _causes_for(windows, (_flag(-4, C.SourceState.UNKNOWN_RESERVE),))
+    assert causes.to_list() == [C.PQV2_RESERVE_UNKNOWN]
+    assert causes.primary == C.PQV2_RESERVE_UNKNOWN
+
+
+def test_v21_multi_cause_source_and_reserve_are_both_retained() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    causes = _causes_for(
+        windows,
+        (_flag(-4), _flag(-5, C.SourceState.UNKNOWN_RESERVE)),
+    )
+    assert causes.to_list() == [C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED]
+    assert causes.primary == C.PQV2_RESERVE_UNKNOWN
+
+
+def test_v21_duplicate_source_flags_collapse_to_one_cause() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    causes = _causes_for(windows, (_flag(-4), _flag(-5)))
+    assert causes.to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+
+
+def test_v21_traversal_order_does_not_change_the_cause_set() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    reserve = _flag(-5, C.SourceState.UNKNOWN_RESERVE)
+    source = _flag(-4)
+    forward = _causes_for(windows, (reserve, source))
+    reverse = _causes_for(windows, (source, reserve))
+    assert forward == reverse
+    assert forward.to_list() == [C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED]
+
+
+def test_v21_same_unresolved_flag_reaches_one_cell_not_another() -> None:
+    flag = _flag(-4)
+    reached = _causes_for(D.Windows(algebraic=((-6, -3),)), (flag,))
+    missed = _causes_for(D.Windows(algebraic=((-3, -1),)), (flag,))
+    assert reached.to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+    assert missed.is_empty
+
+
+def test_v21_algebraic_endpoint_inclusion_and_exclusion() -> None:
+    # y = -6, x = -3, next(x) = -2: reach includes both ends and next(x),
+    # and excludes y - 1 and next(x) + 1.
+    windows = D.Windows(algebraic=((-6, -3),))
+    for s, expected in ((-6, True), (-3, True), (-2, True), (-7, False), (-1, False)):
+        causes = _causes_for(windows, (_flag(s),))
+        assert (not causes.is_empty) is expected, s
+
+
+def test_v21_numerical_window_edges() -> None:
+    # W = (-6, -3] contains -5, -4, -3; the rule tests {prev s, s, next s}.
+    windows = D.Windows(numerical_returns=((-6, -3),))
+    assert not _causes_for(windows, (_flag(-3),)).is_empty  # s inside
+    assert not _causes_for(windows, (_flag(-6),)).is_empty  # next(s) = -5
+    assert not _causes_for(windows, (_flag(-2),)).is_empty  # prev(s) = -3
+    assert _causes_for(windows, (_flag(-8),)).is_empty  # -9/-8/-7 all outside
+
+
+def test_v21_dv_window_edges_are_prev_s_and_s() -> None:
+    windows = D.Windows(
+        numerical_dv_short=((-3, -1),),
+        numerical_dv_long=((-5, -1),),
+    )
+    assert not _causes_for(
+        windows, (_flag(-1),), cls=D.STD_X_RANK
+    ).is_empty  # s in short
+    assert not _causes_for(
+        windows, (_flag(-4),), cls=D.STD_X_RANK
+    ).is_empty  # s in long only
+    assert not _causes_for(
+        windows, (_flag(0),), cls=D.STD_X_RANK
+    ).is_empty  # prev(s) = -1
+    assert _causes_for(windows, (_flag(-6),), cls=D.STD_X_RANK).is_empty
+
+
+def test_v21_misdated_pair_effect_reaches_unresolved_flag() -> None:
+    flag = _flag(-7)
+    candidate = C.MisdatedCandidate("SUS", -7, -4, 1.30)
+    algebraic = D.Windows(algebraic=((-6, -3),))
+    # s = -7 is outside [y, next(x)] = [-6, -2], but d = -4 is inside (y, x].
+    assert _causes_for(
+        algebraic, (flag,), candidates=(candidate,)
+    ).to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+    # Without the recorded candidate the flag's own position does not reach.
+    assert _causes_for(algebraic, (flag,)).is_empty
+    # Numerical pair effect: d = -4 lies in W = (-6, -3].
+    numerical = D.Windows(numerical_returns=((-6, -3),))
+    assert _causes_for(
+        numerical, (flag,), candidates=(candidate,)
+    ).to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+
+
+def test_v21_std_x_rank_reports_cause_for_each_cross_section_key() -> None:
+    windows = D.Windows(
+        algebraic=((-6, -3),),
+        numerical_dv_short=((-3, -1),),
+        numerical_dv_long=((-5, -1),),
+    )
+    other = _flag(-4, key="OTHER")
+    source = C.SourceSet(unknown_by_key={"OTHER": (other,)})
+    result = D.input_uncertainty(
+        D.STD_X_RANK,
+        windows,
+        source,
+        0,
+        ["SUS", "OTHER"],
+        {
+            "SUS": D.ObservedValues(M_obs=1.0),
+            "OTHER": D.ObservedValues(M_obs=1.0),
+        },
+    )
+    assert result.causes["OTHER"].to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+    assert result.causes["SUS"].is_empty
+    assert result.unknown["OTHER"] is True
+    assert result.unknown["SUS"] is False
+
+
+def test_v21_unknown_bool_equals_non_empty_causes() -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    source = C.SourceSet(
+        unknown_by_key={
+            "HIT": (_flag(-4, key="HIT"),),
+            "NONE": (_flag(-10, key="NONE"),),
+        }
+    )
+    result = D.input_uncertainty(D.SIMPLE, windows, source, 0, ["HIT", "NONE"])
+    for key in result.keys:
+        assert result.unknown[key] is (not result.causes[key].is_empty)
+    assert result.unknown["HIT"] is True
+    assert result.unknown["NONE"] is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [(-4,), ((-4, -5, "PQV2_SOURCE_UNRESOLVED"),), 4],
+)
+def test_v21_non_unresolved_flag_entries_raise(value: object) -> None:
+    windows = D.Windows(algebraic=((-6, -3),))
+    source = C.SourceSet(unknown_by_key={"SUS": value})
+    with pytest.raises(C.PQv2InputError):
+        D.input_uncertainty(D.SIMPLE, windows, source, 0, ["SUS"])
+
+
+def test_v21_unresolved_flag_contributes_no_factor_or_interval() -> None:
+    # The flag reaches the momentum window, so the cell is UNKNOWN; its recorded
+    # candidate must still never move the M interval (used for reach only).
+    windows = D.Windows(
+        algebraic=((-6, -3),),
+        numerical_dv_short=((-3, -1),),
+        numerical_dv_long=((-5, -1),),
+    )
+    flag = _flag(-4)
+    candidate = C.MisdatedCandidate("SUS", -4, -6, 1.30)
+    source = C.SourceSet(
+        candidates_by_key={"SUS": (candidate,)},
+        unknown_by_key={"SUS": (flag,)},
+    )
+    result = D.input_uncertainty(
+        D.STD_X_RANK,
+        windows,
+        source,
+        0,
+        ["SUS"],
+        {"SUS": D.ObservedValues(M_obs=2.0, dv={-2: 2.0, -1: 3.0})},
+    )
+    assert result.causes["SUS"].to_list() == [C.PQV2_SOURCE_UNRESOLVED]
+    interval = result.M_interval["SUS"]
+    assert interval is not None
+    assert interval.lo == 2.0
+    assert interval.hi == 2.0
+
+
+# ---------------------------------------------------------------------------
 # Mutation fixture contract
 # ---------------------------------------------------------------------------
 
@@ -889,6 +1130,16 @@ def test_mutation_fixture_contract() -> None:
         "C-M6",
         "C-M7",
         "C-M8",
+        "V21-M05",
+        "C21-M1",
+        "C21-M2",
+        "C21-M3",
+        "C21-M4",
+        "C21-M5",
+        "C21-M6",
+        "C21-M7",
+        "C21-M8",
+        "C21-M9",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_dependency.py").read_text(
         encoding="utf-8"
