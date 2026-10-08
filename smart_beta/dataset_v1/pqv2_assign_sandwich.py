@@ -174,6 +174,47 @@ def _unknown_keys(unknown: Any) -> frozenset[str]:
         return frozenset()
 
 
+def _resolve_causes(
+    unknown: Any,
+    causes: Mapping[str, _core.CauseSet] | None,
+) -> dict[str, _core.CauseSet]:
+    """Resolve the per-cell UNKNOWN cause sets (M§8A.2, M§8A.4).
+
+    ``causes`` is the authoritative per-cell representation.  ``unknown`` is
+    the legacy boolean view and, when supplied, must agree with ``causes``
+    (``unknown[k] == not causes[k].is_empty`` for every key).  A bool-only
+    ``unknown`` with no ``causes`` is rejected: the cause (SOURCE vs RESERVE)
+    cannot be recovered, so no ``PQV2_RESERVE_UNKNOWN`` may be emitted from a
+    bool.  An empty ``CauseSet`` carries no cause and is omitted.
+    """
+
+    unknown_keys = _unknown_keys(unknown)
+    if causes is None:
+        if unknown_keys:
+            raise _core.PQv2InputError(
+                "cause set required: a bool-only UNKNOWN has no classified cause"
+            )
+        return {}
+    if not isinstance(causes, Mapping):
+        raise _core.PQv2InputError(
+            f"causes must be a mapping of CauseSet, got {causes!r}"
+        )
+    cause_map: dict[str, _core.CauseSet] = {}
+    for key, value in causes.items():
+        if not isinstance(value, _core.CauseSet):
+            raise _core.PQv2InputError(
+                f"causes[{key!r}] must be a CauseSet, got {value!r}"
+            )
+        if not value.is_empty:
+            cause_map[str(key)] = value
+    if unknown is not None and unknown_keys != frozenset(cause_map):
+        raise _core.PQv2InputError(
+            "unknown and causes are inconsistent: "
+            f"unknown={sorted(unknown_keys)!r}, causes={sorted(cause_map)!r}"
+        )
+    return cause_map
+
+
 # ---------------------------------------------------------------------------
 # Exact average-rank bounds for a box of V intervals (M§11.2, Decision 19)
 # ---------------------------------------------------------------------------
@@ -260,6 +301,8 @@ def sandwich_assignment(
     G: int,
     long_values_lo: Mapping[str, Any],
     short_values_hi: Mapping[str, Any],
+    *,
+    causes: Mapping[str, _core.CauseSet] | None = None,
 ) -> SandwichAssignment | _core.NotAssessed:
     """Conservative H4/H5 certain/possible sandwich for one formation (M§11.2).
 
@@ -275,9 +318,15 @@ def sandwich_assignment(
     V_obs, V_interval:
         Observed volume ratio and its certified interval.
     unknown:
-        Per-key reserve firewall (``{key: bool}`` or an iterable of keys).  A
-        reserve ``UNKNOWN`` anywhere in the full cross-section makes the whole
-        period ``NotAssessed(PQV2_RESERVE_UNKNOWN)``.
+        Per-key reserve firewall (``{key: bool}`` or an iterable of keys).  It
+        is the legacy boolean view of ``causes`` and, when supplied, must
+        agree with it (a bool-only UNKNOWN is rejected: the SOURCE/RESERVE
+        cause cannot be recovered from a bool).
+    causes:
+        The authoritative per-key ``CauseSet`` (M§8A.2, M§8A.4).  Any cause
+        over the **full cross-section** fails the whole period closed with the
+        union cause set, *before* σ support, the score intervals, C/P and
+        ``D_t``.
     universe_keys:
         The formation universe ``U_f`` (the candidates for grouping).
     b_groups:
@@ -315,13 +364,27 @@ def sandwich_assignment(
     cross = tuple(str(key) for key in cs_keys)
     universe = tuple(str(key) for key in universe_keys)
 
-    # 0. Reserve UNKNOWN: any full-cross-section cell fails the whole period.
-    unknown_set = _unknown_keys(unknown)
-    if unknown_set and any(key in unknown_set for key in cross):
-        return _core.NotAssessed(
-            _core.NotAssessedReason.RESERVE_UNKNOWN,
-            "a full-cross-section M or V cell has an UNKNOWN reserve dependency",
+    # 0. Reserve/UNKNOWN cause resolution (M§8A.2, M§8A.4).  ``causes`` is the
+    #    authoritative per-cell representation; a bool-only ``unknown`` cannot
+    #    be classified and is rejected (no legacy RESERVE emission).
+    cause_map = _resolve_causes(unknown, causes)
+
+    # 0b. UNKNOWN short-circuit over the *full cross-section*, before any
+    #     resolved-state precondition (σ support, score intervals, C/P, D_t).
+    cause_union = _core.EMPTY_CAUSES
+    for key in cross:
+        cause_union = cause_union.union(
+            cause_map.get(key, _core.EMPTY_CAUSES)
         )
+    if not cause_union.is_empty:
+        affected = sorted(
+            {
+                key
+                for key in cross
+                if not cause_map.get(key, _core.EMPTY_CAUSES).is_empty
+            }
+        )
+        return _core.NotAssessed.from_causes(cause_union, detail=affected)
 
     # Resolve intervals / observed values over the full cross-section.
     m_box: dict[str, _core.PositiveInterval] = {}

@@ -101,16 +101,18 @@ def _run(
     long_values=None,
     short_values=None,
     row_order=None,
+    causes=None,
 ):
     return S.simple_assignment(
         keys,
         values,
         row_order if row_order is not None else list(keys),
         uncertain or {},
-        unknown or {},
+        {} if unknown is None else unknown,
         G,
         long_values if long_values is not None else dict(values),
         short_values if short_values is not None else dict(values),
+        causes=causes,
     )
 
 
@@ -302,9 +304,15 @@ def test_turnover_movement_delta_between_formations() -> None:
 def test_reserve_unknown_fails_closed() -> None:
     keys = _keys(5)
     values = _values(5)
-    result = _run(keys, values, unknown={"M2": True}, G=5)
+    result = _run(
+        keys, values,
+        unknown={"M2": True},
+        causes={"M2": C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)},
+        G=5,
+    )
     assert isinstance(result, C.NotAssessed)
     assert result.reason == C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set.to_list() == [C.PQV2_RESERVE_UNKNOWN]
 
 
 def test_possible_sets_are_prop4_union() -> None:
@@ -738,6 +746,11 @@ def test_mutation_fixture_contract() -> None:
         "D-M9",
         "D-M10",
         "D-M11",
+        "V21-M03d",
+        "V21-M06d",
+        "D21-M1",
+        "D21-M2",
+        "D21-M3",
     ]
     source = SOURCE.read_text(encoding="utf-8")
     this_module = sys.modules[__name__]
@@ -864,4 +877,177 @@ def test_kill_D_M10_class_gate_removed() -> None:
         S.simple_assignment(
             keys, values, list(keys), {}, {}, 5, values, values,
             cls=STD_X_RANK,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. v2.1 dependency-local cause firewall (V21-M03d / V21-M06d / D21-*)
+# ---------------------------------------------------------------------------
+
+_SOURCE = C.PQV2_SOURCE_UNRESOLVED
+_RESERVE = C.PQV2_RESERVE_UNKNOWN
+
+
+def test_source_only_cause_short_circuits() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M2": True},
+        causes={"M2": C.CauseSet.of(_SOURCE)},
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_SOURCE_UNRESOLVED
+    assert result.cause_set.to_list() == [_SOURCE]
+    assert result.detail == ("M2",)
+
+
+def test_reserve_only_cause_short_circuits() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M2": True},
+        causes={"M2": C.CauseSet.of(_RESERVE)},
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_RESERVE_UNKNOWN
+    assert result.cause_set.to_list() == [_RESERVE]
+
+
+def test_both_causes_retained_primary_reserve() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M1": True, "M3": True},
+        causes={
+            "M1": C.CauseSet.of(_SOURCE),
+            "M3": C.CauseSet.of(_RESERVE),
+        },
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == _RESERVE
+    assert result.cause_set.to_list() == sorted([_RESERVE, _SOURCE])
+    assert result.detail == ("M1", "M3")
+
+
+def test_cause_on_non_universe_key_is_unrelated() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        causes={"ZZZ_NOT_A_MEMBER": C.CauseSet.of(_SOURCE)},
+        G=5,
+    )
+    assert isinstance(result, S.SimpleAssignment)
+
+
+def test_inconsistent_unknown_and_causes_raise() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    with pytest.raises(C.PQv2InputError):
+        _run(
+            keys, values,
+            unknown={"M2": True},
+            causes={"M2": C.EMPTY_CAUSES},
+            G=5,
+        )
+    with pytest.raises(C.PQv2InputError):
+        _run(
+            keys, values,
+            unknown={},
+            causes={"M2": C.CauseSet.of(_SOURCE)},
+            G=5,
+        )
+
+
+def test_bool_only_unknown_without_causes_raises() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    with pytest.raises(C.PQv2InputError):
+        _run(keys, values, unknown={"M2": True}, G=5)
+
+
+def test_empty_causes_identical_to_no_causes() -> None:
+    keys = _keys(10)
+    values = _values(10)
+    uncertain = {"M0": True, "M9": True}
+    base = _run(keys, values, uncertain=uncertain, G=5)
+    with_causes = _run(
+        keys, values, uncertain=uncertain, G=5,
+        unknown={key: False for key in keys},
+        causes={key: C.EMPTY_CAUSES for key in keys},
+    )
+    assert base == with_causes
+    assert isinstance(base, S.SimpleAssignment)
+
+
+def test_non_cause_set_value_rejected() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    with pytest.raises(C.PQv2InputError):
+        _run(keys, values, causes={"M2": True}, G=5)  # type: ignore[arg-type]
+
+
+def test_kill_V21_M03d_source_relabelled_reserve() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M2": True},
+        causes={"M2": C.CauseSet.of(_SOURCE)},
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_SOURCE_UNRESOLVED
+
+
+def test_kill_V21_M06d_cause_set_dropped() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M1": True, "M3": True},
+        causes={
+            "M1": C.CauseSet.of(_SOURCE),
+            "M3": C.CauseSet.of(_RESERVE),
+        },
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+    assert result.cause_set.to_list() == [_RESERVE, _SOURCE]
+
+
+def test_kill_D21_M1_bool_only_legacy() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    with pytest.raises(C.PQv2InputError):
+        _run(keys, values, unknown={"M2": True}, G=5)
+
+
+def test_kill_D21_M2_assignment_despite_causes() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    result = _run(
+        keys, values,
+        unknown={"M2": True},
+        causes={"M2": C.CauseSet.of(_SOURCE)},
+        G=5,
+    )
+    assert isinstance(result, C.NotAssessed)
+
+
+def test_kill_D21_M3_consistency_removed() -> None:
+    keys = _keys(5)
+    values = _values(5)
+    with pytest.raises(C.PQv2InputError):
+        _run(
+            keys, values,
+            unknown={"M2": True},
+            causes={"M2": C.EMPTY_CAUSES},
+            G=5,
         )

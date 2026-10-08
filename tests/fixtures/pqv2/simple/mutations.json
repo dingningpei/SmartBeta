@@ -137,5 +137,65 @@
       }
     ],
     "test": "tests/test_pqv2_assign_simple.py::test_no_suspect_matches_bucket_means"
+  },
+  {
+    "id": "V21-M03d",
+    "description": "SOURCE emitted as PQV2_RESERVE_UNKNOWN (cause relabelled)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "        return _core.NotAssessed.from_causes(cause_union, detail=affected)",
+        "new": "        return _core.NotAssessed.from_causes(  # V21-M03d\n            _core.CauseSet.of(_core.PQV2_RESERVE_UNKNOWN), detail=affected\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_V21_M03d_source_relabelled_reserve"
+  },
+  {
+    "id": "V21-M06d",
+    "description": "cause set dropped / primary-only (only the primary reason survives)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "        return _core.NotAssessed.from_causes(cause_union, detail=affected)",
+        "new": "        return _core.NotAssessed(cause_union.primary, affected)  # V21-M06d"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_V21_M06d_cause_set_dropped"
+  },
+  {
+    "id": "D21-M1",
+    "description": "bool-only unknown accepted as RESERVE (legacy path restored)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    if causes is None and any(unknown_map[key] for key in key_list):\n        raise _core.PQv2InputError(\"cause set required\")",
+        "new": "    if causes is None and any(unknown_map[key] for key in key_list):\n        return _core.NotAssessed(  # D21-M1\n            _core.PQV2_RESERVE_UNKNOWN, \"legacy bool-only unknown path\"\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D21_M1_bool_only_legacy"
+  },
+  {
+    "id": "D21-M2",
+    "description": "assignment computed despite non-empty causes (short-circuit disabled)",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "    if not cause_union.is_empty:",
+        "new": "    if False:  # D21-M2"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D21_M2_assignment_despite_causes"
+  },
+  {
+    "id": "D21-M3",
+    "description": "unknown / causes consistency check removed",
+    "file": "smart_beta/dataset_v1/pqv2_assign_simple.py",
+    "edits": [
+      {
+        "old": "            if unknown_map[key] != (not cause_map[key].is_empty):",
+        "new": "            if False:  # D21-M3"
+      }
+    ],
+    "test": "tests/test_pqv2_assign_simple.py::test_kill_D21_M3_consistency_removed"
   }
 ]

@@ -52,7 +52,7 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        value = item.value(scenario)\n        if not _is_finite(value):\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        values.append(float(value))",
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)\n        value = item.value(scenario)\n        if not _is_finite(value):\n            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)\n        values.append(float(value))",
         "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            continue  # H-M1: drop the unassessable period\n        value = item.value(scenario)\n        if not _is_finite(value):\n            continue  # H-M1: skip the non-finite value\n        values.append(float(value))"
       }
     ],
@@ -234,8 +234,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if not (math.isfinite(float(result.value)) and math.isfinite(float(result.t_stat))):\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n        )",
-        "new": "    if False:  # H-M16 insufficient support silently accepted\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n        )"
+        "old": "    if not (math.isfinite(float(result.value)) and math.isfinite(float(result.t_stat))):\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n            period_causes,\n            cause_union_list,\n        )",
+        "new": "    if False:  # H-M16 insufficient support silently accepted\n        return (\n            None,\n            None,\n            int(result.n_obs),\n            _envelope.NOT_ASSESSED,\n            _core.NotAssessedReason.L_STATISTIC_UNAVAILABLE,\n            period_causes,\n            cause_union_list,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_insufficient_support_not_assessed"
@@ -246,7 +246,7 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )",
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)",
         "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            values.append(float(b_lookup[period]))  # H-M17 B substituted for L\n            continue"
       }
     ],
@@ -258,7 +258,7 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )",
+        "old": "        if item.status(scenario) != _envelope.ASSESSED:\n            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)",
         "new": "        if item.status(scenario) != _envelope.ASSESSED:\n            values.append(0.0)  # H-M18 zero substituted for L\n            continue"
       }
     ],
@@ -270,7 +270,7 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "        value = item.value(scenario)\n        if not _is_finite(value):\n            return (\n                None,\n                None,\n                len(t_b),\n                _envelope.NOT_ASSESSED,\n                _core.NotAssessedReason.L_PERIOD_NOT_ASSESSED,\n            )\n        values.append(float(value))",
+        "old": "        value = item.value(scenario)\n        if not _is_finite(value):\n            return _fail(_core.NotAssessedReason.L_PERIOD_NOT_ASSESSED)\n        values.append(float(value))",
         "new": "        value = item.value(scenario)\n        values.append(float(value))  # H-M19: NaN skipped by the estimator"
       }
     ],
@@ -299,5 +299,73 @@
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_scenarios_persisted_independently"
+  },
+  {
+    "id": "V21-M08",
+    "description": "H collapses causes (drops causes_*/cause_union/n_unknown_source)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        causes_t0=tuple(period.causes_t0),\n        causes_ts=tuple(period.causes_ts),\n        n_unknown_source=int(period.n_unknown_source),",
+        "new": "        causes_t0=(),  # V21-M08 causes dropped\n        causes_ts=(),  # V21-M08 causes dropped\n        n_unknown_source=0,  # V21-M08 causes dropped"
+      },
+      {
+        "old": "                period_causes=l_period_causes,\n                cause_union=l_cause_union,",
+        "new": "                period_causes=(),  # V21-M08 causes dropped\n                cause_union=(),  # V21-M08 causes dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_source_only_factor_input_cause_end_to_end"
+  },
+  {
+    "id": "H21-M1",
+    "description": "v2 identity accepted",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    if declaration.methodology_sha256 != _core.METHODOLOGY_SHA256:\n        return _core.NotAssessedReason.IDENTITY_MISMATCH",
+        "new": "    if declaration.methodology_sha256 not in (\n        _core.METHODOLOGY_SHA256, _core.AUTHORITY_V2.methodology_sha256\n    ):  # H21-M1 v2 identity accepted\n        return _core.NotAssessedReason.IDENTITY_MISMATCH"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_v2_methodology_identity_rejected_no_reads"
+  },
+  {
+    "id": "H21-M2",
+    "description": "causes not passed to D/E (bool-only call)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            cls=_dependency.SIMPLE,\n            causes=uncertainty.causes,\n        )",
+        "new": "            cls=_dependency.SIMPLE,\n        )  # H21-M2 causes not passed"
+      },
+      {
+        "old": "        short_values,\n        causes=uncertainty.causes,\n    )",
+        "new": "        short_values,\n    )  # H21-M2 causes not passed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_source_only_factor_input_cause_end_to_end"
+  },
+  {
+    "id": "H21-M3",
+    "description": "cause_union built from primaries only",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    cause_union = _core.CauseSet.from_iterable(\n        reason for causes in period_causes for reason in causes\n    )",
+        "new": "    cause_union = _core.CauseSet.from_iterable(  # H21-M3 primaries only\n        by_period[period].reason(scenario)\n        for period in t_b\n        if by_period[period].reason(scenario) is not None\n    )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_l_cell_cause_union_retains_both_causes"
+  },
+  {
+    "id": "H21-M4",
+    "description": "bare-session entries converted instead of rejected",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if isinstance(value, _core.UnresolvedFlag):\n            entries: tuple[Any, ...] = (value,)\n        elif isinstance(value, (tuple, list)):\n            entries = tuple(value)\n        else:\n            raise _core.PQv2InputError(\n                f\"unknown_by_key[{key!r}] must be a tuple of UnresolvedFlag, \"\n                f\"got {value!r}\"\n            )\n        for entry in entries:\n            if not isinstance(entry, _core.UnresolvedFlag):\n                raise _core.PQv2InputError(\n                    f\"unknown_by_key[{key!r}] entry must be UnresolvedFlag, \"\n                    f\"got {entry!r}\"\n                )\n        unknown[key] = entries",
+        "new": "        if isinstance(value, (tuple, list)):  # H21-M4 legacy conversion\n            entries = tuple(value)\n        else:\n            entries = (value,)\n        converted = []\n        for entry in entries:\n            if isinstance(entry, (tuple, list)):\n                converted.append(entry[0])\n            else:\n                converted.append(getattr(entry, \"s\", entry))\n        unknown[key] = tuple(converted)"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_session_only_source_set_rejects_bare_session"
   }
 ]

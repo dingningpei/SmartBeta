@@ -12,8 +12,12 @@ the frozen methodology (``docs/discovery_dataset_v1_2_pq_v2_methodology.md``):
 * the M§11.1 turnover bound ``D_t = min(|U_t|, G*|A_t|)``;
 * the M§11 winsorization-score intervals (clean members ``[v, v]``, uncertain
   members ``(-inf, +inf)``) exported for PQ2-F's block check;
-* the M§8 / M§13 reserve firewall: a universe member with an ``UNKNOWN``
-  factor-input cell makes the whole assignment ``PQV2_RESERVE_UNKNOWN``.
+* the M§8A.2 / M§8A.4 cause firewall: the factor-input cells of the universe
+  members carry dependency-local :class:`pqv2_core.CauseSet` values; any
+  non-empty union short-circuits the whole assignment to a cause-preserving
+  :class:`pqv2_core.NotAssessed` **before** any ordering, leg or turnover
+  logic.  A bool-only ``unknown`` flag with no cause set is rejected (no
+  legacy ``PQV2_RESERVE_UNKNOWN`` path).
 
 The entry is **simple-class only**: any other certified class is rejected with
 :class:`pqv2_core.PQv2InvariantError`.  The frozen positional signature does
@@ -150,6 +154,30 @@ def _lookup(
             raise _core.PQv2InputError(
                 f"{name}[{key!r}] must be a real number"
             ) from exc
+    return result
+
+
+def _cause_map(
+    source: Mapping[str, Any] | None,
+    key_list: tuple[str, ...],
+) -> dict[str, _core.CauseSet]:
+    """Normalize the dependency-local cause mapping to ``{key: CauseSet}``.
+
+    ``source is None`` (or a missing key) means :data:`pqv2_core.EMPTY_CAUSES`.
+    A non-``CauseSet`` value is rejected outright: there is no bool-only
+    fallback (M§8A.4).
+    """
+
+    if source is None:
+        return {key: _core.EMPTY_CAUSES for key in key_list}
+    if not isinstance(source, Mapping):
+        raise _core.PQv2InputError("causes must be a mapping of CauseSet")
+    result: dict[str, _core.CauseSet] = {}
+    for key in key_list:
+        value = source.get(key, _core.EMPTY_CAUSES)
+        if not isinstance(value, _core.CauseSet):
+            raise _core.PQv2InputError(f"causes[{key!r}] must be a CauseSet")
+        result[key] = value
     return result
 
 
@@ -301,6 +329,7 @@ def simple_assignment(
     short_values_hi: Mapping[str, float] | Sequence[float],
     *,
     cls: str = SIMPLE,
+    causes: Mapping[str, _core.CauseSet] | None = None,
 ) -> SimpleAssignment | _core.NotAssessed:
     """M§11.1 simple-class assignment for one formation.
 
@@ -308,9 +337,17 @@ def simple_assignment(
     frozen-scope violation and raises :class:`pqv2_core.PQv2InvariantError`
     (M§15: the simple rule is never applied to a cross-sectional class).
 
+    ``causes`` is the per-member dependency-local cause set (A's
+    :class:`pqv2_core.CauseSet`).  Its union over the universe is the M§8A.4
+    period cause set: a non-empty union short-circuits to
+    :meth:`pqv2_core.NotAssessed.from_causes` before any ordering, leg or
+    turnover logic.  ``unknown`` must agree with
+    ``not causes[k].is_empty`` when both are supplied; a bool-only
+    ``unknown=True`` with no ``causes`` raises (no legacy RESERVE path).
+
     The return is :class:`SimpleAssignment`, or a typed
-    :class:`pqv2_core.NotAssessed` with ``PQV2_RESERVE_UNKNOWN`` /
-    ``PQV2_EMPTY_LEG_CONFIGURATION``.
+    :class:`pqv2_core.NotAssessed` with the dependency-local cause set (or
+    ``PQV2_EMPTY_LEG_CONFIGURATION``).
     """
 
     if str(cls) != SIMPLE:
@@ -337,13 +374,28 @@ def simple_assignment(
         default=math.nan,
     )
 
-    # M§8 / M§13 reserve firewall: any UNKNOWN factor-input cell fails closed.
-    unknown_keys = tuple(key for key in key_list if unknown_map[key])
-    if unknown_keys:
-        return _core.NotAssessed(
-            _core.PQV2_RESERVE_UNKNOWN,
-            f"universe members with an UNKNOWN factor input: {unknown_keys!r}",
+    # M§8A.2 / M§8A.4 cause firewall: the factor-input cells of the universe's
+    # members carry dependency-local cause sets.  A cell that reaches an
+    # unresolved flag is UNKNOWN through its causes, never through a bool-only
+    # flag; there is no legacy RESERVE path.
+    cause_map = _cause_map(causes, key_list)
+    if causes is not None and unknown is not None:
+        for key in key_list:
+            if unknown_map[key] != (not cause_map[key].is_empty):
+                raise _core.PQv2InputError(
+                    f"unknown[{key!r}] disagrees with causes[{key!r}]"
+                )
+    if causes is None and any(unknown_map[key] for key in key_list):
+        raise _core.PQv2InputError("cause set required")
+
+    cause_union = _core.EMPTY_CAUSES
+    for key in key_list:
+        cause_union = cause_union.union(cause_map[key])
+    if not cause_union.is_empty:
+        affected = tuple(
+            sorted(key for key in key_list if not cause_map[key].is_empty)
         )
+        return _core.NotAssessed.from_causes(cause_union, detail=affected)
 
     n = len(key_list)
     sizes = _core.bucket_sizes(n, G)

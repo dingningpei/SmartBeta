@@ -179,6 +179,10 @@ class SyntheticStore:
         self.crosses_reserve: dict[date, bool] = {}
         self.flags: list[dict[str, Any]] = []
         self.ca_events: list[dict[str, Any]] = []
+        #: Optional per-(key, session) D7c ``daily_total_return`` overrides used
+        #: to drive the M§8A.1 UNKNOWN_SOURCE classification without touching
+        #: the TRI/volume inputs the factor panel is evaluated from.
+        self.d7c_overrides: dict[tuple[str, date], float] = {}
         self.d7b_bindings: B.Bindings | None = None
         self.source_bindings: S.SourceBindings | None = None
         self.pq_bindings: Q.Bindings | None = None
@@ -610,10 +614,11 @@ def _trusted(frame: pd.DataFrame, semantic_id: str) -> TrustedInput:
 
 def build_inputs(store: SyntheticStore) -> dict[str, TrustedInput]:
     wide = store.wide_inputs()
+    daily = wide["daily_total_return"].copy()
+    for (key, session), value in store.d7c_overrides.items():
+        daily.at[pd.Timestamp(session), key] = value
     return {
-        "daily_total_return": _trusted(
-            wide["daily_total_return"], "daily_total_return"
-        ),
+        "daily_total_return": _trusted(daily, "daily_total_return"),
         "total_return_index": _trusted(
             wide["total_return_index"], "total_return_index"
         ),

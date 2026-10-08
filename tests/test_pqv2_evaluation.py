@@ -123,6 +123,7 @@ def _build_case(
     declaration_overrides: Mapping[str, Any] | None = None,
     overlay_overrides: Mapping[str, Any] | None = None,
     base_overrides: Mapping[str, Any] | None = None,
+    d7c_overrides: Mapping[tuple[str, date], float] | None = None,
 ) -> Case:
     fx = _load_fixture()
     store = fx.SyntheticStore(tmp_path, name="root")
@@ -130,6 +131,8 @@ def _build_case(
     for key, session_index, beyond in flags:
         store.add_flag(key, fx.SESSIONS[session_index], beyond=beyond)
     store.ca_events.extend(ca_events)
+    for (key, session), value in (d7c_overrides or {}).items():
+        store.d7c_overrides[(key, session)] = value
     store.build_d7b()
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
@@ -190,6 +193,9 @@ def _period(
     status_ts: str = E._envelope.ASSESSED,
     reason_t0: str | None = None,
     reason_ts: str | None = None,
+    causes_t0: Sequence[str] = (),
+    causes_ts: Sequence[str] = (),
+    n_unknown_source: int = 0,
     LS_b_t0: float = 0.20,
     LS_b_ts: float = 0.20,
 ) -> E._envelope.EnvelopePeriod:
@@ -213,6 +219,9 @@ def _period(
         exposure={},
         label_counts={},
         n_unknown_reserve=0,
+        causes_t0=tuple(causes_t0),
+        causes_ts=tuple(causes_ts),
+        n_unknown_source=int(n_unknown_source),
     )
 
 
@@ -304,6 +313,7 @@ def _estimate_with_not_assessed(position: int) -> tuple[Any, ...]:
                     day,
                     status_t0=E._envelope.NOT_ASSESSED,
                     reason_t0=C.NotAssessedReason.RESERVE_UNKNOWN,
+                    causes_t0=[C.NotAssessedReason.RESERVE_UNKNOWN],
                 )
             )
         else:
@@ -315,22 +325,38 @@ def _estimate_with_not_assessed(position: int) -> tuple[Any, ...]:
 
 @pytest.mark.parametrize("position", [0, 1, 3])
 def test_l_period_not_assessed_first_middle_last(position: int) -> None:
-    value, t_stat, n_obs, status, reason = _estimate_with_not_assessed(position)
+    value, t_stat, n_obs, status, reason, period_causes, cause_union = (
+        _estimate_with_not_assessed(position)
+    )
     assert value is None and t_stat is None
     assert status == E._envelope.NOT_ASSESSED
     assert reason == C.NotAssessedReason.L_PERIOD_NOT_ASSESSED
+    assert cause_union == (C.NotAssessedReason.RESERVE_UNKNOWN,)
+    assert period_causes[position] == (C.NotAssessedReason.RESERVE_UNKNOWN,)
+    assert all(
+        causes == ()
+        for index, causes in enumerate(period_causes)
+        if index != position
+    )
 
 
 def test_b_numeric_while_l_not_assessed_no_substitution() -> None:
     day = date(2020, 1, 1)
     envelope = _envelope(
         [
-            _period(day, status_t0=E._envelope.NOT_ASSESSED, reason_t0="PQV2_RESERVE_UNKNOWN"),
+            _period(
+                day,
+                status_t0=E._envelope.NOT_ASSESSED,
+                reason_t0="PQV2_RESERVE_UNKNOWN",
+                causes_t0=["PQV2_RESERVE_UNKNOWN"],
+            ),
             _period(day + timedelta(days=1)),
         ]
     )
     lookup = {day: 123.0, day + timedelta(days=1): 456.0}
-    value, _t, _n, status, reason = E._estimate_l(envelope, lookup, E.SCENARIO_T0)
+    value, _t, _n, status, reason, _pc, _cu = E._estimate_l(
+        envelope, lookup, E.SCENARIO_T0
+    )
     assert value is None
     assert status == E._envelope.NOT_ASSESSED
     assert reason == C.NotAssessedReason.L_PERIOD_NOT_ASSESSED
@@ -340,11 +366,17 @@ def test_nan_l_value_fails_closed() -> None:
     days = [date(2020, 1, 1) + timedelta(days=i) for i in range(3)]
     periods = [
         _period(days[0]),
-        _period(days[1], L_t0=float("nan")),
+        _period(
+            days[1],
+            L_t0=float("nan"),
+            causes_t0=[C.NotAssessedReason.WINSOR_BLOCK],
+        ),
         _period(days[2]),
     ]
     lookup = {day: 0.2 for day in days}
-    value, _t, _n, status, reason = E._estimate_l(_envelope(periods), lookup, E.SCENARIO_T0)
+    value, _t, _n, status, reason, _pc, _cu = E._estimate_l(
+        _envelope(periods), lookup, E.SCENARIO_T0
+    )
     assert value is None
     assert status == E._envelope.NOT_ASSESSED
     assert reason == C.NotAssessedReason.L_PERIOD_NOT_ASSESSED
@@ -387,7 +419,7 @@ def test_insufficient_support_not_assessed() -> None:
     day = date(2020, 1, 1)
     envelope = _envelope([_period(day)])
     lookup = {day: 0.2}
-    value, t_stat, _n, status, reason = E._estimate_l(
+    value, t_stat, _n, status, reason, _pc, _cu = E._estimate_l(
         envelope, lookup, E.SCENARIO_T0
     )
     assert value is None and t_stat is None
@@ -402,7 +434,7 @@ def test_partial_period_estimator_rejected() -> None:
         [_period(day, L_t0=value) for day, value in zip(days, values)]
     )
     lookup = {day: 0.5 for day in days}
-    value, t_stat, n_obs, status, reason = E._estimate_l(
+    value, t_stat, n_obs, status, reason, _pc, _cu = E._estimate_l(
         envelope, lookup, E.SCENARIO_T0
     )
     assert status is None and reason is None
@@ -933,13 +965,70 @@ def test_deterministic_replay_identical_hash(tmp_path: Path) -> None:
     assert runs[0] == runs[1]
 
 
+def _replay_script_with_causes() -> str:
+    return r"""
+import importlib.util, sys, tempfile
+from pathlib import Path
+repo = Path(sys.argv[1])
+fix_path = repo / "tests" / "fixtures" / "pqv2" / "evaluation" / "fixture.py"
+spec = importlib.util.spec_from_file_location("pqv2h_fixture", fix_path)
+fx = importlib.util.module_from_spec(spec)
+sys.modules["pqv2h_fixture"] = fx
+spec.loader.exec_module(fx)
+from smart_beta.dataset_v1 import pqv2_evaluation as E
+for hypothesis in ("C1-H1", "C1-H4"):
+    tmp = Path(tempfile.mkdtemp())
+    store = fx.SyntheticStore(tmp, name="root")
+    store.standard()
+    store.add_flag("A", fx.SESSIONS[239])
+    store.d7c_overrides[("A", fx.SESSIONS[240])] = float("nan")
+    store.build_d7b(); store.build_sources()
+    pq_bindings, identity = store.build_identity()
+    specf = fx.load_campaign_spec(hypothesis)
+    inputs = fx.build_inputs(store)
+    panel = fx.factor_panel(specf, inputs, store)
+    base = fx.base_declaration(specf, panel)
+    decl = fx.declaration(base, identity_hash=identity)
+    overlay = store.overlay(pq_id=decl.pq_id, pq_hash=decl.pq_hash)
+    part, _f, _h = fx.partition()
+    diag = E.build_pqv2_diagnostics(
+        store.root, decl, specf, panel, part,
+        overlay=overlay, inputs=inputs, bindings=store.d7b_bindings,
+        source_bindings=store.source_bindings, pq_bindings=pq_bindings,
+        pq_read_records_fn=lambda path: fx.genesis_records(),
+    )
+    assert diag.periods[0].causes_t0 == (E._core.NotAssessedReason.SOURCE_UNRESOLVED,)
+    print(diag.diagnostics_hash)
+"""
+
+
+def test_deterministic_replay_with_causes_identical_hash(tmp_path: Path) -> None:
+    script = _replay_script_with_causes()
+    env = os.environ.copy()
+    for key in _CREDENTIAL_KEYS:
+        env.pop(key, None)
+    runs = []
+    for _ in range(2):
+        proc = subprocess.run(
+            [sys.executable, "-c", script, str(REPO_ROOT)],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        runs.append(proc.stdout.strip().splitlines())
+    assert len(runs[0]) == 2
+    assert runs[0] == runs[1]
+
+
 # ===========================================================================
 # 12. Gap-aware HAC is never used and never imported
 # ===========================================================================
 
 
 def test_gap_hac_not_imported_in_fresh_process() -> None:
-    script = r"""
+    script = r'''
 import sys
 sys.argv = [sys.argv[0]]
 from smart_beta.dataset_v1 import pqv2_evaluation as E
@@ -955,7 +1044,7 @@ for i in range(3):
         LS_b_t0=1.0, LS_b_ts=1.0, L_t0=0.1, L_ts=0.1,
         status_t0=E._envelope.ASSESSED, status_ts=E._envelope.ASSESSED,
         reason_t0=None, reason_ts=None, exposure={}, label_counts={},
-        n_unknown_reserve=0,
+        n_unknown_reserve=0, causes_t0=(), causes_ts=(), n_unknown_source=0,
     ))
 env = E._envelope.EnvelopeSeries(
     periods=tuple(periods), metric_basis="LONG_SHORT", sign=1, cost_bps=0.0,
@@ -965,7 +1054,7 @@ env = E._envelope.EnvelopeSeries(
 E._estimate_l(env, {p.period: 0.2 for p in periods}, "T0")
 assert "smart_beta.engines.gap_hac" not in sys.modules, "gap_hac imported by estimator"
 print("ok")
-"""
+'''
     env = os.environ.copy()
     for key in _CREDENTIAL_KEYS:
         env.pop(key, None)
@@ -1001,6 +1090,243 @@ print("ok")
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().endswith("ok")
+
+
+# ===========================================================================
+# 14. PQ21-H v2.1 causes: pass-through, persistence and identity
+# ===========================================================================
+
+
+SOURCE = C.NotAssessedReason.SOURCE_UNRESOLVED
+RESERVE = C.NotAssessedReason.RESERVE_UNKNOWN
+
+
+def _assert_period_causes(diag: Any, index: int, expected: Sequence[str]) -> None:
+    period = diag.periods[index]
+    assert tuple(period.causes_t0) == tuple(expected)
+    assert tuple(period.causes_ts) == tuple(expected)
+    assert period.reason_t0 == C.CauseSet.of(*expected).primary
+
+
+def test_source_only_factor_input_cause_end_to_end(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 239, False),),
+        d7c_overrides={("A", fx.SESSIONS[240]): float("nan")},
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    _assert_period_causes(diag, 0, [SOURCE])
+    # No layer may relabel a SOURCE-only cell as RESERVE.
+    for period in diag.periods:
+        assert RESERVE not in period.causes_t0
+        assert period.reason_t0 != RESERVE
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.status == E._envelope.NOT_ASSESSED
+    assert l_cell.reason == C.NotAssessedReason.L_PERIOD_NOT_ASSESSED
+    assert l_cell.cause_union == (SOURCE,)
+
+
+def test_reserve_only_factor_input_cause_end_to_end(tmp_path: Path) -> None:
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("B", 239, True),),
+    )
+    diag = case.diagnostics
+    _assert_period_causes(diag, 0, [RESERVE])
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.cause_union == (RESERVE,)
+
+
+def test_both_causes_factor_input_end_to_end(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 239, False), ("B", 239, True)),
+        d7c_overrides={("A", fx.SESSIONS[240]): float("nan")},
+    )
+    diag = case.diagnostics
+    _assert_period_causes(diag, 0, [RESERVE, SOURCE])
+    assert diag.periods[0].reason_t0 == RESERVE
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.cause_union == (RESERVE, SOURCE)
+
+
+def test_source_label_cause_end_to_end(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 261, False),),
+        d7c_overrides={("A", fx.SESSIONS[262]): float("nan")},
+    )
+    diag = case.diagnostics
+    _assert_period_causes(diag, 0, [SOURCE])
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.cause_union == (SOURCE,)
+
+
+def test_unrelated_unresolved_flag_leaves_periods_assessed(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 255, False),),
+        d7c_overrides={("A", fx.SESSIONS[256]): float("nan")},
+    )
+    diag = case.diagnostics
+    for period in diag.periods:
+        assert tuple(period.causes_t0) == ()
+        assert tuple(period.causes_ts) == ()
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.status is None
+    assert l_cell.cause_union == ()
+
+
+def test_v2_methodology_identity_rejected_no_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+    original = E._pq.verify_dataset_v1_2_identity
+
+    def _spy(*args: Any, **kwargs: Any):
+        reads.append("read")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(E._pq, "verify_dataset_v1_2_identity", _spy)
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        declaration_overrides={
+            "methodology_sha256": C.AUTHORITY_V2.methodology_sha256
+        },
+    )
+    assert case.diagnostics.not_assessed == C.NotAssessedReason.IDENTITY_MISMATCH
+    assert reads == []
+
+
+def test_v2_ed_id_identity_rejected_no_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[str] = []
+    original = E._pq.verify_dataset_v1_2_identity
+
+    def _spy(*args: Any, **kwargs: Any):
+        reads.append("read")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(E._pq, "verify_dataset_v1_2_identity", _spy)
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        declaration_overrides={"ed_id": C.AUTHORITY_V2.ed_id},
+    )
+    assert case.diagnostics.not_assessed == C.NotAssessedReason.IDENTITY_MISMATCH
+    assert reads == []
+
+
+# -- session-only source-set projection ------------------------------------
+
+
+def test_session_only_source_set_rejects_bare_session() -> None:
+    bare = date(2020, 1, 1)
+    source_set = C.SourceSet(unknown_by_key={"A": (bare,)})
+    with pytest.raises(C.PQv2InputError):
+        E._session_only_source_set(source_set)
+
+
+def test_session_only_source_set_passes_flags_through() -> None:
+    flag = C.UnresolvedFlag(
+        security_key="A",
+        s=date(2020, 1, 1),
+        prev_s=date(2019, 12, 31),
+        state=C.SourceState.UNKNOWN_SOURCE,
+    )
+    source_set = C.SourceSet(unknown_by_key={"A": (flag,)})
+    projected = E._session_only_source_set(source_set)
+    assert projected.unknown_by_key["A"] == (flag,)
+    assert projected.unknown_by_key["A"][0] is flag
+
+
+# -- per-period record and L-cell cause persistence ------------------------
+
+
+def test_period_record_carries_causes_and_counts() -> None:
+    period = _period(
+        date(2020, 1, 1),
+        status_t0=E._envelope.NOT_ASSESSED,
+        status_ts=E._envelope.NOT_ASSESSED,
+        reason_t0=RESERVE,
+        reason_ts=RESERVE,
+        causes_t0=[RESERVE, SOURCE],
+        causes_ts=[RESERVE, SOURCE],
+        n_unknown_source=2,
+    )
+    record = E._period_record(period, {}, None)
+    assert record.causes_t0 == (RESERVE, SOURCE)
+    assert record.causes_ts == (RESERVE, SOURCE)
+    assert record.n_unknown_source == 2
+    assert record.reason_t0 == RESERVE
+    body = record.to_dict()
+    assert body["causes_t0"] == [RESERVE, SOURCE]
+    assert body["causes_ts"] == [RESERVE, SOURCE]
+    assert body["n_unknown_source"] == 2
+
+
+def test_l_cell_cause_union_retains_both_causes() -> None:
+    days = [date(2020, 1, 1) + timedelta(days=i) for i in range(3)]
+    periods = [
+        _period(
+            days[0],
+            status_t0=E._envelope.NOT_ASSESSED,
+            status_ts=E._envelope.NOT_ASSESSED,
+            reason_t0=RESERVE,
+            reason_ts=RESERVE,
+            causes_t0=[RESERVE, SOURCE],
+            causes_ts=[RESERVE, SOURCE],
+        ),
+        _period(days[1]),
+        _period(days[2]),
+    ]
+    lookup = {day: 0.2 for day in days}
+    value, _t, _n, status, reason, period_causes, cause_union = E._estimate_l(
+        _envelope(periods), lookup, E.SCENARIO_T0
+    )
+    assert value is None
+    assert status == E._envelope.NOT_ASSESSED
+    assert reason == C.NotAssessedReason.L_PERIOD_NOT_ASSESSED
+    assert period_causes[0] == (RESERVE, SOURCE)
+    assert cause_union == (RESERVE, SOURCE)
+
+
+def test_diagnostics_persist_round_trip_with_causes(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 239, False),),
+        d7c_overrides={("A", fx.SESSIONS[240]): float("nan")},
+    )
+    diag = case.diagnostics
+    directory = tmp_path / "campaign" / "diagnostics"
+    (tmp_path / "campaign").mkdir(parents=True, exist_ok=True)
+    digest = _store.persist(diag, directory)
+    loaded = json.loads((directory / f"{digest}.json").read_text(encoding="utf-8"))
+    first = loaded["periods"][0]
+    assert first["causes_t0"] == [SOURCE]
+    assert first["causes_ts"] == [SOURCE]
+    assert "n_unknown_source" in first
+    l_t0 = next(cell for cell in loaded["cells"] if cell["cell"] == "L-T0")
+    assert l_t0["cause_union"] == [SOURCE]
 
 
 # ===========================================================================
@@ -1042,6 +1368,11 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
         "H-M19",
         "H-M20",
         "H-M21",
+        "V21-M08",
+        "H21-M1",
+        "H21-M2",
+        "H21-M3",
+        "H21-M4",
     }
     assert required.issubset(set(ids))
     for entry in payload:
