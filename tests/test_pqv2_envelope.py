@@ -96,6 +96,17 @@ class Lab:
     t0_hi: float = 0.0
     ts_lo: float = 0.0
     ts_hi: float = 0.0
+    causes: C.CauseSet = C.EMPTY_CAUSES
+
+
+def _causes_for_status(status: str) -> C.CauseSet:
+    """The A cause set a label with *status* would carry (B's convention)."""
+
+    if status == C.UNKNOWN_RESERVE:
+        return C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)
+    if status == C.UNKNOWN_SOURCE:
+        return C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)
+    return C.EMPTY_CAUSES
 
 
 def _clean(obs: float, ts_long: float | None = None, ts_short: float | None = None) -> Lab:
@@ -159,6 +170,7 @@ def _missing(status: str = C.FACTUAL_MISSING) -> Lab:
         t0_hi=math.nan,
         ts_lo=math.nan,
         ts_hi=math.nan,
+        causes=_causes_for_status(status),
     )
 
 
@@ -569,7 +581,12 @@ def test_empty_leg_configuration() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _reserve_world(unknown_key: str, uncertain: bool, b_group: int):
+def _reserve_world(
+    unknown_key: str,
+    uncertain: bool,
+    b_group: int,
+    status: str = C.UNKNOWN_RESERVE,
+):
     keys = KEYS
     values = VALUES
     assignment = S.simple_assignment(
@@ -583,7 +600,7 @@ def _reserve_world(unknown_key: str, uncertain: bool, b_group: int):
         values,
     )
     labels = {key: _clean(values[key]) for key in keys}
-    labels[unknown_key] = _missing(C.UNKNOWN_RESERVE)
+    labels[unknown_key] = _missing(status)
     groups = _groups_for(assignment, G=5)
     groups[unknown_key] = b_group
     return _compose(
@@ -607,6 +624,196 @@ def test_reserve_unknown_in_middle_group_only_is_not_flagged() -> None:
     period = series.periods[0]
     assert period.status_t0 == E.ASSESSED
     assert period.reason_t0 is None
+
+
+# ---------------------------------------------------------------------------
+# 8b. v2.1 cause model (SOUNRCE/RESERVE preservation, short-circuit order)
+# ---------------------------------------------------------------------------
+
+
+def _multi_cause_series() -> E.EnvelopeSeries:
+    """One uncertain possible-leg member carrying BOTH causes."""
+
+    assignment = S.simple_assignment(
+        KEYS, VALUES, list(KEYS), {"M0": True}, {}, 5, VALUES, VALUES
+    )
+    labels = {key: _clean(VALUES[key]) for key in KEYS}
+    labels["M0"] = Lab(
+        status=C.UNKNOWN_RESERVE,
+        lo=math.nan,
+        hi=math.nan,
+        t0_lo=math.nan,
+        t0_hi=math.nan,
+        ts_lo=math.nan,
+        ts_hi=math.nan,
+        causes=C.CauseSet.of(
+            C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED
+        ),
+    )
+    groups = _groups_for(assignment, G=5)
+    groups["M0"] = 3
+    return _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, {0: labels}, {0: groups}
+    )
+
+
+def _unknown_over_block_failure_series() -> E.EnvelopeSeries:
+    """An UNKNOWN possible-leg label in a world whose winsor block fails."""
+
+    keys = [f"M{i}" for i in range(10)]
+    values = {key: float(index) for index, key in enumerate(keys)}
+    assignment = S.simple_assignment(
+        keys, values, list(keys), {"M0": True}, {}, 5, values, values
+    )
+    labels = {key: _clean(values[key]) for key in keys}
+    labels["M0"] = _missing(C.UNKNOWN_SOURCE)
+    groups = _groups_for(assignment, G=5)
+    return _compose(
+        [0], E.NET, 1, 0.0, 5, 0.2, {0: assignment}, {0: labels}, {0: groups}
+    )
+
+
+def test_source_only_assignment_not_assessed_reports_source() -> None:
+    assignment = C.NotAssessed(
+        C.PQV2_SOURCE_UNRESOLVED,
+        "injected unresolved factor input",
+        C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED),
+    )
+    labels = {0: _clean_labels()}
+    groups = {0: _groups_for(_clean_simple())}
+    series = _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, labels, groups
+    )
+    period = series.periods[0]
+    assert period.status_t0 == E.NOT_ASSESSED
+    assert period.status_ts == E.NOT_ASSESSED
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+    assert period.reason_ts == C.PQV2_SOURCE_UNRESOLVED
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.causes_ts == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.winsor_ok is None
+    assert math.isnan(period.L_t0)
+    # B's observed estimator stays numerically available.
+    assert math.isfinite(period.LS_b_t0)
+
+
+def test_source_label_on_possible_leg_member() -> None:
+    series = _reserve_world(
+        "M0", uncertain=True, b_group=3, status=C.UNKNOWN_SOURCE
+    )
+    period = series.periods[0]
+    assert period.status_t0 == E.NOT_ASSESSED
+    assert period.status_ts == E.NOT_ASSESSED
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.causes_ts == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.n_unknown_source == 1
+    assert period.n_unknown_reserve == 0
+    # No resolved-state check was evaluated under UNKNOWN.
+    assert period.winsor_ok is None
+
+
+def test_reserve_label_reports_reserve() -> None:
+    series = _reserve_world("M0", uncertain=True, b_group=3)
+    period = series.periods[0]
+    assert period.causes_t0 == (C.PQV2_RESERVE_UNKNOWN,)
+    assert period.reason_t0 == C.PQV2_RESERVE_UNKNOWN
+    assert period.n_unknown_reserve == 1
+    assert period.n_unknown_source == 0
+    assert period.winsor_ok is None
+
+
+def test_multi_cause_label_reports_both_with_reserve_primary() -> None:
+    period = _multi_cause_series().periods[0]
+    assert period.causes_t0 == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+    assert period.causes_ts == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+    assert period.reason_t0 == C.PQV2_RESERVE_UNKNOWN
+    assert period.n_unknown_source == 1
+    assert period.n_unknown_reserve == 1
+
+
+def test_source_label_in_middle_group_only_is_not_flagged() -> None:
+    series = _reserve_world(
+        "M20", uncertain=False, b_group=3, status=C.UNKNOWN_SOURCE
+    )
+    period = series.periods[0]
+    assert period.status_t0 == E.ASSESSED
+    assert period.reason_t0 is None
+    assert period.causes_t0 == ()
+    assert period.causes_ts == ()
+
+
+def test_unknown_cause_short_circuits_before_winsor_block() -> None:
+    series = _unknown_over_block_failure_series()
+    period = series.periods[0]
+    assignment = S.simple_assignment(
+        [f"M{i}" for i in range(10)],
+        {f"M{i}": float(i) for i in range(10)},
+        [f"M{i}" for i in range(10)],
+        {"M0": True},
+        {},
+        5,
+        {f"M{i}": float(i) for i in range(10)},
+        {f"M{i}": float(i) for i in range(10)},
+    )
+    assert not C.winsor_block_ok(
+        assignment.score_lo, assignment.score_hi, 0.2, assignment.s_1, assignment.s_G
+    )
+    # The UNKNOWN cause wins and the winsorization block is never evaluated.
+    assert period.winsor_ok is None
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+
+
+def test_causes_are_scenario_consistent_on_empty_leg() -> None:
+    assignment = _clean_simple()
+    labels = {
+        key: Lab(
+            status=C.ENVELOPE,
+            lo=1.0,
+            hi=1.0,
+            t0_lo=math.nan,
+            t0_hi=math.nan,
+            ts_lo=VALUES[key],
+            ts_hi=VALUES[key],
+        )
+        for key in KEYS
+    }
+    groups = _groups_for(assignment)
+    series = _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, {0: labels}, {0: groups}
+    )
+    period = series.periods[0]
+    # T0's admissible legs are empty; TS is fully assessable.
+    assert period.status_t0 == E.NOT_ASSESSED
+    assert period.causes_t0 == (C.PQV2_EMPTY_LEG_CONFIGURATION,)
+    assert period.reason_t0 == C.PQV2_EMPTY_LEG_CONFIGURATION
+    assert period.status_ts == E.ASSESSED
+    assert period.causes_ts == ()
+    assert period.reason_ts is None
+
+
+def test_serialization_carries_causes_deterministically() -> None:
+    series = _multi_cause_series()
+    first = series.to_dict()
+    assert first == series.to_dict()
+    period = first["periods"][0]
+    assert period["causes_t0"] == [
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    ]
+    assert period["causes_ts"] == [
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    ]
+    assert period["n_unknown_source"] == 1
+    assert period["n_unknown_reserve"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1308,6 +1515,12 @@ _EXPECTED_MUTATIONS = [
     "F-M17",
     "F-M18",
     "F-M19",
+    "V21-M07",
+    "V21-M12b",
+    "V21-M13",
+    "F21-M1",
+    "F21-M2",
+    "F21-M3",
 ]
 
 
@@ -1653,3 +1866,85 @@ def test_kill_F_M19_legacy_simple_rule_readmitted() -> None:
     )
     assert series.gate_reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
     assert series.periods[0].reason_t0 == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+# ---------------------------------------------------------------------------
+# 17. v2.1 mutation kill tests
+# ---------------------------------------------------------------------------
+
+
+def test_kill_V21_M07_causes_are_not_reduced_to_primary() -> None:
+    """V21-M07: the full cause set must be persisted, not only its primary."""
+
+    period = _multi_cause_series().periods[0]
+    assert period.causes_t0 == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+    assert period.causes_ts == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+
+
+def test_kill_V21_M12b_primary_uses_precedence() -> None:
+    """V21-M12b: the primary must follow M§8A.4 precedence, not tuple order."""
+
+    assignment = C.NotAssessed(
+        C.PQV2_SOURCE_UNRESOLVED,
+        "source over sigma",
+        C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_SIGMA_SUPPORT),
+    )
+    labels = {0: _clean_labels()}
+    groups = {0: _groups_for(_clean_simple())}
+    series = _compose(
+        [0], E.NET, 1, 0.0, 5, 0.05, {0: assignment}, labels, groups
+    )
+    period = series.periods[0]
+    # Canonical order puts SIGMA first; precedence puts SOURCE first.
+    assert period.causes_t0 == (
+        C.PQV2_SIGMA_SUPPORT,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+
+
+def test_kill_V21_M13_winsor_block_not_evaluated_before_unknown() -> None:
+    """V21-M13: the winsor block must not precede the UNKNOWN short-circuit."""
+
+    period = _unknown_over_block_failure_series().periods[0]
+    assert period.winsor_ok is None
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+
+
+def test_kill_F21_M1_source_label_cause_is_recognised() -> None:
+    """F-M1: an UNKNOWN_SOURCE label must be recognised through its causes."""
+
+    period = _reserve_world(
+        "M0", uncertain=True, b_group=3, status=C.UNKNOWN_SOURCE
+    ).periods[0]
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.reason_t0 == C.PQV2_SOURCE_UNRESOLVED
+    assert period.n_unknown_source == 1
+
+
+def test_kill_F21_M2_source_is_not_relabelled_reserve() -> None:
+    """F-M2: a SOURCE cause must never be relabelled RESERVE."""
+
+    period = _reserve_world(
+        "M0", uncertain=True, b_group=3, status=C.UNKNOWN_SOURCE
+    ).periods[0]
+    assert period.causes_t0 == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert period.n_unknown_source == 1
+    assert period.n_unknown_reserve == 0
+
+
+def test_kill_F21_M3_labels_outside_possible_sets_do_not_poison() -> None:
+    """F-M3: only possible-leg labels may contribute causes."""
+
+    period = _reserve_world(
+        "M20", uncertain=False, b_group=3, status=C.UNKNOWN_RESERVE
+    ).periods[0]
+    assert period.status_t0 == E.ASSESSED
+    assert period.causes_t0 == ()

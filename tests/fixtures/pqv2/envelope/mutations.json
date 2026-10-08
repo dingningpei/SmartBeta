@@ -92,19 +92,19 @@
   },
   {
     "id": "F-M5",
-    "description": "the reserve check scans B's observed memberships instead of the possible leg sets",
+    "description": "the label-cause scan uses B's observed memberships instead of the possible leg sets",
     "file": "smart_beta/dataset_v1/pqv2_envelope.py",
     "edits": [
       {
-        "old": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in reserve_members\n            if _is_unknown_reserve(labels.get(key))\n        )\n    )",
-        "new": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in b_groups\n            if int(b_groups[key]) in (1, G)\n            and _is_unknown_reserve(labels.get(key))\n        )\n    )  # F-M5"
+        "old": "    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(\n        labels, reserve_members\n    )",
+        "new": "    _b_long, _b_short = _b_legs(b_groups, G)\n    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(\n        labels, frozenset(_b_long) | frozenset(_b_short)\n    )  # F-M5"
       }
     ],
     "test": "tests/test_pqv2_envelope.py::test_kill_F_M5_reserve_over_b_legs_only"
   },
   {
     "id": "F-M6",
-    "description": "the M\u00a711 winsorization-block check skipped",
+    "description": "the M§11 winsorization-block check skipped",
     "file": "smart_beta/dataset_v1/pqv2_envelope.py",
     "edits": [
       {
@@ -244,12 +244,12 @@
   },
   {
     "id": "F-M17",
-    "description": "a reserve-UNKNOWN label member treated as clean (no reserve firewall)",
+    "description": "a reserve-UNKNOWN label member treated as clean (no label-cause firewall)",
     "file": "smart_beta/dataset_v1/pqv2_envelope.py",
     "edits": [
       {
-        "old": "    unknown_members = tuple(\n        sorted(\n            key\n            for key in reserve_members\n            if _is_unknown_reserve(labels.get(key))\n        )\n    )",
-        "new": "    unknown_members = ()  # F-M17"
+        "old": "    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(\n        labels, reserve_members\n    )",
+        "new": "    label_causes, n_unknown_source, n_unknown_reserve = (\n        _core.EMPTY_CAUSES,\n        0,\n        0,\n    )  # F-M17"
       }
     ],
     "test": "tests/test_pqv2_envelope.py::test_kill_F_M17_reserve_unknown_treated_clean"
@@ -277,5 +277,77 @@
       }
     ],
     "test": "tests/test_pqv2_envelope.py::test_kill_F_M19_legacy_simple_rule_readmitted"
+  },
+  {
+    "id": "V21-M07",
+    "description": "cause dropped in F: the period cause set is reduced to its primary",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        causes = causes.union(label_causes)",
+        "new": "        causes = _core.CauseSet.of(causes.union(label_causes).primary)  # V21-M07"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V21_M07_causes_are_not_reduced_to_primary"
+  },
+  {
+    "id": "V21-M12b",
+    "description": "period primary chosen by canonical tuple order instead of the frozen M§8A.4 precedence",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        reason = causes.primary",
+        "new": "        reason = causes.causes[0]  # V21-M12b"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V21_M12b_primary_uses_precedence"
+  },
+  {
+    "id": "V21-M13",
+    "description": "the M§11 winsorization block is evaluated before the UNKNOWN short-circuit",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    if not label_causes.is_empty:\n        return _not_assessed_period(",
+        "new": "    winsor_ok = _core.winsor_block_ok(score_lo, score_hi, q, s_low, s_high)  # V21-M13\n    if not label_causes.is_empty and winsor_ok:\n        return _not_assessed_period("
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_V21_M13_winsor_block_not_evaluated_before_unknown"
+  },
+  {
+    "id": "F21-M1",
+    "description": "UNKNOWN_SOURCE label not recognised (status-name check for RESERVE only)",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        label_causes = getattr(labels.get(key), \"causes\", None)\n        if not isinstance(label_causes, _core.CauseSet) or label_causes.is_empty:\n            continue",
+        "new": "        _label = labels.get(key)\n        if _label_status(_label) == _core.LabelStatus.UNKNOWN_RESERVE:  # F21-M1\n            label_causes = _core.CauseSet.of(_core.NotAssessedReason.RESERVE_UNKNOWN)\n        else:\n            label_causes = _core.EMPTY_CAUSES\n        if label_causes.is_empty:\n            continue"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F21_M1_source_label_cause_is_recognised"
+  },
+  {
+    "id": "F21-M2",
+    "description": "a SOURCE label cause relabelled RESERVE in the period cause set",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "        causes = causes.union(label_causes)",
+        "new": "        if _core.NotAssessedReason.SOURCE_UNRESOLVED in label_causes:  # F21-M2\n            label_causes = _core.CauseSet.of(_core.NotAssessedReason.RESERVE_UNKNOWN)\n        causes = causes.union(label_causes)"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F21_M2_source_is_not_relabelled_reserve"
+  },
+  {
+    "id": "F21-M3",
+    "description": "labels outside the possible leg sets poison the period cause set",
+    "file": "smart_beta/dataset_v1/pqv2_envelope.py",
+    "edits": [
+      {
+        "old": "    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(\n        labels, reserve_members\n    )",
+        "new": "    label_causes, n_unknown_source, n_unknown_reserve = _label_cause_contribution(  # F21-M3\n        labels, frozenset(labels)\n    )"
+      }
+    ],
+    "test": "tests/test_pqv2_envelope.py::test_kill_F21_M3_labels_outside_possible_sets_do_not_poison"
   }
 ]
