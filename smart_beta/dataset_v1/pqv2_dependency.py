@@ -18,7 +18,9 @@ frozen methodology (``docs/discovery_dataset_v1_2_pq_v2_methodology.md``):
 * :func:`input_uncertainty` — the per-cell input-uncertainty map: ``A_t``
   membership for the simple class, and the M / V interval plus the reserve
   firewall for the ``STD_X_RANK`` class (M§10 primitive dependency, Prop. 2,
-  the DV non-claim).
+  the DV non-claim).  In P-Q v2.1 every cell additionally carries its
+  dependency-local :class:`~smart_beta.dataset_v1.pqv2_core.CauseSet`
+  (M§8A.2, M§8A.4), computed from A's ``UnresolvedFlag`` values.
 
 Nothing here reads a dataset artifact, the reserve, holdout, ``raw/`` or
 ``dsc_evidence``.  The only repository files touched are the read-only imports
@@ -509,14 +511,17 @@ class InputUncertainty:
     """The result of :func:`input_uncertainty`.
 
     ``uncertain`` is the simple-class ``A_t`` membership; ``unknown`` is the
-    reserve firewall; ``M_interval`` / ``V_interval`` are the ``STD_X_RANK``
-    certified intervals (a missing entry means the observed value is unavailable).
+    reserve firewall; ``causes`` is the per-cell dependency-local cause set
+    (``unknown[key] == not causes[key].is_empty``); ``M_interval`` /
+    ``V_interval`` are the ``STD_X_RANK`` certified intervals (a missing entry
+    means the observed value is unavailable).
     """
 
     cls: str
     keys: tuple[str, ...]
     uncertain: Mapping[str, bool]
     unknown: Mapping[str, bool]
+    causes: Mapping[str, _core.CauseSet]
     M_interval: Mapping[str, Any]
     V_interval: Mapping[str, Any]
     windows: Windows
@@ -666,21 +671,103 @@ def _dv_close_kappa(
     return rel, rel.inv()
 
 
-def _normalize_unknown(value: Any) -> tuple[Any, ...]:
+def _normalize_unknown(key: str, value: Any) -> tuple[_core.UnresolvedFlag, ...]:
+    """Validate a key's ``unknown_by_key`` entry as ``UnresolvedFlag`` objects.
+
+    The v2.1 contract is exact: C consumes A's :class:`UnresolvedFlag` values,
+    as produced by PQ2-B and passed through unchanged by H's session projection.
+    A bare session, a ``(session, prev_session, reason)`` triple or any other
+    entry form raises :class:`PQv2InputError`; there is deliberately **no**
+    structural fallback that would silently accept a bare-session UNKNOWN.
+    """
+
     if value is None:
         return ()
-    if isinstance(value, Mapping):
-        return tuple(value.keys())
-    if isinstance(value, (str, bytes)):
-        return (value,)
-    if hasattr(value, "s"):
-        return (value.s,)
-    if not isinstance(value, (list, tuple, set, frozenset)):
-        return (value,)
-    sessions = []
-    for item in value:
-        sessions.append(item.s if hasattr(item, "s") else item)
-    return tuple(sessions)
+    if not isinstance(value, (list, tuple)):
+        raise _core.PQv2InputError(
+            f"unknown_by_key[{key!r}] must be a tuple of UnresolvedFlag, "
+            f"got {value!r}"
+        )
+    flags = tuple(value)
+    for flag in flags:
+        if not isinstance(flag, _core.UnresolvedFlag):
+            raise _core.PQv2InputError(
+                f"unknown_by_key[{key!r}] entry must be UnresolvedFlag, "
+                f"got {flag!r}"
+            )
+    return flags
+
+
+def _unresolved_cause(flag: _core.UnresolvedFlag) -> str:
+    """The durable period cause of an unresolved flag (M§8A.1, M§8A.4)."""
+
+    return _core.cause_for_source_state(flag.state)
+
+
+def _unresolved_reaches(
+    windows: Windows,
+    cls: str,
+    formation_pos: Any,
+    flag: _core.UnresolvedFlag,
+    candidates: Sequence[_core.MisdatedCandidate],
+) -> bool:
+    """Whether an unresolved flag lies in the frozen dependency of a cell.
+
+    The reach rules are the unchanged M§6 / M§7 / M§10 rules applied to the
+    flag: its own algebraic position ``[y, next(x)]``; the numerical window
+    ``{prev s, s, next s}`` (SIMPLE) or the dv cells ``{prev s, s}``
+    (STD_X_RANK); and the MISDATED pair effects of its recorded candidates.
+    Reach attaches causes only — it never contributes a factor or an interval.
+    """
+
+    s_off = _offset(formation_pos, flag.s)
+    prev_off = _offset(formation_pos, flag.prev_s)
+    if prev_off is None and s_off is not None:
+        prev_off = s_off - 1
+    next_off = None if s_off is None else s_off + 1
+
+    if _algebraic_affected(windows.algebraic, s_off):
+        return True
+    if cls == STD_X_RANK:
+        dv_cells = _window_cells(windows.numerical_dv_short) | _window_cells(
+            windows.numerical_dv_long
+        )
+        if s_off in dv_cells or prev_off in dv_cells:
+            return True
+    elif _returns_effect(windows.numerical_returns, s_off, prev_off, next_off):
+        return True
+    for candidate in candidates:
+        d_off = _offset(formation_pos, candidate.d)
+        if _candidate_hits_algebraic(windows.algebraic, s_off, d_off):
+            return True
+        if cls == SIMPLE and _candidate_hits_window(
+            windows.numerical_returns, s_off, d_off
+        ):
+            return True
+    return False
+
+
+def _cell_causes(
+    windows: Windows,
+    cls: str,
+    formation_pos: Any,
+    unknown_flags: Sequence[_core.UnresolvedFlag],
+    candidates: Sequence[_core.MisdatedCandidate],
+) -> _core.CauseSet:
+    """The dependency-local cause set of one cell (M§8A.2, M§8A.4)."""
+
+    reasons: list[str] = []
+    for flag in unknown_flags:
+        flag_candidates = tuple(
+            candidate for candidate in candidates if candidate.s == flag.s
+        )
+        if not _unresolved_reaches(
+            windows, cls, formation_pos, flag, flag_candidates
+        ):
+            continue
+        cause = _unresolved_cause(flag)
+        reasons.append(cause)
+    return _core.CauseSet.from_iterable(reasons)
 
 
 def _simple_cell(
@@ -688,8 +775,7 @@ def _simple_cell(
     formation_pos: Any,
     transitions: Sequence[_core.UncertainTransition],
     candidates: Sequence[_core.MisdatedCandidate],
-    unknown_sessions: Sequence[Any],
-) -> tuple[bool, bool]:
+) -> bool:
     uncertain = False
     for transition in transitions:
         s_off = _offset(formation_pos, transition.s)
@@ -709,18 +795,7 @@ def _simple_cell(
             uncertain = True
         if _candidate_hits_window(windows.numerical_returns, s_off, d_off):
             uncertain = True
-    unknown = False
-    for session in unknown_sessions:
-        s_off = _offset(formation_pos, session)
-        if s_off is None:
-            continue
-        if _algebraic_affected(windows.algebraic, s_off):
-            unknown = True
-        if _returns_effect(
-            windows.numerical_returns, s_off, s_off - 1, s_off + 1
-        ):
-            unknown = True
-    return uncertain, unknown
+    return uncertain
 
 
 def _m_interval(
@@ -842,29 +917,14 @@ def _std_x_rank_cell(
     formation_pos: Any,
     transitions: Sequence[_core.UncertainTransition],
     candidates: Sequence[_core.MisdatedCandidate],
-    unknown_sessions: Sequence[Any],
     observed: ObservedValues | None,
 ) -> tuple[
     _core.PositiveInterval | None,
     _core.PositiveInterval | None,
     bool,
-    bool,
 ]:
     m_interval = _m_interval(windows, formation_pos, transitions, candidates, observed)
     v_interval = _v_interval(windows, formation_pos, transitions, observed)
-    unknown = False
-    for session in unknown_sessions:
-        s_off = _offset(formation_pos, session)
-        if s_off is None:
-            continue
-        if _algebraic_affected(windows.algebraic, s_off):
-            unknown = True
-        if (s_off in _window_cells(windows.numerical_dv_short)) or (
-            s_off in _window_cells(windows.numerical_dv_long)
-        ) or (s_off - 1 in _window_cells(windows.numerical_dv_short)) or (
-            s_off - 1 in _window_cells(windows.numerical_dv_long)
-        ):
-            unknown = True
     uncertain = (
         m_interval is not None
         and not (m_interval.lo == m_interval.hi)
@@ -872,7 +932,7 @@ def _std_x_rank_cell(
         v_interval is not None
         and not (v_interval.lo == v_interval.hi)
     )
-    return m_interval, v_interval, unknown, uncertain
+    return m_interval, v_interval, uncertain
 
 
 def input_uncertainty(
@@ -890,7 +950,9 @@ def input_uncertainty(
     formation position for integer sessions).  ``keys`` is the full cross-section
     to compute over — **every** key is returned, including keys with no flags and
     keys absent from ``observed``; ``observed`` supplies the observed ``M`` and
-    ``dv`` values for the ``STD_X_RANK`` intervals.
+    ``dv`` values for the ``STD_X_RANK`` intervals.  ``source_set.unknown_by_key``
+    must hold A's ``UnresolvedFlag`` values; the per-cell cause set is persisted
+    in ``causes`` and ``unknown`` is exactly ``not causes.is_empty`` (M§8A.2).
     """
 
     if cls not in (SIMPLE, STD_X_RANK):
@@ -902,36 +964,49 @@ def input_uncertainty(
     key_list = tuple(keys)
     uncertain: dict[str, bool] = {}
     unknown: dict[str, bool] = {}
+    causes: dict[str, _core.CauseSet] = {}
     m_intervals: dict[str, _core.PositiveInterval] = {}
     v_intervals: dict[str, _core.PositiveInterval] = {}
     for key in key_list:
         transitions = tuple(source_set.transitions_by_key.get(key, ()))
         candidates = tuple(source_set.candidates_by_key.get(key, ()))
-        unknown_sessions = _normalize_unknown(source_set.unknown_by_key.get(key))
+        unknown_flags = _normalize_unknown(
+            key, source_set.unknown_by_key.get(key)
+        )
+        unresolved_sessions = frozenset(flag.s for flag in unknown_flags)
+        # Candidates whose own flag is unresolved are used for reach only,
+        # never as a factor (M§8A.2): drop them from the interval inputs.
+        factor_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.s not in unresolved_sessions
+        )
+        cell_causes = _cell_causes(
+            windows, cls, formation_pos, unknown_flags, candidates
+        )
+        causes[key] = cell_causes
+        unknown[key] = not cell_causes.is_empty
         if cls == SIMPLE:
-            is_uncertain, is_unknown = _simple_cell(
-                windows, formation_pos, transitions, candidates, unknown_sessions
+            uncertain[key] = _simple_cell(
+                windows, formation_pos, transitions, factor_candidates
             )
-            uncertain[key] = is_uncertain
-            unknown[key] = is_unknown
         else:
-            m_interval, v_interval, is_unknown, is_uncertain = _std_x_rank_cell(
+            m_interval, v_interval, is_uncertain = _std_x_rank_cell(
                 windows,
                 formation_pos,
                 transitions,
-                candidates,
-                unknown_sessions,
+                factor_candidates,
                 observed.get(key),
             )
             m_intervals[key] = m_interval
             v_intervals[key] = v_interval
-            unknown[key] = is_unknown
             uncertain[key] = is_uncertain
     return InputUncertainty(
         cls=cls,
         keys=key_list,
         uncertain=MappingProxyType(uncertain),
         unknown=MappingProxyType(unknown),
+        causes=MappingProxyType(causes),
         M_interval=MappingProxyType(m_intervals),
         V_interval=MappingProxyType(v_intervals),
         windows=windows,

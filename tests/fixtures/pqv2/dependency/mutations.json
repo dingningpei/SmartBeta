@@ -137,5 +137,125 @@
       }
     ],
     "test": "tests/test_pqv2_dependency.py::test_algebraic_flag_positions_match_oracle"
+  },
+  {
+    "id": "V21-M05",
+    "description": "dependency-local cause dropped: every cell reports empty causes (bool-only unknown)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.CauseSet.from_iterable(reasons)",
+        "new": "    return _core.EMPTY_CAUSES  # V21-M05: cause dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_reached_source_flag_cause_is_source_unresolved"
+  },
+  {
+    "id": "C21-M1",
+    "description": "an unrelated unresolved flag poisons the cell (reach is always true)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        if cls == SIMPLE and _candidate_hits_window(\n            windows.numerical_returns, s_off, d_off\n        ):\n            return True\n    return False",
+        "new": "        if cls == SIMPLE and _candidate_hits_window(\n            windows.numerical_returns, s_off, d_off\n        ):\n            return True\n    return True  # C21-M1: unrelated flag poisons the cell"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_unrelated_source_flag_has_empty_causes"
+  },
+  {
+    "id": "C21-M2",
+    "description": "a reached UNKNOWN_SOURCE flag dropped from the cell cause set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        reasons.append(cause)",
+        "new": "        if cause != _core.PQV2_SOURCE_UNRESOLVED:\n            reasons.append(cause)  # C21-M2: reached SOURCE dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_reached_source_flag_cause_is_source_unresolved"
+  },
+  {
+    "id": "C21-M3",
+    "description": "a reached UNKNOWN_RESERVE flag dropped from the cell cause set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        reasons.append(cause)",
+        "new": "        if cause != _core.PQV2_RESERVE_UNKNOWN:\n            reasons.append(cause)  # C21-M3: reached RESERVE dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_reached_reserve_flag_cause_is_reserve_unknown"
+  },
+  {
+    "id": "C21-M4",
+    "description": "UNKNOWN_SOURCE relabelled PQV2_RESERVE_UNKNOWN in the cell cause set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.cause_for_source_state(flag.state)",
+        "new": "    return _core.PQV2_RESERVE_UNKNOWN if flag.state == _core.SourceState.UNKNOWN_SOURCE else _core.cause_for_source_state(flag.state)  # C21-M4"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_reached_source_flag_cause_is_source_unresolved"
+  },
+  {
+    "id": "C21-M5",
+    "description": "UNKNOWN_RESERVE relabelled PQV2_SOURCE_UNRESOLVED in the cell cause set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.cause_for_source_state(flag.state)",
+        "new": "    return _core.PQV2_SOURCE_UNRESOLVED if flag.state == _core.SourceState.UNKNOWN_RESERVE else _core.cause_for_source_state(flag.state)  # C21-M5"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_reached_reserve_flag_cause_is_reserve_unknown"
+  },
+  {
+    "id": "C21-M6",
+    "description": "only the primary cause retained (the full cause set is not persisted)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.CauseSet.from_iterable(reasons)",
+        "new": "    _full = _core.CauseSet.from_iterable(reasons)\n    return _full if _full.is_empty else _core.CauseSet.of(_full.primary)  # C21-M6"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_multi_cause_source_and_reserve_are_both_retained"
+  },
+  {
+    "id": "C21-M7",
+    "description": "traversal-order-dependent cause set (first reaching flag only)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.CauseSet.from_iterable(reasons)",
+        "new": "    return _core.CauseSet.from_iterable(reasons[:1])  # C21-M7"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_traversal_order_does_not_change_the_cause_set"
+  },
+  {
+    "id": "C21-M8",
+    "description": "dependency endpoint shifted for unresolved reach (algebraic position off by one)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    next_off = None if s_off is None else s_off + 1\n\n    if _algebraic_affected(windows.algebraic, s_off):",
+        "new": "    next_off = None if s_off is None else s_off + 1\n\n    if _algebraic_affected(windows.algebraic, s_off + 1):  # C21-M8"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_algebraic_endpoint_inclusion_and_exclusion"
+  },
+  {
+    "id": "C21-M9",
+    "description": "bare-session unknown_by_key entries accepted (structural fallback)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        if not isinstance(flag, _core.UnresolvedFlag):",
+        "new": "        if False:  # C21-M9: structural fallback"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_v21_non_unresolved_flag_entries_raise"
   }
 ]
