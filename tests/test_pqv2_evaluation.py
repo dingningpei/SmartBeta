@@ -72,30 +72,6 @@ def _credential_sentinel(monkeypatch: pytest.MonkeyPatch):
     yield
 
 
-COMPAT_PATH = (
-    REPO_ROOT / "tests" / "fixtures" / "pqv2" / "evaluation" / "compat.py"
-)
-
-
-def _load_compat():
-    module_name = "pqv2h_compat"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, COMPAT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.fixture(autouse=True)
-def _compat(monkeypatch: pytest.MonkeyPatch):
-    """Install the PQ21-D/E/F test doubles only while they are absent (H §2)."""
-
-    _load_compat().install(monkeypatch)
-    yield
-
-
 def test_credential_sentinel_never_leaks() -> None:
     assert E.PQ_METHODOLOGY != CREDENTIAL_SENTINEL
 
@@ -222,9 +198,8 @@ def _period(
     n_unknown_source: int = 0,
     LS_b_t0: float = 0.20,
     LS_b_ts: float = 0.20,
-) -> Any:
-    compat = _load_compat()
-    return compat.CompatPeriod(
+) -> E._envelope.EnvelopePeriod:
+    return E._envelope.EnvelopePeriod(
         period=period,
         rule="SIMPLE_EXACT",
         winsor_ok=True,
@@ -945,12 +920,6 @@ spec = importlib.util.spec_from_file_location("pqv2h_fixture", fix_path)
 fx = importlib.util.module_from_spec(spec)
 sys.modules["pqv2h_fixture"] = fx
 spec.loader.exec_module(fx)
-compat_path = repo / "tests" / "fixtures" / "pqv2" / "evaluation" / "compat.py"
-cspec = importlib.util.spec_from_file_location("pqv2h_compat", compat_path)
-compat = importlib.util.module_from_spec(cspec)
-sys.modules["pqv2h_compat"] = compat
-cspec.loader.exec_module(compat)
-compat.install_raw()
 from smart_beta.dataset_v1 import pqv2_evaluation as E
 for hypothesis in ("C1-H1", "C1-H4"):
     tmp = Path(tempfile.mkdtemp())
@@ -1006,12 +975,6 @@ spec = importlib.util.spec_from_file_location("pqv2h_fixture", fix_path)
 fx = importlib.util.module_from_spec(spec)
 sys.modules["pqv2h_fixture"] = fx
 spec.loader.exec_module(fx)
-compat_path = repo / "tests" / "fixtures" / "pqv2" / "evaluation" / "compat.py"
-cspec = importlib.util.spec_from_file_location("pqv2h_compat", compat_path)
-compat = importlib.util.module_from_spec(cspec)
-sys.modules["pqv2h_compat"] = compat
-cspec.loader.exec_module(compat)
-compat.install_raw()
 from smart_beta.dataset_v1 import pqv2_evaluation as E
 for hypothesis in ("C1-H1", "C1-H4"):
     tmp = Path(tempfile.mkdtemp())
@@ -1065,17 +1028,9 @@ def test_deterministic_replay_with_causes_identical_hash(tmp_path: Path) -> None
 
 
 def test_gap_hac_not_imported_in_fresh_process() -> None:
-    script = (
-        r'''
-import importlib.util, sys
+    script = r'''
+import sys
 sys.argv = [sys.argv[0]]
-from pathlib import Path
-compat_path = Path(__COMPAT_PATH__)
-cspec = importlib.util.spec_from_file_location("pqv2h_compat", compat_path)
-compat = importlib.util.module_from_spec(cspec)
-sys.modules["pqv2h_compat"] = compat
-cspec.loader.exec_module(compat)
-compat.install_raw()
 from smart_beta.dataset_v1 import pqv2_evaluation as E
 assert "smart_beta.engines.gap_hac" not in sys.modules, "gap_hac imported"
 # Exercise the estimator path as well.
@@ -1083,13 +1038,13 @@ from datetime import date, timedelta
 day = date(2020, 1, 1)
 periods = []
 for i in range(3):
-    periods.append(compat.CompatPeriod(
+    periods.append(E._envelope.EnvelopePeriod(
         period=day + timedelta(days=i), rule="SIMPLE_EXACT", winsor_ok=True,
         D_t=0, TO_b=0.0, TO_hi=0.0, changed_b=0, union=1,
         LS_b_t0=1.0, LS_b_ts=1.0, L_t0=0.1, L_ts=0.1,
         status_t0=E._envelope.ASSESSED, status_ts=E._envelope.ASSESSED,
         reason_t0=None, reason_ts=None, exposure={}, label_counts={},
-        n_unknown_reserve=0,
+        n_unknown_reserve=0, causes_t0=(), causes_ts=(), n_unknown_source=0,
     ))
 env = E._envelope.EnvelopeSeries(
     periods=tuple(periods), metric_basis="LONG_SHORT", sign=1, cost_bps=0.0,
@@ -1099,8 +1054,7 @@ env = E._envelope.EnvelopeSeries(
 E._estimate_l(env, {p.period: 0.2 for p in periods}, "T0")
 assert "smart_beta.engines.gap_hac" not in sys.modules, "gap_hac imported by estimator"
 print("ok")
-'''.replace("__COMPAT_PATH__", repr(str(COMPAT_PATH)))
-    )
+'''
     env = os.environ.copy()
     for key in _CREDENTIAL_KEYS:
         env.pop(key, None)
