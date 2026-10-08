@@ -76,7 +76,7 @@ def _credential_sentinel(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_credential_sentinel_never_leaks() -> None:
-    assert S.POSITION_BEYOND_DEVELOPMENT_END != CREDENTIAL_SENTINEL
+    assert C.SourceState.UNKNOWN_RESERVE != CREDENTIAL_SENTINEL
 
 
 # ---------------------------------------------------------------------------
@@ -145,35 +145,23 @@ class _Store:
         self.source_bindings: S.SourceBindings | None = None
 
     # -- helpers ---------------------------------------------------------
-    def _ticker(self, key: str) -> str:
-        for security_key, ticker, _start, _end in self.identities:
-            if security_key == key:
-                return ticker
-        raise KeyError(key)
-
-    def _interval(self, key: str) -> tuple[date, date]:
-        for security_key, _ticker, start, end in self.identities:
-            if security_key == key:
-                return start, end
-        raise KeyError(key)
-
     def _selected_counts(self) -> dict[tuple[str, date], int]:
+        # D4 reuses tickers across keys and a ticker's event may fall inside
+        # several keys' intervals, so count it for every containing key (the
+        # D7a ``ca_event_count`` semantics).
         counts: dict[tuple[str, date], int] = {}
         for event in self.ca_events:
-            key = None
-            for security_key, ticker, _start, _end in self.identities:
-                if ticker == event["stock_id"]:
-                    key = security_key
-                    break
-            if key is None:
-                continue
-            start, end = self._interval(key)
             effective = event["effective_date"]
             if event.get("is_superseded", False) or event["knowledge_date"] != effective:
                 continue
-            if not (start <= effective <= min(end, _DEV_END)):
-                continue
-            counts[(key, effective)] = counts.get((key, effective), 0) + 1
+            for security_key, ticker, start, end in self.identities:
+                if ticker != event["stock_id"]:
+                    continue
+                if not (start <= effective <= min(end, _DEV_END)):
+                    continue
+                counts[(security_key, effective)] = (
+                    counts.get((security_key, effective), 0) + 1
+                )
         return counts
 
     # -- build -----------------------------------------------------------
@@ -771,10 +759,13 @@ def test_reserve_firewall_marks_unknown(tmp_path: Path) -> None:
         ],
     )
     source = _load(store)
-    # The near-end flag's +5 window crosses DEVELOPMENT_END -> UNKNOWN.
-    unknown_sessions = {entry[0] for entry in source.unknown_by_key["K1"]}
-    assert near_end in unknown_sessions
-    assert far_from_end not in unknown_sessions
+    # The near-end flag's +5 window crosses DEVELOPMENT_END -> UNKNOWN_RESERVE,
+    # even though its D7c m_s is finite; the far flag is resolved.
+    unknown = source.unknown_by_key["K1"]
+    assert [(flag.s, flag.state) for flag in unknown] == [
+        (near_end, C.SourceState.UNKNOWN_RESERVE)
+    ]
+    assert far_from_end in {t.s for t in source.transitions_by_key["K1"]}
 
 
 def test_next_beyond_development_marks_unknown(tmp_path: Path) -> None:
@@ -787,8 +778,10 @@ def test_next_beyond_development_marks_unknown(tmp_path: Path) -> None:
         flags=[_flag(flag_session, sessions[9], sessions[11], beyond=True)],
     )
     source = _load(store)
-    unknown_sessions = {entry[0] for entry in source.unknown_by_key["K1"]}
-    assert flag_session in unknown_sessions
+    unknown = source.unknown_by_key["K1"]
+    assert [(flag.s, flag.state) for flag in unknown] == [
+        (flag_session, C.SourceState.UNKNOWN_RESERVE)
+    ]
     assert source.transitions_by_key.get("K1", ()) == ()
 
 
@@ -816,7 +809,7 @@ def test_post_development_row_raises(tmp_path: Path) -> None:
         _load(store)
 
 
-def test_missing_m_s_raises(tmp_path: Path) -> None:
+def test_missing_m_s_is_unknown_source(tmp_path: Path) -> None:
     sessions = _consecutive(date(2023, 5, 1), 20)
     store = _store(
         tmp_path,
@@ -825,8 +818,183 @@ def test_missing_m_s_raises(tmp_path: Path) -> None:
         daily_by_key={"K1": {}},  # no D7c return at all
         flags=[_flag(sessions[10], sessions[9], sessions[11])],
     )
-    with pytest.raises(C.PQv2InputError):
-        _load(store)
+    source = _load(store)
+    assert source.transitions_by_key.get("K1", ()) == ()
+    unknown = source.unknown_by_key["K1"]
+    assert len(unknown) == 1
+    assert unknown[0].state == C.SourceState.UNKNOWN_SOURCE
+    assert unknown[0].s == sessions[10]
+    assert unknown[0].prev_s == sessions[9]
+    assert not hasattr(unknown[0], "m_obs")
+
+
+# ---------------------------------------------------------------------------
+# v2.1 source classification (M§8A.1)
+# ---------------------------------------------------------------------------
+
+
+def _states(source: C.SourceSet, key: str) -> dict[date, str]:
+    return {flag.s: flag.state for flag in source.unknown_by_key.get(key, ())}
+
+
+def test_finite_m_s_is_resolved(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {flag_session: 0.05}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert source.unknown_by_key == {}
+    assert list(source.transitions_by_key) == ["K1"]
+    assert source.transitions_by_key["K1"][0].m_obs == pytest.approx(1.05)
+
+
+def test_absent_row_inside_development_is_unknown_source(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    # A valid return on another date for the same key must not substitute.
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {sessions[2]: 0.05}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert source.transitions_by_key.get("K1", ()) == ()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [float("nan"), float("inf"), float("-inf"), -1.0, -1.5],
+)
+def test_unusable_m_s_is_unknown_source(tmp_path: Path, bad: float) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {flag_session: bad}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+
+
+def test_never_in_d7c_key_is_unknown_source_without_abort(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        # K2 has no D7c column at all; K1 is resolved.
+        daily_by_key={"K1": {session: 0.01 for session in sessions}},
+        flags=[
+            _flag(flag_session, sessions[9], sessions[11], key="K1"),
+            _flag(flag_session, sessions[9], sessions[11], key="K2"),
+        ],
+    )
+    source = _load(store)
+    assert _states(source, "K2") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert list(source.transitions_by_key) == ["K1"]
+    assert source.transitions_by_key["K1"][0].m_obs == pytest.approx(1.01)
+
+
+def test_d7a_valid_return_does_not_substitute(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    # A D7a-valid return at the exact row next(s) exists, but the authorised
+    # D7c row there is absent -> UNKNOWN_SOURCE.
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {sessions[11]: 0.5}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert source.transitions_by_key.get("K1", ()) == ()
+
+
+def test_unresolved_flags_appear_once_and_sorted(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {}},
+        flags=[
+            _flag(sessions[12], sessions[11], sessions[13]),
+            _flag(sessions[6], sessions[5], sessions[7]),
+        ],
+    )
+    source = _load(store)
+    unknown = source.unknown_by_key["K1"]
+    assert [flag.s for flag in unknown] == [sessions[6], sessions[12]]
+    assert len(unknown) == len(set(unknown)) == 2
+    assert all(flag.state == C.SourceState.UNKNOWN_SOURCE for flag in unknown)
+
+
+def test_unknown_classification_is_row_order_invariant(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    daily = {"K1": {sessions[5]: 0.02}}
+    flags = [
+        _flag(sessions[10], sessions[9], sessions[11]),
+        _flag(sessions[6], sessions[5], sessions[7]),
+        _flag(sessions[2], sessions[1], sessions[3]),
+    ]
+    forward = _store(tmp_path / "forward", sessions=sessions, daily_by_key=daily, flags=flags)
+    reverse = _store(
+        tmp_path / "reverse",
+        sessions=sessions,
+        daily_by_key=daily,
+        flags=list(reversed(flags)),
+    )
+    assert _load(forward) == _load(reverse)
+
+
+def test_reserve_classification_reads_no_reserve_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 75)
+    dev_position = sessions.index(_DEV_END)
+    near_end = sessions[dev_position - 2]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {session: 0.01 for session in sessions}},
+        flags=[_flag(near_end, sessions[dev_position - 3], sessions[dev_position - 1])],
+    )
+    opened: list[str] = []
+    real_open = builtins.open
+    real_read_parquet = pd.read_parquet
+
+    def _open(file: Any, *args: Any, **kwargs: Any):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def _read_parquet(path: Any, *args: Any, **kwargs: Any):
+        opened.append(str(path))
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _open)
+    monkeypatch.setattr(pd, "read_parquet", _read_parquet)
+    source = _load(store)
+    assert _states(source, "K1") == {
+        near_end: C.SourceState.UNKNOWN_RESERVE
+    }
+    forbidden = ("reserve_sealed", "raw/", "dsc_evidence", "/raw", "knowledge_pit")
+    assert [path for path in opened if any(t in path for t in forbidden)] == []
 
 
 def test_ca_event_count_mismatch_raises(tmp_path: Path) -> None:
@@ -874,24 +1042,315 @@ def test_binding_hash_mismatch_raises(tmp_path: Path) -> None:
         _load(store)
 
 
-def test_conflicting_ticker_mapping_raises(tmp_path: Path) -> None:
+# ---------------------------------------------------------------------------
+# Ticker reuse / D4 interval assignment (PQ2-B-R1)
+# ---------------------------------------------------------------------------
+# D4 reuses tickers across distinct security keys; a ticker's event belongs to
+# every key whose clipped D4 interval contains its effective date (the D7a
+# ``_member_ca_events`` rule).  These tests are synthetic-only and assert that
+# the loader never collapses a ticker onto a single key.
+
+
+def _ca_event(
+    stock_id: str,
+    effective: date,
+    factor: float,
+    action: str = "split",
+    knowledge: date | None = None,
+    superseded: bool = False,
+) -> dict[str, Any]:
+    return {
+        "stock_id": stock_id,
+        "effective_date": effective,
+        "action_type": action,
+        "knowledge_date": effective if knowledge is None else knowledge,
+        "adjustment_factor": factor,
+        "is_superseded": superseded,
+    }
+
+
+def _identity_frame(identities: list[tuple[str, str, date, date]]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "security_key": pd.Series([row[0] for row in identities], dtype="string"),
+            "ticker": pd.Series([row[1] for row in identities], dtype="string"),
+            "listed_start": pd.Series(
+                [row[2] for row in identities], dtype="datetime64[ns]"
+            ),
+            "listed_end": pd.Series(
+                [row[3] for row in identities], dtype="datetime64[ns]"
+            ),
+        }
+    )
+
+
+def _ca_frame(events: list[dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "stock_id": pd.Series([e["stock_id"] for e in events], dtype="string"),
+            "effective_date": pd.Series(
+                [e["effective_date"] for e in events], dtype="datetime64[ns]"
+            ),
+            "action_type": pd.Series(
+                [e["action_type"] for e in events], dtype="string"
+            ),
+            "knowledge_date": pd.Series(
+                [e["knowledge_date"] for e in events], dtype="datetime64[ns]"
+            ),
+            "adjustment_factor": pd.Series(
+                [e["adjustment_factor"] for e in events], dtype="float64"
+            ),
+            "is_superseded": pd.Series(
+                [e.get("is_superseded", False) for e in events], dtype=bool
+            ),
+        }
+    )
+
+
+def _direct_events(
+    identities: list[tuple[str, str, date, date]],
+    events: list[dict[str, Any]],
+    sessions: list[date],
+) -> dict[str, dict[date, tuple[tuple[str, bool, float], ...]]]:
+    index = S._identity_index(_identity_frame(identities))
+    return S._event_index(_ca_frame(events), sessions, index)
+
+
+def test_unique_ticker_unchanged() -> None:
+    sessions = _consecutive(date(2023, 5, 1), 12)
+    result = _direct_events(
+        [("K1", "AAA", sessions[0], sessions[11])],
+        [_ca_event("AAA", sessions[3], 1.10)],
+        sessions,
+    )
+    assert set(result) == {"K1"}
+    assert set(result["K1"]) == {sessions[3]}
+
+
+def test_event_before_listed_start_not_assigned() -> None:
+    sessions = _consecutive(date(2023, 5, 1), 12)
+    result = _direct_events(
+        [("K1", "AAA", sessions[5], sessions[11])],
+        [_ca_event("AAA", sessions[2], 1.10)],
+        sessions,
+    )
+    assert "K1" not in result
+
+
+def test_event_after_listed_end_not_assigned() -> None:
+    sessions = _consecutive(date(2023, 5, 1), 12)
+    result = _direct_events(
+        [("K1", "AAA", sessions[0], sessions[5])],
+        [_ca_event("AAA", sessions[8], 1.10)],
+        sessions,
+    )
+    assert "K1" not in result
+
+
+def test_interval_boundaries_are_inclusive() -> None:
+    sessions = _consecutive(date(2023, 5, 1), 75)
+    dev_end = _DEV_END
+    result = _direct_events(
+        [
+            ("K1", "AAA", sessions[5], sessions[8]),
+            ("K2", "BBB", sessions[5], date(2099, 1, 1)),
+        ],
+        [
+            _ca_event("AAA", sessions[5], 1.10),  # listed_start inclusive
+            _ca_event("AAA", sessions[8], 1.20),  # listed_end inclusive
+            _ca_event("AAA", sessions[9], 1.30),  # past listed_end
+            _ca_event("BBB", sessions[5], 1.40),  # listed_start inclusive
+            _ca_event("BBB", dev_end, 1.50),  # clipped end == DEVELOPMENT_END
+        ],
+        sessions,
+    )
+    assert set(result["K1"]) == {sessions[5], sessions[8]}
+    assert set(result["K2"]) == {sessions[5], dev_end}
+
+
+def test_event_index_matches_d7a_member_selection() -> None:
+    # Test-only import of the D7a semantic reference: the synthetic selection
+    # must agree with returns._member_ca_events over reused-ticker intervals.
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    identities = [
+        ("K1", "AAA", sessions[0], sessions[9]),
+        ("K2", "AAA", sessions[5], sessions[19]),
+    ]
+    events = [
+        _ca_event("AAA", sessions[2], 1.10),
+        _ca_event("AAA", sessions[7], 0.90, action="dividend"),
+        _ca_event("AAA", sessions[12], 1.20),
+    ]
+    result = _direct_events(identities, events, sessions)
+    by_ticker = R._index_ca_events(_ca_frame(events))
+    for key, ticker, start, end in identities:
+        expected = R._member_ca_events(
+            by_ticker.get(ticker, []), start, min(end, _DEV_END)
+        )
+        expected_by_session: dict[date, list[tuple[str, float]]] = {}
+        for event in expected:
+            expected_by_session.setdefault(event.effective_date, []).append(
+                (event.action_type, event.adjustment_factor)
+            )
+        actual = result.get(key, {})
+        assert set(actual) == set(expected_by_session)
+        for session, pairs in expected_by_session.items():
+            actual_pairs = sorted(
+                (action, factor) for action, _candidate, factor in actual[session]
+            )
+            assert actual_pairs == sorted(pairs)
+
+
+def test_reused_ticker_disjoint_intervals(tmp_path: Path) -> None:
     sessions = _consecutive(date(2023, 5, 1), 20)
     store = _store(
         tmp_path,
         sessions=sessions,
         identities=[
-            ("K1", "AAA", date(2020, 1, 1), date(2099, 1, 1)),
-            ("K2", "AAA", date(2020, 1, 1), date(2099, 1, 1)),
+            ("K1", "AAA", sessions[0], sessions[4]),
+            ("K2", "AAA", sessions[10], sessions[19]),
         ],
-        ca_events=[],
+        ca_events=[
+            _ca_event("AAA", sessions[1], 1.10),
+            _ca_event("AAA", sessions[11], 0.90),
+        ],
         daily_by_key={
             "K1": {session: 0.01 for session in sessions},
             "K2": {session: 0.01 for session in sessions},
         },
-        flags=[_flag(sessions[10], sessions[9], sessions[11])],
+        flags=[
+            _flag(sessions[2], sessions[1], sessions[3], key="K1"),
+            _flag(sessions[12], sessions[11], sessions[13], key="K2"),
+        ],
     )
-    with pytest.raises(C.PQv2InputError):
-        _load(store)
+    source = _load(store)
+    assert {c.d for c in source.candidates_by_key["K1"]} == {sessions[1]}
+    assert {c.d for c in source.candidates_by_key["K2"]} == {sessions[11]}
+
+
+def test_reused_ticker_overlapping_intervals(tmp_path: Path) -> None:
+    # A shared event on an overlap must appear for BOTH containing keys
+    # (kills a one-to-one ticker->key assumption, e.g. B-M6).
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[8]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        identities=[
+            ("K1", "AAA", sessions[0], sessions[9]),
+            ("K2", "AAA", sessions[5], sessions[19]),
+        ],
+        ca_events=[_ca_event("AAA", sessions[7], 1.25)],
+        daily_by_key={
+            "K1": {session: 0.01 for session in sessions},
+            "K2": {session: 0.01 for session in sessions},
+        },
+        flags=[
+            _flag(flag_session, sessions[7], sessions[9], key="K1"),
+            _flag(flag_session, sessions[7], sessions[9], key="K2"),
+        ],
+    )
+    source = _load(store)
+    for key in ("K1", "K2"):
+        assert [(c.s, c.d, c.phi_d) for c in source.candidates_by_key[key]] == [
+            (flag_session, sessions[7], pytest.approx(1.25))
+        ]
+
+
+def test_reused_ticker_gap_yields_no_candidate(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        identities=[
+            ("K1", "AAA", sessions[0], sessions[4]),
+            ("K2", "AAA", sessions[10], sessions[19]),
+        ],
+        ca_events=[_ca_event("AAA", sessions[7], 1.10)],  # between the intervals
+        daily_by_key={
+            "K1": {session: 0.01 for session in sessions},
+            "K2": {session: 0.01 for session in sessions},
+        },
+        flags=[
+            _flag(sessions[2], sessions[1], sessions[3], key="K1"),
+            _flag(sessions[12], sessions[11], sessions[13], key="K2"),
+        ],
+    )
+    source = _load(store)
+    assert source.candidates_by_key.get("K1", ()) == ()
+    assert source.candidates_by_key.get("K2", ()) == ()
+
+
+def test_d4_row_order_is_permutation_invariant(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    daily = {
+        "K1": {session: 0.01 for session in sessions},
+        "K2": {session: 0.01 for session in sessions},
+    }
+    flags = [
+        _flag(sessions[8], sessions[7], sessions[9], key="K1"),
+        _flag(sessions[8], sessions[7], sessions[9], key="K2"),
+    ]
+    event = _ca_event("AAA", sessions[7], 1.25)
+    forward = _store(
+        tmp_path / "forward",
+        sessions=sessions,
+        identities=[
+            ("K1", "AAA", sessions[0], sessions[9]),
+            ("K2", "AAA", sessions[5], sessions[19]),
+        ],
+        ca_events=[event],
+        daily_by_key=daily,
+        flags=flags,
+    )
+    reverse = _store(
+        tmp_path / "reverse",
+        sessions=sessions,
+        identities=[
+            ("K2", "AAA", sessions[5], sessions[19]),
+            ("K1", "AAA", sessions[0], sessions[9]),
+        ],
+        ca_events=[event],
+        daily_by_key=daily,
+        flags=flags,
+    )
+    assert _load(forward) == _load(reverse)
+
+
+def test_event_row_order_is_permutation_invariant(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    daily = {
+        "K1": {session: 0.01 for session in sessions},
+        "K2": {session: 0.01 for session in sessions},
+    }
+    identities = [
+        ("K1", "AAA", sessions[0], sessions[9]),
+        ("K2", "AAA", sessions[5], sessions[19]),
+    ]
+    flags = [
+        _flag(sessions[8], sessions[7], sessions[9], key="K1"),
+        _flag(sessions[8], sessions[7], sessions[9], key="K2"),
+    ]
+    e1 = _ca_event("AAA", sessions[7], 1.25)
+    e2 = _ca_event("AAA", sessions[7], 0.80, action="dividend")
+    e3 = _ca_event("AAA", sessions[11], 1.10)
+    forward = _store(
+        tmp_path / "forward",
+        sessions=sessions,
+        identities=identities,
+        ca_events=[e1, e2, e3],
+        daily_by_key=daily,
+        flags=flags,
+    )
+    reverse = _store(
+        tmp_path / "reverse",
+        sessions=sessions,
+        identities=identities,
+        ca_events=[e3, e2, e1],
+        daily_by_key=daily,
+        flags=flags,
+    )
+    assert _load(forward) == _load(reverse)
 
 
 # ---------------------------------------------------------------------------

@@ -68,8 +68,8 @@
     "file": "smart_beta/dataset_v1/pqv2_sources.py",
     "edits": [
       {
-        "old": "        if flag_position + MISDATED_WINDOW > dev_end_position:",
-        "new": "        if False:  # V2-M06: firewall removed"
+        "old": "            or next_s > DEVELOPMENT_END\n            or flag_position + MISDATED_WINDOW > dev_end_position",
+        "new": "            or next_s > DEVELOPMENT_END"
       }
     ],
     "test": "tests/test_pqv2_sources.py::test_reserve_firewall_marks_unknown"
@@ -157,5 +157,161 @@
       }
     ],
     "test": "tests/test_pqv2_sources.py::test_window_is_trusted_sessions_not_calendar_days"
+  },
+  {
+    "id": "B-M6",
+    "description": "the one-to-one ticker->key assumption is restored (only the first key per ticker is kept)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "    keys_by_ticker: dict[str, list[str]] = {}\n    for key, ticker in index.ticker_by_key.items():\n        keys_by_ticker.setdefault(ticker, []).append(key)",
+        "new": "    keys_by_ticker: dict[str, list[str]] = {}\n    for key, ticker in index.ticker_by_key.items():\n        keys_by_ticker.setdefault(ticker, [key])"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reused_ticker_overlapping_intervals"
+  },
+  {
+    "id": "V21-M01",
+    "description": "the global first-unresolved-m_s abort is restored",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            state, m_obs = _classify_m(lookup, key, next_s)\n\n        if state == SourceState.RESOLVED:",
+        "new": "            state, m_obs = _classify_m(lookup, key, next_s)\n            if state != SourceState.RESOLVED:\n                raise PQv2InputError(\"unresolved m_s (V21-M01)\")\n\n        if state == SourceState.RESOLVED:"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_missing_m_s_is_unknown_source"
+  },
+  {
+    "id": "V21-M02",
+    "description": "UNKNOWN_SOURCE is treated as clean (RESOLVED with lambda = 1)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        if state == SourceState.RESOLVED:\n            assert m_obs is not None",
+        "new": "        if state == SourceState.UNKNOWN_SOURCE:\n            state = SourceState.RESOLVED\n            m_obs = 1.0\n        if state == SourceState.RESOLVED:\n            assert m_obs is not None"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_missing_m_s_is_unknown_source"
+  },
+  {
+    "id": "V21-M03b",
+    "description": "an UNKNOWN_SOURCE flag is emitted as UNKNOWN_RESERVE (sources)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            unknown.setdefault(key, []).append(\n                UnresolvedFlag(\n                    security_key=key, s=s, prev_s=prev_s, state=state\n                )\n            )",
+        "new": "            unknown.setdefault(key, []).append(\n                UnresolvedFlag(\n                    security_key=key,\n                    s=s,\n                    prev_s=prev_s,\n                    state=SourceState.UNKNOWN_RESERVE,\n                )\n            )"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_missing_m_s_is_unknown_source"
+  },
+  {
+    "id": "V21-M03l",
+    "description": "an UNKNOWN_SOURCE label status is emitted as UNKNOWN_RESERVE (labels)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "        return _blank(\n            label_status_for_causes(causes),\n            causes.primary,",
+        "new": "        return _blank(\n            LabelStatus.UNKNOWN_RESERVE,\n            causes.primary,"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_reaching_source_flag_makes_label_unknown_source"
+  },
+  {
+    "id": "V21-M04",
+    "description": "an UNKNOWN_RESERVE flag is emitted as UNKNOWN_SOURCE",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        if reserve:\n            state = SourceState.UNKNOWN_RESERVE\n            m_obs: float | None = None",
+        "new": "        if reserve:\n            state = SourceState.UNKNOWN_SOURCE\n            m_obs: float | None = None"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reserve_firewall_marks_unknown"
+  },
+  {
+    "id": "V21-M09",
+    "description": "a D7a return is substituted for a missing D7c m_s",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            state, m_obs = _classify_m(lookup, key, next_s)\n\n        if state == SourceState.RESOLVED:",
+        "new": "            state, m_obs = _classify_m(lookup, key, next_s)\n            if state != SourceState.RESOLVED:\n                d7a_rows = daily[daily[\"security_key\"] == key]\n                d7a_match = d7a_rows[d7a_rows[\"date\"] == pd.Timestamp(next_s)]\n                if not d7a_match.empty:\n                    d7a_value = float(d7a_match.iloc[0][\"daily_total_return\"])\n                    if math.isfinite(d7a_value):\n                        m_obs = 1.0 + d7a_value\n                        state = SourceState.RESOLVED\n\n        if state == SourceState.RESOLVED:"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_d7a_valid_return_does_not_substitute"
+  },
+  {
+    "id": "V21-M10",
+    "description": "another D7c session value is substituted when the exact row is unusable",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "    value = float(values.at[label, key])\n    if not math.isfinite(value):",
+        "new": "    value = float(values.at[label, key])\n    if not math.isfinite(value):\n        fallback = values[key].dropna()\n        if not fallback.empty:\n            value = float(fallback.iloc[0])\n    if not math.isfinite(value):"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_absent_row_inside_development_is_unknown_source"
+  },
+  {
+    "id": "V21-M11",
+    "description": "an unresolved flag is dropped from unknown_by_key",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        unknown_by_key={\n            key: tuple(sorted(set(value), key=_unresolved_sort_key))\n            for key, value in unknown.items()\n        },",
+        "new": "        unknown_by_key={},"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_missing_m_s_is_unknown_source"
+  },
+  {
+    "id": "V21-M14",
+    "description": "next(s) beyond DEVELOPMENT_END is classified UNKNOWN_SOURCE",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "        if reserve:\n            state = SourceState.UNKNOWN_RESERVE\n            m_obs: float | None = None",
+        "new": "        if reserve:\n            state = (\n                SourceState.UNKNOWN_SOURCE\n                if beyond or next_s is None or next_s > DEVELOPMENT_END\n                else SourceState.UNKNOWN_RESERVE\n            )\n            m_obs: float | None = None"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_next_beyond_development_marks_unknown"
+  },
+  {
+    "id": "B21-M1",
+    "description": "the label ignores unresolved-flag reach (the cause is dropped)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if not causes.is_empty:\n        return _blank(",
+        "new": "    if False:  # B21-M1: unresolved causes dropped\n        return _blank("
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_reaching_source_flag_makes_label_unknown_source"
+  },
+  {
+    "id": "B21-M2",
+    "description": "an unrelated unresolved flag poisons the label (reach filter removed)",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "        reaches = _own_position_reaches(\n            flag.s, flag.prev_s, formation, e_star\n        ) or any(\n            candidate.s == flag.s\n            and _pair_reaches(candidate.s, candidate.d, formation, e_star)\n            for candidate in candidates\n        )\n        if not reaches:\n            continue",
+        "new": "        reaches = True\n        if not reaches:\n            continue"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_unrelated_unresolved_flag_does_not_poison_the_label"
+  },
+  {
+    "id": "B21-M3",
+    "description": "the label cause set keeps only the primary cause",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    if not causes.is_empty:\n        return _blank(\n            label_status_for_causes(causes),",
+        "new": "    if not causes.is_empty:\n        causes = CauseSet.of(causes.primary)\n        return _blank(\n            label_status_for_causes(causes),"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_source_plus_reserve_keeps_both_causes_with_reserve_primary"
   }
 ]

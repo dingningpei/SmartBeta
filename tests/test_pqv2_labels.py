@@ -83,7 +83,7 @@ def _bridge(world: O.World, key: str):
     stock = world.by_key[key]
     transitions: list[C.UncertainTransition] = []
     candidates: list[C.MisdatedCandidate] = []
-    unknown: list[tuple[object, object, str]] = []
+    unknown: list[C.UnresolvedFlag] = []
     for s in sorted(stock.flags):
         position = world.pos_of(s)
         m_obs = world._observed_m(stock, s)
@@ -113,19 +113,25 @@ def _bridge(world: O.World, key: str):
                     security_key=key, s=_D(s), d=_D(d), phi_d=phi_d
                 )
             )
+        reserve = False
         if world.development_end is not None and (
             position + C.MISDATED_WINDOW > world.pos_of(world.development_end)
         ):
-            unknown.append(
-                (_D(s), _D(prev_s) if prev_s is not None else None, "FIREWALL")
-            )
+            reserve = True
         if (
             next_s is not None
             and world.reserve_start is not None
             and next_s >= world.reserve_start
         ):
+            reserve = True
+        if reserve:
             unknown.append(
-                (_D(s), _D(prev_s) if prev_s is not None else None, "NEXT_BEYOND")
+                C.UnresolvedFlag(
+                    security_key=key,
+                    s=_D(s),
+                    prev_s=_D(prev_s) if prev_s is not None else None,
+                    state=C.SourceState.UNKNOWN_RESERVE,
+                )
             )
     return transitions, candidates, unknown
 
@@ -544,6 +550,159 @@ def test_misdated_alternative_count() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v2.1 dependency-local causes (M§8A.2, M§8A.4)
+# ---------------------------------------------------------------------------
+
+
+def test_reaching_source_flag_makes_label_unknown_source() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    flag = C.UnresolvedFlag(
+        "S", _D(6), _D(5), C.SourceState.UNKNOWN_SOURCE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [flag], t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_SOURCE
+    assert envelope.reason == C.PQV2_SOURCE_UNRESOLVED
+    assert envelope.causes.causes == (C.PQV2_SOURCE_UNRESOLVED,)
+    assert envelope.n_unknown_source == 1
+    assert envelope.n_unknown_reserve == 0
+    # No envelope is computed under UNKNOWN.
+    assert envelope.lo != envelope.lo and envelope.hi != envelope.hi
+
+
+def test_reaching_reserve_flag_makes_label_unknown_reserve() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    flag = C.UnresolvedFlag(
+        "S", _D(6), _D(5), C.SourceState.UNKNOWN_RESERVE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [flag], t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_RESERVE_UNKNOWN
+    assert envelope.causes.causes == (C.PQV2_RESERVE_UNKNOWN,)
+    assert envelope.n_unknown_reserve == 1
+    assert envelope.n_unknown_source == 0
+
+
+def test_source_plus_reserve_keeps_both_causes_with_reserve_primary() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    source = C.UnresolvedFlag(
+        "S", _D(6), _D(5), C.SourceState.UNKNOWN_SOURCE
+    )
+    reserve = C.UnresolvedFlag(
+        "S", _D(4), _D(3), C.SourceState.UNKNOWN_RESERVE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [source, reserve], t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_RESERVE_UNKNOWN
+    assert C.PQV2_SOURCE_UNRESOLVED in envelope.causes
+    assert C.PQV2_RESERVE_UNKNOWN in envelope.causes
+    assert envelope.causes.causes == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+    assert envelope.n_unknown_source == 1
+    assert envelope.n_unknown_reserve == 1
+
+
+def test_unrelated_unresolved_flag_does_not_poison_the_label() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP)
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    out_of_window = C.UnresolvedFlag(
+        "S", _D(0), None, C.SourceState.UNKNOWN_SOURCE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [out_of_window], t0_value=0.01
+    )
+    assert envelope.status == C.ENVELOPE
+    assert envelope.causes.is_empty
+    assert envelope.n_unknown_source == 0
+    assert envelope.n_unknown_reserve == 0
+
+
+def test_pair_effect_reach_poisons_the_label() -> None:
+    # s = 2 lies outside the label window [4, 8]; d = 6 lies inside, so the
+    # candidate pair reaches and an unresolved flag at s must be honoured.
+    world = _world(
+        n=12, f=4, h=4, closes=_GROW, flags=(2,),
+        events=((6, "split", 1.3),),
+    )
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    flag = C.UnresolvedFlag(
+        "S", _D(2), _D(1), C.SourceState.UNKNOWN_SOURCE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [flag], t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_SOURCE
+    assert envelope.causes.causes == (C.PQV2_SOURCE_UNRESOLVED,)
+
+
+def test_development_end_plus_source_flag_keeps_both_causes() -> None:
+    world = _world(n=12, f=4, h=1, closes=_GROW)
+    transitions, candidates, _ = _bridge(world, "S")
+    record = {
+        "formation_date": _D(4),
+        "endpoint": C.DEVELOPMENT_END,
+        "label_state": "COMPLETE",
+        "observed_segment_end": C.DEVELOPMENT_END,
+        "terminal_affected": False,
+    }
+    flag = C.UnresolvedFlag(
+        "S", _D(4), _D(3), C.SourceState.UNKNOWN_SOURCE
+    )
+    envelope = L.label_envelope(
+        record, transitions, candidates, [flag], t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_RESERVE_UNKNOWN
+    assert envelope.causes.causes == (
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SOURCE_UNRESOLVED,
+    )
+
+
+def test_empty_and_factual_missing_ignore_unresolved_flags() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP)
+    source = C.UnresolvedFlag(
+        "S", _D(4), _D(3), C.SourceState.UNKNOWN_SOURCE
+    )
+    empty = {
+        "formation_date": _D(4),
+        "endpoint": _D(8),
+        "label_state": "EMPTY_OBSERVED_PATH_IDENTITY",
+        "observed_segment_end": _D(8),
+        "terminal_affected": False,
+    }
+    envelope = L.label_envelope(empty, (), (), [source], t0_value=0.01)
+    assert envelope.status == C.EMPTY_NO_DEPENDENCY
+    assert envelope.causes.is_empty
+
+    missing = {
+        "formation_date": _D(4),
+        "endpoint": _D(8),
+        "label_state": "INCOMPLETE",
+        "observed_segment_end": None,
+        "terminal_affected": False,
+    }
+    envelope = L.label_envelope(missing, (), (), [source], t0_value=0.01)
+    assert envelope.status == C.FACTUAL_MISSING
+    assert envelope.causes.is_empty
+
+
+# ---------------------------------------------------------------------------
 # Input handling
 # ---------------------------------------------------------------------------
 
@@ -553,16 +712,31 @@ def test_unknown_set_accepts_mapping_and_sequence() -> None:
     record = _record(world, "S", 4, 8)
     transitions, candidates, _ = _bridge(world, "S")
     r_obs = world.view(()).label_R("S", 4, 8)
-    sequence = [(date(2020, 1, 7), date(2020, 1, 6), "FIREWALL")]
-    mapping = {"2020-01-07": sequence[0]}
+    flag = C.UnresolvedFlag(
+        "S", date(2020, 1, 7), date(2020, 1, 6), C.SourceState.UNKNOWN_SOURCE
+    )
     env_sequence = L.label_envelope(
-        record, transitions, candidates, sequence, t0_value=r_obs
+        record, transitions, candidates, [flag], t0_value=r_obs
+    )
+    env_single = L.label_envelope(
+        record, transitions, candidates, flag, t0_value=r_obs
     )
     env_mapping = L.label_envelope(
-        record, transitions, candidates, mapping, t0_value=r_obs
+        record, transitions, candidates, {"S": (flag,)}, t0_value=r_obs
     )
-    assert env_sequence.status == C.UNKNOWN_RESERVE
-    assert env_mapping.status == C.UNKNOWN_RESERVE
+    for envelope in (env_sequence, env_single, env_mapping):
+        assert envelope.status == C.UNKNOWN_SOURCE
+        assert envelope.reason == C.PQV2_SOURCE_UNRESOLVED
+
+
+def test_label_envelope_non_flag_unknown_fails_closed() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    with pytest.raises(C.PQv2InputError):
+        L.label_envelope(
+            record, transitions, candidates, [(date(2020, 1, 7), None, "X")]
+        )
 
 
 def test_label_envelope_rejects_bad_record() -> None:
@@ -594,6 +768,19 @@ def test_mutation_fixture_contract() -> None:
         "B-M3",
         "B-M4",
         "B-M5",
+        "B-M6",
+        "V21-M01",
+        "V21-M02",
+        "V21-M03b",
+        "V21-M03l",
+        "V21-M04",
+        "V21-M09",
+        "V21-M10",
+        "V21-M11",
+        "V21-M14",
+        "B21-M1",
+        "B21-M2",
+        "B21-M3",
     }
     allowed_files = {
         "smart_beta/dataset_v1/pqv2_sources.py",

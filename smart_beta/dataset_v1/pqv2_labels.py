@@ -31,14 +31,20 @@ from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 from smart_beta.dataset_v1.pqv2_core import (
+    CauseSet,
     DEVELOPMENT_END,
+    EMPTY_CAUSES,
     LabelStatus,
     MisdatedCandidate,
     NotAssessedReason,
     PQv2InputError,
     PositiveInterval,
+    SourceState,
     UncertainTransition,
+    UnresolvedFlag,
     UNIT,
+    cause_for_source_state,
+    label_status_for_causes,
 )
 
 __all__ = [
@@ -76,7 +82,9 @@ class LabelEnvelope:
     interior: int
     ending_endpoint: int
     n_misdated: int
-    n_unknown: int
+    n_unknown_source: int
+    n_unknown_reserve: int
+    causes: CauseSet = EMPTY_CAUSES
 
     def positions(self) -> dict[str, int]:
         return {
@@ -99,7 +107,9 @@ class LabelEnvelope:
             "interior": int(self.interior),
             "ending_endpoint": int(self.ending_endpoint),
             "n_misdated": int(self.n_misdated),
-            "n_unknown": int(self.n_unknown),
+            "n_unknown_source": int(self.n_unknown_source),
+            "n_unknown_reserve": int(self.n_unknown_reserve),
+            "causes": list(self.causes),
         }
 
 
@@ -136,32 +146,57 @@ def _field(record: Mapping[str, Any] | Any, name: str) -> Any:
         ) from exc
 
 
-def _unknown_sessions(
-    unknown: Any,
-) -> dict[Any, Any]:
-    """Normalise the key's unknown set to ``{flag_session: prev_session_or_None}``.
+def _unresolved_flags(unknown: Any) -> tuple[UnresolvedFlag, ...]:
+    """Normalise the key's M§8A.2 unresolved flags to a tuple.
 
-    Accepts a mapping (as stored by the loader) or a sequence whose entries are
-    a session, ``(session, prev_session)`` or ``(session, prev_session, reason)``.
+    Accepts ``None``, a single :class:`UnresolvedFlag`, a sequence of them, or a
+    mapping whose values are flags or sequences of flags (as stored in
+    ``SourceSet.unknown_by_key``).  Anything else fails closed.
     """
 
     if unknown is None:
-        return {}
+        return ()
+    if isinstance(unknown, UnresolvedFlag):
+        return (unknown,)
     if isinstance(unknown, Mapping):
-        raw = list(unknown.values())
+        raw: list[Any] = []
+        for value in unknown.values():
+            if isinstance(value, (tuple, list)):
+                raw.extend(value)
+            else:
+                raw.append(value)
     else:
         raw = list(unknown)
-    out: dict[Any, Any] = {}
+    out: list[UnresolvedFlag] = []
     for entry in raw:
-        if isinstance(entry, (tuple, list)):
-            if len(entry) == 0:
-                continue
-            session = entry[0]
-            prev_s = entry[1] if len(entry) > 1 else None
-        else:
-            session, prev_s = entry, None
-        out[session] = prev_s
-    return out
+        if not isinstance(entry, UnresolvedFlag):
+            raise PQv2InputError(
+                "unknown must be an UnresolvedFlag or a sequence of them"
+            )
+        out.append(entry)
+    return tuple(out)
+
+
+def _own_position_reaches(
+    s: Any, prev_s: Any, f: date, e_star: date
+) -> bool:
+    """M§8A.2: the flag's own position lies in ``[f, next(e*)]``."""
+
+    if s is None:
+        return False
+    if f <= s <= e_star:
+        return True
+    return s > e_star and prev_s == e_star
+
+
+def _pair_reaches(s: Any, d: Any, f: date, e_star: date) -> bool:
+    """M§8A.2: exactly one of the candidate pair ``{s, d}`` lies in ``(f, e*]``."""
+
+    if s is None or d is None:
+        return False
+    s_inside = f < s <= e_star
+    d_inside = f < d <= e_star
+    return s_inside != d_inside
 
 
 def _as_bool(value: Any) -> bool:
@@ -228,8 +263,6 @@ def label_envelope(
         except PQv2InputError:
             record_ts = float("nan")
 
-    unknown_sessions = _unknown_sessions(unknown)
-
     if state == _STATE_EMPTY:
         return _blank(
             LabelStatus.EMPTY_NO_DEPENDENCY,
@@ -261,15 +294,41 @@ def label_envelope(
             float("nan"),
         )
 
+    # M§8A.2 / M§8A.4: dependency-local causes from every reaching unresolved
+    # flag, plus the existing M§8 reserve firewall at e* == DEVELOPMENT_END.
+    unresolved = _unresolved_flags(unknown)
+    causes = EMPTY_CAUSES
+    n_unknown_source = 0
+    n_unknown_reserve = 0
+    for flag in unresolved:
+        reaches = _own_position_reaches(
+            flag.s, flag.prev_s, formation, e_star
+        ) or any(
+            candidate.s == flag.s
+            and _pair_reaches(candidate.s, candidate.d, formation, e_star)
+            for candidate in candidates
+        )
+        if not reaches:
+            continue
+        causes = causes.union(CauseSet.of(cause_for_source_state(flag.state)))
+        if flag.state == SourceState.UNKNOWN_SOURCE:
+            n_unknown_source += 1
+        else:
+            n_unknown_reserve += 1
     if e_star == DEVELOPMENT_END:
+        causes = causes.union(CauseSet.of(NotAssessedReason.RESERVE_UNKNOWN))
+
+    if not causes.is_empty:
         return _blank(
-            LabelStatus.UNKNOWN_RESERVE,
-            NotAssessedReason.RESERVE_UNKNOWN,
+            label_status_for_causes(causes),
+            causes.primary,
             float("nan"),
             float("nan"),
             float("nan"),
             float("nan"),
-            unknown=len(unknown_sessions),
+            n_unknown_source=n_unknown_source,
+            n_unknown_reserve=n_unknown_reserve,
+            causes=causes,
         )
 
     # Per-flag factor sets, seeded with the dependent base interval.
@@ -298,33 +357,6 @@ def label_envelope(
         factors.setdefault(s, [UNIT]).append(alternative)
         positions.setdefault(s, None)
         n_misdated += 1
-
-    # Reserve firewall: an unknown flag inside [f, next(e*)] or a relevant
-    # candidate whose flag is unknown turns the label UNKNOWN.
-    n_unknown = 0
-    for session, prev_s in unknown_sessions.items():
-        in_window = formation <= session <= e_star or (
-            session > e_star and prev_s == e_star
-        )
-        if in_window:
-            n_unknown += 1
-    for candidate in candidates:
-        s = candidate.s
-        d = candidate.d
-        s_inside = formation < s <= e_star
-        d_inside = formation < d <= e_star
-        if (s_inside != d_inside) and s in unknown_sessions:
-            n_unknown = max(n_unknown, 1)
-    if n_unknown:
-        return _blank(
-            LabelStatus.UNKNOWN_RESERVE,
-            NotAssessedReason.RESERVE_UNKNOWN,
-            float("nan"),
-            float("nan"),
-            float("nan"),
-            float("nan"),
-            unknown=len(unknown_sessions),
-        )
 
     lo = 1.0
     hi = 1.0
@@ -357,7 +389,9 @@ def label_envelope(
         interior=counts[INTERIOR],
         ending_endpoint=counts[ENDING_ENDPOINT],
         n_misdated=n_misdated,
-        n_unknown=0,
+        n_unknown_source=0,
+        n_unknown_reserve=0,
+        causes=EMPTY_CAUSES,
     )
 
 
@@ -369,7 +403,9 @@ def _blank(
     t0: Any,
     ts: Any,
     *,
-    unknown: int = 0,
+    n_unknown_source: int = 0,
+    n_unknown_reserve: int = 0,
+    causes: CauseSet = EMPTY_CAUSES,
 ) -> LabelEnvelope:
     return LabelEnvelope(
         status=status,
@@ -384,5 +420,7 @@ def _blank(
         interior=0,
         ending_endpoint=0,
         n_misdated=0,
-        n_unknown=unknown,
+        n_unknown_source=n_unknown_source,
+        n_unknown_reserve=n_unknown_reserve,
+        causes=causes,
     )
