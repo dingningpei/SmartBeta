@@ -1,0 +1,126 @@
+[
+ {
+  "id": "C2-M1",
+  "description": "a T0-only (or TS-only) pass is accepted by the disposition",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "    return (\n        classify_is.status[0],\n        classify_is.status[1],\n        classify_oos.status[0],\n        classify_oos.status[1],\n    )",
+    "new": "    return (\n        classify_is.status[0],\n        classify_oos.status[0],\n    )"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_disposition_t0_pass_ts_fail_is_fail"
+ },
+ {
+  "id": "C2-M2",
+  "description": "the L cells are omitted from the screen",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "def _screen_cell_names() -> tuple[str, ...]:\n    return (\"B-T0\", \"B-TS\", \"L-T0\", \"L-TS\")",
+    "new": "def _screen_cell_names() -> tuple[str, ...]:\n    return (\"B-T0\", \"B-TS\")"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_screen_includes_l_cells"
+ },
+ {
+  "id": "C2-M3",
+  "description": "a NOT_ASSESSED L cell is treated as a FAIL (not None)",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "    if cell.status is not None:\n        return None",
+    "new": "    if cell.status is not None:\n        return False"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_screen_l_not_assessed_is_none"
+ },
+ {
+  "id": "C2-M4",
+  "description": "the cause sets are dropped from the ledger record",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "            \"cause_sets\": {\n                \"is\": cause_sets(diag_is, classify_is),\n                \"oos\": cause_sets(diag_oos, classify_oos),\n            },",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_cause_sets_carried_to_ledger_and_report"
+ },
+ {
+  "id": "C2-M5",
+  "description": "persist happens after the ledger append (write-ahead broken)",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "        self._persist_diagnostics(diag_is)\n        self._persist_diagnostics(diag_oos)\n        if existing is not None:",
+    "new": "        if existing is not None:"
+   },
+   {
+    "old": "        self.ledger.append(_json_safe(record))\n        self.counters.consume_primary()\n        return None",
+    "new": "        self.ledger.append(_json_safe(record))\n        self._persist_diagnostics(diag_is)\n        self._persist_diagnostics(diag_oos)\n        self.counters.consume_primary()\n        return None"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_write_ahead_persist_before_append"
+ },
+ {
+  "id": "C2-M6",
+  "description": "the executor imports/uses the K-PIT write surface",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "from smart_beta.science.knowledge import read_records",
+    "new": "from smart_beta.science.knowledge import KnowledgeLog, read_records"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_executor_never_writes_kpit"
+ },
+ {
+  "id": "C2-M7",
+  "description": "the runner writes the Campaign-1 output directory",
+  "file": "smart_beta/campaign/runner2.py",
+  "edits": [
+   {
+    "old": "OUTPUT_DIRNAME = \"campaign2\"",
+    "new": "OUTPUT_DIRNAME = \"campaign1\""
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_campaign1_modules_unchanged_and_c2_output"
+ },
+ {
+  "id": "C2-M8",
+  "description": "the declaration accepts the historical P-Q v2 identity instead of v2.1",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "        methodology_sha256=PQ_METHODOLOGY_SHA256,\n        cs_id=PQ_CS_ID,\n        ed_id=PQ_ED_ID,\n        ce_id=PQ_CE_ID,",
+    "new": "        methodology_sha256=_core.AUTHORITY_V2.methodology_sha256,\n        cs_id=PQ_CS_ID,\n        ed_id=_core.AUTHORITY_V2.ed_id,\n        ce_id=PQ_CE_ID,"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_wrap_declaration_binds_v2_1"
+ },
+ {
+  "id": "C2-M9",
+  "description": "the disposition precedence puts FAIL before NOT_ASSESSED",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "    if not_assessed:\n        return (\n            Disposition.NOT_ASSESSED,",
+    "new": "    if False:\n        return (\n            Disposition.NOT_ASSESSED,"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_disposition_any_not_assessed_wins"
+ },
+ {
+  "id": "C2-M10",
+  "description": "the re-use disclosure is omitted from the report",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "        \"reuse_disclosure\": REUSE_DISCLOSURE,",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_report_determinism_and_reuse_disclosure"
+ }
+]
