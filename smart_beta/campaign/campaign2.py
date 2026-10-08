@@ -581,11 +581,57 @@ def estimand_policy_content() -> dict[str, Any]:
 _assert_screen_policy()
 verify_precommitment()
 
-#: The expected hypothesis ids are computed from the frozen inputs (the real
-#: D7c manifest) by :func:`_expected_hypothesis_ids` when first needed; a test
-#: may monkeypatch this mapping with a synthetic-manifest fixture.
-EXPECTED_HYPOTHESIS_DEFINITION_HASHES: dict[str, str] = {}
-EXPECTED_HYPOTHESIS_IDS: dict[str, str] = {}
+#: The frozen bound hypothesis identities (C2-E2 section 2). These are the
+#: check, never the source of the value: the executor recomputes each id from
+#: the frozen D7c manifest and asserts equality unconditionally. A test may
+#: monkeypatch this mapping with a synthetic-manifest fixture; the executor
+#: never treats an empty or partial mapping as "no check".
+EXPECTED_HYPOTHESIS_DEFINITION_HASHES: dict[str, str] = {
+    "C1-H1": (
+        "ce26a34da8a62912f10a50ad9c25447b62ecb1b56e2d5a031913691785420e14"
+    ),
+    "C1-H2": (
+        "e2503e5240cce5b38071af96d19d11e118ec78dd84ae4152415a6ed6ce70fce9"
+    ),
+    "C1-H3": (
+        "6bd890da620263418709623fc23963cb82e258b2b2bfc8a01f600e132be15da2"
+    ),
+    "C1-H4": (
+        "095b126b5227c180bd49568daa02222c3e77ee460917b5e2f4d263ab1e2cc1d0"
+    ),
+    "C1-H5": (
+        "e859f7aa604b3fca1a19b2ea16e87ec5d056064a6e15c4206ebba2727a8b176a"
+    ),
+    "C1-H6": (
+        "ba7714468f9b3641e249764e1b076491b32531b16a2bfd5da51e2c29b6dad7ac"
+    ),
+    "C1-H7": (
+        "efd345b3c280ca81905b7a6e655e2e30ff4c4e8b01173fa949fea4dddfaba8d3"
+    ),
+}
+EXPECTED_HYPOTHESIS_IDS: dict[str, str] = {
+    "C1-H1": (
+        "e9375f9fa0426cec18db9dac35c6351f11aee44f5ff5cbd6c3e1d2b272ad3ddc"
+    ),
+    "C1-H2": (
+        "feb2ef7c00eca805beaa046b3a90191baa44c3d35dc43ee869afd0aef785e1c2"
+    ),
+    "C1-H3": (
+        "4bf41f5b771be1fcb0894411f020e45873c080bce0a02bc58b96280991c2e867"
+    ),
+    "C1-H4": (
+        "dcf37574370a4352369a6547f0f77ccc9f934a2a0601344092d7d024f14b9659"
+    ),
+    "C1-H5": (
+        "bca56c6272404eb5e464cdcd4874d63a83336ba2d3aa13db55a90e1090a8688e"
+    ),
+    "C1-H6": (
+        "32e5f90651471d5d7550d541171c79d352e1bdc9442a5ab6c35d9cb4fa81489b"
+    ),
+    "C1-H7": (
+        "0bf4ae4b057c54bf5188cc304bb73aeffdd433084303b4e15c65cc63e9bc5a27"
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -636,7 +682,7 @@ def _hypothesis_identities_for(
     factor_specs: Sequence[FactorSpec],
     *,
     root: Path | str,
-    expected_ids: Mapping[str, str] | None,
+    expected_ids: Mapping[str, str],
 ) -> tuple[dict[str, str], ...]:
     identities: list[dict[str, str]] = []
     for spec in factor_specs:
@@ -644,7 +690,7 @@ def _hypothesis_identities_for(
         definition = hypothesis_definition(spec, root=root)
         definition_hash = hypothesis_definition_hash(definition)
         hypothesis_id = campaign2_hypothesis_id(definition_hash)
-        if expected_ids is not None and expected_ids.get(label) != hypothesis_id:
+        if expected_ids.get(label) != hypothesis_id:
             raise C2BindingError(
                 f"hypothesis_id {hypothesis_id} for {label} != bound "
                 f"{expected_ids.get(label)}"
@@ -1102,7 +1148,7 @@ class Campaign2Executor:
             identities = _hypothesis_identities_for(
                 self.factor_specs,
                 root=self.root,
-                expected_ids=EXPECTED_HYPOTHESIS_IDS or None,
+                expected_ids=EXPECTED_HYPOTHESIS_IDS,
             )
         except C2BindingError:
             return self._stage_a_result(
@@ -1235,7 +1281,7 @@ class Campaign2Executor:
         definition_hash = hypothesis_definition_hash(definition)
         hypothesis_id = campaign2_hypothesis_id(definition_hash)
         expected = EXPECTED_HYPOTHESIS_IDS.get(label)
-        if expected is not None and expected != hypothesis_id:
+        if expected is None or expected != hypothesis_id:
             raise C2BindingError(
                 f"hypothesis_id {hypothesis_id} for {label} != bound {expected}"
             )

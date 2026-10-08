@@ -100,6 +100,63 @@ def _fixture_hypothesis_ids() -> dict[str, str]:
 _FIXTURE_HYPOTHESIS_IDS = _fixture_hypothesis_ids()
 _FIXTURE_DEFINITION_HASHES = _fixture_definition_hashes()
 
+#: The frozen bound identities as shipped by ``campaign2`` before any test
+#: monkeypatches them. Captured at import time so the C2-E2 section 2 literals
+#: can be asserted even though the autouse fixture replaces the mapping for the
+#: synthetic-manifest tests.
+_FROZEN_EXPECTED_HYPOTHESIS_DEFINITION_HASHES = dict(
+    C2.EXPECTED_HYPOTHESIS_DEFINITION_HASHES
+)
+_FROZEN_EXPECTED_HYPOTHESIS_IDS = dict(C2.EXPECTED_HYPOTHESIS_IDS)
+
+#: The C2-E2 section 2 frozen table.
+_ERRATUM_HYPOTHESIS_DEFINITION_HASHES: dict[str, str] = {
+    "C1-H1": (
+        "ce26a34da8a62912f10a50ad9c25447b62ecb1b56e2d5a031913691785420e14"
+    ),
+    "C1-H2": (
+        "e2503e5240cce5b38071af96d19d11e118ec78dd84ae4152415a6ed6ce70fce9"
+    ),
+    "C1-H3": (
+        "6bd890da620263418709623fc23963cb82e258b2b2bfc8a01f600e132be15da2"
+    ),
+    "C1-H4": (
+        "095b126b5227c180bd49568daa02222c3e77ee460917b5e2f4d263ab1e2cc1d0"
+    ),
+    "C1-H5": (
+        "e859f7aa604b3fca1a19b2ea16e87ec5d056064a6e15c4206ebba2727a8b176a"
+    ),
+    "C1-H6": (
+        "ba7714468f9b3641e249764e1b076491b32531b16a2bfd5da51e2c29b6dad7ac"
+    ),
+    "C1-H7": (
+        "efd345b3c280ca81905b7a6e655e2e30ff4c4e8b01173fa949fea4dddfaba8d3"
+    ),
+}
+_ERRATUM_HYPOTHESIS_IDS: dict[str, str] = {
+    "C1-H1": (
+        "e9375f9fa0426cec18db9dac35c6351f11aee44f5ff5cbd6c3e1d2b272ad3ddc"
+    ),
+    "C1-H2": (
+        "feb2ef7c00eca805beaa046b3a90191baa44c3d35dc43ee869afd0aef785e1c2"
+    ),
+    "C1-H3": (
+        "4bf41f5b771be1fcb0894411f020e45873c080bce0a02bc58b96280991c2e867"
+    ),
+    "C1-H4": (
+        "dcf37574370a4352369a6547f0f77ccc9f934a2a0601344092d7d024f14b9659"
+    ),
+    "C1-H5": (
+        "bca56c6272404eb5e464cdcd4874d63a83336ba2d3aa13db55a90e1090a8688e"
+    ),
+    "C1-H6": (
+        "32e5f90651471d5d7550d541171c79d352e1bdc9442a5ab6c35d9cb4fa81489b"
+    ),
+    "C1-H7": (
+        "0bf4ae4b057c54bf5188cc304bb73aeffdd433084303b4e15c65cc63e9bc5a27"
+    ),
+}
+
 
 def _write_fixture_manifest(root) -> None:
     path = Path(root) / C1.TI_MANIFEST_RELATIVE
@@ -489,6 +546,95 @@ def test_campaign2_hypothesis_id_domain_separation():
     assert c2_id == C2.content_hash(
         {"domain": "campaign2", "hypothesis_definition_hash": definition_hash}
     )
+
+
+# ---------------------------------------------------------------------------
+# C2-E2 section 2/4: the bound hypothesis identities
+# ---------------------------------------------------------------------------
+
+
+def test_expected_hypothesis_constants_match_erratum():
+    """The C2-E2 section 2 literals, exactly, as shipped by the module."""
+    assert _FROZEN_EXPECTED_HYPOTHESIS_DEFINITION_HASHES == (
+        _ERRATUM_HYPOTHESIS_DEFINITION_HASHES
+    )
+    assert _FROZEN_EXPECTED_HYPOTHESIS_IDS == _ERRATUM_HYPOTHESIS_IDS
+    assert len(_FROZEN_EXPECTED_HYPOTHESIS_IDS) == 7
+    assert set(_FROZEN_EXPECTED_HYPOTHESIS_IDS) == set(C2.EXPECTED_LABELS)
+    # The ids are the named function of the definition hashes (self-consistency).
+    for label, definition_hash in _ERRATUM_HYPOTHESIS_DEFINITION_HASHES.items():
+        assert (
+            C2.campaign2_hypothesis_id(definition_hash)
+            == _ERRATUM_HYPOTHESIS_IDS[label]
+        )
+
+
+def test_hypothesis_identities_fail_closed_on_empty_mapping(
+    tmp_path, monkeypatch
+):
+    _write_fixture_manifest(tmp_path)
+    monkeypatch.setattr(C2, "EXPECTED_HYPOTHESIS_IDS", {})
+    with pytest.raises(C2.C2BindingError):
+        C2.hypothesis_identities(tmp_path)
+
+
+def test_hypothesis_identities_fail_closed_on_partial_mapping(
+    tmp_path, monkeypatch
+):
+    _write_fixture_manifest(tmp_path)
+    partial = dict(_FIXTURE_HYPOTHESIS_IDS)
+    partial.pop("C1-H7")
+    monkeypatch.setattr(C2, "EXPECTED_HYPOTHESIS_IDS", partial)
+    with pytest.raises(C2.C2BindingError):
+        C2.hypothesis_identities(tmp_path)
+
+
+def test_executor_fails_closed_on_empty_mapping(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    monkeypatch.setattr(C2, "EXPECTED_HYPOTHESIS_IDS", {})
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    result = executor.run()
+    assert (
+        result.stop_reason
+        == C2.C2StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    assert L.CampaignLedger(executor.ledger.path).records() == ()
+
+
+def test_executor_fails_closed_on_partial_mapping(tmp_path, monkeypatch):
+    _install_stubs(monkeypatch)
+    partial = dict(_FIXTURE_HYPOTHESIS_IDS)
+    partial.pop("C1-H7")
+    monkeypatch.setattr(C2, "EXPECTED_HYPOTHESIS_IDS", partial)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    result = executor.run()
+    assert (
+        result.stop_reason
+        == C2.C2StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    assert L.CampaignLedger(executor.ledger.path).records() == ()
+
+
+def test_executor_binding_is_active_without_fixture_patch(tmp_path, monkeypatch):
+    """Run the executor with the frozen real ids against a synthetic manifest.
+
+    The binding check is *not* monkeypatched out: the synthetic definition
+    hashes cannot equal the frozen real ids, so the run must fail closed with a
+    pre-open Stage-A C2BindingError and write nothing.
+    """
+    monkeypatch.setattr(
+        C2,
+        "EXPECTED_HYPOTHESIS_IDS",
+        dict(_FROZEN_EXPECTED_HYPOTHESIS_IDS),
+    )
+    _install_stubs(monkeypatch)
+    executor = _make_executor(tmp_path, labels=("C1-H1",), require_kpit=False)
+    result = executor.run()
+    assert (
+        result.stop_reason
+        == C2.C2StopReason.INFRASTRUCTURE_OR_DATA_INVARIANT_FAILURE
+    )
+    assert L.CampaignLedger(executor.ledger.path).records() == ()
 
 
 def test_wrap_declaration_binds_v2_1():

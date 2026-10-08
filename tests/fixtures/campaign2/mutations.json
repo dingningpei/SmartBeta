@@ -122,5 +122,41 @@
    }
   ],
   "test": "tests/test_campaign2_executor.py::test_report_determinism_and_reuse_disclosure"
+ },
+ {
+  "id": "C2-M11",
+  "description": "the executor restores the 'or None' binding bypass",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "                expected_ids=EXPECTED_HYPOTHESIS_IDS,",
+    "new": "                expected_ids=EXPECTED_HYPOTHESIS_IDS or None,"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_executor_fails_closed_on_empty_mapping"
+ },
+ {
+  "id": "C2-M12",
+  "description": "one bound C2-E2 section 2 hypothesis id is altered",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "    \"C1-H1\": (\n        \"e9375f9fa0426cec18db9dac35c6351f11aee44f5ff5cbd6c3e1d2b272ad3ddc\"\n    ),",
+    "new": "    \"C1-H1\": (\n        \"0000000000000000000000000000000000000000000000000000000000000000\"\n    ),"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_expected_hypothesis_constants_match_erratum"
+ },
+ {
+  "id": "C2-M13",
+  "description": "an empty bound-id mapping is accepted (the check is skipped)",
+  "file": "smart_beta/campaign/campaign2.py",
+  "edits": [
+   {
+    "old": "        if expected_ids.get(label) != hypothesis_id:",
+    "new": "        if expected_ids and expected_ids.get(label) != hypothesis_id:"
+   }
+  ],
+  "test": "tests/test_campaign2_executor.py::test_executor_fails_closed_on_empty_mapping"
  }
 ]
