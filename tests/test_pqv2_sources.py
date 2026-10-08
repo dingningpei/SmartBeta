@@ -76,7 +76,7 @@ def _credential_sentinel(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_credential_sentinel_never_leaks() -> None:
-    assert S.POSITION_BEYOND_DEVELOPMENT_END != CREDENTIAL_SENTINEL
+    assert C.SourceState.UNKNOWN_RESERVE != CREDENTIAL_SENTINEL
 
 
 # ---------------------------------------------------------------------------
@@ -759,10 +759,13 @@ def test_reserve_firewall_marks_unknown(tmp_path: Path) -> None:
         ],
     )
     source = _load(store)
-    # The near-end flag's +5 window crosses DEVELOPMENT_END -> UNKNOWN.
-    unknown_sessions = {entry[0] for entry in source.unknown_by_key["K1"]}
-    assert near_end in unknown_sessions
-    assert far_from_end not in unknown_sessions
+    # The near-end flag's +5 window crosses DEVELOPMENT_END -> UNKNOWN_RESERVE,
+    # even though its D7c m_s is finite; the far flag is resolved.
+    unknown = source.unknown_by_key["K1"]
+    assert [(flag.s, flag.state) for flag in unknown] == [
+        (near_end, C.SourceState.UNKNOWN_RESERVE)
+    ]
+    assert far_from_end in {t.s for t in source.transitions_by_key["K1"]}
 
 
 def test_next_beyond_development_marks_unknown(tmp_path: Path) -> None:
@@ -775,8 +778,10 @@ def test_next_beyond_development_marks_unknown(tmp_path: Path) -> None:
         flags=[_flag(flag_session, sessions[9], sessions[11], beyond=True)],
     )
     source = _load(store)
-    unknown_sessions = {entry[0] for entry in source.unknown_by_key["K1"]}
-    assert flag_session in unknown_sessions
+    unknown = source.unknown_by_key["K1"]
+    assert [(flag.s, flag.state) for flag in unknown] == [
+        (flag_session, C.SourceState.UNKNOWN_RESERVE)
+    ]
     assert source.transitions_by_key.get("K1", ()) == ()
 
 
@@ -804,7 +809,7 @@ def test_post_development_row_raises(tmp_path: Path) -> None:
         _load(store)
 
 
-def test_missing_m_s_raises(tmp_path: Path) -> None:
+def test_missing_m_s_is_unknown_source(tmp_path: Path) -> None:
     sessions = _consecutive(date(2023, 5, 1), 20)
     store = _store(
         tmp_path,
@@ -813,8 +818,183 @@ def test_missing_m_s_raises(tmp_path: Path) -> None:
         daily_by_key={"K1": {}},  # no D7c return at all
         flags=[_flag(sessions[10], sessions[9], sessions[11])],
     )
-    with pytest.raises(C.PQv2InputError):
-        _load(store)
+    source = _load(store)
+    assert source.transitions_by_key.get("K1", ()) == ()
+    unknown = source.unknown_by_key["K1"]
+    assert len(unknown) == 1
+    assert unknown[0].state == C.SourceState.UNKNOWN_SOURCE
+    assert unknown[0].s == sessions[10]
+    assert unknown[0].prev_s == sessions[9]
+    assert not hasattr(unknown[0], "m_obs")
+
+
+# ---------------------------------------------------------------------------
+# v2.1 source classification (M§8A.1)
+# ---------------------------------------------------------------------------
+
+
+def _states(source: C.SourceSet, key: str) -> dict[date, str]:
+    return {flag.s: flag.state for flag in source.unknown_by_key.get(key, ())}
+
+
+def test_finite_m_s_is_resolved(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {flag_session: 0.05}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert source.unknown_by_key == {}
+    assert list(source.transitions_by_key) == ["K1"]
+    assert source.transitions_by_key["K1"][0].m_obs == pytest.approx(1.05)
+
+
+def test_absent_row_inside_development_is_unknown_source(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    # A valid return on another date for the same key must not substitute.
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {sessions[2]: 0.05}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert source.transitions_by_key.get("K1", ()) == ()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [float("nan"), float("inf"), float("-inf"), -1.0, -1.5],
+)
+def test_unusable_m_s_is_unknown_source(tmp_path: Path, bad: float) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {flag_session: bad}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+
+
+def test_never_in_d7c_key_is_unknown_source_without_abort(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        # K2 has no D7c column at all; K1 is resolved.
+        daily_by_key={"K1": {session: 0.01 for session in sessions}},
+        flags=[
+            _flag(flag_session, sessions[9], sessions[11], key="K1"),
+            _flag(flag_session, sessions[9], sessions[11], key="K2"),
+        ],
+    )
+    source = _load(store)
+    assert _states(source, "K2") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert list(source.transitions_by_key) == ["K1"]
+    assert source.transitions_by_key["K1"][0].m_obs == pytest.approx(1.01)
+
+
+def test_d7a_valid_return_does_not_substitute(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    flag_session = sessions[10]
+    # A D7a-valid return at the exact row next(s) exists, but the authorised
+    # D7c row there is absent -> UNKNOWN_SOURCE.
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {sessions[11]: 0.5}},
+        flags=[_flag(flag_session, sessions[9], sessions[11])],
+    )
+    source = _load(store)
+    assert _states(source, "K1") == {
+        flag_session: C.SourceState.UNKNOWN_SOURCE
+    }
+    assert source.transitions_by_key.get("K1", ()) == ()
+
+
+def test_unresolved_flags_appear_once_and_sorted(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {}},
+        flags=[
+            _flag(sessions[12], sessions[11], sessions[13]),
+            _flag(sessions[6], sessions[5], sessions[7]),
+        ],
+    )
+    source = _load(store)
+    unknown = source.unknown_by_key["K1"]
+    assert [flag.s for flag in unknown] == [sessions[6], sessions[12]]
+    assert len(unknown) == len(set(unknown)) == 2
+    assert all(flag.state == C.SourceState.UNKNOWN_SOURCE for flag in unknown)
+
+
+def test_unknown_classification_is_row_order_invariant(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    daily = {"K1": {sessions[5]: 0.02}}
+    flags = [
+        _flag(sessions[10], sessions[9], sessions[11]),
+        _flag(sessions[6], sessions[5], sessions[7]),
+        _flag(sessions[2], sessions[1], sessions[3]),
+    ]
+    forward = _store(tmp_path / "forward", sessions=sessions, daily_by_key=daily, flags=flags)
+    reverse = _store(
+        tmp_path / "reverse",
+        sessions=sessions,
+        daily_by_key=daily,
+        flags=list(reversed(flags)),
+    )
+    assert _load(forward) == _load(reverse)
+
+
+def test_reserve_classification_reads_no_reserve_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 75)
+    dev_position = sessions.index(_DEV_END)
+    near_end = sessions[dev_position - 2]
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {session: 0.01 for session in sessions}},
+        flags=[_flag(near_end, sessions[dev_position - 3], sessions[dev_position - 1])],
+    )
+    opened: list[str] = []
+    real_open = builtins.open
+    real_read_parquet = pd.read_parquet
+
+    def _open(file: Any, *args: Any, **kwargs: Any):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def _read_parquet(path: Any, *args: Any, **kwargs: Any):
+        opened.append(str(path))
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _open)
+    monkeypatch.setattr(pd, "read_parquet", _read_parquet)
+    source = _load(store)
+    assert _states(source, "K1") == {
+        near_end: C.SourceState.UNKNOWN_RESERVE
+    }
+    forbidden = ("reserve_sealed", "raw/", "dsc_evidence", "/raw", "knowledge_pit")
+    assert [path for path in opened if any(t in path for t in forbidden)] == []
 
 
 def test_ca_event_count_mismatch_raises(tmp_path: Path) -> None:

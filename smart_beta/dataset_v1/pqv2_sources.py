@@ -44,7 +44,9 @@ from smart_beta.dataset_v1.pqv2_core import (
     PQv2BindingError,
     PQv2InputError,
     SourceSet,
+    SourceState,
     UncertainTransition,
+    UnresolvedFlag,
     s2_relative,
 )
 
@@ -53,14 +55,7 @@ __all__ = [
     "load_ca_events",
     "load_identity_assignment",
     "load_source_set",
-    "POSITION_BEYOND_DEVELOPMENT_END",
-    "POSITION_NEXT_BEYOND_DEVELOPMENT",
 ]
-
-#: Firewall reason for a flag whose ``+5`` candidate window passes DEV_END.
-POSITION_BEYOND_DEVELOPMENT_END = "MISDATED_WINDOW_BEYOND_DEVELOPMENT_END"
-#: Firewall reason for a flag whose trusted ``next`` session is in the reserve.
-POSITION_NEXT_BEYOND_DEVELOPMENT = "NEXT_BEYOND_DEVELOPMENT"
 
 _CA_COLUMNS = (
     "stock_id",
@@ -317,27 +312,35 @@ def _daily_lookup(ti_inputs: Any) -> tuple[pd.DataFrame, dict[date, Any]]:
     return values, positions
 
 
-def _observed_m(
+def _classify_m(
     lookup: tuple[pd.DataFrame, Mapping[date, Any]], key: str, row_date: date
-) -> float:
+) -> tuple[str, float | None]:
+    """M§8A.1 rules 2–3 at the exact authorised row ``row_date = next(s)``.
+
+    Returns ``(SourceState.RESOLVED, m_obs)`` only when the D7c daily
+    ``daily_total_return`` for *key* at *row_date* is present (the row exists
+    and the key is a column), finite and gives ``m_s = 1 + value > 0``.
+    Otherwise returns ``(SourceState.UNKNOWN_SOURCE, None)``.  It never
+    substitutes a D7a return, another D7c session, a fill, interpolation or
+    ``λ = 1``, and it reads no reserve-dated row.
+    """
+
     values, positions = lookup
     label = positions.get(row_date)
     if label is None or key not in values.columns:
-        raise PQv2InputError(
-            f"flagged transition source session for {key!r} carries no VALID "
-            "daily_total_return"
-        )
+        return SourceState.UNKNOWN_SOURCE, None
     value = float(values.at[label, key])
     if not math.isfinite(value):
-        raise PQv2InputError(
-            f"flagged transition source session for {key!r} is not a VALID return"
-        )
+        return SourceState.UNKNOWN_SOURCE, None
     m_obs = 1.0 + value
     if not math.isfinite(m_obs) or m_obs <= 0.0:
-        raise PQv2InputError(
-            f"observed multiplier for {key!r} is not finite and positive"
-        )
-    return m_obs
+        return SourceState.UNKNOWN_SOURCE, None
+    return SourceState.RESOLVED, m_obs
+
+
+def _unresolved_sort_key(flag: UnresolvedFlag) -> tuple[Any, ...]:
+    prev = flag.prev_s if flag.prev_s is not None else date.min
+    return (flag.s, flag.state, prev)
 
 
 # ---------------------------------------------------------------------------
@@ -492,15 +495,22 @@ def load_source_set(
     ti_inputs: Any,
     sessions: Sequence[date],
 ) -> SourceSet:
-    """Build the deterministic P-Q v2 :class:`SourceSet` (plan §6.2, M§7/M§8).
+    """Build the deterministic P-Q v2.1 :class:`SourceSet` (M§8A.1).
 
     * flags come from ``overlay.flags`` only;
-    * ``m_s`` is ``1 + daily_total_return`` at the flag's source session;
+    * each flag gets exactly one M§8A.1 source state, in order: UNKNOWN_RESERVE
+      (next(s) beyond/undefined at ``DEVELOPMENT_END``, or the ``+5`` window
+      crossing it), else UNKNOWN_SOURCE (the exact D7c row at next(s) is
+      absent/NaN/±inf or ``1 + value <= 0``), else RESOLVED;
+    * only RESOLVED flags appear in ``transitions_by_key``; unresolved flags are
+      recorded once each in ``unknown_by_key`` as :class:`UnresolvedFlag`;
     * MISDATED candidates are recorded split/dividend events of the same D4
       security, inside its D4 interval, at a trusted session ``d != s`` within
-      ``MISDATED_WINDOW``, with the combined same-day factor;
-    * the firewall marks a flag UNKNOWN when its ``+5`` window or its ``next``
-      session runs past ``DEVELOPMENT_END``.
+      ``MISDATED_WINDOW``, with the combined same-day factor, and are
+      enumerated for RESOLVED and both UNKNOWN states (``d`` never past
+      ``DEVELOPMENT_END``);
+    * there is no global abort because a flag is unresolved, and no substitution
+      (D7a, another D7c session, fill, interpolation, zero or ``λ = 1``).
     """
 
     parsed_sessions = [_as_date(session) for session in sessions]
@@ -532,7 +542,7 @@ def load_source_set(
 
     transitions: dict[str, list[UncertainTransition]] = {}
     candidates: dict[str, list[MisdatedCandidate]] = {}
-    unknown: dict[str, list[tuple[Any, Any, str]]] = {}
+    unknown: dict[str, list[UnresolvedFlag]] = {}
 
     ordered = sorted(
         flags.to_dict("records"),
@@ -557,38 +567,48 @@ def load_source_set(
         flag_next = _as_date(row["next_session"])
         beyond = _as_bool(row["next_beyond_development"])
 
-        reasons: list[str] = []
-        if flag_position + MISDATED_WINDOW > dev_end_position:
-            reasons.append(POSITION_BEYOND_DEVELOPMENT_END)
-        if beyond:
-            reasons.append(POSITION_NEXT_BEYOND_DEVELOPMENT)
-        if reasons:
-            unknown.setdefault(key, []).extend(
-                (s, prev_s, reason) for reason in reasons
-            )
-            continue
-
-        if next_s is None:
-            raise PQv2InputError(
-                f"flag for {key!r} has no trusted next session for m_s"
-            )
-        m_obs = _observed_m(lookup, key, next_s)
-        transitions.setdefault(key, []).append(
-            UncertainTransition(
-                security_key=key,
-                s=s,
-                prev_s=prev_s,
-                next_s=flag_next,
-                m_obs=m_obs,
-                rel=s2_relative(m_obs),
-            )
+        # M§8A.1 rule 1: reserve firewall, decided without reading any row.
+        reserve = (
+            beyond
+            or next_s is None
+            or next_s > DEVELOPMENT_END
+            or flag_position + MISDATED_WINDOW > dev_end_position
         )
+        if reserve:
+            state = SourceState.UNKNOWN_RESERVE
+            m_obs: float | None = None
+        else:
+            assert next_s is not None
+            # M§8A.1 rules 2-3: the exact authorised D7c row at next(s).
+            state, m_obs = _classify_m(lookup, key, next_s)
 
+        if state == SourceState.RESOLVED:
+            assert m_obs is not None
+            transitions.setdefault(key, []).append(
+                UncertainTransition(
+                    security_key=key,
+                    s=s,
+                    prev_s=prev_s,
+                    next_s=flag_next,
+                    m_obs=m_obs,
+                    rel=s2_relative(m_obs),
+                )
+            )
+        else:
+            unknown.setdefault(key, []).append(
+                UnresolvedFlag(
+                    security_key=key, s=s, prev_s=prev_s, state=state
+                )
+            )
+
+        # M§7/M§8A.2: candidates are recorded events only, so enumerate them
+        # for RESOLVED and both UNKNOWN states (never past DEVELOPMENT_END) so
+        # downstream can compute pair-effect reach.
         key_events = events.get(key)
         if not key_events:
             continue
         for d in sorted(key_events):
-            if d == s:
+            if d == s or d > DEVELOPMENT_END:
                 continue
             d_position = position.get(d)
             if d_position is None:
@@ -613,7 +633,7 @@ def load_source_set(
         transitions_by_key={key: tuple(value) for key, value in transitions.items()},
         candidates_by_key={key: tuple(value) for key, value in candidates.items()},
         unknown_by_key={
-            key: tuple(sorted(set(value), key=lambda item: (item[0], item[2])))
+            key: tuple(sorted(set(value), key=_unresolved_sort_key))
             for key, value in unknown.items()
         },
     )
