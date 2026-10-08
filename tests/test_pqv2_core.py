@@ -13,25 +13,31 @@ named test per mutation; the mapping is checked mechanically by
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import json
 import math
+import os
 import random
 import shutil
 import socket
+import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from smart_beta.dataset_v1 import delisting_bridge as D7B
 from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.engines.portfolio_sort import assign_groups
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-METHODOLOGY_REL = Path("docs") / "discovery_dataset_v1_2_pq_v2_methodology.md"
+METHODOLOGY_REL = Path(C.CURRENT_AUTHORITY.methodology_relative)
+V2_METHODOLOGY_REL = Path(C.AUTHORITY_V2.methodology_relative)
 CREDENTIAL_SENTINEL = "pqv2-core-credential-sentinel-9f31"
 
 _CREDENTIAL_KEYS = (
@@ -54,7 +60,8 @@ _EXPECTED_ED_LINE = (
     '"rolling_window_union_numerical","arithmetic_conservative_union",'
     '"cross_sectional_whole_row","label_candidate_e_[f,next(e)]",'
     '"dtr_{prev,s,next}","dv_{prev,s}","misdated_recorded_pm5",'
-    '"reserve_unknown_not_assessed"],"version":"pq-v2-ed-1"}'
+    '"reserve_unknown_not_assessed","source_unresolved_unknown_not_assessed"],'
+    '"version":"pq-v2.1-ed-2"}'
 )
 _EXPECTED_CE_LINE = (
     '{"classes":{"simple_exact":["C1-H1","C1-H2","C1-H3","C1-H6","C1-H7"],'
@@ -95,12 +102,13 @@ def test_credential_sentinel_never_leaks() -> None:
 
 
 def _copy_authority_tree(tmp_path: Path) -> Path:
-    """Copy the methodology document and every pinned file into a temp root."""
+    """Copy both methodologies and every pinned file into a temp root."""
 
     root = tmp_path / "repo"
-    doc = root / METHODOLOGY_REL
-    doc.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPO_ROOT / METHODOLOGY_REL, doc)
+    for authority in (C.AUTHORITY_V2, C.AUTHORITY_V2_1):
+        doc = root / authority.methodology_relative
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / authority.methodology_relative, doc)
     for relative in C.PINNED_CODE:
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -153,7 +161,7 @@ def test_identity_constants_match_document() -> None:
 
     assert len(C.METHODOLOGY_SHA256) == 64
     assert C.METHODOLOGY_SHA256 == (
-        "a31ed9c49cd3a03208ae28539a8b5f5531916e31fac32bbd60e2af07746fa56d"
+        "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
     )
 
 
@@ -171,16 +179,14 @@ def test_verify_authority_rejects_tampered_document(tmp_path: Path) -> None:
         C.verify_authority(root)
 
 
-def test_verify_authority_rejects_wrong_document_constant(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(C, "METHODOLOGY_SHA256", "0" * 64)
+def test_verify_authority_rejects_wrong_document_constant() -> None:
+    bad = dataclasses.replace(C.CURRENT_AUTHORITY, methodology_sha256="0" * 64)
     with pytest.raises(C.PQv2BindingError):
-        C.verify_authority(REPO_ROOT)
+        C.verify_authority(REPO_ROOT, authority=bad)
 
 
 def test_verify_authority_rejects_tampered_identity_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     root = _copy_authority_tree(tmp_path)
     doc = root / METHODOLOGY_REL
@@ -189,11 +195,12 @@ def test_verify_authority_rejects_tampered_identity_line(
     doc.write_text(text, encoding="utf-8")
     # Step (a) would fire first; pin the tampered document's hash so the test
     # isolates the identity-line check (b).
-    monkeypatch.setattr(
-        C, "METHODOLOGY_SHA256", hashlib.sha256(doc.read_bytes()).hexdigest()
+    tampered = dataclasses.replace(
+        C.CURRENT_AUTHORITY,
+        methodology_sha256=hashlib.sha256(doc.read_bytes()).hexdigest(),
     )
     with pytest.raises(C.PQv2BindingError):
-        C.verify_authority(root)
+        C.verify_authority(root, authority=tampered)
 
 
 def test_verify_authority_rejects_tampered_pinned_file(tmp_path: Path) -> None:
@@ -239,6 +246,330 @@ def test_pqv2_code_sha256_is_deterministic_and_sensitive(tmp_path: Path) -> None
     assert real_manifest["smart_beta/dataset_v1/pqv2_core.py"] == hashlib.sha256(
         (REPO_ROOT / "smart_beta/dataset_v1/pqv2_core.py").read_bytes()
     ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Versioned authority (M§17) and v2.1 vocabulary / cause model (M§8A)
+# ---------------------------------------------------------------------------
+
+
+_CAUSE_PROBE = r'''
+import hashlib, itertools
+from smart_beta.dataset_v1 import delisting_bridge as D7B
+from smart_beta.dataset_v1 import pqv2_core as C
+reasons = [
+    C.PQV2_SOURCE_UNRESOLVED,
+    C.PQV2_RESERVE_UNKNOWN,
+    C.PQV2_SIGMA_SUPPORT,
+]
+blobs = []
+for perm in itertools.permutations(reasons):
+    blobs.append(D7B.canonical_json(C.CauseSet.of(*perm).to_list()))
+joined = "|".join(blobs)
+print(joined)
+print(hashlib.sha256(joined.encode("utf-8")).hexdigest())
+'''
+
+
+def _run_cause_probe(hashseed: int | None = None) -> tuple[str, ...]:
+    env = os.environ.copy()
+    for key in _CREDENTIAL_KEYS:
+        env.pop(key, None)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    if hashseed is None:
+        env.pop("PYTHONHASHSEED", None)
+    else:
+        env["PYTHONHASHSEED"] = str(hashseed)
+    proc = subprocess.run(
+        [sys.executable, "-c", _CAUSE_PROBE],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return tuple(proc.stdout.strip().splitlines())
+
+
+def test_source_and_reserve_vocabulary_distinct() -> None:
+    assert C.NotAssessedReason.SOURCE_UNRESOLVED != C.NotAssessedReason.RESERVE_UNKNOWN
+    assert C.PQV2_SOURCE_UNRESOLVED != C.PQV2_RESERVE_UNKNOWN
+    assert C.LabelStatus.UNKNOWN_SOURCE != C.LabelStatus.UNKNOWN_RESERVE
+    assert C.SourceState.UNKNOWN_SOURCE != C.SourceState.UNKNOWN_RESERVE
+    assert C.PQV2_SOURCE_UNRESOLVED == C.NotAssessedReason.SOURCE_UNRESOLVED
+    assert C.PQV2_RESERVE_UNKNOWN == C.NotAssessedReason.RESERVE_UNKNOWN
+    assert C.PQV2_SOURCE_UNRESOLVED in C.NotAssessedReason.ALL
+    assert C.LabelStatus.UNKNOWN_SOURCE in C.LabelStatus.ALL
+    assert C.SourceState.ALL == (
+        C.SourceState.RESOLVED,
+        C.SourceState.UNKNOWN_SOURCE,
+        C.SourceState.UNKNOWN_RESERVE,
+    )
+    assert C.SourceState.UNKNOWN == (
+        C.SourceState.UNKNOWN_SOURCE,
+        C.SourceState.UNKNOWN_RESERVE,
+    )
+
+
+def test_source_reason_serializes_exactly() -> None:
+    assert C.NotAssessedReason.SOURCE_UNRESOLVED == "PQV2_SOURCE_UNRESOLVED"
+    assert C.PQV2_SOURCE_UNRESOLVED == "PQV2_SOURCE_UNRESOLVED"
+
+
+def test_reserve_reason_serializes_exactly() -> None:
+    assert C.NotAssessedReason.RESERVE_UNKNOWN == "PQV2_RESERVE_UNKNOWN"
+    assert C.PQV2_RESERVE_UNKNOWN == "PQV2_RESERVE_UNKNOWN"
+
+
+def test_cause_for_source_state_mapping() -> None:
+    assert (
+        C.cause_for_source_state(C.SourceState.UNKNOWN_SOURCE)
+        == C.PQV2_SOURCE_UNRESOLVED
+    )
+    assert (
+        C.cause_for_source_state(C.SourceState.UNKNOWN_RESERVE)
+        == C.PQV2_RESERVE_UNKNOWN
+    )
+
+
+def test_label_status_for_causes_precedence() -> None:
+    assert (
+        C.label_status_for_causes(C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN))
+        == C.LabelStatus.UNKNOWN_RESERVE
+    )
+    assert (
+        C.label_status_for_causes(C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED))
+        == C.LabelStatus.UNKNOWN_SOURCE
+    )
+    both = C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_RESERVE_UNKNOWN)
+    assert C.label_status_for_causes(both) == C.LabelStatus.UNKNOWN_RESERVE
+    with pytest.raises(C.PQv2InputError):
+        C.label_status_for_causes(C.EMPTY_CAUSES)
+    with pytest.raises(C.PQv2InputError):
+        C.label_status_for_causes(C.CauseSet.of(C.PQV2_SIGMA_SUPPORT))
+
+
+def test_unresolved_flag_cause_and_validation() -> None:
+    source = C.UnresolvedFlag(
+        "KEY", date(2020, 1, 1), None, C.SourceState.UNKNOWN_SOURCE
+    )
+    assert source.cause == C.PQV2_SOURCE_UNRESOLVED
+    reserve = C.UnresolvedFlag(
+        "KEY", date(2020, 1, 1), date(2019, 12, 31), C.SourceState.UNKNOWN_RESERVE
+    )
+    assert reserve.cause == C.PQV2_RESERVE_UNKNOWN
+    assert not hasattr(source, "m_obs")
+    assert not hasattr(source, "correction")
+    with pytest.raises(C.PQv2InputError):
+        C.UnresolvedFlag("KEY", date(2020, 1, 1), None, C.SourceState.RESOLVED)
+    with pytest.raises(C.PQv2InputError):
+        C.UnresolvedFlag("KEY", date(2020, 1, 1), None, "nonsense")
+
+
+def test_causeset_is_insertion_order_independent() -> None:
+    reasons = (
+        C.PQV2_SOURCE_UNRESOLVED,
+        C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_SIGMA_SUPPORT,
+    )
+    built = {C.CauseSet.of(*perm).causes for perm in itertools.permutations(reasons)}
+    assert built == {tuple(sorted(reasons))}
+
+
+def test_causeset_collapses_duplicates() -> None:
+    cause_set = C.CauseSet.of(
+        C.PQV2_SOURCE_UNRESOLVED,
+        C.PQV2_SOURCE_UNRESOLVED,
+        C.PQV2_RESERVE_UNKNOWN,
+    )
+    assert cause_set.causes == (C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED)
+    assert len(cause_set) == 2
+
+
+def test_causeset_retains_all_causes() -> None:
+    cause_set = C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_RESERVE_UNKNOWN)
+    assert cause_set.to_list() == [C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED]
+    assert len(cause_set) == 2
+    assert C.PQV2_RESERVE_UNKNOWN in cause_set
+    assert C.PQV2_SOURCE_UNRESOLVED in cause_set
+
+
+def test_causeset_primary_reserve_over_source() -> None:
+    assert (
+        C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_RESERVE_UNKNOWN).primary
+        == C.PQV2_RESERVE_UNKNOWN
+    )
+
+
+def test_causeset_primary_source_over_sigma() -> None:
+    cause_set = C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_SIGMA_SUPPORT)
+    assert len(cause_set) == 2
+    assert cause_set.primary == C.PQV2_SOURCE_UNRESOLVED
+
+
+def test_causeset_primary_reserve_over_winsor() -> None:
+    cause_set = C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN, C.PQV2_WINSOR_BLOCK)
+    assert len(cause_set) == 2
+    assert cause_set.primary == C.PQV2_RESERVE_UNKNOWN
+
+
+def test_empty_causes_behavior() -> None:
+    assert C.EMPTY_CAUSES.is_empty
+    assert C.EMPTY_CAUSES.primary is None
+    assert C.EMPTY_CAUSES.to_list() == []
+    assert len(C.EMPTY_CAUSES) == 0
+    assert list(C.EMPTY_CAUSES) == []
+    assert not C.EMPTY_CAUSES.has_unknown
+    assert C.CauseSet(()).is_empty
+    assert C.CauseSet.from_iterable([]).is_empty
+    with pytest.raises(C.PQv2InputError):
+        C.NotAssessed.from_causes(C.EMPTY_CAUSES)
+
+
+def test_resolved_and_non_period_reasons_rejected() -> None:
+    with pytest.raises(C.PQv2InputError):
+        C.CauseSet.of("RESOLVED")
+    for bad in (
+        C.NotAssessedReason.IDENTITY_MISMATCH,
+        C.NotAssessedReason.L_PERIOD_NOT_ASSESSED,
+        "nonsense",
+    ):
+        with pytest.raises(C.PQv2InputError):
+            C.CauseSet.of(bad)
+    with pytest.raises(C.PQv2InputError):
+        C.cause_for_source_state(C.SourceState.RESOLVED)
+    with pytest.raises(C.PQv2InputError):
+        C.cause_for_source_state("RESOLVED")
+    with pytest.raises(C.PQv2InputError):
+        C.UnresolvedFlag("KEY", date(2020, 1, 1), None, C.SourceState.RESOLVED)
+
+
+def test_causeset_union_iteration_and_short_circuit() -> None:
+    reserve = C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN)
+    source = C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)
+    merged = reserve.union(source)
+    assert merged.causes == (C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED)
+    assert list(merged) == [C.PQV2_RESERVE_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED]
+    assert C.must_short_circuit(merged)
+    assert C.must_short_circuit(source)
+    assert not C.must_short_circuit(C.CauseSet.of(C.PQV2_SIGMA_SUPPORT))
+    assert not C.must_short_circuit(C.EMPTY_CAUSES)
+
+
+def test_notassessed_causes_roundtrip() -> None:
+    cause_set = C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED, C.PQV2_RESERVE_UNKNOWN)
+    derived = C.NotAssessed.from_causes(cause_set, detail="x")
+    assert derived.reason == C.PQV2_RESERVE_UNKNOWN
+    assert derived.causes is cause_set
+    assert derived.cause_set is cause_set
+    assert derived.detail == "x"
+
+    legacy = C.NotAssessed(C.PQV2_SOURCE_UNRESOLVED, "d")
+    assert legacy.causes is None
+    assert legacy.cause_set == C.CauseSet.of(C.PQV2_SOURCE_UNRESOLVED)
+    gate = C.NotAssessed(C.PQV2_IDENTITY_MISMATCH, "g")
+    assert gate.cause_set is None
+
+    with pytest.raises(C.PQv2InvariantError):
+        C.NotAssessed(
+            C.PQV2_SOURCE_UNRESOLVED,
+            "d",
+            C.CauseSet.of(C.PQV2_RESERVE_UNKNOWN),
+        )
+
+
+def test_verify_authority_binds_v21_methodology_hash() -> None:
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
+    assert C.verify_authority(REPO_ROOT) is None
+    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C.METHODOLOGY_SHA256 == (
+        "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
+    )
+
+
+def test_v21_ed_id_frozen_value() -> None:
+    assert C.ED_ID == C.AUTHORITY_V2_1.ed_id
+    assert C.ED_ID == (
+        "65bd7d1341e70674132bc7729870876adf5457fe9ce4c277d0f1148df343a4d6"
+    )
+    assert C.ED_ID != C.AUTHORITY_V2.ed_id
+
+
+def test_cs_id_frozen_value() -> None:
+    assert C.CS_ID == C.AUTHORITY_V2_1.cs_id
+    assert C.CS_ID == (
+        "432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2"
+    )
+    assert C.CS_ID != C.CE_ID
+
+
+def test_ce_id_frozen_value() -> None:
+    assert C.CE_ID == C.AUTHORITY_V2_1.ce_id
+    assert C.CE_ID == (
+        "605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf"
+    )
+
+
+def test_require_current_authority_binds_v21() -> None:
+    assert (
+        C.require_current_authority(C.METHODOLOGY_SHA256, C.CS_ID, C.ED_ID, C.CE_ID)
+        is None
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.require_current_authority(
+            C.AUTHORITY_V2.methodology_sha256, C.CS_ID, C.ED_ID, C.CE_ID
+        )
+    with pytest.raises(C.PQv2BindingError):
+        C.require_current_authority(
+            C.METHODOLOGY_SHA256, C.CS_ID, C.AUTHORITY_V2.ed_id, C.CE_ID
+        )
+
+
+def test_tampered_v21_document_rejected_and_v2_authority_passes(
+    tmp_path: Path,
+) -> None:
+    root = _copy_authority_tree(tmp_path)
+    assert C.verify_authority(root) is None
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2) is None
+
+    doc = root / METHODOLOGY_REL
+    text = doc.read_text(encoding="utf-8")
+    doc.write_text("# tampered title line\n" + text.split("\n", 1)[1], encoding="utf-8")
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root)
+    # The preserved v2 document is byte-unchanged, so the historical authority
+    # still verifies in the same tree.
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2) is None
+    assert not (root / V2_METHODOLOGY_REL).read_bytes().startswith(
+        b"# tampered title line"
+    )
+
+
+def test_current_authority_binds_preserved_v2_document(tmp_path: Path) -> None:
+    root = _copy_authority_tree(tmp_path)
+    assert C.verify_authority(root) is None
+    doc = root / V2_METHODOLOGY_REL
+    text = doc.read_text(encoding="utf-8")
+    doc.write_text(text + "\n<!-- tampered -->\n", encoding="utf-8")
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root)
+    # The explicit historical authority still reports the mismatch too.
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root, authority=C.AUTHORITY_V2)
+
+
+def test_canonical_cause_serialization_across_processes() -> None:
+    first = _run_cause_probe()
+    second = _run_cause_probe()
+    assert len(first) == 2
+    assert first == second
+
+
+def test_canonical_cause_serialization_across_hashseeds() -> None:
+    first = _run_cause_probe(hashseed=0)
+    second = _run_cause_probe(hashseed=987654321)
+    assert len(first) == 2
+    assert first == second
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +830,18 @@ def test_mutation_fixture_contract() -> None:
         "A-M3",
         "A-M4",
         "A-M5",
+        "V21-M12a",
+        "V21-M15",
+        "A21-M1",
+        "A21-M2",
+        "A21-M3",
+        "A21-M4",
+        "A21-M5",
+        "A21-M6",
+        "A21-M7",
+        "A21-M8",
+        "A21-M9",
+        "A21-M10",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_core.py").read_text(
         encoding="utf-8"
