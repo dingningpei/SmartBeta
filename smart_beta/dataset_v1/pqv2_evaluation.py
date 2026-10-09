@@ -193,18 +193,40 @@ class PQv2EvaluationDeclaration:
         return _d7b.content_hash(self.to_dict())
 
 
-def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:
-    """The typed identity-mismatch reason, or ``None`` when the declaration binds."""
+def _declaration_authority(
+    declaration: PQv2EvaluationDeclaration,
+) -> _core.MethodologyAuthority | None:
+    """Resolve the declaration's admitted authority, or ``None`` (E1 §2).
+
+    The v2.1 (Campaign-2) and v2.2 authorities are both admitted; the historical
+    v2 authority (and any other identity triple) fails closed with ``None``.
+    """
 
     if declaration.pq_methodology != PQ_METHODOLOGY:
+        return None
+    try:
+        return _core.require_admitted_authority(
+            declaration.methodology_sha256,
+            declaration.ed_id,
+            declaration.ce_id,
+        )
+    except _core.PQv2BindingError:
+        return None
+
+
+def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:
+    """The typed identity-mismatch reason, or ``None`` when the declaration binds.
+
+    A v2 or v2.1 declaration is *not* rejected: both admitted authorities are
+    accepted (E1 §4: the Campaign-2 v2.1 path stays byte-identical).  Only an
+    identity triple outside :data:`pqv2_core.ADMITTED_AUTHORITIES` (for example
+    the historical v2 authority) is a typed blank ``PQV2_IDENTITY_MISMATCH``.
+    """
+
+    authority = _declaration_authority(declaration)
+    if authority is None:
         return _core.NotAssessedReason.IDENTITY_MISMATCH
-    if declaration.methodology_sha256 != _core.METHODOLOGY_SHA256:
-        return _core.NotAssessedReason.IDENTITY_MISMATCH
-    if declaration.cs_id != _core.CS_ID:
-        return _core.NotAssessedReason.IDENTITY_MISMATCH
-    if declaration.ed_id != _core.ED_ID:
-        return _core.NotAssessedReason.IDENTITY_MISMATCH
-    if declaration.ce_id != _core.CE_ID:
+    if declaration.cs_id != authority.cs_id:
         return _core.NotAssessedReason.IDENTITY_MISMATCH
     if declaration.dataset_id != _pq.DATASET_ID:
         return _core.NotAssessedReason.IDENTITY_MISMATCH
@@ -371,6 +393,11 @@ class PQv2Diagnostics:
     support: tuple[tuple[str, int], ...]
     non_claims: tuple[str, ...]
     b_diagnostics_hash: str | None
+    #: The admitted authority's version string and, for an amendment authority
+    #: (v2.2), the base methodology hash.  Both are ``None`` for a v2.1
+    #: declaration, whose serialization stays byte-identical to v2.1 (E1 §4).
+    methodology_version: str | None = None
+    base_methodology_sha256: str | None = None
     b_diagnostics: Any = field(default=None, compare=False, repr=False)
 
     def cell(self, name: str) -> PQv2Cell | None:
@@ -380,7 +407,7 @@ class PQv2Diagnostics:
         return None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "not_assessed": self.not_assessed,
             "declaration_hash": self.declaration_hash,
             "dataset_identity_hash": self.dataset_identity_hash,
@@ -418,6 +445,13 @@ class PQv2Diagnostics:
             "non_claims": list(self.non_claims),
             "b_diagnostics_hash": self.b_diagnostics_hash,
         }
+        # E1 §4: an amendment authority records its version and base hash; the
+        # v2.1 payload deliberately carries neither, so its serialization (and
+        # hence its content address) is byte-identical to the pre-v2.2 output.
+        if self.base_methodology_sha256 is not None:
+            body["methodology_version"] = self.methodology_version
+            body["base_methodology_sha256"] = self.base_methodology_sha256
+        return body
 
     @property
     def diagnostics_hash(self) -> str:
@@ -822,9 +856,19 @@ def _formation_positions(
 def _dv_offsets(
     windows: _dependency.Windows, formation_pos: Mapping[date, int]
 ) -> tuple[int, ...]:
+    """Every dv offset of the certified windows, including the A§15A generic dv.
+
+    The simple-class ``numerical_dv`` windows (A§15A.1 generic
+    ``rolling_mean(dv, w)``) are consumed alongside the STD_X_RANK short/long
+    dv windows, so an observed ``dv`` is available at every offset C's
+    dependency can move.
+    """
+
     cells: set[int] = set()
-    for window in tuple(windows.numerical_dv_short) + tuple(
-        windows.numerical_dv_long
+    for window in (
+        tuple(windows.numerical_dv)
+        + tuple(windows.numerical_dv_short)
+        + tuple(windows.numerical_dv_long)
     ):
         cells.update(range(window[0] + 1, window[1] + 1))
     return tuple(sorted(cells))
@@ -1159,8 +1203,12 @@ def _blank_diagnostics(
     *,
     metric_basis: str | None = None,
     certified_class: Any = None,
+    authority: _core.MethodologyAuthority | None = None,
 ) -> PQv2Diagnostics:
     declaration_hash = declaration.declaration_hash
+    base_methodology_sha256 = (
+        None if authority is None else authority.base_methodology_sha256
+    )
     cells = tuple(
         PQv2Cell(
             cell=name,
@@ -1225,6 +1273,8 @@ def _blank_diagnostics(
         support=(),
         non_claims=NON_CLAIMS,
         b_diagnostics_hash=None,
+        methodology_version=None if authority is None else authority.version,
+        base_methodology_sha256=base_methodology_sha256,
         b_diagnostics=None,
     )
 
@@ -1266,9 +1316,12 @@ def build_pqv2_diagnostics(
 
     # Step 1 - authority and declaration binding, before any data access.
     _core.verify_authority(repo_root)
+    authority = _declaration_authority(declaration)
     reason = _declaration_reason(declaration)
     if reason is not None:
-        return _blank_diagnostics(declaration, factor_spec, reason)
+        return _blank_diagnostics(
+            declaration, factor_spec, reason, authority=authority
+        )
 
     # Step 2 - dataset identity and overlay.
     try:
@@ -1284,27 +1337,36 @@ def build_pqv2_diagnostics(
             declaration,
             factor_spec,
             _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,
+            authority=authority,
         )
     if identity_hash != declaration.dataset_identity_hash:
         return _blank_diagnostics(
             declaration,
             factor_spec,
             _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,
+            authority=authority,
         )
     if overlay.pq_id != declaration.pq_id or overlay.pq_hash != declaration.pq_hash:
         return _blank_diagnostics(
             declaration,
             factor_spec,
             _core.NotAssessedReason.OVERLAY_MISMATCH,
+            authority=authority,
         )
 
-    # Step 3 - expression, sign and metric gates.
-    certified = _dependency.certify(factor_spec)
+    # Step 3 - expression, sign and metric gates.  The resolved admitted
+    # authority selects the classifier (E1 §3): v2.1 is the enumerated-key CE
+    # classifier, v2.2 is the A§15A grammar recognizer.
+    certified = _dependency.certify(factor_spec, authority=authority)
     if isinstance(certified, _core.NotAssessed):
-        return _blank_diagnostics(declaration, factor_spec, certified.reason)
+        return _blank_diagnostics(
+            declaration, factor_spec, certified.reason, authority=authority
+        )
     windows = _dependency.dependency_windows(factor_spec.expression)
     if isinstance(windows, _core.NotAssessed):
-        return _blank_diagnostics(declaration, factor_spec, windows.reason)
+        return _blank_diagnostics(
+            declaration, factor_spec, windows.reason, authority=authority
+        )
     metric_basis = _metric_kind(declaration.base.primary_metric)
     if metric_basis is None:
         return _blank_diagnostics(
@@ -1312,6 +1374,7 @@ def build_pqv2_diagnostics(
             factor_spec,
             _core.NotAssessedReason.METRIC_NOT_CERTIFIED,
             certified_class=certified,
+            authority=authority,
         )
 
     # Step 4 - B exactly as D7b, reconstructed and reconciled bit-exactly.
@@ -1330,6 +1393,7 @@ def build_pqv2_diagnostics(
             diag_b.not_assessed,
             metric_basis=metric_basis,
             certified_class=certified,
+            authority=authority,
         )
     (scenario_t0, scenario_ts), groups, loaded = _reconstruct_b(
         root, declaration, factor_spec, factor_panel, partition, bindings
@@ -1445,6 +1509,7 @@ def build_pqv2_diagnostics(
             envelope.gate_reason,
             metric_basis=metric_basis,
             certified_class=certified,
+            authority=authority,
         )
 
     # Step 9 - the L statistics on B's ordered finite-period index.
@@ -1596,6 +1661,10 @@ def build_pqv2_diagnostics(
         support=support,
         non_claims=NON_CLAIMS,
         b_diagnostics_hash=diag_b.diagnostics_hash,
+        methodology_version=None if authority is None else authority.version,
+        base_methodology_sha256=(
+            None if authority is None else authority.base_methodology_sha256
+        ),
         b_diagnostics=diag_b,
     )
 

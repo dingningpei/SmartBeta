@@ -1,0 +1,2973 @@
+{
+ "C1-H1": {
+  "assignment_rule": "SIMPLE_EXACT",
+  "b_diagnostics_hash": "4573909ea01d359151cbb335f754da41ea810e0bdae9d93ece27f1d306ac3ba1",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "SIMPLE",
+  "certified_hypothesis": "C1-H1",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "4df68818ab502caf752f01d37c23c6d44b1694501faa0921be5f8a4b5453df49",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H2": {
+  "assignment_rule": "SIMPLE_EXACT",
+  "b_diagnostics_hash": "7c2d6a5225996415762724a24b9e7883f213f69ffadb4ab9cedd87c886819e2d",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "SIMPLE",
+  "certified_hypothesis": "C1-H2",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "28b5bc348476ca64a098ff8c9677aa49c5e334492da2e369bd741cedfbf8b978",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H3": {
+  "assignment_rule": "SIMPLE_EXACT",
+  "b_diagnostics_hash": "6307e0397fecc4727d13309ac47ff19f0efad9378ae038947f0b1d05920fc544",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.1959303431360332,
+     -0.01898522399999991,
+     -0.018617303999999946,
+     -0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -540.807445941247,
+    "value": -0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.1959303431360332,
+     -0.01898522399999991,
+     -0.018617303999999946,
+     -0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -2.85165410058568,
+    "value": -0.06312952378400824
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.1959303431360332,
+     -0.01898522399999991,
+     -0.018617303999999946,
+     -0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -540.807445941247,
+    "value": -0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.1959303431360332,
+     -0.01898522399999991,
+     -0.018617303999999946,
+     -0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -2.85165410058568,
+    "value": -0.06312952378400824
+   }
+  ],
+  "certified_class": "SIMPLE",
+  "certified_hypothesis": "C1-H3",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "56790a6e8dd140fe53d7820c0de578b87d5ade85006abd8463ead4de6ffe187f",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": -0.018617303999999946,
+    "LS_b_ts": -0.018617303999999946,
+    "L_t0": -0.1959303431360332,
+    "L_ts": -0.1959303431360332,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 2,
+    "LS_b_t0": -0.01898522399999991,
+    "LS_b_ts": -0.01898522399999991,
+    "L_t0": -0.01898522399999991,
+    "L_ts": -0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.3333333333333333,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 1,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 2,
+    "LS_b_t0": -0.018617303999999946,
+    "LS_b_ts": -0.018617303999999946,
+    "L_t0": -0.018617303999999946,
+    "L_ts": -0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.6666666666666666,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 1,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 2,
+    "LS_b_t0": -0.01898522399999991,
+    "LS_b_ts": -0.01898522399999991,
+    "L_t0": -0.01898522399999991,
+    "L_ts": -0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.6666666666666666,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 1,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H4": {
+  "assignment_rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+  "b_diagnostics_hash": "a7806079f5b568cd947b83987ab76f364c4db143e4535dffd11a944115471833",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "STD_X_RANK",
+  "certified_hypothesis": "C1-H4",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "24cd73683a748f700d3679fdff78f07decd9aac6f2cf75691abd355913e035df",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [
+   "R_BOX",
+   "MU_DECOUPLED",
+   "MV_CARTESIAN"
+  ],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H5": {
+  "assignment_rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+  "b_diagnostics_hash": "d7081557a8a125b0cb24f74d2c507452cf191e92c0c37ec8a5d80f1026c5ae25",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "STD_X_RANK",
+  "certified_hypothesis": "C1-H5",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "c0cbe25910ada79e4a6022841b12554b1143aac944fcd3abb939f593758ebb2d",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "C_long": 3,
+     "C_short": 3,
+     "P_long": 3,
+     "P_short": 3,
+     "class": "STD_X_RANK",
+     "n_cross_section": 6,
+     "n_universe": 6
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SANDWICH_CONSERVATIVE_SUPERSET",
+    "sigma_ok": true,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [
+   "R_BOX",
+   "MU_DECOUPLED",
+   "MV_CARTESIAN"
+  ],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H6": {
+  "assignment_rule": "SIMPLE_EXACT",
+  "b_diagnostics_hash": "e4835335f199159515e94abdcd3616357a770e1b13dc813704c5a17dde3dfe71",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "SIMPLE",
+  "certified_hypothesis": "C1-H6",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "ef86600459b89ae26a17bcca26110ac9662baed4cfa5fb53f5f6b20d783bd181",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ },
+ "C1-H7": {
+  "assignment_rule": "SIMPLE_EXACT",
+  "b_diagnostics_hash": "d303af0f93907932c490f4de0f632f21d5a301ad49f4cb5e9fe79af9604937e7",
+  "b_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "b_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "basis": "GROSS",
+  "ce_id": "<CE_ID>",
+  "cells": [
+   {
+    "cause_union": [],
+    "cell": "B-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-T0",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "T0",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   },
+   {
+    "cause_union": [],
+    "cell": "B-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "B",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": 540.807445941247,
+    "value": 0.01880126399999993
+   },
+   {
+    "cause_union": [],
+    "cell": "L-TS",
+    "cell_hash": "<CELL_HASH>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "estimand": "L",
+    "estimator": "metrics.long_short_mean_tstat",
+    "n_index": 4,
+    "n_obs": 4,
+    "period_causes": [
+     [],
+     [],
+     [],
+     []
+    ],
+    "period_identities": [
+     "2020-11-30",
+     "2020-12-04",
+     "2020-12-10",
+     "2020-12-16"
+    ],
+    "period_reasons": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "period_statuses": [
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED",
+     "ASSESSED"
+    ],
+    "period_values": [
+     -0.14039939725856704,
+     0.01898522399999991,
+     0.018617303999999946,
+     0.01898522399999991
+    ],
+    "reason": null,
+    "scenario": "TS",
+    "status": null,
+    "support": 4,
+    "t_stat": -1.0527312752744846,
+    "value": -0.020952911314641817
+   }
+  ],
+  "certified_class": "SIMPLE",
+  "certified_hypothesis": "C1-H7",
+  "cost_bps": 10.0,
+  "cost_rate": 0.001,
+  "cs_id": "<CS_ID>",
+  "dataset_identity_hash": "a065493d295883f425d499816a98ac55a03cd67a1086bd7b64249b90fe76b9da",
+  "declaration_hash": "<DECLARATION_HASH>",
+  "ed_id": "<ED_ID>",
+  "estimator_identity": "metrics.long_short_mean_tstat",
+  "factor_panel_sha256": "d05164f37587d92a4f989b67f4632cefab87578d71ac5ae4fb8135e64264f754",
+  "index": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_t0": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "l_periods_ts": [
+   "2020-11-30",
+   "2020-12-04",
+   "2020-12-10",
+   "2020-12-16"
+  ],
+  "methodology_sha256": "<METHODOLOGY_SHA256>",
+  "metric_basis": "LONG_SHORT",
+  "n_groups": 2,
+  "non_claims": [
+   "The model is not truth containment; robustness to every possible correction is not claimed.",
+   "P-Q v2 does not bound the true return, does not certify data quality, and does not imply Gate-6 passed (Gate-6 stays INCONCLUSIVE).",
+   "P-Q v2 does not sensitivity-test the correctness of security identity.",
+   "The MISDATED model is one misdating at a time.",
+   "The DV uncertainty model is a D7c-semantic statement.",
+   "The H4/H5 sandwich is a superset, not exact.",
+   "Outcomes: no confirmation, holdout or reserve validation.",
+   "The correction model is declared, not empirically certified containment."
+  ],
+  "not_assessed": null,
+  "orientation_rule": "PASSTHROUGH",
+  "overlay_pq_hash": "pqv2h-hash",
+  "periods": [
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": -0.14039939725856704,
+    "L_ts": -0.14039939725856704,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-11-30",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 1
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-04",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.018617303999999946,
+    "LS_b_ts": 0.018617303999999946,
+    "L_t0": 0.018617303999999946,
+    "L_ts": 0.018617303999999946,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-10",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   },
+   {
+    "D_t": 0,
+    "LS_b_t0": 0.01898522399999991,
+    "LS_b_ts": 0.01898522399999991,
+    "L_t0": 0.01898522399999991,
+    "L_ts": 0.01898522399999991,
+    "TO_b": 0.0,
+    "TO_hi": 0.0,
+    "causes_t0": [],
+    "causes_ts": [],
+    "changed_b": 0,
+    "exposure": {
+     "A_t": 0,
+     "class": "SIMPLE",
+     "n": 6,
+     "s_1": 3,
+     "s_G": 3
+    },
+    "label_counts": {
+     "ENVELOPE": 6
+    },
+    "n_misdated": 0,
+    "n_unknown_reserve": 0,
+    "n_unknown_source": 0,
+    "period": "2020-12-16",
+    "position_counts": {
+     "ENDING_ENDPOINT": 0,
+     "FORMATION_ENDPOINT": 0,
+     "INTERIOR": 0
+    },
+    "reason_t0": null,
+    "reason_ts": null,
+    "rule": "SIMPLE_EXACT",
+    "sigma_ok": null,
+    "status_t0": "ASSESSED",
+    "status_ts": "ASSESSED",
+    "union": 6,
+    "winsor_ok": true
+   }
+  ],
+  "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+  "primary_metric": "long_short",
+  "q": 0.0,
+  "relaxations": [],
+  "screen_id": "pqv2h-screen",
+  "screen_policy_hash": "pqv2h-policy",
+  "sign": 1,
+  "support": [
+   {
+    "cell": "B-T0",
+    "n": 4
+   },
+   {
+    "cell": "L-T0",
+    "n": 4
+   },
+   {
+    "cell": "B-TS",
+    "n": 4
+   },
+   {
+    "cell": "L-TS",
+    "n": 4
+   }
+  ]
+ }
+}
