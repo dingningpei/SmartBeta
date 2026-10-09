@@ -7,8 +7,8 @@ implements the core pieces of the frozen methodology
 (``docs/discovery_dataset_v1_2_pq_v2_1_methodology.md``):
 
 * the versioned authorities (:class:`MethodologyAuthority`, :data:`AUTHORITY_V2`,
-  :data:`AUTHORITY_V2_1`, :data:`AUTHORITY_V2_2`, :data:`ADMITTED_AUTHORITIES`,
-  :data:`CURRENT_AUTHORITY`), the four frozen identities
+  :data:`AUTHORITY_V2_1`, :data:`AUTHORITY_V2_2`, :data:`AUTHORITY_V2_3`,
+  :data:`ADMITTED_AUTHORITIES`, :data:`CURRENT_AUTHORITY`), the four frozen identities
   (:data:`METHODOLOGY_SHA256`, :data:`CS_ID`, :data:`ED_ID`, :data:`CE_ID`),
   :func:`verify_authority`, :func:`require_admitted_authority` and
   :func:`require_current_authority`;
@@ -49,6 +49,7 @@ __all__ = [
     "AUTHORITY_V2",
     "AUTHORITY_V2_1",
     "AUTHORITY_V2_2",
+    "AUTHORITY_V2_3",
     "ADMITTED_AUTHORITIES",
     "CURRENT_AUTHORITY",
     "METHODOLOGY_SHA256",
@@ -174,10 +175,27 @@ AUTHORITY_V2_2 = MethodologyAuthority(
     base_methodology_sha256=AUTHORITY_V2_1.methodology_sha256,
 )
 
-#: The authorities an evaluation may explicitly select (E1 §2).
+#: P-Q v2.3 authority (the event-grammar amendment, E§6).  Its methodology is
+#: the event-grammar document; its base is the preserved v2.2 amendment, and
+#: :func:`verify_authority` walks that chain to v2.1 (E§6, plan §3).
+AUTHORITY_V2_3 = MethodologyAuthority(
+    version="P-Q v2.3",
+    methodology_relative="docs/discovery_dataset_v1_2_pq_v2_3_event_grammar.md",
+    methodology_sha256=(
+        "d4ec7f6caaa6cc74a340fdcf28b5d2030b3a650c383518284099ebd5a0b26aad"
+    ),
+    cs_id="432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2",
+    ed_id="b3907c69878342fa9e8b07cdf35e4ddd6b47823fe0388ee9fb1762235e01ea7b",
+    ce_id="f3c7c7dfaa7de050b991fd64e7d586e69c787707834116d827301ad332d24a91",
+    base_methodology_relative=AUTHORITY_V2_2.methodology_relative,
+    base_methodology_sha256=AUTHORITY_V2_2.methodology_sha256,
+)
+
+#: The authorities an evaluation may explicitly select (E1 §2; v2.3 plan §3).
 ADMITTED_AUTHORITIES: tuple[MethodologyAuthority, ...] = (
     AUTHORITY_V2_1,
     AUTHORITY_V2_2,
+    AUTHORITY_V2_3,
 )
 
 #: The authority a fresh execution binds.  It deliberately stays P-Q v2.1:
@@ -394,12 +412,24 @@ def identity_lines(
 ) -> dict[str, str]:
     """Return the canonical identity lines keyed ``"CS"``, ``"ED"``, ``"CE"``.
 
-    An amendment-based authority (its ``base_methodology_relative`` is set)
-    reproduces all three from the amendment and its preserved base; the full
-    methodology documents extract them from their own headers.
+    The v2.3 authority carries its ED/CE lines literally in the event-grammar
+    document (its CS line is inherited through the v2.2 chain); a v2.2-style
+    amendment-based authority reproduces all three from the amendment and its
+    preserved base; the full methodology documents extract them from their own
+    headers.
     """
 
     root = _repo_root(repo_root)
+    if authority is AUTHORITY_V2_3:
+        base_lines = identity_lines(root, AUTHORITY_V2_2)
+        document_lines = methodology_path(root, authority).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        return {
+            "CS": base_lines["CS"],
+            "ED": _extract_code_block_after(document_lines, "ED-ID v2.3"),
+            "CE": _extract_code_block_after(document_lines, "CE-ID v2.3"),
+        }
     if authority.base_methodology_relative is not None:
         base_lines = _base_identity_lines(root, authority)
         return _amendment_identity_lines(root, authority, base_lines)
@@ -437,7 +467,9 @@ def verify_authority(
         When ``authority.base_methodology_relative`` is set, the base document
         is hashed and must equal ``authority.base_methodology_sha256`` too —
         for *any* authority that carries a base, not only the current one
-        (E1 §2).
+        (E1 §2).  For :data:`AUTHORITY_V2_3` the whole base authority is
+        re-verified recursively, so the v2.2 amendment and the v2.1 base are
+        both checked (plan §3).
     (b) The three canonical identity lines' SHA-256 values equal ``authority``'s
         CS/ED/CE ids.
     (c) Every file in :data:`PINNED_CODE` hashes to its pinned value.
@@ -471,6 +503,9 @@ def verify_authority(
                 "base methodology document SHA-256 mismatch: "
                 f"{actual_base} != {authority.base_methodology_sha256}"
             )
+
+    if authority is AUTHORITY_V2_3:
+        verify_authority(root, authority=AUTHORITY_V2_2)
 
     if authority is CURRENT_AUTHORITY:
         for preserved in PRESERVED_AUTHORITIES:
@@ -707,6 +742,12 @@ class NotAssessedReason:
     SIGMA_SUPPORT = "PQV2_SIGMA_SUPPORT"
     WINSOR_BLOCK = "PQV2_WINSOR_BLOCK"
     EMPTY_LEG_CONFIGURATION = "PQV2_EMPTY_LEG_CONFIGURATION"
+    # M1b event-layer causes (E§4 / M1b §2)
+    EVENT_IDENTITY_UNMAPPED = "PQV2_EVENT_IDENTITY_UNMAPPED"
+    EVENT_IDENTITY_CONTRADICTED = "PQV2_EVENT_IDENTITY_CONTRADICTED"
+    EVENT_SOURCE_EXCLUDED = "PQV2_EVENT_SOURCE_EXCLUDED"
+    EVENT_TIME_UNAVAILABLE = "PQV2_EVENT_TIME_UNAVAILABLE"
+    EVENT_RESERVE = "PQV2_EVENT_RESERVE"
     # statistics
     L_PERIOD_NOT_ASSESSED = "PQV2_L_PERIOD_NOT_ASSESSED"
     B_STATISTIC_UNAVAILABLE = "PQV2_B_STATISTIC_UNAVAILABLE"
@@ -723,6 +764,11 @@ class NotAssessedReason:
         SIGMA_SUPPORT,
         WINSOR_BLOCK,
         EMPTY_LEG_CONFIGURATION,
+        EVENT_IDENTITY_UNMAPPED,
+        EVENT_IDENTITY_CONTRADICTED,
+        EVENT_SOURCE_EXCLUDED,
+        EVENT_TIME_UNAVAILABLE,
+        EVENT_RESERVE,
         L_PERIOD_NOT_ASSESSED,
         B_STATISTIC_UNAVAILABLE,
         L_STATISTIC_UNAVAILABLE,
@@ -773,6 +819,11 @@ PQV2_SOURCE_UNRESOLVED = NotAssessedReason.SOURCE_UNRESOLVED
 PQV2_SIGMA_SUPPORT = NotAssessedReason.SIGMA_SUPPORT
 PQV2_WINSOR_BLOCK = NotAssessedReason.WINSOR_BLOCK
 PQV2_EMPTY_LEG_CONFIGURATION = NotAssessedReason.EMPTY_LEG_CONFIGURATION
+PQV2_EVENT_IDENTITY_UNMAPPED = NotAssessedReason.EVENT_IDENTITY_UNMAPPED
+PQV2_EVENT_IDENTITY_CONTRADICTED = NotAssessedReason.EVENT_IDENTITY_CONTRADICTED
+PQV2_EVENT_SOURCE_EXCLUDED = NotAssessedReason.EVENT_SOURCE_EXCLUDED
+PQV2_EVENT_TIME_UNAVAILABLE = NotAssessedReason.EVENT_TIME_UNAVAILABLE
+PQV2_EVENT_RESERVE = NotAssessedReason.EVENT_RESERVE
 PQV2_L_PERIOD_NOT_ASSESSED = NotAssessedReason.L_PERIOD_NOT_ASSESSED
 PQV2_B_STATISTIC_UNAVAILABLE = NotAssessedReason.B_STATISTIC_UNAVAILABLE
 PQV2_L_STATISTIC_UNAVAILABLE = NotAssessedReason.L_STATISTIC_UNAVAILABLE
@@ -794,20 +845,29 @@ CLASSIFICATION_STATUSES = ClassificationStatus.ALL
 # Source state and the period cause model (M§8A.1, M§8A.4)
 # --------------------------------------------------------------------------
 
-#: M§8A.4 period cause precedence, **highest priority first**.  Whole-evaluation
-#: gates and statistic-level reasons are deliberately absent: they are not period
-#: causes.
+#: M§8A.4 period cause precedence extended to the full M1b order (E§4 / M1b §2),
+#: **highest priority first**.  Whole-evaluation gates and statistic-level
+#: reasons are deliberately absent: they are not period causes.
 PERIOD_CAUSE_PRECEDENCE: tuple[str, ...] = (
     NotAssessedReason.RESERVE_UNKNOWN,
+    NotAssessedReason.EVENT_RESERVE,
     NotAssessedReason.SOURCE_UNRESOLVED,
+    NotAssessedReason.EVENT_IDENTITY_CONTRADICTED,
+    NotAssessedReason.EVENT_IDENTITY_UNMAPPED,
+    NotAssessedReason.EVENT_SOURCE_EXCLUDED,
+    NotAssessedReason.EVENT_TIME_UNAVAILABLE,
     NotAssessedReason.SIGMA_SUPPORT,
     NotAssessedReason.WINSOR_BLOCK,
     NotAssessedReason.EMPTY_LEG_CONFIGURATION,
 )
 
-#: The two UNKNOWN causes; a cell carrying either must short-circuit before any
-#: resolved-state precondition (M§8A.4).
-UNKNOWN_CAUSES: tuple[str, ...] = PERIOD_CAUSE_PRECEDENCE[:2]
+#: The price-source UNKNOWN causes; a cell carrying either must short-circuit
+#: before any resolved-state precondition (M§8A.4).  The M1b event causes are a
+#: separate family and are deliberately not listed here.
+UNKNOWN_CAUSES: tuple[str, ...] = (
+    NotAssessedReason.RESERVE_UNKNOWN,
+    NotAssessedReason.SOURCE_UNRESOLVED,
+)
 
 
 def _canonical_period_causes(reasons: Iterable[str]) -> tuple[str, ...]:
