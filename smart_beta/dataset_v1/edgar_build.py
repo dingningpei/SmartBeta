@@ -56,6 +56,7 @@ from smart_beta.dataset_v1.edgar_events import (
     EventRow,
     default_session_calendar,
     load_raw_filings,
+    load_raw_header_times,
     normalize_key,
     sort_event_rows,
     split_by_firewall,
@@ -67,6 +68,7 @@ from smart_beta.dataset_v1.edgar_identity import (
     AUDIT_CONTRADICTED,
     AUDIT_NO_SYMBOL_EVIDENCE,
     AUDIT_NOT_SAMPLED,
+    DEFAULT_IM_P_SEED,
     GATE_FAIL,
     GATE_NOT_CERTIFIED,
     GATE_PASS,
@@ -79,11 +81,14 @@ from smart_beta.dataset_v1.edgar_identity import (
     STATUS_FOREIGN_FILER,
     STATUS_MAPPED,
     IdentityRow,
+    build_symbol_evidence,
     clopper_pearson_upper,
+    coerce_key,
     load_edgar_reference,
     read_identity_map,
     resolve_identity,
     run_im_p,
+    select_im_p_sample,
     write_identity_map,
 )
 from smart_beta.dataset_v1.reserve_firewall import RESERVE_START, ReserveFirewallError
@@ -106,6 +111,8 @@ __all__ = [
     "EV_T_SAMPLE_SIZE",
     "EV_T_THRESHOLD",
     "EV_T_TRAILING_SESSIONS",
+    "DEFAULT_IM_P_SEED",
+    "DEFAULT_EV_T_SEED",
     "DEFAULT_BUILD_SEED",
     "GATE_IM_P",
     "GATE_EV_C",
@@ -149,7 +156,14 @@ EV_T_THRESHOLD = 0.60
 #: default, exposed as a parameter so the choice is explicit and reproducible.
 EV_T_TRAILING_SESSIONS = 252
 
-DEFAULT_BUILD_SEED = 1304
+#: The EV-T sample seed (V13-E1).  V13-E4 separated the previously conflated
+#: single build seed: IM-P uses :data:`DEFAULT_IM_P_SEED` (owned by E-2,
+#: re-exported here) and EV-T uses :data:`DEFAULT_EV_T_SEED`.
+DEFAULT_EV_T_SEED = 1304
+
+#: Legacy alias for the EV-T sample seed, kept so the pre-erratum interface
+#: keeps working; new callers use :data:`DEFAULT_EV_T_SEED`.
+DEFAULT_BUILD_SEED = DEFAULT_EV_T_SEED
 
 GATE_IM_P = "IM_P"
 GATE_EV_C = "EV_C"
@@ -322,6 +336,8 @@ def run_ev_c_gate(
     for event in events:
         if event.event_type != EA_8K202:
             continue
+        if event.k_session is None:
+            continue
         if not (development_start <= event.k_session <= development_end):
             continue
         counts[(event.security_key, event.k_session.year)] += 1
@@ -466,7 +482,7 @@ def run_ev_t_gate(
     events: Iterable[EventRow],
     returns: D7cDevelopmentReturns,
     *,
-    seed: int = DEFAULT_BUILD_SEED,
+    seed: int = DEFAULT_EV_T_SEED,
     sample_size: int = EV_T_SAMPLE_SIZE,
     trailing_sessions: int = EV_T_TRAILING_SESSIONS,
     threshold: float = EV_T_THRESHOLD,
@@ -475,7 +491,9 @@ def run_ev_t_gate(
     candidates = [
         event
         for event in sort_event_rows(events)
-        if event.event_type == EA_8K202 and event.k_session < RESERVE_START
+        if event.event_type == EA_8K202
+        and event.k_session is not None
+        and event.k_session < RESERVE_START
     ]
     rng = random.Random(seed)
     take = min(int(sample_size), len(candidates))
@@ -587,14 +605,19 @@ def manifest_payload(
     acq_id: str,
     gates: Sequence[GateResult],
     counts: Mapping[str, Any],
+    *,
+    seeds: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The canonical manifest body (everything except ``ev_id``)."""
-    return {
+    payload: dict[str, Any] = {
         "schema": SCHEMA,
         "acq_id": str(acq_id),
         "gates": {gate.name: gate.as_dict() for gate in gates},
         "counts": {key: counts[key] for key in sorted(counts)},
     }
+    if seeds is not None:
+        payload["seeds"] = {key: int(seeds[key]) for key in sorted(seeds)}
+    return payload
 
 
 def compute_ev_id(payload: Mapping[str, Any]) -> str:
@@ -624,23 +647,53 @@ def _derive_identity_rows(
     keys: Iterable[Any],
     evidence: Mapping[str, Any] | Iterable[Any] | None,
     tickers: Mapping[str, Sequence[str]] | None,
-    seed: int,
+    im_p_seed: int,
 ) -> list[IdentityRow]:
+    """Resolve the D4 keys and stamp the IM-P verdicts from the raw store.
+
+    The IM-P sample is selected with ``im_p_seed`` (V13-E1, ``1302``) and its
+    symbol evidence is read from the E-1 raw store with
+    :func:`~smart_beta.dataset_v1.edgar_identity.build_symbol_evidence`.  An
+    explicit ``evidence`` argument (synthetic tests) overrides the raw store,
+    and the D4 tickers for the audit come from the coerced keys unless the
+    caller supplies ``tickers``.
+    """
     reference = load_edgar_reference(raw_root)
+    key_list = [coerce_key(key) for key in keys]
     rows = resolve_identity(
-        keys,
+        key_list,
         company_tickers=reference.company_tickers,
         cik_lookup=reference.cik_lookup,
         submissions=reference.submissions,
         issuer_names=reference.issuer_names,
     )
-    if evidence is not None or tickers is not None:
-        rows, _ = run_im_p(
-            rows,
-            evidence=evidence or {},
-            tickers=tickers or {},
-            seed=seed,
+    key_tickers: dict[str, tuple[str, ...]] = {
+        key.security_key: (key.ticker,) for key in key_list if key.ticker
+    }
+    effective_tickers = tickers if tickers is not None else key_tickers
+    if evidence is None:
+        by_key = {row.security_key: row for row in rows}
+        sample = select_im_p_sample(rows, seed=im_p_seed)
+        sample_rows = [
+            {
+                "security_key": key,
+                "cik": by_key[key].cik,
+                "ticker": key_tickers.get(key, (None,))[0],
+            }
+            for key in sample
+            if key in by_key
+        ]
+        evidence_map: Mapping[str, Any] | Iterable[Any] = build_symbol_evidence(
+            raw_root, sample_rows
         )
+    else:
+        evidence_map = evidence
+    rows, _ = run_im_p(
+        rows,
+        evidence=evidence_map,
+        tickers=effective_tickers,
+        seed=im_p_seed,
+    )
     return rows
 
 
@@ -655,13 +708,19 @@ def _derive_event_rows(
             continue
         if row.cik is None:
             continue
-        filings = load_raw_filings(raw_root, int(row.cik))
+        cik = int(row.cik)
+        filings = load_raw_filings(raw_root, cik)
+        # V13-E2: K(e) is read only from the index header; the mapping is
+        # always supplied (even when empty) so a missing header fails closed
+        # to EVENT_TIME_UNAVAILABLE instead of falling back to the JSON.
+        header_times = load_raw_header_times(raw_root, cik)
         events.extend(
             normalize_key(
                 row.security_key,
-                int(row.cik),
+                cik,
                 filings,
                 calendar=calendar,
+                header_times=header_times,
             )
         )
     return sort_event_rows(events)
@@ -678,7 +737,8 @@ def build(
     evidence: Mapping[str, Any] | Iterable[Any] | None = None,
     tickers: Mapping[str, Sequence[str]] | None = None,
     calendar: Any | None = None,
-    seed: int = DEFAULT_BUILD_SEED,
+    im_p_seed: int = DEFAULT_IM_P_SEED,
+    ev_t_seed: int = DEFAULT_EV_T_SEED,
     sample_size: int = EV_T_SAMPLE_SIZE,
     trailing_sessions: int = EV_T_TRAILING_SESSIONS,
     development_start: date = DEVELOPMENT_START,
@@ -691,6 +751,8 @@ def build(
     arguments when supplied, otherwise read from
     ``<root>/derived/edgar-<acq_id>/``, otherwise derived from the E-1 raw
     acquisition ``<root>/raw/edgar-<acq_id>/`` and the supplied D4 ``keys``.
+    The IM-P sample uses ``im_p_seed`` (V13-E1, ``1302``) and the EV-T sample
+    uses ``ev_t_seed`` (V13-E1, ``1304``); both are recorded in the manifest.
     Development returns are read only through :class:`D7cDevelopmentReturns`
     (never a factor or long-short outcome).  Either way the returned manifest
     records the honest gate statuses, the counts and the ``ev_id``.
@@ -705,7 +767,7 @@ def build(
             identity_rows = read_identity_rows(identity_path)
         elif keys is not None:
             identity_rows = _derive_identity_rows(
-                raw_directory, keys, evidence, tickers, seed
+                raw_directory, keys, evidence, tickers, im_p_seed
             )
         else:
             raise EdgarBuildInputError(
@@ -748,7 +810,7 @@ def build(
         run_ev_t_gate(
             events,
             returns,
-            seed=seed,
+            seed=ev_t_seed,
             sample_size=sample_size,
             trailing_sessions=trailing_sessions,
         ),
@@ -778,7 +840,12 @@ def build(
         "event_types": sorted({event.event_type for event in events}),
     }
 
-    payload = manifest_payload(acq_id, gates, counts)
+    payload = manifest_payload(
+        acq_id,
+        gates,
+        counts,
+        seeds={"im_p_seed": im_p_seed, "ev_t_seed": ev_t_seed},
+    )
     manifest = {**payload, "ev_id": compute_ev_id(payload)}
 
     if write:

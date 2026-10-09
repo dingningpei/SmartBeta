@@ -41,5 +41,29 @@
       }
     ],
     "test": "tests/test_edgar_build.py::test_d7c_returns_refuses_the_reserve"
+  },
+  {
+    "id": "E4-M4",
+    "description": "IM-P uses the EV-T seed (the V13-E4 seed conflation)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "                raw_directory, keys, evidence, tickers, im_p_seed\n",
+        "new": "                raw_directory, keys, evidence, tickers, ev_t_seed\n"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_im_p_sample_uses_the_im_p_seed"
+  },
+  {
+    "id": "E4-M5",
+    "description": "header times omitted (the build falls back to the JSON time)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "                calendar=calendar,\n                header_times=header_times,\n",
+        "new": "                calendar=calendar,\n"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_build_event_times_come_from_the_headers"
   }
 ]
