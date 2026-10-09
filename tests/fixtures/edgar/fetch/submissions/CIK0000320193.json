@@ -1,0 +1,31 @@
+{
+  "cik": "320193",
+  "entityName": "Apple Inc.",
+  "formerNames": [
+    {"name": "Apple Computer Inc.", "from": "1994-01-01", "to": "2007-01-09"},
+    {"name": "NeXT Software Inc.", "from": "1988-01-01", "to": "1994-01-01"}
+  ],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000320193-23-000064", "0000320193-23-000077", "0000320193-23-000010"],
+      "form": ["10-Q", "8-K", "10-Q"],
+      "filingDate": ["2023-05-05", "2023-06-01", "2023-02-03"],
+      "reportDate": ["2023-04-01", "2023-06-01", "2022-12-31"],
+      "acceptanceDateTime": [
+        "2023-05-05T16:30:00.000Z",
+        "2023-06-01T20:15:00.000Z",
+        "2023-02-03T16:00:00.000Z"
+      ],
+      "items": ["", "2.02", ""],
+      "primaryDocument": ["aapl-20230401.htm", "aapl-8k.htm", "aapl-20221231.htm"]
+    },
+    "files": [
+      {
+        "name": "CIK0000320193-submissions-001.json",
+        "filingCount": 1,
+        "filingFrom": "2016-01-01",
+        "filingTo": "2016-12-31"
+      }
+    ]
+  }
+}
