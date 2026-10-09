@@ -105,3 +105,19 @@ mapped intervals:
   reason `EVENT_TIME_UNAVAILABLE`. They are never dropped and never used.
 - **Implementation:** the planner filters the E-1 `build_l3_plan` output by form, in the
   E-1L runner. No code change.
+
+## L3 budget revision (user, 2026-10-09: "(a) 预算提高到 135,000")
+
+- **Planner estimate error:** the planner's estimate (about 115,600) was low by about 14%.
+  The production `build_l3_plan`, run with merged E-1-R1 and E-2-R1, gives **131,467**
+  requests:
+
+  | Forms | Requests |
+  |---|---|
+  | 8-K 2.02 | 66,624 |
+  | 10-Q / 10-K | 63,083 |
+  | 20-F / 40-F | 1,760 |
+
+- **What happened:** the frozen 125,000 budget stopped the run before any request was
+  issued.
+- **New budget:** **135,000** requests (scope unchanged; rate ≤ 8 requests/s).
