@@ -6,8 +6,10 @@ scrubs the eight provider credentials plus ``SEC_CONTACT`` from the process
 environment, so no test can reach the network.  Every event is built from
 synthetic fixtures only; no test opens ``data_store``.
 
-Covers plan §4 (Timing, Event types, Firewall rows) and every plan §5
-mutation with the ``E3`` prefix.
+Covers plan §4 (Timing, Event types, Firewall rows), the V13-E2 erratum
+(header time source, ``acceptance_json_raw`` / ``json_discrepancy``, the
+``EVENT_TIME_UNAVAILABLE`` path) and every plan §5 / erratum mutation with
+the ``E3`` prefix.
 """
 
 from __future__ import annotations
@@ -16,9 +18,10 @@ import json
 import socket
 import sys
 import urllib.request
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 
+import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
@@ -30,16 +33,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "edgar" / "events"
 MUTATIONS = FIXTURES / "mutations.json"
 
-#: The E-1 filing columns (a synthetic payload must carry all of them).
+#: The real SEC ``filings.recent`` field list (V13-E2 Addendum).
 FILING_FIELDS = (
     "accessionNumber",
-    "form",
+    "act",
+    "core_type",
+    "fileNumber",
     "filingDate",
-    "reportDate",
-    "acceptanceDateTime",
+    "filmNumber",
+    "form",
+    "isInlineXBRL",
+    "isXBRL",
+    "isXBRLNumeric",
     "items",
+    "primaryDocDescription",
     "primaryDocument",
+    "reportDate",
+    "size",
+    "acceptanceDateTime",
 )
+
+#: Sentinel: build the header mapping from each row's JSON ET wall clock.
+_AUTO_HEADERS = object()
 
 
 @pytest.fixture(autouse=True)
@@ -70,12 +85,21 @@ def calendar():
 def _filing(**overrides: object) -> dict:
     row = {
         "accessionNumber": "0000000001-22-000001",
-        "form": "8-K",
+        "act": "34",
+        "core_type": "8-K",
+        "fileNumber": "001-00001",
         "filingDate": "2022-03-15",
-        "reportDate": "2022-03-15",
-        "acceptanceDateTime": "2022-03-15T14:00:00.000Z",
+        "filmNumber": "22700001",
+        "form": "8-K",
+        "isInlineXBRL": 0,
+        "isXBRL": 0,
+        "isXBRLNumeric": 0,
         "items": "2.02",
+        "primaryDocDescription": "8-K",
         "primaryDocument": "doc.htm",
+        "reportDate": "2022-03-15",
+        "size": 12345,
+        "acceptanceDateTime": "2022-03-15T14:00:00.000Z",
     }
     row.update(overrides)
     return row
@@ -85,15 +109,44 @@ def _payload(rows, cik: int = 1, entity_name: str = "Synthetic Corp.") -> dict:
     recent = {field: [row.get(field) for row in rows] for field in FILING_FIELDS}
     return {
         "cik": str(cik),
-        "entityName": entity_name,
+        "entityType": "operating",
+        "sic": "7372",
+        "sicDescription": "Services-Prepackaged Software",
+        "name": entity_name,
+        "tickers": ["SYN"],
+        "exchanges": ["Nasdaq"],
+        "formerNames": [],
         "filings": {"recent": recent, "files": []},
     }
 
 
-def _normalize(rows, calendar, *, cik: int = 1, key: str = "K1", **kwargs):
+def _header_clock(value: str) -> str:
+    """The ET wall-clock 14-digit field equivalent to a JSON value."""
+    return E.to_eastern(E.parse_acceptance_datetime(value)).strftime("%Y%m%d%H%M%S")
+
+
+def _default_headers(rows) -> dict:
+    """A per-accession header mapping consistent with each row's JSON value."""
+    headers: dict[str, str] = {}
+    for row in rows:
+        value = row.get("acceptanceDateTime")
+        if value is None:
+            continue
+        headers[str(row.get("accessionNumber") or "")] = _header_clock(value)
+    return headers
+
+
+def _normalize(rows, calendar, *, cik: int = 1, key: str = "K1", header_times=_AUTO_HEADERS, **kwargs):
     payload = _payload(rows, cik=cik)
+    if header_times is _AUTO_HEADERS:
+        header_times = _default_headers(rows)
     return E.normalize_events(
-        [E.KeyCik(key, cik)], {cik: payload}, calendar=calendar, **kwargs
+        [E.KeyCik(key, cik)],
+        {cik: payload},
+        calendar=calendar,
+        header_times=header_times,
+        validate=False,
+        **kwargs,
     )
 
 
@@ -110,7 +163,7 @@ def _types_for(rows, calendar, accession: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Timing (plan §4; mutations E3-M1, E3-M2)
+# Timing (plan §4; mutations E3-M1, E3-M2, E3-M7)
 # ---------------------------------------------------------------------------
 
 
@@ -132,7 +185,7 @@ def test_k_session_boundary_1600(calendar) -> None:
 
 
 def test_filing_date_is_never_the_knowledge_time(calendar) -> None:
-    """K(e) comes from acceptanceDateTime, never from filingDate."""
+    """K(e) comes from the index header, never from filingDate."""
     row = _filing(
         filingDate="2022-03-15",
         acceptanceDateTime="2022-03-15T20:30:00.000Z",  # 16:30 EDT, after close
@@ -221,6 +274,140 @@ def test_boundary_flag_uses_an_injected_early_close(calendar) -> None:
     # A non-session never carries a boundary fact.
     weekend = E.to_eastern(E.parse_acceptance_datetime("2018-11-24T18:05:00.000Z"))
     assert E.boundary_flag(weekend, calendar, early) is False
+
+
+# ---------------------------------------------------------------------------
+# V13-E2 header time source (mutations E3-M6, E3-M7)
+# ---------------------------------------------------------------------------
+
+
+def test_header_is_the_knowledge_source_not_json(calendar) -> None:
+    """When a header mapping is supplied, K(e) follows the header, not the JSON."""
+    row = _filing(
+        accessionNumber="A-HDR",
+        acceptanceDateTime="2022-03-15T20:30:00.000Z",  # 16:30 EDT (after close)
+    )
+    (event,) = _normalize(
+        [row], calendar, header_times={"A-HDR": "20220315140000"}
+    )  # 14:00 EDT, before close
+    assert event.acceptance_et.time() == time(14, 0, 0)
+    assert event.k_session == date(2022, 3, 15)
+    assert event.acceptance_json_raw == "2022-03-15T20:30:00.000Z"
+
+
+def test_header_is_read_as_eastern_wall_clock(calendar) -> None:
+    """The 14-digit field is an America/New_York wall clock, never UTC."""
+    row = _filing(
+        accessionNumber="A-AAPL",
+        acceptanceDateTime="2022-07-29T23:30:28.000Z",
+    )
+    (event,) = _normalize(
+        [row], calendar, header_times={"A-AAPL": "20220729153028"}
+    )
+    assert event.acceptance_et == datetime(2022, 7, 29, 15, 30, 28, tzinfo=E.EASTERN)
+    assert event.acceptance_utc == datetime(2022, 7, 29, 19, 30, 28, tzinfo=timezone.utc)
+    assert event.k_session == date(2022, 7, 29)
+
+
+def test_missing_header_gives_event_time_unavailable(calendar) -> None:
+    """A missing header never falls back to the JSON or filingDate."""
+    row = _filing(accessionNumber="A-NOHDR")
+    (event,) = _normalize([row], calendar, header_times={})
+    assert event.k_session is None
+    assert event.acceptance_utc is None and event.acceptance_et is None
+    assert event.k_reason == E.EVENT_TIME_UNAVAILABLE
+    assert event.json_discrepancy is None
+    assert event.acceptance_json_raw == "2022-03-15T14:00:00.000Z"
+
+
+def test_unparseable_header_gives_event_time_unavailable(calendar) -> None:
+    row = _filing(accessionNumber="A-BADHDR")
+    (event,) = _normalize(
+        [row],
+        calendar,
+        header_times={"A-BADHDR": "<ACCEPTANCE-DATETIME>2022-03-15T14:00:00"},
+    )
+    assert event.k_session is None
+    assert event.k_reason == E.EVENT_TIME_UNAVAILABLE
+
+
+def test_index_header_parser_is_strict() -> None:
+    assert E.parse_index_header_acceptance(None) is None
+    assert E.parse_index_header_acceptance("20220315140000") == "20220315140000"
+    assert (
+        E.parse_index_header_acceptance("<ACCEPTANCE-DATETIME>20220315140000")
+        == "20220315140000"
+    )
+    assert (
+        E.parse_index_header_acceptance("<ACCEPTANCE-DATETIME>202203151400000")
+        is None
+    )
+    assert (
+        E.parse_index_header_acceptance("<ACCEPTANCE-DATETIME>2022-03-15T14:00:00")
+        is None
+    )
+    assert E.parse_index_header_acceptance("") is None
+    assert E.parse_header_wall_clock("20220230120000") is None  # impossible day
+
+
+def test_load_raw_header_times_reads_the_l3_relpath() -> None:
+    headers = E.load_raw_header_times(FIXTURES, 1)
+    assert headers["0000000001-22-000001"] == "20220125160500"
+    assert headers["0000000001-22-000002"] == "20220128113000"
+    assert E.header_relpath(1, "0000000001-22-000001").as_posix() == (
+        "headers/0000000001/0000000001-22-000001-index-headers.html"
+    )
+    missing = E.load_raw_header_times(FIXTURES, 1, ["0000000001-99-999999"])
+    assert missing == {"0000000001-99-999999": None}
+
+
+def test_json_discrepancy_classes(calendar) -> None:
+    """The recorded JSON value is classified against the header time."""
+    exact = _filing(
+        accessionNumber="A-EXACT",
+        acceptanceDateTime="2022-01-25T21:05:00.000Z",
+    )
+    (event,) = _normalize([exact], calendar, header_times={"A-EXACT": "20220125160500"})
+    assert event.json_discrepancy == E.JSON_EXACT_UTC
+
+    other = _filing(
+        accessionNumber="A-OTHER",
+        acceptanceDateTime="2022-01-25T13:05:00.000Z",
+    )
+    (event,) = _normalize([other], calendar, header_times={"A-OTHER": "20220125160500"})
+    assert event.json_discrepancy == E.JSON_OTHER
+
+    absent = _filing(accessionNumber="A-NOJSON", acceptanceDateTime=None)
+    (event,) = _normalize(
+        [absent], calendar, header_times={"A-NOJSON": "20220125160500"}
+    )
+    assert event.acceptance_json_raw is None
+    assert event.json_discrepancy is None
+
+
+def test_json_discrepancy_plus_one_offset(calendar) -> None:
+    """A JSON value one ET offset later than the header is PLUS_ONE_OFFSET."""
+    row = _filing(
+        accessionNumber="A-PLUS",
+        filingDate="2022-04-29",
+        reportDate="2022-04-29",
+        acceptanceDateTime="2022-04-29T23:30:00.000Z",  # header 19:30Z + 4 h
+    )
+    (event,) = _normalize([row], calendar, header_times={"A-PLUS": "20220429153000"})
+    assert event.acceptance_utc == datetime(2022, 4, 29, 19, 30, tzinfo=timezone.utc)
+    assert event.json_discrepancy == E.JSON_PLUS_ONE_OFFSET
+
+
+def test_legacy_json_path_without_a_header_source(calendar) -> None:
+    """No header source at all keeps the pre-V13-E2 E-4 fallback working."""
+    row = _filing(accessionNumber="A-LEGACY")
+    (event,) = _normalize([row], calendar, header_times=None)
+    assert event.k_session == date(2022, 3, 15)
+    assert event.k_reason is None
+    # A JSON value is still required on that path (fail closed).
+    broken = _filing(accessionNumber="A-LEGACY-NONE", acceptanceDateTime=None)
+    with pytest.raises(E.EventFormatError):
+        _normalize([broken], calendar, header_times=None)
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +535,22 @@ def test_unknown_forms_are_not_events(calendar) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_fixtures_use_the_real_sec_schema() -> None:
+    for cik in (1, 2):
+        payload = _load_fixture(f"submissions/CIK{cik:010d}.json")
+        assert "name" in payload and "entityName" not in payload
+        assert set(FILING_FIELDS) <= set(payload["filings"]["recent"])
+
+
 def test_domestic_fixture_end_to_end(calendar) -> None:
     payload = _load_fixture("submissions/CIK0000000001.json")
+    headers = E.load_raw_header_times(FIXTURES, 1)
     events = E.normalize_events(
-        [E.KeyCik("K-DOM", 1)], {1: payload}, calendar=calendar
+        [E.KeyCik("K-DOM", 1)],
+        {1: payload},
+        calendar=calendar,
+        header_times=headers,
+        validate=False,
     )
     by_accession = {event.accession: event for event in events}
     assert set(by_accession) == {
@@ -361,16 +560,23 @@ def test_domestic_fixture_end_to_end(calendar) -> None:
     eightk = by_accession["0000000001-22-000001"]
     assert eightk.event_type == E.EA_8K202
     assert eightk.k_session == date(2022, 1, 26)
+    assert eightk.json_discrepancy == E.JSON_EXACT_UTC
     fallback = by_accession["0000000001-22-000003"]
     assert fallback.event_type == E.EA_PERIODIC_FALLBACK
     assert fallback.k_session == date(2022, 4, 29)
     assert fallback.report_period == date(2022, 3, 31)
+    assert fallback.json_discrepancy == E.JSON_PLUS_ONE_OFFSET
 
 
 def test_fpi_fixture_end_to_end(calendar) -> None:
     payload = _load_fixture("submissions/CIK0000000002.json")
+    headers = E.load_raw_header_times(FIXTURES, 2)
     events = E.normalize_events(
-        [E.KeyCik("K-FPI", 2)], {2: payload}, calendar=calendar
+        [E.KeyCik("K-FPI", 2)],
+        {2: payload},
+        calendar=calendar,
+        header_times=headers,
+        validate=False,
     )
     types = sorted(event.event_type for event in events)
     assert types == sorted([E.FPI_6K, E.FPI_20F, E.FPI_20F])
@@ -384,7 +590,7 @@ def test_raw_layout_reader_follows_pagination(calendar, tmp_path: Path) -> None:
         json.dumps(
             {
                 "cik": "3",
-                "entityName": "Paginated Corp.",
+                "name": "Paginated Corp.",
                 "filings": {
                     "recent": {field: [] for field in FILING_FIELDS},
                     "files": [
@@ -402,15 +608,13 @@ def test_raw_layout_reader_follows_pagination(calendar, tmp_path: Path) -> None:
     rows = E.load_raw_filings(raw, 3)
     assert [row["accessionNumber"] for row in rows] == ["A-PAGE"]
     events = E.normalize_events(
-        [E.KeyCik("K-PAGE", 3)], {3: rows}, calendar=calendar
+        [E.KeyCik("K-PAGE", 3)],
+        {3: rows},
+        calendar=calendar,
+        header_times={"A-PAGE": "20220315100000"},
+        validate=False,
     )
     assert [event.event_type for event in events] == [E.EA_8K202]
-
-
-def test_missing_acceptance_datetime_fails_closed(calendar) -> None:
-    row = _filing(accessionNumber="A-NONE", acceptanceDateTime=None)
-    with pytest.raises(E.EventFormatError):
-        _normalize([row], calendar)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +658,29 @@ def test_split_by_firewall_boundary(calendar) -> None:
     dev, res = E.split_by_firewall([reserve, development])
     assert dev == [development]
     assert res == [reserve]
+
+
+def test_unavailable_time_row_is_not_reserve(calendar) -> None:
+    """An EVENT_TIME_UNAVAILABLE row has no session and is not reserve data."""
+    (event,) = _normalize(
+        [_filing(accessionNumber="A-NOHDR")], calendar, header_times={}
+    )
+    dev, res = E.split_by_firewall([event])
+    assert dev == [event]
+    assert res == []
+
+
+def test_development_loader_reads_unavailable_rows(calendar, tmp_path: Path) -> None:
+    """A null (EVENT_TIME_UNAVAILABLE) row is a development row, not a crash."""
+    (event,) = _normalize(
+        [_filing(accessionNumber="A-NOHDR")], calendar, header_times={}
+    )
+    E.write_event_panel(tmp_path, "synthetic", [event])
+    accessor = E.EventDevelopmentAccessor(tmp_path)
+    frame = accessor.read()
+    assert len(frame) == 1
+    assert pd.isna(frame.loc[0, "k_session"])
+    assert frame.loc[0, "k_reason"] == E.EVENT_TIME_UNAVAILABLE
 
 
 def test_development_loader_fails_closed_on_reserve_row(tmp_path: Path) -> None:
@@ -531,6 +758,9 @@ def test_mutation_fixture_contract() -> None:
         "E3-M3",
         "E3-M4",
         "E3-M5",
+        "E3-M6",
+        "E3-M7",
+        "E3-M8",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/edgar_events.py").read_text(
         encoding="utf-8"
