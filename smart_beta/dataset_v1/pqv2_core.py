@@ -7,9 +7,11 @@ implements the core pieces of the frozen methodology
 (``docs/discovery_dataset_v1_2_pq_v2_1_methodology.md``):
 
 * the versioned authorities (:class:`MethodologyAuthority`, :data:`AUTHORITY_V2`,
-  :data:`AUTHORITY_V2_1`, :data:`CURRENT_AUTHORITY`), the four frozen identities
+  :data:`AUTHORITY_V2_1`, :data:`AUTHORITY_V2_2`, :data:`ADMITTED_AUTHORITIES`,
+  :data:`CURRENT_AUTHORITY`), the four frozen identities
   (:data:`METHODOLOGY_SHA256`, :data:`CS_ID`, :data:`ED_ID`, :data:`CE_ID`),
-  :func:`verify_authority` and :func:`require_current_authority`;
+  :func:`verify_authority`, :func:`require_admitted_authority` and
+  :func:`require_current_authority`;
 * the correction-sensitivity set S2 (M§3) as :class:`PositiveInterval`
   arithmetic with :func:`s2_absolute` / :func:`s2_relative` (no global K);
 * the exhaustive typed status vocabularies (M§14, M§15) plus the M§8A source
@@ -47,6 +49,7 @@ __all__ = [
     "AUTHORITY_V2",
     "AUTHORITY_V2_1",
     "AUTHORITY_V2_2",
+    "ADMITTED_AUTHORITIES",
     "CURRENT_AUTHORITY",
     "METHODOLOGY_SHA256",
     "CS_ID",
@@ -66,6 +69,7 @@ __all__ = [
     "PQv2InvariantError",
     # authority
     "verify_authority",
+    "require_admitted_authority",
     "require_current_authority",
     "pqv2_code_sha256",
     "pqv2_code_manifest",
@@ -170,8 +174,16 @@ AUTHORITY_V2_2 = MethodologyAuthority(
     base_methodology_sha256=AUTHORITY_V2_1.methodology_sha256,
 )
 
-#: The authority a fresh evaluation must bind.
-CURRENT_AUTHORITY = AUTHORITY_V2_2
+#: The authorities an evaluation may explicitly select (E1 §2).
+ADMITTED_AUTHORITIES: tuple[MethodologyAuthority, ...] = (
+    AUTHORITY_V2_1,
+    AUTHORITY_V2_2,
+)
+
+#: The authority a fresh execution binds.  It deliberately stays P-Q v2.1:
+#: Campaign-2, its declaration payloads and ``runner2`` require v2.1 until a
+#: later decision admits a switch (E1 §1, §6).
+CURRENT_AUTHORITY = AUTHORITY_V2_1
 
 #: SHA-256 of the current methodology document.
 METHODOLOGY_SHA256 = CURRENT_AUTHORITY.methodology_sha256
@@ -422,6 +434,10 @@ def verify_authority(
     """Verify the plan §2 (a)-(c) authority bindings; raise on any mismatch.
 
     (a) The methodology document SHA-256 equals ``authority.methodology_sha256``.
+        When ``authority.base_methodology_relative`` is set, the base document
+        is hashed and must equal ``authority.base_methodology_sha256`` too —
+        for *any* authority that carries a base, not only the current one
+        (E1 §2).
     (b) The three canonical identity lines' SHA-256 values equal ``authority``'s
         CS/ED/CE ids.
     (c) Every file in :data:`PINNED_CODE` hashes to its pinned value.
@@ -442,20 +458,21 @@ def verify_authority(
             f"{actual_methodology} != {authority.methodology_sha256}"
         )
 
+    base_relative = authority.base_methodology_relative
+    if base_relative is not None:
+        base_document = root / base_relative
+        if not base_document.is_file():
+            raise PQv2BindingError(
+                f"base methodology document missing: {base_document}"
+            )
+        actual_base = _sha256_file(base_document)
+        if actual_base != authority.base_methodology_sha256:
+            raise PQv2BindingError(
+                "base methodology document SHA-256 mismatch: "
+                f"{actual_base} != {authority.base_methodology_sha256}"
+            )
+
     if authority is CURRENT_AUTHORITY:
-        base_relative = authority.base_methodology_relative
-        if base_relative is not None:
-            base_document = root / base_relative
-            if not base_document.is_file():
-                raise PQv2BindingError(
-                    f"base methodology document missing: {base_document}"
-                )
-            actual_base = _sha256_file(base_document)
-            if actual_base != authority.base_methodology_sha256:
-                raise PQv2BindingError(
-                    "base methodology document SHA-256 mismatch: "
-                    f"{actual_base} != {authority.base_methodology_sha256}"
-                )
         for preserved in PRESERVED_AUTHORITIES:
             preserved_path = root / preserved.methodology_relative
             if not preserved_path.is_file():
@@ -486,6 +503,31 @@ def verify_authority(
             raise PQv2BindingError(
                 f"pinned file changed: {relative} ({digest} != {pinned})"
             )
+
+
+def require_admitted_authority(
+    methodology_sha256: str,
+    ed_id: str,
+    ce_id: str,
+) -> MethodologyAuthority:
+    """Return the admitted authority matching the three identities, or raise (E1 §2).
+
+    The CS-ID is shared by the admitted authorities, so it does not
+    participate in the selection.  A set of identities that matches none of
+    :data:`ADMITTED_AUTHORITIES` fails closed with :class:`PQv2BindingError`.
+    """
+
+    for authority in ADMITTED_AUTHORITIES:
+        if (
+            authority.methodology_sha256 == methodology_sha256
+            and authority.ed_id == ed_id
+            and authority.ce_id == ce_id
+        ):
+            return authority
+    raise PQv2BindingError(
+        "declaration does not bind an admitted authority: "
+        f"({methodology_sha256!r}, {ed_id!r}, {ce_id!r})"
+    )
 
 
 def require_current_authority(

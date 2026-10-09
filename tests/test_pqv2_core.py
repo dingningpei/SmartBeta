@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 METHODOLOGY_REL = Path(C.CURRENT_AUTHORITY.methodology_relative)
 BASE_METHODOLOGY_REL = Path(C.AUTHORITY_V2_2.base_methodology_relative)
 V2_METHODOLOGY_REL = Path(C.AUTHORITY_V2.methodology_relative)
+V22_METHODOLOGY_REL = Path(C.AUTHORITY_V2_2.methodology_relative)
 CREDENTIAL_SENTINEL = "pqv2-core-credential-sentinel-9f31"
 
 _CREDENTIAL_KEYS = (
@@ -57,7 +58,7 @@ _EXPECTED_CS_LINE = (
     '{"correction_set":"pq-v2-S2","form":"[min(lo,m_obs),max(hi,m_obs)]",'
     '"hi":1.5,"lo":0.5,"model":"PREDECLARED_CORRECTION_SENSITIVITY"}'
 )
-_EXPECTED_V21_ED_LINE = (
+_EXPECTED_ED_LINE = (
     '{"rules":["tri_log_linear_prefix_cancellation","lag_shift",'
     '"rolling_window_union_numerical","arithmetic_conservative_union",'
     '"cross_sectional_whole_row","label_candidate_e_[f,next(e)]",'
@@ -65,7 +66,12 @@ _EXPECTED_V21_ED_LINE = (
     '"reserve_unknown_not_assessed","source_unresolved_unknown_not_assessed"],'
     '"version":"pq-v2.1-ed-2"}'
 )
-_EXPECTED_ED_LINE = (
+_EXPECTED_CE_LINE = (
+    '{"classes":{"simple_exact":["C1-H1","C1-H2","C1-H3","C1-H6","C1-H7"],'
+    '"std_x_rank_sandwich":["C1-H4","C1-H5"]},'
+    '"other":"NOT_ASSESSED_UNLESS_SEPARATELY_FROZEN","version":"pq-v2-ce-1"}'
+)
+_EXPECTED_V22_ED_LINE = (
     '{"rules":["tri_log_linear_prefix_cancellation","lag_shift",'
     '"rolling_window_union_numerical","arithmetic_conservative_union",'
     '"cross_sectional_whole_row","label_candidate_e_[f,next(e)]",'
@@ -73,12 +79,7 @@ _EXPECTED_ED_LINE = (
     '"reserve_unknown_not_assessed","source_unresolved_unknown_not_assessed",'
     '"add_sub_support_union"],"version":"pq-v2.2-ed-3"}'
 )
-_EXPECTED_V21_CE_LINE = (
-    '{"classes":{"simple_exact":["C1-H1","C1-H2","C1-H3","C1-H6","C1-H7"],'
-    '"std_x_rank_sandwich":["C1-H4","C1-H5"]},'
-    '"other":"NOT_ASSESSED_UNLESS_SEPARATELY_FROZEN","version":"pq-v2-ce-1"}'
-)
-_EXPECTED_CE_LINE = (
+_EXPECTED_V22_CE_LINE = (
     '{"classes":{"simple_exact":"GRAMMAR_SIMPLE_G_v1",'
     '"std_x_rank_sandwich":"GRAMMAR_STD_X_RANK_G_v1"},'
     '"bounds":{"lookback_max":504,"window_min":2,"window_max":504},'
@@ -124,10 +125,10 @@ def _copy_authority_tree(tmp_path: Path) -> Path:
 
     root = tmp_path / "repo"
     relatives = {
-        C.CURRENT_AUTHORITY.methodology_relative,
-        C.CURRENT_AUTHORITY.base_methodology_relative,
         C.AUTHORITY_V2.methodology_relative,
         C.AUTHORITY_V2_1.methodology_relative,
+        C.AUTHORITY_V2_2.methodology_relative,
+        C.AUTHORITY_V2_2.base_methodology_relative,
     }
     for relative in relatives:
         doc = root / relative
@@ -172,7 +173,7 @@ def _recompute_v22_canonical_lines() -> dict[str, str]:
     base_ed["version"] = "pq-v2.2-ed-3"
     ed_line = json.dumps(base_ed, separators=(",", ":"), ensure_ascii=True)
 
-    amendment_text = (REPO_ROOT / METHODOLOGY_REL).read_text(encoding="utf-8")
+    amendment_text = (REPO_ROOT / V22_METHODOLOGY_REL).read_text(encoding="utf-8")
     ce_line = _document_block_after(amendment_text, "CE-ID v2.2")
     return {"ED": ed_line, "CE": ce_line}
 
@@ -222,12 +223,12 @@ def test_identity_constants_match_document() -> None:
 
     assert len(C.METHODOLOGY_SHA256) == 64
     assert C.METHODOLOGY_SHA256 == (
-        "ab12886cdbac42725bcc283d2e37567e15340b3b80cb603f2a4df8a31a77af76"
+        "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
     )
 
 
 def test_v22_authority_constants() -> None:
-    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_2
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
     assert C.AUTHORITY_V2_2.version == "P-Q v2.2"
     assert C.AUTHORITY_V2_2.methodology_relative == (
         "docs/discovery_dataset_v1_2_pq_v2_2_amendment.md"
@@ -248,10 +249,12 @@ def test_v22_authority_constants() -> None:
     assert C.AUTHORITY_V2_2.base_methodology_sha256 == (
         "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
     )
-    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_2.methodology_sha256
-    assert C.CS_ID == C.AUTHORITY_V2_2.cs_id
-    assert C.ED_ID == C.AUTHORITY_V2_2.ed_id
-    assert C.CE_ID == C.AUTHORITY_V2_2.ce_id
+    # v2.2 is admitted but not current; the module constants follow v2.1.
+    assert C.ADMITTED_AUTHORITIES == (C.AUTHORITY_V2_1, C.AUTHORITY_V2_2)
+    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C.CS_ID == C.AUTHORITY_V2_1.cs_id
+    assert C.ED_ID == C.AUTHORITY_V2_1.ed_id
+    assert C.CE_ID == C.AUTHORITY_V2_1.ce_id
     for historical in (C.AUTHORITY_V2, C.AUTHORITY_V2_1):
         assert historical.base_methodology_relative is None
         assert historical.base_methodology_sha256 is None
@@ -259,52 +262,61 @@ def test_v22_authority_constants() -> None:
 
 def test_v22_canonical_line_recomputation() -> None:
     recomputed = _recompute_v22_canonical_lines()
-    assert recomputed["ED"] == _EXPECTED_ED_LINE
-    assert recomputed["CE"] == _EXPECTED_CE_LINE
-    assert hashlib.sha256(recomputed["ED"].encode("utf-8")).hexdigest() == C.ED_ID
-    assert hashlib.sha256(recomputed["CE"].encode("utf-8")).hexdigest() == C.CE_ID
+    assert recomputed["ED"] == _EXPECTED_V22_ED_LINE
+    assert recomputed["CE"] == _EXPECTED_V22_CE_LINE
+    assert hashlib.sha256(recomputed["ED"].encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_2.ed_id
+    )
+    assert hashlib.sha256(recomputed["CE"].encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_2.ce_id
+    )
 
-    # The module's own document-derived lines must agree with the independent
-    # recomputation and reproduce the frozen constants.
-    lines = C.identity_lines(REPO_ROOT)
+    # The module's own document-derived lines, selected through the admitted
+    # v2.2 authority, must agree with the independent recomputation.
+    lines = C.identity_lines(REPO_ROOT, authority=C.AUTHORITY_V2_2)
     assert lines["ED"] == recomputed["ED"]
     assert lines["CE"] == recomputed["CE"]
     assert lines["CS"] == C.identity_lines(REPO_ROOT, authority=C.AUTHORITY_V2_1)[
         "CS"
     ]
-    assert hashlib.sha256(lines["ED"].encode("utf-8")).hexdigest() == C.ED_ID
-    assert hashlib.sha256(lines["CE"].encode("utf-8")).hexdigest() == C.CE_ID
-    hashes = C.recompute_identity_hashes(REPO_ROOT)
-    assert hashes["methodology"] == C.METHODOLOGY_SHA256
-    assert hashes["CS"] == C.CS_ID
-    assert hashes["ED"] == C.ED_ID
-    assert hashes["CE"] == C.CE_ID
+    assert hashlib.sha256(lines["ED"].encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_2.ed_id
+    )
+    assert hashlib.sha256(lines["CE"].encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_2.ce_id
+    )
+    hashes = C.recompute_identity_hashes(REPO_ROOT, authority=C.AUTHORITY_V2_2)
+    assert hashes["methodology"] == C.AUTHORITY_V2_2.methodology_sha256
+    assert hashes["CS"] == C.AUTHORITY_V2_2.cs_id
+    assert hashes["ED"] == C.AUTHORITY_V2_2.ed_id
+    assert hashes["CE"] == C.AUTHORITY_V2_2.ce_id
 
 
 def test_v21_and_v2_authorities_still_verify() -> None:
     assert C.verify_authority(REPO_ROOT, authority=C.AUTHORITY_V2) is None
     assert C.verify_authority(REPO_ROOT, authority=C.AUTHORITY_V2_1) is None
+    assert C.verify_authority(REPO_ROOT, authority=C.AUTHORITY_V2_2) is None
     v21_lines = C.identity_lines(REPO_ROOT, authority=C.AUTHORITY_V2_1)
-    assert v21_lines["ED"] == _EXPECTED_V21_ED_LINE
-    assert v21_lines["CE"] == _EXPECTED_V21_CE_LINE
+    assert v21_lines["ED"] == _EXPECTED_ED_LINE
+    assert v21_lines["CE"] == _EXPECTED_CE_LINE
     assert C.AUTHORITY_V2_1.ed_id != C.AUTHORITY_V2_2.ed_id
     assert C.AUTHORITY_V2_1.ce_id != C.AUTHORITY_V2_2.ce_id
 
 
 def test_verify_authority_rejects_tampered_amendment(tmp_path: Path) -> None:
     root = _copy_authority_tree(tmp_path)
-    assert C.verify_authority(root) is None
-    doc = root / METHODOLOGY_REL
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_2) is None
+    doc = root / V22_METHODOLOGY_REL
     text = doc.read_text(encoding="utf-8")
     text = text.replace('"version":"pq-v2.2-ce-2"', '"version":"pq-v2.2-ce-9"')
     doc.write_text(text, encoding="utf-8")
     with pytest.raises(C.PQv2BindingError):
-        C.verify_authority(root)
+        C.verify_authority(root, authority=C.AUTHORITY_V2_2)
 
 
 def test_verify_authority_rejects_tampered_base_document(tmp_path: Path) -> None:
     root = _copy_authority_tree(tmp_path)
-    assert C.verify_authority(root) is None
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_2) is None
     base_doc = root / BASE_METHODOLOGY_REL
     text = base_doc.read_text(encoding="utf-8")
     base_doc.write_text(
@@ -312,7 +324,7 @@ def test_verify_authority_rejects_tampered_base_document(tmp_path: Path) -> None
         encoding="utf-8",
     )
     with pytest.raises(C.PQv2BindingError):
-        C.verify_authority(root)
+        C.verify_authority(root, authority=C.AUTHORITY_V2_2)
 
 
 def test_verify_authority_passes_on_repository() -> None:
@@ -346,7 +358,7 @@ def test_verify_authority_rejects_tampered_identity_line(
     # The base hash check would fire first; pin the tampered base document's
     # hash so the test isolates the v2.2 identity-line recomputation (b).
     tampered = dataclasses.replace(
-        C.CURRENT_AUTHORITY,
+        C.AUTHORITY_V2_2,
         base_methodology_sha256=hashlib.sha256(base_doc.read_bytes()).hexdigest(),
     )
     with pytest.raises(C.PQv2BindingError):
@@ -629,9 +641,10 @@ def test_notassessed_causes_roundtrip() -> None:
 
 
 def test_verify_authority_binds_v21_methodology_hash() -> None:
-    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_2
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
     assert C.verify_authority(REPO_ROOT) is None
-    assert C.AUTHORITY_V2_1.methodology_sha256 == (
+    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C.METHODOLOGY_SHA256 == (
         "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
     )
     assert C.AUTHORITY_V2_2.base_methodology_sha256 == (
@@ -645,7 +658,7 @@ def test_v21_ed_id_frozen_value() -> None:
         "65bd7d1341e70674132bc7729870876adf5457fe9ce4c277d0f1148df343a4d6"
     )
     assert C.AUTHORITY_V2_1.ed_id != C.AUTHORITY_V2.ed_id
-    assert C.AUTHORITY_V2_1.ed_id != C.ED_ID
+    assert C.ED_ID == C.AUTHORITY_V2_1.ed_id
 
 
 def test_cs_id_frozen_value() -> None:
@@ -660,17 +673,19 @@ def test_cs_id_frozen_value() -> None:
 def test_ce_id_frozen_value() -> None:
     assert C.CE_ID == C.CURRENT_AUTHORITY.ce_id
     assert C.CE_ID == (
-        "81cafb32030681023be9328c0ceda1d9d78e502071377692b19dc302ce699d5d"
+        "605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf"
     )
-    assert C.CE_ID != C.AUTHORITY_V2_1.ce_id
+    assert C.CE_ID == C.AUTHORITY_V2_1.ce_id
+    assert C.CE_ID != C.AUTHORITY_V2_2.ce_id
 
 
-def test_require_current_authority_rejects_stale_v21() -> None:
+def test_require_current_authority_binds_v21_and_rejects_stale() -> None:
     assert (
         C.require_current_authority(C.METHODOLOGY_SHA256, C.CS_ID, C.ED_ID, C.CE_ID)
         is None
     )
-    for stale in (C.AUTHORITY_V2, C.AUTHORITY_V2_1):
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
+    for stale in (C.AUTHORITY_V2, C.AUTHORITY_V2_2):
         with pytest.raises(C.PQv2BindingError):
             C.require_current_authority(
                 stale.methodology_sha256,
@@ -680,12 +695,66 @@ def test_require_current_authority_rejects_stale_v21() -> None:
             )
     with pytest.raises(C.PQv2BindingError):
         C.require_current_authority(
-            C.METHODOLOGY_SHA256, C.CS_ID, C.AUTHORITY_V2_1.ed_id, C.CE_ID
+            C.AUTHORITY_V2.methodology_sha256, C.CS_ID, C.ED_ID, C.CE_ID
         )
     with pytest.raises(C.PQv2BindingError):
         C.require_current_authority(
-            C.METHODOLOGY_SHA256, C.CS_ID, C.ED_ID, C.AUTHORITY_V2_1.ce_id
+            C.METHODOLOGY_SHA256, C.CS_ID, C.AUTHORITY_V2.ed_id, C.CE_ID
         )
+
+
+def test_require_admitted_authority_selects_v21_and_v22() -> None:
+    assert C.ADMITTED_AUTHORITIES == (C.AUTHORITY_V2_1, C.AUTHORITY_V2_2)
+    assert (
+        C.require_admitted_authority(
+            C.AUTHORITY_V2_1.methodology_sha256,
+            C.AUTHORITY_V2_1.ed_id,
+            C.AUTHORITY_V2_1.ce_id,
+        )
+        is C.AUTHORITY_V2_1
+    )
+    assert (
+        C.require_admitted_authority(
+            C.AUTHORITY_V2_2.methodology_sha256,
+            C.AUTHORITY_V2_2.ed_id,
+            C.AUTHORITY_V2_2.ce_id,
+        )
+        is C.AUTHORITY_V2_2
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.require_admitted_authority(
+            C.AUTHORITY_V2.methodology_sha256,
+            C.AUTHORITY_V2.ed_id,
+            C.AUTHORITY_V2.ce_id,
+        )
+    with pytest.raises(C.PQv2BindingError):
+        C.require_admitted_authority(
+            C.AUTHORITY_V2_1.methodology_sha256,
+            C.AUTHORITY_V2_2.ed_id,
+            C.AUTHORITY_V2_2.ce_id,
+        )
+
+
+def test_campaign2_binding_uses_current_v21() -> None:
+    """The frozen Campaign-2 consumer stays bound to the current v2.1 authority.
+
+    ``runner2`` requires ``CURRENT_AUTHORITY is AUTHORITY_V2_1`` and
+    ``campaign2`` takes its methodology/ED/CE identities from the current
+    authority, so this reproduces ``test_campaign2_executor``'s binding here.
+    """
+
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
+    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C.CS_ID == C.AUTHORITY_V2_1.cs_id
+    assert C.ED_ID == C.AUTHORITY_V2_1.ed_id
+    assert C.CE_ID == C.AUTHORITY_V2_1.ce_id
+
+    from smart_beta.campaign import campaign2 as C2
+
+    assert C2.PQ_METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C2.PQ_CS_ID == C.AUTHORITY_V2_1.cs_id
+    assert C2.PQ_ED_ID == C.AUTHORITY_V2_1.ed_id
+    assert C2.PQ_CE_ID == C.AUTHORITY_V2_1.ce_id
 
 
 def test_tampered_amendment_rejected_and_historical_authorities_pass(
@@ -695,14 +764,15 @@ def test_tampered_amendment_rejected_and_historical_authorities_pass(
     assert C.verify_authority(root) is None
     assert C.verify_authority(root, authority=C.AUTHORITY_V2) is None
     assert C.verify_authority(root, authority=C.AUTHORITY_V2_1) is None
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_2) is None
 
-    doc = root / METHODOLOGY_REL
+    doc = root / V22_METHODOLOGY_REL
     text = doc.read_text(encoding="utf-8")
     doc.write_text("# tampered title line\n" + text.split("\n", 1)[1], encoding="utf-8")
     with pytest.raises(C.PQv2BindingError):
-        C.verify_authority(root)
-    # The preserved v2 and v2.1 documents are byte-unchanged, so their
-    # historical authorities still verify in the same tree.
+        C.verify_authority(root, authority=C.AUTHORITY_V2_2)
+    # The current v2.1 document and the preserved v2 document are unchanged.
+    assert C.verify_authority(root) is None
     assert C.verify_authority(root, authority=C.AUTHORITY_V2) is None
     assert C.verify_authority(root, authority=C.AUTHORITY_V2_1) is None
     assert not (root / V2_METHODOLOGY_REL).read_bytes().startswith(
@@ -1007,7 +1077,7 @@ def test_mutation_fixture_contract() -> None:
         "A21-M8",
         "A21-M9",
         "A21-M10",
-        "V22-M08",
+        "V22-M08'",
         "V22-M09",
         "A22-M1",
     ]

@@ -247,16 +247,16 @@
     "test": "tests/test_pqv2_core.py::test_resolved_and_non_period_reasons_rejected"
   },
   {
-    "id": "V22-M08",
-    "description": "the v2.1 identities stay current instead of binding v2.2",
+    "id": "V22-M08'",
+    "description": "CURRENT_AUTHORITY switched away from the Campaign-2 v2.1 binding to v2.2",
     "file": "smart_beta/dataset_v1/pqv2_core.py",
     "edits": [
       {
-        "old": "CURRENT_AUTHORITY = AUTHORITY_V2_2",
-        "new": "CURRENT_AUTHORITY = AUTHORITY_V2_1"
+        "old": "CURRENT_AUTHORITY = AUTHORITY_V2_1",
+        "new": "CURRENT_AUTHORITY = AUTHORITY_V2_2"
       }
     ],
-    "test": "tests/test_pqv2_core.py::test_v22_authority_constants"
+    "test": "tests/test_pqv2_core.py::test_campaign2_binding_uses_current_v21"
   },
   {
     "id": "V22-M09",
@@ -264,8 +264,8 @@
     "file": "smart_beta/dataset_v1/pqv2_core.py",
     "edits": [
       {
-        "old": "            if actual_base != authority.base_methodology_sha256:",
-        "new": "            if False:  # V22-M09: base document hash check bypassed"
+        "old": "        if actual_base != authority.base_methodology_sha256:",
+        "new": "        if False:  # V22-M09: base document hash check bypassed"
       }
     ],
     "test": "tests/test_pqv2_core.py::test_verify_authority_rejects_tampered_base_document"
