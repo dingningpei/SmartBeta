@@ -1455,10 +1455,9 @@ def build_pqv2_diagnostics(
 
     for formation in formations:
         universe = universe_by_formation[formation]
-        values = {
-            key: factor_values.get((formation, key), math.nan) for key in universe
-        }
         b_groups = group_by_formation.get(formation, {})
+        ranked = _ranked_members(formation, universe, factor_values, b_groups)
+        values = {key: factor_values[(formation, key)] for key in ranked}
         b_groups_by_period[formation] = b_groups
         labels = _labels_for_formation(
             formation,
@@ -1473,7 +1472,7 @@ def build_pqv2_diagnostics(
         cross_by_period[formation] = cross_keys
         assignment_by_period[formation] = _assignment_for_formation(
             formation,
-            universe,
+            ranked,
             values,
             source_set,
             windows,
@@ -1712,6 +1711,36 @@ def _factor_lookup(factor_panel: pd.DataFrame) -> dict[tuple[date, str], float]:
             continue
         out[(parsed, str(row.stock_id))] = float(row.value)
     return out
+
+
+def _ranked_members(
+    formation: date,
+    universe: Sequence[str],
+    factor_values: Mapping[tuple[date, str], float],
+    b_groups: Mapping[str, int],
+) -> tuple[str, ...]:
+    """The per-formation ranked set: the finite-factor universe members.
+
+    M§2 groups over the ``n`` non-NaN members, so the set D and E rank/assign
+    over is exactly the formation universe's members with a finite observed
+    factor value -- never the whole universe with NaN members converted to a
+    bounded value.  That set is, by construction, exactly B's grouped members
+    at the formation (``b_groups`` keys): a mismatch is a frozen invariant
+    violation, not something to reconcile silently.
+    """
+
+    ranked = tuple(
+        sorted(
+            key for key in universe if _is_finite(factor_values.get((formation, key)))
+        )
+    )
+    if set(ranked) != set(b_groups):
+        raise PQv2InvariantError(
+            "finite-factor ranked set != B's grouped set at "
+            f"{formation}: finite_only={sorted(set(ranked) - set(b_groups))} "
+            f"b_only={sorted(set(b_groups) - set(ranked))}"
+        )
+    return ranked
 
 
 def _scenario_lookup(panel: pd.DataFrame) -> dict[tuple[date, str], float]:
