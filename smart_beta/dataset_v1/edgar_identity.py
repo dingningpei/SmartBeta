@@ -35,17 +35,24 @@ Every input key produces exactly one output row; unmapped keys are never
 dropped (V§3, M2 limitation 2).  The IM-P audit is evaluated only on the
 sampled keys **with** symbol evidence, and the §8 rule turns an undersized
 evidence base into ``NOT_CERTIFIED`` rather than a weak ``PASS``.
+
+As amended by V13-E3, the module also reads the stored E-1-R2 L2 primary
+documents (``extract_trading_symbols``, ``build_symbol_evidence``) so the
+audit's evidence is the independently observed cover-page
+``dei:TradingSymbol``, normalized against the key's D4 ticker.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import random
+import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 import pandas as pd
 import pyarrow as pa
@@ -99,6 +106,9 @@ __all__ = [
     "IdentityRow",
     "SymbolEvidence",
     "ImPAuditResult",
+    "normalize_symbol",
+    "extract_trading_symbols",
+    "build_symbol_evidence",
     "coerce_key",
     "load_edgar_reference",
     "parse_tiingo_names",
@@ -784,16 +794,188 @@ def read_identity_map(path: str | Path) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# IM-P — seeded sample, symbol-evidence audit, gate
+# IM-P — seeded sample, L2 symbol evidence (V13-E3 §2), audit, gate
 # ---------------------------------------------------------------------------
+
+#: The E-1-R2 raw-store directory holding the L2 primary documents.
+SYMBOL_EVIDENCE_DIR = "symbol_evidence"
+
+#: The E-1-R2 record of keys with no inline-XBRL periodic filing.
+NO_INLINE_XBRL_FILE = "no_inline_xbrl.json"
+
+#: An inline-XBRL fact whose ``name`` is ``dei:TradingSymbol`` (any case).
+_TRADING_SYMBOL_RE = re.compile(
+    r"<ix:nonNumeric\b[^>]*\bname\s*=\s*[\"']dei:TradingSymbol[\"'][^>]*>"
+    r"(.*?)</ix:nonNumeric>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def normalize_symbol(value: Any) -> str:
+    """Uppercase ``value`` and drop ``.``, ``-``, ``/`` and whitespace.
+
+    ``BRK.B``, ``BRK-B``, ``brk b`` and ``BRK/B`` all normalize to ``BRKB``
+    so a D4 ticker and its inline-XBRL spelling compare equal.
+    """
+    text = str(value).upper()
+    for ch in (".", "-", "/"):
+        text = text.replace(ch, "")
+    return "".join(text.split())
+
+
+def extract_trading_symbols(document_bytes: bytes | str) -> tuple[str, ...]:
+    """Every normalized ``dei:TradingSymbol`` in an inline-XBRL document.
+
+    Each inline-XBRL fact inside ``ix:nonNumeric`` whose ``name`` is
+    ``dei:TradingSymbol`` (matched case-insensitively) is stripped of its
+    inner tags and whitespace, uppercased and normalized with
+    :func:`normalize_symbol`; empty values are dropped.  The result is a
+    sorted, distinct tuple.  A malformed or absent tag yields no symbol.
+    """
+    if isinstance(document_bytes, bytes):
+        text = document_bytes.decode("utf-8", errors="replace")
+    else:
+        text = str(document_bytes)
+    symbols: set[str] = set()
+    for inner in _TRADING_SYMBOL_RE.findall(text):
+        cleaned = html.unescape(_TAG_RE.sub(" ", inner))
+        normalized = normalize_symbol(cleaned)
+        if normalized:
+            symbols.add(normalized)
+    return tuple(sorted(symbols))
+
+
+def _read_no_inline_keys(root: Path) -> frozenset[str]:
+    """The E-1-R2 ``no_inline_xbrl.json`` security keys (sorted list)."""
+    path = root / SYMBOL_EVIDENCE_DIR / NO_INLINE_XBRL_FILE
+    if not path.exists():
+        return frozenset()
+    data = _json_loads(path.read_bytes())
+    if not isinstance(data, list):
+        return frozenset()
+    return frozenset(str(item) for item in data if item is not None)
+
+
+def _row_field(row: Any, name: str) -> Any:
+    """Read ``name`` from a mapping row or an attribute row (E-1 request)."""
+    if isinstance(row, Mapping):
+        return row.get(name)
+    return getattr(row, name, None)
+
+
+def _row_document_paths(root: Path, row: Any) -> Iterator[Path]:
+    """The stored primary-document paths for one L2 row.
+
+    The row may carry an explicit ``relpath`` (E-1's ``FetchRequest``), the
+    ``cik`` plus ``accession``/``primaryDocument`` triple (from which the
+    E-1-R2 relpath is rebuilt), or the ``cik`` alone (every stored document
+    under that CIK is read).
+    """
+    relpath = _row_field(row, "relpath") or _row_field(row, "path")
+    if relpath:
+        yield root / str(relpath)
+        return
+    cik = _row_field(row, "cik")
+    if cik is None:
+        return
+    accession = _row_field(row, "accession") or _row_field(row, "accessionNumber")
+    document = _row_field(row, "primaryDocument") or _row_field(
+        row, "primary_document"
+    )
+    if accession and document:
+        folder = str(accession).replace("-", "")
+        yield root / SYMBOL_EVIDENCE_DIR / str(int(cik)) / folder / str(document)
+        return
+    base = root / SYMBOL_EVIDENCE_DIR / str(int(cik))
+    if base.is_dir():
+        for accession_dir in sorted(base.iterdir()):
+            if not accession_dir.is_dir():
+                continue
+            for doc in sorted(accession_dir.iterdir()):
+                if doc.is_file() and doc.suffix.lower() != ".json":
+                    yield doc
+
+
+def _symbol_verdict(
+    observed_symbols: Sequence[str], ticker: str | None
+) -> str:
+    """The E-2-R2 verdict for one key's extracted symbol union.
+
+    CONFIRMED when the normalized D4 ticker is one of the observed symbols,
+    CONTRADICTED when the union is non-empty but the ticker is absent, and
+    NO_SYMBOL_EVIDENCE when there is no union (including a key recorded as
+    ``NO_INLINE_XBRL_FILING``).
+    """
+    if not observed_symbols:
+        return AUDIT_NO_SYMBOL_EVIDENCE
+    normalized_ticker = normalize_symbol(ticker) if ticker else ""
+    if normalized_ticker and normalized_ticker in set(observed_symbols):
+        return AUDIT_CONFIRMED
+    return AUDIT_CONTRADICTED
+
+
+def build_symbol_evidence(
+    raw_root: str | Path,
+    sample_rows: Iterable[Any],
+) -> dict[str, SymbolEvidence]:
+    """Read the stored L2 documents and classify each sampled key.
+
+    ``raw_root`` is an E-1 raw acquisition directory.  Each row of
+    ``sample_rows`` names a sampled key (``security_key``, ``cik`` and, for
+    the verdict, ``ticker``) and either an explicit document ``relpath``, the
+    ``accession``/``primaryDocument`` pair, or just its ``cik``.  Keys listed
+    in ``symbol_evidence/no_inline_xbrl.json`` carry no documents and are
+    always NO_SYMBOL_EVIDENCE.  The observed symbols are the sorted union of
+    :func:`extract_trading_symbols` over the key's fetched documents, and the
+    verdict follows :func:`_symbol_verdict`.  IM-P's :func:`audit_im_p`
+    recomputes the gate verdicts from ``observed_symbols`` unchanged.
+    """
+    root = Path(raw_root)
+    no_inline = _read_no_inline_keys(root)
+    observed: dict[str, set[str]] = {}
+    tickers: dict[str, str] = {}
+    order: list[str] = []
+    for row in sample_rows:
+        key = _row_field(row, "security_key")
+        if key is None:
+            continue
+        key = str(key)
+        if key not in observed:
+            observed[key] = set()
+            order.append(key)
+        ticker = _row_field(row, "ticker")
+        if ticker:
+            tickers.setdefault(key, str(ticker))
+        if key in no_inline:
+            continue
+        for path in _row_document_paths(root, row):
+            if path.is_file():
+                observed[key].update(extract_trading_symbols(path.read_bytes()))
+    result: dict[str, SymbolEvidence] = {}
+    for key in order:
+        symbols = tuple(sorted(observed[key]))
+        result[key] = SymbolEvidence(
+            key, symbols, _symbol_verdict(symbols, tickers.get(key))
+        )
+    for key in sorted(no_inline):
+        result.setdefault(key, SymbolEvidence(key, (), AUDIT_NO_SYMBOL_EVIDENCE))
+    return result
 
 
 @dataclass(frozen=True)
 class SymbolEvidence:
-    """The independently observed cover-page trading symbol(s) for a key."""
+    """The independently observed cover-page trading symbol(s) for a key.
+
+    ``verdict`` is the E-2-R2 classification of those symbols against the
+    key's normalized D4 ticker (``CONFIRMED`` / ``CONTRADICTED`` /
+    ``NO_SYMBOL_EVIDENCE``); it is informational, and :func:`audit_im_p`
+    stays the gate's verdict authority, recomputing from ``observed_symbols``.
+    """
 
     security_key: str
     observed_symbols: tuple[str, ...] = ()
+    verdict: str = AUDIT_NOT_SAMPLED
 
 
 def _coerce_evidence(value: Any) -> tuple[str, ...]:
