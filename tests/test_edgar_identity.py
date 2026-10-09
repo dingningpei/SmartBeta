@@ -174,11 +174,21 @@ def test_load_edgar_reference_reads_e1_layout() -> None:
     ref = I.load_edgar_reference(RAW)
     assert ref.company_tickers["ZYX"] == (111,)
     assert ref.cik_lookup["ex why zee"] == (1234567,)
-    assert set(ref.submissions) == {111, 1234567}
-    # The paginated files/*.json rows are merged into the CIK view.
+    assert ref.cik_lookup["nova systems"] == (777,)
+    assert set(ref.submissions) == {111, 1234567, 777}
+    # The current issuer name is the real top-level ``name`` key.
+    assert ref.submissions[111].entity_name == "Zyx First Inc."
+    assert ref.submissions[1234567].entity_name == "Ex Why Zee Holdings"
+    assert ref.submissions[777].entity_name == "Nova Systems Inc."
+    # The former-name bounds are the real ISO-8601 datetimes.
+    assert ref.submissions[1234567].former_names == (
+        ("Ex Why Zee Corp", date(2010, 1, 1), date(2018, 1, 1)),
+    )
+    # The paginated files/*.json rows (real top-level arrays) are merged.
     view = ref.submissions[111]
     assert {row["form"] for row in view.filings} == {"10-Q", "10-K"}
     assert ref.issuer_names["K-EX"] == ("Ex Why Zee Corp",)
+    assert ref.issuer_names["K-NOVA"] == ("Nova Systems Inc.",)
 
 
 def test_resolve_from_raw_fixture_ticker_and_name_routes() -> None:
@@ -300,6 +310,27 @@ def test_name_route_keeps_current_name_open_ended() -> None:
         submissions=submissions,
     )
     assert rows[0].status == I.STATUS_MAPPED and rows[0].cik == 10
+
+
+def test_name_route_uses_real_current_name_key() -> None:
+    """The real submissions key is ``name``, never ``entityName``.
+
+    CIK 777's current ``name`` matches the key's issuer name and its
+    ``formerNames`` is empty, so reading ``entityName`` (mutation E2-M5)
+    drops the only candidate and the key becomes NO_CANDIDATE.
+    """
+    ref = I.load_edgar_reference(RAW)
+    rows = I.resolve_identity(
+        [_key("K-NOVA", "NOVA", date(2015, 1, 1), date(2017, 12, 31))],
+        company_tickers=ref.company_tickers,
+        cik_lookup=ref.cik_lookup,
+        submissions=ref.submissions,
+        issuer_names=ref.issuer_names,
+    )
+    assert rows[0].route == I.ROUTE_NAME
+    assert rows[0].status == I.STATUS_MAPPED
+    assert rows[0].cik == 777
+    assert ref.submissions[777].entity_name == "Nova Systems Inc."
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +857,7 @@ def test_mutation_fixture_contract() -> None:
         "E2-M2",
         "E2-M3",
         "E2-M4",
+        "E2-M5",
     ]
     source = (
         REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_identity.py"
