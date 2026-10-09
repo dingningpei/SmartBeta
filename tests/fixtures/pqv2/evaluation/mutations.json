@@ -12,8 +12,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    certified = _dependency.certify(factor_spec)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(declaration, factor_spec, certified.reason)",
-        "new": "    certified = _dependency.certify(factor_spec)\n    if isinstance(certified, _core.NotAssessed) and certified.reason != _core.NotAssessedReason.SIGN_NOT_CERTIFIED:\n        return _blank_diagnostics(declaration, factor_spec, certified.reason)\n    if isinstance(certified, _core.NotAssessed):\n        certified = _dependency.CertifiedClass(_dependency.SIMPLE, \"C1-H1\")"
+        "old": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )",
+        "new": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed) and certified.reason != _core.NotAssessedReason.SIGN_NOT_CERTIFIED:\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )\n    if isinstance(certified, _core.NotAssessed):\n        certified = _dependency.CertifiedClass(\n            _dependency.SIMPLE,\n            \"C1-H1\",\n            ed_id=authority.ed_id,\n            ce_id=authority.ce_id,\n        )"
       },
       {
         "old": "        declaration.base.primary_metric,\n        int(factor_spec.sign),\n        declaration.base.transaction_cost_bps,",
@@ -40,8 +40,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:\n    \"\"\"The typed identity-mismatch reason, or ``None`` when the declaration binds.\"\"\"\n\n    if declaration.pq_methodology != PQ_METHODOLOGY:",
-        "new": "def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:\n    \"\"\"The typed identity-mismatch reason, or ``None`` when the declaration binds.\"\"\"\n\n    return None  # V2-M19 declaration identity comparison removed\n    if declaration.pq_methodology != PQ_METHODOLOGY:"
+        "old": "    authority = _declaration_authority(declaration)\n    if authority is None:\n        return _core.NotAssessedReason.IDENTITY_MISMATCH",
+        "new": "    return None  # V2-M19 declaration identity comparison removed\n    authority = _declaration_authority(declaration)\n    if authority is None:\n        return _core.NotAssessedReason.IDENTITY_MISMATCH"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_declaration_identity_mismatch_blank_and_no_reads"
@@ -136,8 +136,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "        b_diagnostics_hash=diag_b.diagnostics_hash,\n        b_diagnostics=diag_b,",
-        "new": "        b_diagnostics_hash=None,  # H-M8\n        b_diagnostics=None,  # H-M8"
+        "old": "        b_diagnostics_hash=diag_b.diagnostics_hash,\n        methodology_version=None if authority is None else authority.version,\n        base_methodology_sha256=(\n            None if authority is None else authority.base_methodology_sha256\n        ),\n        b_diagnostics=diag_b,",
+        "new": "        b_diagnostics_hash=None,  # H-M8\n        methodology_version=None if authority is None else authority.version,\n        base_methodology_sha256=(\n            None if authority is None else authority.base_methodology_sha256\n        ),\n        b_diagnostics=None,  # H-M8"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_b_diagnostics_attached_and_hashed"
@@ -148,8 +148,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if envelope.gate_reason is not None:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n        )",
-        "new": "    if False:  # H-M9 legacy SIMPLE rule tag accepted\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n        )"
+        "old": "    if envelope.gate_reason is not None:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n        )",
+        "new": "    if False:  # H-M9 legacy SIMPLE rule tag accepted\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_legacy_simple_rule_tag_fails_closed"
@@ -172,8 +172,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if identity_hash != declaration.dataset_identity_hash:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n        )",
-        "new": "    if False:  # H-M11 upstream dataset identity hash ignored\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n        )"
+        "old": "    if identity_hash != declaration.dataset_identity_hash:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n        )",
+        "new": "    if False:  # H-M11 upstream dataset identity hash ignored\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_dataset_identity_mismatch_blank"
@@ -322,8 +322,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if declaration.methodology_sha256 != _core.METHODOLOGY_SHA256:\n        return _core.NotAssessedReason.IDENTITY_MISMATCH",
-        "new": "    if declaration.methodology_sha256 not in (\n        _core.METHODOLOGY_SHA256, _core.AUTHORITY_V2.methodology_sha256\n    ):  # H21-M1 v2 identity accepted\n        return _core.NotAssessedReason.IDENTITY_MISMATCH"
+        "old": "    try:\n        return _core.require_admitted_authority(\n            declaration.methodology_sha256,\n            declaration.ed_id,\n            declaration.ce_id,\n        )\n    except _core.PQv2BindingError:\n        return None",
+        "new": "    try:\n        return _core.require_admitted_authority(\n            declaration.methodology_sha256,\n            declaration.ed_id,\n            declaration.ce_id,\n        )\n    except _core.PQv2BindingError:\n        if declaration.methodology_sha256 == _core.AUTHORITY_V2.methodology_sha256:  # H21-M1 v2 identity accepted\n            return _core.AUTHORITY_V2_2\n        return None"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_v2_methodology_identity_rejected_no_reads"
@@ -367,5 +367,53 @@
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_session_only_source_set_rejects_bare_session"
+  },
+  {
+    "id": "V22-M10",
+    "description": "H rejects an unlabelled grammar-certified spec (hypothesis is None)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )",
+        "new": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if (\n        not isinstance(certified, _core.NotAssessed)\n        and getattr(certified, \"hypothesis\", None) is None\n    ):  # V22-M10 unlabelled grammar spec rejected\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED,\n            authority=authority,\n        )\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_grammar_member_unlabelled_spec_is_assessed"
+  },
+  {
+    "id": "V22-M12",
+    "description": "a C1 non-identity diagnostic field changed (L period index blanked)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        l_periods_t0=b_periods_t0,\n        l_periods_ts=b_periods_ts,",
+        "new": "        l_periods_t0=(),  # V22-M12 non-identity diagnostic field changed\n        l_periods_ts=b_periods_ts,"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_c1_equivalence_v22_matches_v21_golden"
+  },
+  {
+    "id": "H22-M1",
+    "description": "base_methodology_sha256 omitted from the diagnostics",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if self.base_methodology_sha256 is not None:\n            body[\"methodology_version\"] = self.methodology_version\n            body[\"base_methodology_sha256\"] = self.base_methodology_sha256",
+        "new": "        if self.base_methodology_sha256 is not None:\n            body[\"methodology_version\"] = self.methodology_version  # H22-M1 base omitted"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_v22_diagnostics_record_authority_base"
+  },
+  {
+    "id": "V22-M14",
+    "description": "a declaration bound to a non-admitted authority accepted",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "    except _core.PQv2BindingError:\n        return None",
+        "new": "    except _core.PQv2BindingError:\n        return _core.AUTHORITY_V2_2  # V22-M14 non-admitted authority accepted"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_non_admitted_authority_rejected"
   }
 ]

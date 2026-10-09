@@ -33,6 +33,14 @@ from smart_beta.campaign import diagnostics_store as _store
 from smart_beta.dataset_v1 import delisting_bridge as B
 from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_evaluation as E
+from smart_beta.spec.expression import (
+    Div,
+    Sub,
+    field,
+    lag,
+    ratio,
+    rolling_mean,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "pqv2" / "evaluation" / "fixture.py"
@@ -124,6 +132,7 @@ def _build_case(
     overlay_overrides: Mapping[str, Any] | None = None,
     base_overrides: Mapping[str, Any] | None = None,
     d7c_overrides: Mapping[tuple[str, date], float] | None = None,
+    spec_override: Any = None,
 ) -> Case:
     fx = _load_fixture()
     store = fx.SyntheticStore(tmp_path, name="root")
@@ -136,7 +145,7 @@ def _build_case(
     store.build_d7b()
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
-    spec = fx.load_campaign_spec(hypothesis)
+    spec = spec_override if spec_override is not None else fx.load_campaign_spec(hypothesis)
     if sign != 1:
         spec = dataclasses.replace(spec, sign=sign)
     inputs = fx.build_inputs(store)
@@ -1330,6 +1339,214 @@ def test_diagnostics_persist_round_trip_with_causes(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# 12b. PQ22-H v2.2 authority selection, C1 equivalence and grammar members
+# ===========================================================================
+
+_V22_DECLARATION = {
+    "methodology_sha256": C.AUTHORITY_V2_2.methodology_sha256,
+    "ed_id": C.AUTHORITY_V2_2.ed_id,
+    "ce_id": C.AUTHORITY_V2_2.ce_id,
+}
+GOLDEN_PATH = (
+    REPO_ROOT
+    / "tests"
+    / "fixtures"
+    / "pqv2"
+    / "evaluation"
+    / "v21_golden"
+    / "golden.json"
+)
+C1_HYPOTHESES = ("C1-H1", "C1-H2", "C1-H3", "C1-H4", "C1-H5", "C1-H6", "C1-H7")
+_IDENTITY_SENTINELS = {
+    "methodology_sha256": "<METHODOLOGY_SHA256>",
+    "cs_id": "<CS_ID>",
+    "ed_id": "<ED_ID>",
+    "ce_id": "<CE_ID>",
+    "pqv2_code_sha256": "<PQV2_CODE_SHA256>",
+    "declaration_hash": "<DECLARATION_HASH>",
+    "methodology_version": "<METHODOLOGY_VERSION>",
+    "base_methodology_sha256": "<BASE_METHODOLOGY_SHA256>",
+}
+
+
+def _normalized(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The identity/derived-hash sentinel projection of a diagnostics payload.
+
+    Plan §1 C1-equivalence: the identity fields and the hashes derived from
+    them necessarily change between authorities, so they are substituted; every
+    period value, cell, cause set, status, count and data hash stays compared.
+    """
+
+    out = json.loads(B.canonical_json(body))
+    for key, sentinel in _IDENTITY_SENTINELS.items():
+        if key in out:
+            out[key] = sentinel
+    for cell in out["cells"]:
+        cell["declaration_hash"] = _IDENTITY_SENTINELS["declaration_hash"]
+        cell["cell_hash"] = "<CELL_HASH>"
+    return out
+
+
+def _golden() -> dict[str, Any]:
+    return json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+
+
+def test_v21_golden_present_for_all_c1_specs() -> None:
+    assert set(_golden()) == set(C1_HYPOTHESES)
+
+
+@pytest.mark.parametrize("hypothesis", C1_HYPOTHESES)
+def test_c1_equivalence_v22_matches_v21_golden(
+    tmp_path: Path, hypothesis: str
+) -> None:
+    golden = _golden()[hypothesis]
+    golden["methodology_version"] = "<METHODOLOGY_VERSION>"
+    golden["base_methodology_sha256"] = "<BASE_METHODOLOGY_SHA256>"
+    expected = _normalized(golden)
+    case = _build_case(
+        tmp_path,
+        hypothesis=hypothesis,
+        declaration_overrides=_V22_DECLARATION,
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    body = diag.to_dict()
+    assert body["methodology_version"] == C.AUTHORITY_V2_2.version
+    assert (
+        body["base_methodology_sha256"]
+        == C.AUTHORITY_V2_2.base_methodology_sha256
+    )
+    assert _normalized(body) == expected
+
+
+@pytest.mark.parametrize("hypothesis", C1_HYPOTHESES)
+def test_v21_diagnostics_byte_identical_to_golden(
+    tmp_path: Path, hypothesis: str
+) -> None:
+    golden = _normalized(_golden()[hypothesis])
+    case = _build_case(tmp_path, hypothesis=hypothesis)
+    body = case.diagnostics.to_dict()
+    # E1 §4: a v2.1 declaration serializes exactly the pre-v2.2 payload.
+    assert "methodology_version" not in body
+    assert "base_methodology_sha256" not in body
+    assert _normalized(body) == golden
+
+
+def test_v22_diagnostics_record_authority_base(tmp_path: Path) -> None:
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        declaration_overrides=_V22_DECLARATION,
+    )
+    body = case.diagnostics.to_dict()
+    assert body["methodology_version"] == "P-Q v2.2"
+    assert body["base_methodology_sha256"] == (
+        "66772bb1b12a134ca35a3ff5e3d475e00c998b95d3cdcb1e3223fd5f012d5d1e"
+    )
+    directory = tmp_path / "campaign" / "diagnostics"
+    (tmp_path / "campaign").mkdir(parents=True, exist_ok=True)
+    digest = _store.persist(case.diagnostics, directory)
+    loaded = json.loads((directory / f"{digest}.json").read_text(encoding="utf-8"))
+    assert loaded["base_methodology_sha256"] == body["base_methodology_sha256"]
+
+
+def test_non_admitted_authority_rejected(tmp_path: Path) -> None:
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        declaration_overrides={
+            "methodology_sha256": C.AUTHORITY_V2.methodology_sha256,
+            "ed_id": C.AUTHORITY_V2.ed_id,
+            "ce_id": C.AUTHORITY_V2.ce_id,
+        },
+    )
+    assert E._declaration_reason(case.declaration) == C.NotAssessedReason.IDENTITY_MISMATCH
+    assert case.diagnostics.not_assessed == C.NotAssessedReason.IDENTITY_MISMATCH
+
+
+# -- a grammar-certified (hypothesis-less) member end to end ----------------
+
+
+def _input_for(alias: str):
+    fx = _load_fixture()
+    for hypothesis in ("C1-H1", "C1-H4", "C1-H6"):
+        spec = fx.load_campaign_spec(hypothesis)
+        for item in spec.inputs:
+            if item.alias == alias:
+                return item
+    raise KeyError(alias)
+
+
+def _grammar_spec(*, aliases: Sequence[str], expression: Any, sign: int = 1):
+    fx = _load_fixture()
+    base = fx.load_campaign_spec("C1-H4")
+    return dataclasses.replace(
+        base,
+        id="pqv2h_grammar_member",
+        description="PQ22-H A§15A grammar member",
+        expression=expression,
+        inputs=tuple(_input_for(alias) for alias in aliases),
+        sign=sign,
+        hypothesis=None,
+    )
+
+
+def _add_sub_dv_member():
+    forward = ratio(lag(field("tri"), 21), lag(field("tri"), 252))
+    backward = ratio(lag(field("tri"), 252), lag(field("tri"), 21))
+    return Div(Sub(forward, backward), rolling_mean(field("dv"), 21))
+
+
+def test_grammar_member_add_sub_dv_denominator_end_to_end(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    spec = _grammar_spec(aliases=("tri", "dv"), expression=_add_sub_dv_member())
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+        flags=(("A", 239, False),),
+        d7c_overrides={("A", fx.SESSIONS[240]): float("nan")},
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.certified_class == "SIMPLE"
+    # The A§15A grammar member has no C1 hypothesis label; nothing keys on it.
+    assert diag.certified_hypothesis is None
+    # The SOURCE cause reaches the dv denominator and is propagated per period.
+    assert tuple(diag.periods[0].causes_t0) == (SOURCE,)
+    assert tuple(diag.periods[0].causes_ts) == (SOURCE,)
+    l_cell = diag.cell("L-T0")
+    assert l_cell is not None
+    assert l_cell.cause_union == (SOURCE,)
+
+    # Deterministic rebuild: the same member in a fresh synthetic root hashes
+    # to the same diagnostics and cell hashes.
+    again = _build_case(
+        tmp_path / "again",
+        hypothesis="C1-H1",
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+        flags=(("A", 239, False),),
+        d7c_overrides={("A", fx.SESSIONS[240]): float("nan")},
+    )
+    assert again.diagnostics.diagnostics_hash == diag.diagnostics_hash
+    assert again.diagnostics.cell("L-T0").cell_hash == l_cell.cell_hash
+
+
+def test_grammar_member_unlabelled_spec_is_assessed(tmp_path: Path) -> None:
+    spec = _grammar_spec(aliases=("tri", "dv"), expression=_add_sub_dv_member())
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+    )
+    assert case.diagnostics.not_assessed is None
+    assert case.diagnostics.certified_hypothesis is None
+
+
+# ===========================================================================
 # 13. Mutation control and runner support
 # ===========================================================================
 
@@ -1373,6 +1590,10 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
         "H21-M2",
         "H21-M3",
         "H21-M4",
+        "V22-M10",
+        "V22-M12",
+        "V22-M14",
+        "H22-M1",
     }
     assert required.issubset(set(ids))
     for entry in payload:
