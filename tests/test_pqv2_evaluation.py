@@ -21,7 +21,7 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -1692,6 +1692,344 @@ def test_c1_forced_nan_member_matches_b_exclusion(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# 12c. PQ23-H v2.3 EVENT_SIMPLE: per-scenario evaluation and causes
+# ===========================================================================
+
+_V23_DECLARATION = {
+    "methodology_sha256": C.AUTHORITY_V2_3.methodology_sha256,
+    "ed_id": C.AUTHORITY_V2_3.ed_id,
+    "ce_id": C.AUTHORITY_V2_3.ce_id,
+}
+
+_EVENT_MORNING = time(10, 0)
+_EVENT_PRECLOSE = time(15, 50)
+
+
+def _event_factor_input(semantic_id: str):
+    """A FactorInput for a §2 event semantic id (alias == semantic id)."""
+
+    from smart_beta.dataset_v1 import pqv2_dependency as dependency
+    from smart_beta.spec.factor_spec import FactorInput
+    from smart_beta.spec.requirements import (
+        DataRequirement,
+        Frequency,
+        ObservationPeriod,
+        Unit,
+    )
+
+    period = (
+        ObservationPeriod.PERIOD
+        if semantic_id == dependency.EVENT_EAR
+        else ObservationPeriod.INSTANT
+    )
+    units = (
+        Unit.FRACTION
+        if semantic_id == dependency.EVENT_EAR
+        else Unit.COUNT
+    )
+    return FactorInput(
+        alias=semantic_id,
+        requirement=DataRequirement(
+            semantic_id=semantic_id,
+            frequency=Frequency.DAILY,
+            observation_period=period,
+            units=units,
+        ),
+    )
+
+
+def _event_spec(expression: Any, roles: Sequence[str]):
+    fx = _load_fixture()
+    base = fx.load_campaign_spec("C1-H1")
+    return dataclasses.replace(
+        base,
+        id="pqv2h_event_member",
+        description="PQ23-H EVENT_G member",
+        expression=expression,
+        inputs=tuple(_event_factor_input(role) for role in roles),
+        sign=1,
+        hypothesis=None,
+    )
+
+
+def _event_layer(
+    fx: Any,
+    events: Mapping[str, Sequence[tuple[int, time]]],
+    *,
+    status: Mapping[str, str] | None = None,
+    verdict: Mapping[str, str] | None = None,
+):
+    from smart_beta.dataset_v1 import pqv2_events as EV
+
+    records: dict[str, tuple[Any, ...]] = {}
+    for key, items in events.items():
+        out = []
+        for k_index, acceptance in items:
+            k_session = fx.SESSIONS[k_index]
+            out.append(
+                EV.EventRecord(
+                    security_key=key,
+                    cik=1,
+                    accession=f"{key}-{k_index}",
+                    form="8-K",
+                    event_type=EV.EA_8K202,
+                    k_session=k_session,
+                    acceptance_et=datetime.combine(k_session, acceptance),
+                    acceptance_json_raw=None,
+                    filing_date=None,
+                    boundary_flag=False,
+                )
+            )
+        records[key] = tuple(out)
+    keys = tuple(sorted(set(fx.KEYS) | set(records)))
+    return EV.EventLayer(
+        acq_id="a" * 16,
+        ev_id="e" * 64,
+        keys=keys,
+        status_by_key={key: (status or {}).get(key, "MAPPED") for key in keys},
+        verdict_by_key={key: (verdict or {}).get(key, "") for key in keys},
+        interval_by_key={key: (None, None) for key in keys},
+        events_by_key={key: records.get(key, ()) for key in keys},
+        null_time_by_key={key: () for key in keys},
+    )
+
+
+def _build_event_case(
+    tmp_path: Path,
+    *,
+    expression: Any,
+    roles: Sequence[str],
+    events: Mapping[str, Sequence[tuple[int, time]]],
+    status: Mapping[str, str] | None = None,
+    verdict: Mapping[str, str] | None = None,
+):
+    from smart_beta.dataset_v1 import pqv2_events as EV
+
+    fx = _load_fixture()
+    store = fx.SyntheticStore(tmp_path, name="root")
+    store.standard()
+    store.build_d7b()
+    store.build_sources()
+    pq_bindings, identity_hash = store.build_identity()
+    layer = _event_layer(fx, events, status=status, verdict=verdict)
+    base_inputs = fx.build_inputs(store)
+    tri_frame = base_inputs["total_return_index"].values
+    built = EV.build_event_inputs(
+        layer, tri_frame, fx.SESSIONS, scenario="K0", roles=roles
+    )
+    merged = {**base_inputs, **built}
+    spec = _event_spec(expression, roles)
+    panel = fx.factor_panel(spec, merged, store)
+    base = fx.base_declaration(spec, panel)
+    declaration = fx.declaration(
+        base, identity_hash=identity_hash, **_V23_DECLARATION
+    )
+    overlay = store.overlay(pq_id=declaration.pq_id, pq_hash=declaration.pq_hash)
+    part, _fold, _holdout = fx.partition()
+    diagnostics = E.build_pqv2_diagnostics(
+        store.root,
+        declaration,
+        spec,
+        panel,
+        part,
+        overlay=overlay,
+        inputs=merged,
+        bindings=store.d7b_bindings,
+        source_bindings=store.source_bindings,
+        pq_bindings=pq_bindings,
+        pq_read_records_fn=lambda path: fx.genesis_records(),
+        event_layer=layer,
+    )
+    return diagnostics
+
+
+def _ear_expression() -> Any:
+    from smart_beta.dataset_v1 import pqv2_dependency as dependency
+    from smart_beta.spec.expression import field
+
+    return field(dependency.EVENT_EAR)
+
+
+def _ear_roles() -> tuple[str, ...]:
+    from smart_beta.dataset_v1 import pqv2_dependency as dependency
+
+    return (dependency.EVENT_EAR,)
+
+
+def _all_key_events(acceptance: time = _EVENT_MORNING, key: str | None = None):
+    fx = _load_fixture()
+    events: dict[str, list[tuple[int, time]]] = {
+        member: [(255, acceptance)] for member in fx.KEYS
+    }
+    if key is not None:
+        events[key] = [(255, acceptance)]
+    return events
+
+
+def test_event_simple_four_way_cells_recorded(tmp_path: Path) -> None:
+    """A clean EVENT_G case records all four {T0,TS}x{K0,K1} cells."""
+
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_MORNING),
+    )
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == E._dependency.EVENT_SIMPLE
+    assert diagnostics.event_scenarios == ("K0", "K1")
+    # The declaration resolves the v2.3 authority (and its v2.2 base).
+    assert diagnostics.methodology_version == C.AUTHORITY_V2_3.version
+    assert (
+        diagnostics.base_methodology_sha256
+        == C.AUTHORITY_V2_3.base_methodology_sha256
+    )
+    for scenario in ("T0", "TS"):
+        for event_scenario in ("K0", "K1"):
+            for estimand in ("B", "L"):
+                cell = diagnostics.cell(f"{estimand}-{scenario}-{event_scenario}")
+                assert cell is not None, (estimand, scenario, event_scenario)
+                assert cell.event_scenario == event_scenario
+                assert cell.status is None
+    # No B_e event: K1 is identical to K0 -- recorded, never skipped.
+    assert diagnostics.event_scenarios_identical is True
+    for scenario in ("T0", "TS"):
+        assert diagnostics.cell(f"L-{scenario}-K1") is not None
+
+
+def test_event_preclose_k1_differs(tmp_path: Path) -> None:
+    """A pre-close B_e event makes K1 differ from K0 (H23-M2 target)."""
+
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_PRECLOSE, key="A"),
+    )
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == E._dependency.EVENT_SIMPLE
+    assert diagnostics.event_scenarios == ("K0", "K1")
+    assert diagnostics.event_scenarios_identical is False
+    assert diagnostics.cell("L-T0-K1") is not None
+    assert diagnostics.cell("L-T0-K0") is not None
+
+
+def test_event_cause_recorded_in_diagnostics(tmp_path: Path) -> None:
+    """An M1b event cause reaches the cells and periods (H23-M3 target)."""
+
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_MORNING),
+        status={"A": "AMBIGUOUS"},
+    )
+    assert diagnostics.not_assessed is None
+    expected = C.PQV2_EVENT_IDENTITY_UNMAPPED
+    for scenario in ("T0", "TS"):
+        for event_scenario in ("K0", "K1"):
+            cell = diagnostics.cell(f"L-{scenario}-{event_scenario}")
+            assert cell is not None
+            assert cell.cause_union == (expected,), (scenario, event_scenario)
+            assert expected in cell.period_causes[0]
+    # Per-period causes keep the M1b reason and are not collapsed to SOURCE.
+    for period in diagnostics.periods:
+        assert expected in period.causes_t0
+
+
+def _event_screens(**by_cell: bool) -> tuple[E.PQv2ScreenOutcome, ...]:
+    return tuple(
+        E.PQv2ScreenOutcome(name, value) for name, value in by_cell.items()
+    )
+
+
+def _all_event_screens(passed: bool = True) -> dict[str, bool]:
+    return {
+        f"{estimand}-{scenario}-{event_scenario}": passed
+        for scenario in ("T0", "TS")
+        for event_scenario in ("K0", "K1")
+        for estimand in ("B", "L")
+    }
+
+
+def test_event_classification_requires_all_combinations(tmp_path: Path) -> None:
+    """A K1-only pass is not a PASS (H23-M1 target)."""
+
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_MORNING),
+    )
+    by_cell = _all_event_screens(True)
+    by_cell["L-T0-K1"] = False
+    record = E.classify_pqv2(diagnostics, _event_screens(**by_cell))
+    assert record.event_scenarios == ("K0", "K1")
+    assert record.scenario == ("T0-K0", "T0-K1", "TS-K0", "TS-K1")
+    assert record.event_pass is False
+    assert record.status[1] == C.ClassificationStatus.QUARANTINE_SENSITIVE
+    assert record.advancement_permitted[1] is False
+    assert record.accept is False
+
+
+def test_event_classification_all_combinations_pass(tmp_path: Path) -> None:
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_MORNING),
+    )
+    record = E.classify_pqv2(
+        diagnostics, _event_screens(**_all_event_screens(True))
+    )
+    assert record.event_pass is True
+    assert all(record.advancement_permitted)
+
+
+def test_event_spec_requires_the_event_layer(tmp_path: Path) -> None:
+    fx = _load_fixture()
+    store = fx.SyntheticStore(tmp_path, name="root")
+    store.standard()
+    store.build_d7b()
+    store.build_sources()
+    pq_bindings, identity_hash = store.build_identity()
+    spec = _event_spec(_ear_expression(), _ear_roles())
+    base_inputs = fx.build_inputs(store)
+    # A missing event layer fails closed before any D7b read.
+    from smart_beta.dataset_v1 import pqv2_events as EV
+
+    built = EV.build_event_inputs(
+        _event_layer(fx, _all_key_events(_EVENT_MORNING)),
+        base_inputs["total_return_index"].values,
+        fx.SESSIONS,
+        scenario="K0",
+        roles=_ear_roles(),
+    )
+    merged = {**base_inputs, **built}
+    panel = fx.factor_panel(spec, merged, store)
+    base = fx.base_declaration(spec, panel)
+    declaration = fx.declaration(
+        base, identity_hash=identity_hash, **_V23_DECLARATION
+    )
+    overlay = store.overlay(pq_id=declaration.pq_id, pq_hash=declaration.pq_hash)
+    part, _fold, _holdout = fx.partition()
+    with pytest.raises(C.PQv2InputError):
+        E.build_pqv2_diagnostics(
+            store.root,
+            declaration,
+            spec,
+            panel,
+            part,
+            overlay=overlay,
+            inputs=merged,
+            bindings=store.d7b_bindings,
+            source_bindings=store.source_bindings,
+            pq_bindings=pq_bindings,
+            pq_read_records_fn=lambda path: fx.genesis_records(),
+        )
+
+
+# ===========================================================================
 # 13. Mutation control and runner support
 # ===========================================================================
 
@@ -1740,6 +2078,9 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
         "V22-M14",
         "H22-M1",
         "H22-M2",
+        "H23-M1",
+        "H23-M2",
+        "H23-M3",
     }
     assert required.issubset(set(ids))
     for entry in payload:

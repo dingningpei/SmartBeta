@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -50,6 +50,7 @@ from smart_beta.dataset_v1 import pqv2_assign_simple as _simple
 from smart_beta.dataset_v1 import pqv2_core as _core
 from smart_beta.dataset_v1 import pqv2_dependency as _dependency
 from smart_beta.dataset_v1 import pqv2_envelope as _envelope
+from smart_beta.dataset_v1 import pqv2_events as _events
 from smart_beta.dataset_v1 import pqv2_labels as _labels
 from smart_beta.dataset_v1 import pqv2_sources as _sources
 from smart_beta.dataset_v1 import quarantine as _pq
@@ -89,6 +90,11 @@ CELL_NAMES = ("B-T0", "B-TS", "L-T0", "L-TS")
 SCENARIO_T0 = "T0"
 SCENARIO_TS = "TS"
 _SCENARIOS = (SCENARIO_T0, SCENARIO_TS)
+
+#: The P-Q v2.3 event-timing scenarios (owned by PQ23-B; E§5.3, M1b §3).
+EVENT_SCENARIOS = _events.SCENARIOS
+EVENT_SCENARIO_K0 = _events.SCENARIO_K0
+EVENT_SCENARIO_K1 = _events.SCENARIO_K1
 
 ESTIMAND_B = "B"
 ESTIMAND_L = "L"
@@ -260,9 +266,12 @@ class PQv2Cell:
     declaration_hash: str
     period_causes: tuple[tuple[str, ...], ...] = ()
     cause_union: tuple[str, ...] = ()
+    #: The P-Q v2.3 event-timing scenario (``K0`` / ``K1``); ``None`` for the
+    #: P-Q v2.1/v2.2 (T0/TS only) path, whose serialization is unchanged.
+    event_scenario: str | None = None
 
     def _body(self) -> dict[str, Any]:
-        return {
+        body = {
             "cell": self.cell,
             "scenario": self.scenario,
             "estimand": self.estimand,
@@ -282,6 +291,9 @@ class PQv2Cell:
             "period_causes": [list(item) for item in self.period_causes],
             "cause_union": list(self.cause_union),
         }
+        if self.event_scenario is not None:
+            body["event_scenario"] = self.event_scenario
+        return body
 
     def to_dict(self) -> dict[str, Any]:
         body = self._body()
@@ -398,6 +410,12 @@ class PQv2Diagnostics:
     #: declaration, whose serialization stays byte-identical to v2.1 (E1 §4).
     methodology_version: str | None = None
     base_methodology_sha256: str | None = None
+    #: The P-Q v2.3 event-timing scenarios actually evaluated (``("K0", "K1")``
+    #: for ``EVENT_SIMPLE``; empty for the v2.1/v2.2 path).  When
+    #: ``event_scenarios_identical`` is true, no ``B_e`` event affected any
+    #: cell and ``K1`` is recorded as identical to ``K0`` (never skipped).
+    event_scenarios: tuple[str, ...] = ()
+    event_scenarios_identical: bool | None = None
     b_diagnostics: Any = field(default=None, compare=False, repr=False)
 
     def cell(self, name: str) -> PQv2Cell | None:
@@ -451,6 +469,9 @@ class PQv2Diagnostics:
         if self.base_methodology_sha256 is not None:
             body["methodology_version"] = self.methodology_version
             body["base_methodology_sha256"] = self.base_methodology_sha256
+        if self.event_scenarios:
+            body["event_scenarios"] = list(self.event_scenarios)
+            body["event_scenarios_identical"] = self.event_scenarios_identical
         return body
 
     @property
@@ -491,9 +512,14 @@ class PQv2Record:
     certified_class: str | None
     assignment_rule: str | None
     non_claims: tuple[str, ...]
+    #: The P-Q v2.3 event-timing scenarios (empty on the v2.1/v2.2 path); when
+    #: non-empty, ``scenario``/``status``/... carry the four {T0,TS}x{K0,K1}
+    #: combinations and ``event_pass`` is the every-combination PASS verdict.
+    event_scenarios: tuple[str, ...] = ()
+    event_pass: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "declaration_hash": self.declaration_hash,
             "diagnostics_hash": self.diagnostics_hash,
             "screen_id": self.screen_id,
@@ -514,6 +540,10 @@ class PQv2Record:
             "assignment_rule": self.assignment_rule,
             "non_claims": list(self.non_claims),
         }
+        if self.event_scenarios:
+            body["event_scenarios"] = list(self.event_scenarios)
+            body["event_pass"] = None if self.event_pass is None else bool(self.event_pass)
+        return body
 
     @property
     def record_hash(self) -> str:
@@ -930,6 +960,40 @@ def _labels_for_formation(
     return labels
 
 
+def _event_maps(
+    event_layer: Any | None,
+    event_scenario: str | None,
+    universe: Sequence[str],
+    formation_pos: Mapping[date, int],
+) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    """The per-key event-anchored windows and M1b cause sets of one formation.
+
+    ``event_layer is None`` (the P-Q v2.1/v2.2 path) returns ``(None, None)``,
+    leaving :func:`pqv2_dependency.input_uncertainty` byte-identical to the
+    pre-v2.3 behaviour.  For an ``EVENT_SIMPLE`` cell the windows and cause
+    sets come from PQ23-C's :func:`pqv2_dependency.event_windows` /
+    :func:`pqv2_dependency.event_cell_causes` for the key's own calendar and
+    the requested event scenario.
+    """
+
+    if event_layer is None:
+        return None, None
+    if event_scenario is None:
+        raise _core.PQv2InputError(
+            "an event layer requires an event scenario (K0 / K1)"
+        )
+    windows_map: dict[str, Any] = {}
+    causes_map: dict[str, Any] = {}
+    for key in tuple(sorted(universe)):
+        windows_map[key] = _dependency.event_windows(
+            event_layer, key, formation_pos, event_scenario
+        )
+        causes_map[key] = _dependency.event_cell_causes(
+            event_layer, key, formation_pos, event_scenario
+        )
+    return windows_map, causes_map
+
+
 def _assignment_for_formation(
     formation: date,
     universe: Sequence[str],
@@ -945,6 +1009,9 @@ def _assignment_for_formation(
     labels: Mapping[str, _labels.LabelEnvelope],
     b_groups: Mapping[str, int],
     cross_keys: Sequence[str],
+    *,
+    event_layer: Any | None = None,
+    event_scenario: str | None = None,
 ) -> Any:
     formation_pos = _formation_positions(sessions, formation)
     long_values = {
@@ -960,6 +1027,9 @@ def _assignment_for_formation(
     session_at_offset = {offset: session for session, offset in formation_pos.items()}
 
     if cls == _dependency.SIMPLE:
+        event_windows_map, event_causes_map = _event_maps(
+            event_layer, event_scenario, universe, formation_pos
+        )
         uncertainty = _dependency.input_uncertainty(
             _dependency.SIMPLE,
             windows,
@@ -967,6 +1037,8 @@ def _assignment_for_formation(
             formation_pos,
             tuple(sorted(universe)),
             None,
+            event_windows=event_windows_map,
+            event_causes=event_causes_map,
         )
         return _simple.simple_assignment(
             tuple(sorted(universe)),
@@ -1305,8 +1377,19 @@ def build_pqv2_diagnostics(
     pq_read_records_fn: Any | None = None,
     sessions: Sequence[date] | None = None,
     repo_root: Path | str | None = None,
+    event_layer: Any | None = None,
+    event_scenario: str | None = None,
+    _event_dispatch: bool = True,
 ) -> PQv2Diagnostics:
-    """Evaluate one declared development fold under the frozen P-Q v2 model."""
+    """Evaluate one declared development fold under the frozen P-Q v2 model.
+
+    For an ``EVENT_SIMPLE`` spec under :data:`pqv2_core.AUTHORITY_V2_3` the
+    caller supplies the v1.3 development ``event_layer`` (PQ23-B); the
+    evaluation then builds the K0/K1 event inputs, evaluates the factor panel
+    per scenario and records the four-way {T0,TS}x{K0,K1} cells.  Without an
+    event layer the event spec fails closed.  The v2.1/v2.2 path ignores both
+    ``event_layer``/``event_scenario`` and is byte-identical to before.
+    """
 
     if not isinstance(declaration, PQv2EvaluationDeclaration):
         raise PQv2DeclarationError(
@@ -1375,6 +1458,30 @@ def build_pqv2_diagnostics(
             _core.NotAssessedReason.METRIC_NOT_CERTIFIED,
             certified_class=certified,
             authority=authority,
+        )
+
+    # P-Q v2.3 (E§5.3): an EVENT_SIMPLE spec is evaluated under both event
+    # scenarios (K0/K1).  The event inputs and the per-scenario factor panel
+    # are built here; each scenario then runs the unchanged evaluation below
+    # with the event context threaded into the uncertainty reach.
+    if _event_dispatch and str(certified) == _dependency.EVENT_SIMPLE:
+        return _build_event_diagnostics(
+            root,
+            declaration,
+            factor_spec,
+            factor_panel,
+            partition,
+            overlay=overlay,
+            inputs=inputs,
+            event_layer=event_layer,
+            bindings=bindings,
+            source_bindings=source_bindings,
+            pq_bindings=pq_bindings,
+            pq_repo_root=pq_repo_root,
+            pq_knowledge_log_path=pq_knowledge_log_path,
+            pq_read_records_fn=pq_read_records_fn,
+            sessions=sessions,
+            repo_root=repo_root,
         )
 
     # Step 4 - B exactly as D7b, reconstructed and reconciled bit-exactly.
@@ -1476,7 +1583,7 @@ def build_pqv2_diagnostics(
             values,
             source_set,
             windows,
-            str(certified),
+            _assignment_class(certified),
             int(declaration.base.n_groups),
             session_list,
             m_by_formation.get(formation),
@@ -1485,6 +1592,8 @@ def build_pqv2_diagnostics(
             labels,
             b_groups,
             cross_keys,
+            event_layer=event_layer,
+            event_scenario=event_scenario,
         )
 
     # Step 8 - composition (with the frozen gates).
@@ -1498,7 +1607,7 @@ def build_pqv2_diagnostics(
         assignment_by_period,
         labels_by_period,
         b_groups_by_period,
-        cls=str(certified),
+        cls=_envelope_class(certified),
         repo_root=repo_root,
     )
     if envelope.gate_reason is not None:
@@ -1665,6 +1774,242 @@ def build_pqv2_diagnostics(
             None if authority is None else authority.base_methodology_sha256
         ),
         b_diagnostics=diag_b,
+    )
+
+
+# ---------------------------------------------------------------------------
+# P-Q v2.3 event evaluation (E§5.3, plan §3 PQ23-H)
+# ---------------------------------------------------------------------------
+
+
+def _assignment_class(certified: Any) -> str:
+    """The assignment rule class of a certified class.
+
+    ``EVENT_SIMPLE`` is assigned by the unchanged M§11.1 Prop. 4 simple rule
+    (E§3), so it maps onto :data:`pqv2_dependency.SIMPLE` for both the
+    assignment and the envelope; every other class is itself.
+    """
+
+    if str(certified) == _dependency.EVENT_SIMPLE:
+        return _dependency.SIMPLE
+    return str(certified)
+
+
+def _envelope_class(certified: Any) -> str:
+    """The certified class the F envelope composes under (see above)."""
+
+    return _assignment_class(certified)
+
+
+def _event_roles(factor_spec: FactorSpec) -> tuple[str, ...]:
+    """The §2 event semantic ids the spec references, in declared order."""
+
+    roles: list[str] = []
+    for item in factor_spec.inputs:
+        semantic = item.requirement.semantic_id
+        if _dependency._is_event_role(semantic) and semantic not in roles:
+            roles.append(semantic)
+    return tuple(roles)
+
+
+def _tri_frame(inputs: Mapping[str, Any]) -> pd.DataFrame:
+    """The D7c ``total_return_index`` wide frame from the evaluation inputs."""
+
+    trusted = inputs.get("total_return_index")
+    if trusted is None:
+        raise _core.PQv2InputError(
+            "an EVENT_SIMPLE evaluation needs the total_return_index TrustedInput"
+        )
+    return trusted.values
+
+
+def _scenario_panel(
+    template: pd.DataFrame,
+    factor_spec: FactorSpec,
+    inputs: Mapping[str, Any],
+    overlay: _pq.Overlay,
+) -> pd.DataFrame:
+    """Evaluate the factor panel for one scenario at the template's rows.
+
+    The declared factor panel fixes the evaluated ``(formation, member)`` rows;
+    the K1 scenario only changes the event-primitive inputs, so the K1 panel is
+    the template with its values replaced by the K1 evaluation at exactly those
+    rows.  This keeps the D7b fold/universe validation and the factor-panel
+    hash well defined per scenario.
+    """
+
+    frames = _alias_frames(factor_spec, inputs, overlay)
+    result = _evaluator.evaluate(factor_spec, frames)
+    panel = result.panel
+    lookup: dict[tuple[date, str], float] = {}
+    if panel is not None and len(panel) != 0:
+        for row in panel.itertuples(index=False):
+            parsed = _d7b._as_date(row.date)
+            if parsed is None:
+                continue
+            lookup[(parsed, str(row.stock_id))] = float(row.value)
+    out = template.copy(deep=True)
+    for position, row in enumerate(out.itertuples(index=False)):
+        parsed = _d7b._as_date(row.date)
+        out.at[out.index[position], "value"] = float(
+            lookup.get((parsed, str(row.stock_id)), float("nan"))
+        )
+    return out
+
+
+def _panels_identical(left: pd.DataFrame, right: pd.DataFrame) -> bool:
+    """Bit-identical panel equality (NaN in the same cell counts as equal)."""
+
+    if left.shape != right.shape:
+        return False
+    return left.reset_index(drop=True).equals(right.reset_index(drop=True))
+
+
+def _merge_event_diagnostics(
+    k0: PQv2Diagnostics,
+    k1: PQv2Diagnostics,
+    identical: bool,
+) -> PQv2Diagnostics:
+    """Merge the K0/K1 scenario diagnostics into one four-way payload.
+
+    The K0 diagnostics stay the primary payload (its ``periods``, index and
+    metadata), while every cell is scenario-qualified: ``B-T0-K0`` ...
+    ``L-TS-K1``.  Each cell keeps its own per-period values, statuses and cause
+    sets, so the scenario dimension and the cause sets are recorded, never
+    dropped.  ``event_scenarios_identical`` records the no-``B_e`` case where
+    K1 is identical to K0 (recorded, not skipped).
+    """
+
+    declaration_hash = k0.declaration_hash
+    other_cells = k0.cells if k0.not_assessed is not None else k1.cells
+    cells: list[PQv2Cell] = []
+    for cell in k0.cells:
+        cells.append(
+            _replace(
+                cell,
+                cell=f"{cell.cell}-{EVENT_SCENARIO_K0}",
+                event_scenario=EVENT_SCENARIO_K0,
+                declaration_hash=declaration_hash,
+            )
+        )
+    for cell in other_cells:
+        cells.append(
+            _replace(
+                cell,
+                cell=f"{cell.cell}-{EVENT_SCENARIO_K1}",
+                event_scenario=EVENT_SCENARIO_K1,
+                declaration_hash=declaration_hash,
+            )
+        )
+    return _replace(
+        k0,
+        declaration_hash=declaration_hash,
+        cells=tuple(cells),
+        event_scenarios=EVENT_SCENARIOS,
+        event_scenarios_identical=bool(identical),
+    )
+
+
+def _build_event_diagnostics(
+    root: Path | str,
+    declaration: PQv2EvaluationDeclaration,
+    factor_spec: FactorSpec,
+    factor_panel: pd.DataFrame,
+    partition: Any,
+    *,
+    overlay: _pq.Overlay,
+    inputs: Mapping[str, Any],
+    event_layer: Any | None,
+    bindings: _d7b.Bindings | None,
+    source_bindings: Any | None,
+    pq_bindings: _pq.Bindings | None,
+    pq_repo_root: Path | str | None,
+    pq_knowledge_log_path: Path | str | None,
+    pq_read_records_fn: Any | None,
+    sessions: Sequence[date] | None,
+    repo_root: Path | str | None,
+) -> PQv2Diagnostics:
+    """Evaluate an ``EVENT_SIMPLE`` spec under both event scenarios (E§5.3).
+
+    1. Build the K0/K1 event inputs from the PQ23-B layer (E§2 conventions).
+    2. Evaluate the factor panel per scenario; the K0 panel is the declared
+       one, the K1 panel is re-evaluated from the K1 event inputs at the same
+       rows.
+    3. Run the unchanged evaluation per scenario (B is the unmodified D7b
+       pipeline on that scenario's panel) and merge the four-way cells.
+    """
+
+    if event_layer is None:
+        raise _core.PQv2InputError(
+            "an EVENT_SIMPLE evaluation requires the v1.3 EventLayer"
+        )
+    session_list = (
+        tuple(sessions)
+        if sessions is not None
+        else _sessions_from_inputs(inputs)
+    )
+    tri_frame = _tri_frame(inputs)
+    roles = _event_roles(factor_spec)
+    built = {
+        scenario: _events.build_event_inputs(
+            event_layer, tri_frame, session_list, scenario=scenario, roles=roles
+        )
+        for scenario in EVENT_SCENARIOS
+    }
+    base_inputs = {
+        semantic: trusted
+        for semantic, trusted in inputs.items()
+        if semantic not in set(roles)
+    }
+    common = dict(
+        bindings=bindings,
+        source_bindings=source_bindings,
+        pq_bindings=pq_bindings,
+        pq_repo_root=pq_repo_root,
+        pq_knowledge_log_path=pq_knowledge_log_path,
+        pq_read_records_fn=pq_read_records_fn,
+        sessions=session_list,
+        repo_root=repo_root,
+        event_layer=event_layer,
+        _event_dispatch=False,
+    )
+    k0 = build_pqv2_diagnostics(
+        root,
+        declaration,
+        factor_spec,
+        factor_panel,
+        partition,
+        overlay=overlay,
+        inputs={**base_inputs, **built[EVENT_SCENARIO_K0]},
+        event_scenario=EVENT_SCENARIO_K0,
+        **common,
+    )
+    if k0.not_assessed is not None and k0.certified_class is None:
+        # A gate before certification (authority / dataset identity): the
+        # scenario dimension cannot change it, so K1 is recorded as identical.
+        return _merge_event_diagnostics(k0, k0, True)
+    k1_inputs = {**base_inputs, **built[EVENT_SCENARIO_K1]}
+    k1_panel = _scenario_panel(factor_panel, factor_spec, k1_inputs, overlay)
+    k1_declaration = _replace(
+        declaration,
+        base=_replace(
+            declaration.base,
+            factor_panel_sha256=_d7b._canonical_factor_hash(k1_panel),
+        ),
+    )
+    k1 = build_pqv2_diagnostics(
+        root,
+        k1_declaration,
+        factor_spec,
+        k1_panel,
+        partition,
+        overlay=overlay,
+        inputs=k1_inputs,
+        event_scenario=EVENT_SCENARIO_K1,
+        **common,
+    )
+    return _merge_event_diagnostics(
+        k0, k1, _panels_identical(factor_panel, k1_panel)
     )
 
 
@@ -1886,19 +2231,35 @@ def classify_pqv2(
     screens: Sequence[PQv2ScreenOutcome],
 ) -> PQv2Record:
     """Apply the M§14 table per scenario; ``INVARIANT_VIOLATION_FAIL_CLOSED``
-    is a typed status and never raises."""
+    is a typed status and never raises.
+
+    For a P-Q v2.3 ``EVENT_SIMPLE`` diagnostics (E§5.3) the table is applied to
+    all four ``{T0, TS} x {K0, K1}`` combinations; PASS requires PASS under
+    **every** combination (no averaging), reported as ``event_pass``.  The
+    P-Q v2.1/v2.2 path is the unchanged two-scenario table.
+    """
 
     by_cell = {screen.cell: screen for screen in screens}
+    event_scenarios = tuple(getattr(diagnostics, "event_scenarios", ()) or ())
     statuses: list[str] = []
     reasons: list[str | None] = []
     b_screens: list[bool | None] = []
     l_screens: list[bool | None] = []
     advancement: list[bool] = []
-    for scenario in _SCENARIOS:
-        b_cell = diagnostics.cell(f"B-{scenario}")
-        l_cell = diagnostics.cell(f"L-{scenario}")
-        b_screen = by_cell.get(f"B-{scenario}")
-        l_screen = by_cell.get(f"L-{scenario}")
+    scenario_labels: list[str] = []
+    combinations = [
+        (scenario, event_scenario)
+        for scenario in _SCENARIOS
+        for event_scenario in (event_scenarios or (None,))
+    ]
+    for scenario, event_scenario in combinations:
+        suffix = "" if event_scenario is None else f"-{event_scenario}"
+        b_name = f"B-{scenario}{suffix}"
+        l_name = f"L-{scenario}{suffix}"
+        b_cell = diagnostics.cell(b_name)
+        l_cell = diagnostics.cell(l_name)
+        b_screen = by_cell.get(b_name)
+        l_screen = by_cell.get(l_name)
         b_passed = None if b_screen is None else b_screen.passed
         l_passed = None if l_screen is None else l_screen.passed
         b_available = (
@@ -1921,6 +2282,13 @@ def classify_pqv2(
         b_screens.append(b_passed)
         l_screens.append(l_passed)
         advancement.append(permitted)
+        scenario_labels.append(scenario + suffix)
+
+    event_pass: bool | None = None
+    if event_scenarios:
+        # E§5.3: a PASS requires PASS under every {T0, TS} x {K0, K1}
+        # combination; there is no averaging and no best-scenario choice.
+        event_pass = all(advancement)
 
     return PQv2Record(
         declaration_hash=diagnostics.declaration_hash,
@@ -1934,8 +2302,10 @@ def classify_pqv2(
         advancement_permitted=tuple(advancement),
         accept=False,
         confirmation=False,
-        scenario=_SCENARIOS,
+        scenario=tuple(scenario_labels),
         certified_class=diagnostics.certified_class,
         assignment_rule=diagnostics.assignment_rule,
         non_claims=diagnostics.non_claims,
+        event_scenarios=event_scenarios,
+        event_pass=event_pass,
     )

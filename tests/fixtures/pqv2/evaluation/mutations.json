@@ -439,5 +439,41 @@
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_non_admitted_authority_rejected"
+  },
+  {
+    "id": "H23-M1",
+    "description": "a K0-only (or K1-only) event-scenario pass is accepted as the four-way PASS",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        event_pass = all(advancement)",
+        "new": "        event_pass = any(advancement)  # H23-M1: single-scenario pass accepted"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_event_classification_requires_all_combinations"
+  },
+  {
+    "id": "H23-M2",
+    "description": "the event scenario dimension is collapsed (K1 reuses the K0 event inputs)",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            event_layer, tri_frame, session_list, scenario=scenario, roles=roles",
+        "new": "            event_layer, tri_frame, session_list, scenario=EVENT_SCENARIO_K0, roles=roles  # H23-M2 collapsed"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_event_preclose_k1_differs"
+  },
+  {
+    "id": "H23-M3",
+    "description": "an M1b event cause is dropped from the per-cell diagnostics",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            event_causes=event_causes_map,",
+        "new": "            event_causes=None,  # H23-M3 event cause dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_event_cause_recorded_in_diagnostics"
   }
 ]
