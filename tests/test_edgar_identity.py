@@ -845,6 +845,136 @@ def test_coerce_key_accepts_mapping_and_timestamps() -> None:
 
 
 # ---------------------------------------------------------------------------
+# L2 symbol evidence (V13-E3 §2-§3)
+# ---------------------------------------------------------------------------
+
+SYMBOL_RAW = RAW / "symbol_evidence"
+BRK_DOC = SYMBOL_RAW / "9001" / "000000900124000001" / "brk-cover.htm"
+ABSENT_DOC = SYMBOL_RAW / "9002" / "000000900224000001" / "absent-cover.htm"
+MALFORMED_DOC = SYMBOL_RAW / "9003" / "000000900324000001" / "malformed-cover.htm"
+OTHER_DOC = SYMBOL_RAW / "9004" / "000000900424000001" / "other-cover.htm"
+
+
+def _symbol_sample() -> list[dict]:
+    """The synthetic L2 sample: multi-class, absent, malformed, contradiction
+    and a key recorded as NO_INLINE_XBRL_FILING."""
+    return [
+        {"security_key": "K-BRK", "cik": 9001, "ticker": "BRK-B"},
+        {"security_key": "K-NOTAG", "cik": 9002, "ticker": "XYZ"},
+        {"security_key": "K-BAD", "cik": 9003, "ticker": "XYZ"},
+        {"security_key": "K-CON", "cik": 9004, "ticker": "AAPL"},
+        {"security_key": "K-NOINLINE", "cik": 9005, "ticker": "XYZ"},
+    ]
+
+
+def test_normalize_symbol_removes_class_punctuation() -> None:
+    for text in ("BRK.B", "brk-b", "BRK/B", " brk b "):
+        assert I.normalize_symbol(text) == "BRKB"
+
+
+def test_extract_trading_symbols_real_shape_multi_class() -> None:
+    # The fixture carries two dei:TradingSymbol facts (BRK.A and BRK.B); the
+    # second is matched case-insensitively and has an inner <span>.
+    assert I.extract_trading_symbols(BRK_DOC.read_bytes()) == ("BRKA", "BRKB")
+    assert I.extract_trading_symbols(
+        '<ix:nonNumeric name="DEI:tradingsymbol"><b>brk.b</b></ix:nonNumeric>'
+    ) == ("BRKB",)
+    assert I.extract_trading_symbols(
+        "<IX:NONNUMERIC NAME='dei:TradingSymbol'> BRK-B </IX:NONNUMERIC>"
+    ) == ("BRKB",)
+
+
+def test_extract_trading_symbols_absent_and_malformed_are_empty() -> None:
+    assert I.extract_trading_symbols(ABSENT_DOC.read_bytes()) == ()
+    assert I.extract_trading_symbols(MALFORMED_DOC.read_bytes()) == ()
+
+
+def test_extract_trading_symbols_drops_empty_and_dedups() -> None:
+    document = (
+        '<ix:nonNumeric name="dei:TradingSymbol">&#160; </ix:nonNumeric>'
+        '<ix:nonNumeric name="dei:TradingSymbol">AAPL</ix:nonNumeric>'
+        '<ix:nonNumeric name="dei:TradingSymbol">AAPL</ix:nonNumeric>'
+    )
+    assert I.extract_trading_symbols(document) == ("AAPL",)
+
+
+def test_build_symbol_evidence_scans_l2_relpaths() -> None:
+    evidence = I.build_symbol_evidence(RAW, _symbol_sample())
+    assert evidence["K-BRK"].observed_symbols == ("BRKA", "BRKB")
+    assert evidence["K-NOTAG"].observed_symbols == ()
+    assert evidence["K-BAD"].observed_symbols == ()
+    assert evidence["K-CON"].observed_symbols == ("MSFT",)
+    assert I.extract_trading_symbols(OTHER_DOC.read_bytes()) == ("MSFT",)
+    # K-NOINLINE is listed in symbol_evidence/no_inline_xbrl.json.
+    assert evidence["K-NOINLINE"].observed_symbols == ()
+
+
+def test_build_symbol_evidence_accepts_explicit_relpath() -> None:
+    rows = [
+        {
+            "security_key": "K-BRK",
+            "ticker": "BRK.B",
+            "relpath": "symbol_evidence/9001/000000900124000001/brk-cover.htm",
+        }
+    ]
+    evidence = I.build_symbol_evidence(RAW, rows)
+    assert evidence["K-BRK"].observed_symbols == ("BRKA", "BRKB")
+    assert evidence["K-BRK"].verdict == I.AUDIT_CONFIRMED
+
+
+def test_build_symbol_evidence_accepts_accession_and_document() -> None:
+    rows = [
+        {
+            "security_key": "K-CON",
+            "cik": 9004,
+            "ticker": "AAPL",
+            "accessionNumber": "0000009004-24-000001",
+            "primaryDocument": "other-cover.htm",
+        }
+    ]
+    evidence = I.build_symbol_evidence(RAW, rows)
+    assert evidence["K-CON"].observed_symbols == ("MSFT",)
+    assert evidence["K-CON"].verdict == I.AUDIT_CONTRADICTED
+
+
+def test_build_symbol_evidence_verdicts() -> None:
+    evidence = I.build_symbol_evidence(RAW, _symbol_sample())
+    assert evidence["K-BRK"].verdict == I.AUDIT_CONFIRMED
+    assert evidence["K-CON"].verdict == I.AUDIT_CONTRADICTED
+    assert evidence["K-NOTAG"].verdict == I.AUDIT_NO_SYMBOL_EVIDENCE
+    assert evidence["K-BAD"].verdict == I.AUDIT_NO_SYMBOL_EVIDENCE
+    assert evidence["K-NOINLINE"].verdict == I.AUDIT_NO_SYMBOL_EVIDENCE
+
+
+def test_build_symbol_evidence_brk_b_dot_and_dash_confirm() -> None:
+    # BRK.B (inline XBRL) and BRK-B (D4) must normalize to the same symbol;
+    # mutation E2-M6 (no ``.``/``-`` normalization) turns this into
+    # CONTRADICTED.
+    for ticker in ("BRK-B", "BRK.B"):
+        evidence = I.build_symbol_evidence(
+            RAW, [{"security_key": "K-BRK", "cik": 9001, "ticker": ticker}]
+        )
+        assert evidence["K-BRK"].verdict == I.AUDIT_CONFIRMED, ticker
+
+
+def test_build_symbol_evidence_feeds_audit_im_p_unchanged() -> None:
+    evidence = I.build_symbol_evidence(RAW, _symbol_sample())
+    rows = [
+        I.IdentityRow("K-BRK", 9001, I.STATUS_MAPPED, I.ROUTE_TICKER, None, None, 1),
+        I.IdentityRow("K-CON", 9004, I.STATUS_MAPPED, I.ROUTE_TICKER, None, None, 1),
+        I.IdentityRow("K-NOTAG", 9002, I.STATUS_MAPPED, I.ROUTE_TICKER, None, None, 1),
+    ]
+    tickers = {"K-BRK": ("BRKB",), "K-CON": ("AAPL",), "K-NOTAG": ("XYZ",)}
+    sample = tuple(row.security_key for row in rows)
+    result = I.audit_im_p(
+        rows, sample, evidence, tickers, min_evidence_total=1, min_evidence_ended=0
+    )
+    assert result.verdicts["K-BRK"] == I.AUDIT_CONFIRMED
+    assert result.verdicts["K-CON"] == I.AUDIT_CONTRADICTED
+    assert result.verdicts["K-NOTAG"] == I.AUDIT_NO_SYMBOL_EVIDENCE
+
+
+# ---------------------------------------------------------------------------
 # Mutation contract (plan §5)
 # ---------------------------------------------------------------------------
 
@@ -858,6 +988,8 @@ def test_mutation_fixture_contract() -> None:
         "E2-M3",
         "E2-M4",
         "E2-M5",
+        "E2-M6",
+        "E2-M7",
     ]
     source = (
         REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_identity.py"

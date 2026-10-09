@@ -65,5 +65,29 @@
       }
     ],
     "test": "tests/test_edgar_identity.py::test_name_route_uses_real_current_name_key"
+  },
+  {
+    "id": "E2-M6",
+    "description": "the symbol is not normalized (BRK.B != BRK-B): the extracted union no longer matches the normalized D4 ticker",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "    text = str(value).upper()\n    for ch in (\".\", \"-\", \"/\"):\n        text = text.replace(ch, \"\")",
+        "new": "    text = str(value).upper()\n    for ch in (\"/\",):\n        text = text.replace(ch, \"\")"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_build_symbol_evidence_brk_b_dot_and_dash_confirm"
+  },
+  {
+    "id": "E2-M7",
+    "description": "an empty union treated as CONTRADICTED instead of NO_SYMBOL_EVIDENCE",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "    if not observed_symbols:\n        return AUDIT_NO_SYMBOL_EVIDENCE",
+        "new": "    if not observed_symbols:\n        return AUDIT_CONTRADICTED"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_build_symbol_evidence_verdicts"
   }
 ]
