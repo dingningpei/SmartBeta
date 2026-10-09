@@ -1,0 +1,31 @@
+{
+  "cik": "777",
+  "entityType": "operating",
+  "sic": "7372",
+  "sicDescription": "Services-Prepackaged Software",
+  "name": "Nova Systems Inc.",
+  "tickers": [],
+  "exchanges": [],
+  "formerNames": [],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000000777-16-000001"],
+      "act": ["34"],
+      "core_type": ["10-Q"],
+      "fileNumber": ["001-00007"],
+      "filmNumber": ["16777777"],
+      "form": ["10-Q"],
+      "filingDate": ["2016-05-01"],
+      "reportDate": ["2016-03-31"],
+      "acceptanceDateTime": ["2016-05-01T18:00:00.000Z"],
+      "isInlineXBRL": [true],
+      "isXBRL": [true],
+      "isXBRLNumeric": [true],
+      "items": [""],
+      "primaryDocDescription": ["FORM 10-Q"],
+      "primaryDocument": ["nova-20160331.htm"],
+      "size": [456789]
+    },
+    "files": []
+  }
+}

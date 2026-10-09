@@ -1,18 +1,36 @@
 {
   "cik": "1234567",
-  "entityName": "Ex Why Zee Holdings",
+  "entityType": "operating",
+  "sic": "3674",
+  "sicDescription": "Semiconductors & Related Devices",
+  "name": "Ex Why Zee Holdings",
+  "tickers": [],
+  "exchanges": [],
   "formerNames": [
-    {"name": "Ex Why Zee Corp", "from": "2010-01-01", "to": "2018-01-01"}
+    {
+      "name": "Ex Why Zee Corp",
+      "from": "2010-01-01T00:00:00.000Z",
+      "to": "2018-01-01T00:00:00.000Z"
+    }
   ],
   "filings": {
     "recent": {
       "accessionNumber": ["0001234567-16-000001"],
+      "act": ["34"],
+      "core_type": ["10-Q"],
+      "fileNumber": ["001-00002"],
+      "filmNumber": ["16234567"],
       "form": ["10-Q"],
       "filingDate": ["2016-06-01"],
       "reportDate": ["2016-03-31"],
       "acceptanceDateTime": ["2016-06-01T20:00:00.000Z"],
+      "isInlineXBRL": [true],
+      "isXBRL": [true],
+      "isXBRLNumeric": [true],
       "items": [""],
-      "primaryDocument": ["exw-20160331.htm"]
+      "primaryDocDescription": ["FORM 10-Q"],
+      "primaryDocument": ["exw-20160331.htm"],
+      "size": [345678]
     },
     "files": []
   }

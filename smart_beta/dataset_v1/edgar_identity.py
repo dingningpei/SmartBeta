@@ -323,7 +323,7 @@ def _view_from_payload(
         filings = iter_filings(payload)
     return SubmissionView(
         cik=int(payload.get("cik") or 0),
-        entity_name=payload.get("entityName"),
+        entity_name=payload.get("name"),
         former_names=_former_names(payload),
         filings=tuple(dict(row) for row in filings),
     )
@@ -399,6 +399,22 @@ def parse_tiingo_names(payload: bytes | str | Any) -> dict[str, tuple[str, ...]]
     return result
 
 
+def _page_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Flatten one paginated ``files/*.json`` page.
+
+    The real SEC page carries the ``filings.recent`` parallel arrays at the
+    top level; E-1's :func:`iter_filings` reads the ``recent`` shape and the
+    ``{"filings": [...]}`` body.  Handle both here without changing E-1
+    (imported read-only).
+    """
+    page_rows = iter_filings(payload)
+    if page_rows:
+        return page_rows
+    if any(column in payload for column in ("accessionNumber", "form")):
+        return iter_filings({"filings": {"recent": payload}})
+    return page_rows
+
+
 def load_edgar_reference(root: str | Path) -> EdgarReference:
     """Read an E-1 raw acquisition directory (read-only; no network)."""
     root = Path(root)
@@ -430,7 +446,7 @@ def load_edgar_reference(root: str | Path) -> EdgarReference:
         for name in paginated.get(int(cik), ()):
             page_path = submissions_dir / "files" / str(name)
             if page_path.exists():
-                rows.extend(iter_filings(_json_loads(page_path.read_bytes())))
+                rows.extend(_page_rows(_json_loads(page_path.read_bytes())))
         views[int(cik)] = _view_from_payload(payload, filings=rows)
 
     names_path = root / "tiingo_names.json"
@@ -487,7 +503,7 @@ def _name_matches_interval(
 ) -> bool:
     """True iff a name matches with an overlap of the key's listed interval.
 
-    The current ``entityName`` is treated as open-ended from the latest
+    The current ``name`` is treated as open-ended from the latest
     ``formerNames`` end; each former name carries its own ``[from, to]``.
     """
     targets = {_norm(name) for name in names if _norm(name)}

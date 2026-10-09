@@ -53,5 +53,17 @@
       }
     ],
     "test": "tests/test_edgar_identity.py::test_im_p_one_sided_upper_bound_is_exact"
+  },
+  {
+    "id": "E2-M5",
+    "description": "the current name read from entityName only (the real key is name): a name-route key with no former-name match becomes NO_CANDIDATE",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "        entity_name=payload.get(\"name\"),",
+        "new": "        entity_name=payload.get(\"entityName\"),"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_name_route_uses_real_current_name_key"
   }
 ]

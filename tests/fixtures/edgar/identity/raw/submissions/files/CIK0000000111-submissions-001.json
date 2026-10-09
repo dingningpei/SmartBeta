@@ -1,13 +1,18 @@
 {
-  "filings": [
-    {
-      "accessionNumber": "0000000111-17-000001",
-      "form": "10-K",
-      "filingDate": "2017-02-01",
-      "reportDate": "2016-12-31",
-      "acceptanceDateTime": "2017-02-01T16:00:00.000Z",
-      "items": "",
-      "primaryDocument": "zyx-20161231.htm"
-    }
-  ]
+  "accessionNumber": ["0000000111-17-000001"],
+  "act": ["34"],
+  "core_type": ["10-K"],
+  "fileNumber": ["001-00001"],
+  "filmNumber": ["17654321"],
+  "form": ["10-K"],
+  "filingDate": ["2017-02-01"],
+  "reportDate": ["2016-12-31"],
+  "acceptanceDateTime": ["2017-02-01T16:00:00.000Z"],
+  "isInlineXBRL": [true],
+  "isXBRL": [true],
+  "isXBRLNumeric": [true],
+  "items": [""],
+  "primaryDocDescription": ["FORM 10-K"],
+  "primaryDocument": ["zyx-20161231.htm"],
+  "size": [234567]
 }
