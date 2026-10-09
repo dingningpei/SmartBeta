@@ -245,5 +245,41 @@
       }
     ],
     "test": "tests/test_pqv2_core.py::test_resolved_and_non_period_reasons_rejected"
+  },
+  {
+    "id": "V22-M08'",
+    "description": "CURRENT_AUTHORITY switched away from the Campaign-2 v2.1 binding to v2.2",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "CURRENT_AUTHORITY = AUTHORITY_V2_1",
+        "new": "CURRENT_AUTHORITY = AUTHORITY_V2_2"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_campaign2_binding_uses_current_v21"
+  },
+  {
+    "id": "V22-M09",
+    "description": "verify_authority does not verify the base v2.1 document",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "        if actual_base != authority.base_methodology_sha256:",
+        "new": "        if False:  # V22-M09: base document hash check bypassed"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_verify_authority_rejects_tampered_base_document"
+  },
+  {
+    "id": "A22-M1",
+    "description": "the CE line hash taken from the v2.1 line instead of the amendment",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    ce_line = _extract_code_block_after(amendment_lines, \"CE-ID v2.2\")",
+        "new": "    ce_line = base_lines[\"CE\"]  # A22-M1: v2.1 CE line"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_v22_canonical_line_recomputation"
   }
 ]
