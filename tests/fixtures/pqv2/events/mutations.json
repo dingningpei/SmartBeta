@@ -1,0 +1,81 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the frozen-literal test",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [],
+    "test": "tests/test_pqv2_events.py::test_frozen_semantic_ids"
+  },
+  {
+    "id": "B23-M1",
+    "description": "the row label is read as the TRI date (bridge lag ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "        out[previous] = label",
+        "new": "        out[_as_date(label)] = label"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_bridge_lag_alignment_offset_labels"
+  },
+  {
+    "id": "B23-M2",
+    "description": "an event is observed at K instead of K+1",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    index = bisect.bisect_right(ordered_positions, previous_position - 1) - 1",
+        "new": "    index = bisect.bisect_right(ordered_positions, previous_position) - 1"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_observability_boundary"
+  },
+  {
+    "id": "B23-M3",
+    "description": "B_e is symmetric +/- 15 min (the draft boundary, not M1b)",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    return BOUNDARY_START <= wall < BOUNDARY_END",
+        "new": "    return BOUNDARY_START <= wall < time(16, 15)"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_b_e_boundary_times"
+  },
+  {
+    "id": "B23-M4",
+    "description": "FPI keys are given events (FPI types admitted to the event set)",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    return event_type == EA_8K202",
+        "new": "    return event_type in (EA_8K202, FPI_6K, FPI_20F)"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_fpi_and_fallback_excluded"
+  },
+  {
+    "id": "B23-M5",
+    "description": "a null-time event is silently skipped (no TIME_UNAVAILABLE source)",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "            if is_in_scope_null_time(filing_date, interval_by_key[key]):",
+        "new": "            if False:  # B23-M5: null-time event silently skipped"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_time_unavailable_scope"
+  },
+  {
+    "id": "B23-M6",
+    "description": "reserve rows are read (the V§5 firewall refusal removed)",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    if reserve_rows:",
+        "new": "    if False:  # B23-M6: reserve rows read"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_reserve_rows_refused"
+  }
+]
