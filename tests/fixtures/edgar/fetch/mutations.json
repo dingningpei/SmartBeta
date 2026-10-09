@@ -53,5 +53,17 @@
       }
     ],
     "test": "tests/test_edgar_fetch.py::test_contact_required_before_any_request"
+  },
+  {
+    "id": "E1-M5",
+    "description": "the L3 plan omits a filing type",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "L3_EVENT_FORMS = frozenset({\"10-Q\", \"10-K\", \"6-K\", \"20-F\", \"40-F\"})",
+        "new": "L3_EVENT_FORMS = frozenset({\"10-Q\", \"10-K\", \"20-F\", \"40-F\"})"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_build_l3_plan_selects_event_typed_filings"
   }
 ]

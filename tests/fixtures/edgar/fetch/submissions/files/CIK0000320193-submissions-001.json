@@ -1,13 +1,18 @@
 {
-  "filings": [
-    {
-      "accessionNumber": "0000320193-16-000013",
-      "form": "10-K",
-      "filingDate": "2016-10-26",
-      "reportDate": "2016-09-24",
-      "acceptanceDateTime": "2016-10-26T18:01:00.000Z",
-      "items": "",
-      "primaryDocument": "aapl-20160924.htm"
-    }
-  ]
+  "acceptanceDateTime": ["2016-10-26T18:01:00.000Z"],
+  "accessionNumber": ["0000320193-16-000013"],
+  "act": ["34"],
+  "core_type": ["10-K"],
+  "fileNumber": ["001-36743"],
+  "filingDate": ["2016-10-26"],
+  "filmNumber": ["161950000"],
+  "form": ["10-K"],
+  "isInlineXBRL": [false],
+  "isXBRL": [true],
+  "isXBRLNumeric": [true],
+  "items": [""],
+  "primaryDocDescription": ["10-K"],
+  "primaryDocument": ["aapl-20160924.htm"],
+  "reportDate": ["2016-09-24"],
+  "size": [700000]
 }
