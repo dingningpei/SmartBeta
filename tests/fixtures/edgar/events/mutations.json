@@ -1,0 +1,69 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the K(e) boundary test",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [],
+    "test": "tests/test_edgar_events.py::test_k_session_boundary_1600"
+  },
+  {
+    "id": "E3-M1",
+    "description": "filingDate used for K(e) instead of acceptanceDateTime",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "        acceptance_utc = parse_acceptance_datetime(row.get(\"acceptanceDateTime\"))",
+        "new": "        acceptance_utc = parse_acceptance_datetime(row.get(\"filingDate\"))"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_filing_date_is_never_the_knowledge_time"
+  },
+  {
+    "id": "E3-M2",
+    "description": "16:00:00 ET treated as the same session",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    if calendar.is_trading_day(day) and eastern.time() < MARKET_CLOSE_ET:",
+        "new": "    if calendar.is_trading_day(day) and eastern.time() <= MARKET_CLOSE_ET:"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_k_session_boundary_1600"
+  },
+  {
+    "id": "E3-M3",
+    "description": "8-K/A creates an event",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    if amended:\n        return None",
+        "new": "    if False:\n        return None"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_amendment_never_creates_an_event"
+  },
+  {
+    "id": "E3-M4",
+    "description": "a reserve row written to the development path",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    development_rows, reserve_rows = split_by_firewall(rows)",
+        "new": "    development_rows, reserve_rows = list(rows), []"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_reserve_row_never_written_to_development_path"
+  },
+  {
+    "id": "E3-M5",
+    "description": "the periodic fallback merged into EA_8K202",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    if base in PERIODIC_FALLBACK_FORMS:\n        return EA_PERIODIC_FALLBACK",
+        "new": "    if base in PERIODIC_FALLBACK_FORMS:\n        return EA_8K202"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_periodic_fallback_is_typed_separately"
+  }
+]
