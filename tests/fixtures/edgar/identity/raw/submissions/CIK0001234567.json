@@ -1,0 +1,19 @@
+{
+  "cik": "1234567",
+  "entityName": "Ex Why Zee Holdings",
+  "formerNames": [
+    {"name": "Ex Why Zee Corp", "from": "2010-01-01", "to": "2018-01-01"}
+  ],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0001234567-16-000001"],
+      "form": ["10-Q"],
+      "filingDate": ["2016-06-01"],
+      "reportDate": ["2016-03-31"],
+      "acceptanceDateTime": ["2016-06-01T20:00:00.000Z"],
+      "items": [""],
+      "primaryDocument": ["exw-20160331.htm"]
+    },
+    "files": []
+  }
+}
