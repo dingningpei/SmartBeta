@@ -1,0 +1,45 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module records an honest EV-C PASS",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [],
+    "test": "tests/test_edgar_build.py::test_ev_c_gate_passes_on_full_coverage"
+  },
+  {
+    "id": "E4-M1",
+    "description": "a gate failure ignored (every gate status forced to PASS)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "            \"status\": self.status,",
+        "new": "            \"status\": GATE_PASS,"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_gate_failure_is_recorded_not_ignored"
+  },
+  {
+    "id": "E4-M2",
+    "description": "nondeterministic EV-T sample order (input order instead of the sorted panel)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "        for event in sort_event_rows(events)",
+        "new": "        for event in events"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_ev_t_sample_is_order_invariant"
+  },
+  {
+    "id": "E4-M3",
+    "description": "EV-T reads the sealed reserve instead of failing closed",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "        if session >= RESERVE_START:\n            raise ReserveFirewallError(",
+        "new": "        if False:\n            raise ReserveFirewallError("
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_d7c_returns_refuses_the_reserve"
+  }
+]
