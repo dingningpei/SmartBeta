@@ -12,8 +12,8 @@
     "file": "smart_beta/dataset_v1/edgar_events.py",
     "edits": [
       {
-        "old": "            header_value = header_times.get(accession)",
-        "new": "            header_value = row.get(\"filingDate\")"
+        "old": "        header_value = header_times.get(accession)",
+        "new": "        header_value = row.get(\"filingDate\")"
       }
     ],
     "test": "tests/test_edgar_events.py::test_filing_date_is_never_the_knowledge_time"
@@ -68,12 +68,12 @@
   },
   {
     "id": "E3-M6",
-    "description": "JSON used when the header is missing",
+    "description": "JSON used when the header is present but missing/unparseable",
     "file": "smart_beta/dataset_v1/edgar_events.py",
     "edits": [
       {
-        "old": "            if header_et is None:\n                k_reason = EVENT_TIME_UNAVAILABLE",
-        "new": "            if header_et is None:\n                header_et = to_eastern(parse_acceptance_datetime(json_raw))\n                k_reason = None"
+        "old": "        if header_et is None:\n            k_reason = EVENT_TIME_UNAVAILABLE",
+        "new": "        if header_et is None:\n            header_et = to_eastern(parse_acceptance_datetime(json_raw))\n            k_reason = None"
       }
     ],
     "test": "tests/test_edgar_events.py::test_missing_header_gives_event_time_unavailable"
@@ -101,5 +101,25 @@
       }
     ],
     "test": "tests/test_edgar_events.py::test_json_discrepancy_plus_one_offset"
+  },
+  {
+    "id": "E3-M9",
+    "description": "the JSON fallback restored when no header mapping is supplied (V13-E4 §2)",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    if header_times is None:\n        raise EventInputError(\n            \"normalize_key requires a header_times mapping (V13-E4 §2); \"\n            \"the JSON acceptanceDateTime is never a K(e) source\"\n        )\n    rows = [dict(row) for row in filings]",
+        "new": "    rows = [dict(row) for row in filings]"
+      },
+      {
+        "old": "        header_value = header_times.get(accession)\n        header_et = parse_header_wall_clock(header_value)\n        if header_et is None:\n            k_reason = EVENT_TIME_UNAVAILABLE\n        else:\n            k_reason = None",
+        "new": "        if header_times is None:\n            header_et = to_eastern(parse_acceptance_datetime(json_raw))\n            k_reason = None\n        else:\n            header_value = header_times.get(accession)\n            header_et = parse_header_wall_clock(header_value)\n            if header_et is None:\n                k_reason = EVENT_TIME_UNAVAILABLE\n            else:\n                k_reason = None"
+      },
+      {
+        "old": "    if header_times is None:\n        raise EventInputError(\n            \"normalize_events requires a header_times mapping (V13-E4 \u00a72); \"\n            \"the JSON acceptanceDateTime is never a K(e) source\"\n        )\n    events: list[EventRow] = []",
+        "new": "    events: list[EventRow] = []"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_header_times_is_required"
   }
 ]

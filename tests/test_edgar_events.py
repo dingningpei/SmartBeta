@@ -8,8 +8,9 @@ synthetic fixtures only; no test opens ``data_store``.
 
 Covers plan §4 (Timing, Event types, Firewall rows), the V13-E2 erratum
 (header time source, ``acceptance_json_raw`` / ``json_discrepancy``, the
-``EVENT_TIME_UNAVAILABLE`` path) and every plan §5 / erratum mutation with
-the ``E3`` prefix.
+``EVENT_TIME_UNAVAILABLE`` path), the V13-E4 §2 erratum (a missing
+``header_times`` mapping fails closed; the JSON-time path is removed) and
+every plan §5 / erratum mutation with the ``E3`` prefix.
 """
 
 from __future__ import annotations
@@ -398,16 +399,22 @@ def test_json_discrepancy_plus_one_offset(calendar) -> None:
     assert event.json_discrepancy == E.JSON_PLUS_ONE_OFFSET
 
 
-def test_legacy_json_path_without_a_header_source(calendar) -> None:
-    """No header source at all keeps the pre-V13-E2 E-4 fallback working."""
-    row = _filing(accessionNumber="A-LEGACY")
-    (event,) = _normalize([row], calendar, header_times=None)
-    assert event.k_session == date(2022, 3, 15)
-    assert event.k_reason is None
-    # A JSON value is still required on that path (fail closed).
-    broken = _filing(accessionNumber="A-LEGACY-NONE", acceptanceDateTime=None)
-    with pytest.raises(E.EventFormatError):
-        _normalize([broken], calendar, header_times=None)
+def test_header_times_is_required(calendar) -> None:
+    """A missing header source fails closed; no JSON-time path remains."""
+    row = _filing(accessionNumber="A-REQ")
+    payload = _payload([row], cik=1)
+    with pytest.raises(E.EventInputError):
+        E.normalize_key(
+            "K1", 1, [row], calendar=calendar, header_times=None
+        )
+    with pytest.raises(E.EventInputError):
+        E.normalize_events(
+            [E.KeyCik("K1", 1)],
+            {1: payload},
+            calendar=calendar,
+            header_times=None,
+            validate=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +768,7 @@ def test_mutation_fixture_contract() -> None:
         "E3-M6",
         "E3-M7",
         "E3-M8",
+        "E3-M9",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/edgar_events.py").read_text(
         encoding="utf-8"
