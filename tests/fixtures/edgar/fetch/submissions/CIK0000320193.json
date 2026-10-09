@@ -36,9 +36,9 @@
       "filingDate": ["2023-05-05", "2023-06-01", "2023-02-03"],
       "filmNumber": ["23870000", "23990000", "23600000"],
       "form": ["10-Q", "8-K", "10-Q"],
-      "isInlineXBRL": [true, false, true],
-      "isXBRL": [true, false, true],
-      "isXBRLNumeric": [true, false, true],
+      "isInlineXBRL": [1, 0, 1],
+      "isXBRL": [1, 0, 1],
+      "isXBRLNumeric": [1, 0, 1],
       "items": ["", "2.02", ""],
       "primaryDocDescription": ["10-Q", "8-K", "10-Q"],
       "primaryDocument": [
