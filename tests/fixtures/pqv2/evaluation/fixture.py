@@ -183,6 +183,11 @@ class SyntheticStore:
         #: to drive the M§8A.1 UNKNOWN_SOURCE classification without touching
         #: the TRI/volume inputs the factor panel is evaluated from.
         self.d7c_overrides: dict[tuple[str, date], float] = {}
+        #: Optional per-(key, session) ``total_return_index`` overrides used to
+        #: drive a NaN momentum (M) row at a formation without touching the
+        #: factor-panel plumbing (the panel is evaluated from these inputs, so
+        #: the NaN propagates exactly as a real PROPAGATE missing row would).
+        self.tri_overrides: dict[tuple[str, date], float] = {}
         self.d7b_bindings: B.Bindings | None = None
         self.source_bindings: S.SourceBindings | None = None
         self.pq_bindings: Q.Bindings | None = None
@@ -617,11 +622,12 @@ def build_inputs(store: SyntheticStore) -> dict[str, TrustedInput]:
     daily = wide["daily_total_return"].copy()
     for (key, session), value in store.d7c_overrides.items():
         daily.at[pd.Timestamp(session), key] = value
+    tri = wide["total_return_index"].copy()
+    for (key, session), value in store.tri_overrides.items():
+        tri.at[pd.Timestamp(session), key] = value
     return {
         "daily_total_return": _trusted(daily, "daily_total_return"),
-        "total_return_index": _trusted(
-            wide["total_return_index"], "total_return_index"
-        ),
+        "total_return_index": _trusted(tri, "total_return_index"),
         "dollar_volume": _trusted(wide["dollar_volume"], "dollar_volume"),
     }
 

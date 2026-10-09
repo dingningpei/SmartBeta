@@ -405,6 +405,18 @@
     "test": "tests/test_pqv2_evaluation.py::test_v22_diagnostics_record_authority_base"
   },
   {
+    "id": "H22-M2",
+    "description": "NaN-factor universe member passed through to D/E",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        ranked = _ranked_members(formation, universe, factor_values, b_groups)\n        values = {key: factor_values[(formation, key)] for key in ranked}",
+        "new": "        ranked = _ranked_members(formation, universe, factor_values, b_groups)\n        ranked = universe  # H22-M2: NaN member passed through\n        values = {key: factor_values.get((formation, key), math.nan) for key in ranked}"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_grammar_member_nan_factor_long_lookback_end_to_end"
+  },
+  {
     "id": "V22-M14",
     "description": "a declaration bound to a non-admitted authority accepted",
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",

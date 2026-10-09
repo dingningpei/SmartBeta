@@ -35,11 +35,15 @@ from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_evaluation as E
 from smart_beta.spec.expression import (
     Div,
+    Mul,
     Sub,
     field,
     lag,
+    literal,
+    rank,
     ratio,
     rolling_mean,
+    standardize,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +136,8 @@ def _build_case(
     overlay_overrides: Mapping[str, Any] | None = None,
     base_overrides: Mapping[str, Any] | None = None,
     d7c_overrides: Mapping[tuple[str, date], float] | None = None,
+    tri_overrides: Mapping[tuple[str, date], float] | None = None,
+    force_nan: tuple[str, date] | None = None,
     spec_override: Any = None,
 ) -> Case:
     fx = _load_fixture()
@@ -142,6 +148,8 @@ def _build_case(
     store.ca_events.extend(ca_events)
     for (key, session), value in (d7c_overrides or {}).items():
         store.d7c_overrides[(key, session)] = value
+    for (key, session), value in (tri_overrides or {}).items():
+        store.tri_overrides[(key, session)] = value
     store.build_d7b()
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
@@ -150,6 +158,13 @@ def _build_case(
         spec = dataclasses.replace(spec, sign=sign)
     inputs = fx.build_inputs(store)
     panel_values = panel if panel is not None else fx.factor_panel(spec, inputs, store)
+    if force_nan is not None:
+        key, formation = force_nan
+        panel_values = panel_values.copy()
+        mask = (panel_values["date"] == pd.Timestamp(formation)) & (
+            panel_values["stock_id"] == key
+        )
+        panel_values.loc[mask, "value"] = float("nan")
     base = fx.base_declaration(spec, panel_values, **(dict(base_overrides or {})))
     declaration = fx.declaration(
         base,
@@ -1546,6 +1561,136 @@ def test_grammar_member_unlabelled_spec_is_assessed(tmp_path: Path) -> None:
     assert case.diagnostics.certified_hypothesis is None
 
 
+# -- NaN factor rows: the ranked set is exactly B's grouped set -------------
+
+
+def _b_grouped_members(diag: Any) -> dict[date, set[str]]:
+    """B's per-formation grouped members, from the D7b accounting records."""
+
+    grouped: dict[date, set[str]] = {}
+    for record in diag.b_diagnostics.accounting_records:
+        if record.scenario != E.SCENARIO_T0 or record.group is None:
+            continue
+        grouped.setdefault(record.formation_date, set()).add(record.stock_id)
+    return grouped
+
+
+def _long_lookback_dv_ratio_member():
+    """A SIMPLE_G member whose 504-session dv mean is NaN on the short fixture."""
+
+    return Sub(
+        Div(rolling_mean(field("dv"), 504), rolling_mean(field("dv"), 252)),
+        literal(2.0),
+    )
+
+
+def test_grammar_member_nan_factor_long_lookback_end_to_end(tmp_path: Path) -> None:
+    """The I11 reproducer: a < 504-session history leaves every factor NaN.
+
+    D and E must be ranked/assigned over the finite-factor universe (empty
+    here), never over the whole universe with NaN members converted to a
+    bounded value: the evaluation stays certified SIMPLE and deterministic.
+    """
+
+    spec = _grammar_spec(aliases=("dv",), expression=_long_lookback_dv_ratio_member())
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.certified_class == "SIMPLE"
+    assert diag.certified_hypothesis is None
+    assert len(diag.periods) == 4
+    for period in diag.periods:
+        assert period.status_t0 == E._envelope.NOT_ASSESSED
+        assert period.status_ts == E._envelope.NOT_ASSESSED
+        assert period.reason_t0 == C.PQV2_EMPTY_LEG_CONFIGURATION
+        assert period.reason_ts == C.PQV2_EMPTY_LEG_CONFIGURATION
+
+    # Deterministic rebuild: the same synthetic root hashes to the same output.
+    again = _build_case(
+        tmp_path / "again",
+        hypothesis="C1-H1",
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+    )
+    assert again.diagnostics.diagnostics_hash == diag.diagnostics_hash
+    assert (
+        again.diagnostics.cell("L-T0").cell_hash
+        == diag.cell("L-T0").cell_hash
+    )
+
+
+def test_std_x_rank_member_nan_m_row_uses_b_grouped_set(tmp_path: Path) -> None:
+    """A STD_X_RANK_G member with one NaN M row keeps the full cross-section.
+
+    The NaN-M member is excluded from the leg/assignment universe exactly as B
+    excludes it (``n_universe`` drops), but it still contributes its finite V
+    to the full-cross-section standardize/rank inputs (``n_cross_section``
+    stays), which are unchanged.
+    """
+
+    fx = _load_fixture()
+    momentum = ratio(field("tri"), lag(field("tri"), 252))
+    volume = ratio(
+        rolling_mean(field("dv"), 2), rolling_mean(field("dv"), 252)
+    )
+    spec = _grammar_spec(
+        aliases=("tri", "dv"), expression=Mul(standardize(momentum), rank(volume))
+    )
+    affected = fx.FORMATIONS[2]
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H4",
+        flags=(),
+        spec_override=spec,
+        declaration_overrides=_V22_DECLARATION,
+        tri_overrides={("B", fx.SESSIONS[268]): float("nan")},
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.certified_class == "STD_X_RANK"
+    b_grouped = _b_grouped_members(diag)
+    for period in diag.periods:
+        assert period.status_t0 == E._envelope.ASSESSED
+        assert period.exposure["class"] == "STD_X_RANK"
+        assert period.exposure["n_universe"] == len(b_grouped[period.period])
+        # The NaN-M member is still a member of the full valid cross-section.
+        assert period.exposure["n_cross_section"] == 6
+    assert "B" not in b_grouped[affected]
+    assert b_grouped[affected] == {key for key in fx.KEYS if key != "B"}
+    assert "B" in b_grouped[fx.FORMATIONS[0]]
+
+
+def test_c1_forced_nan_member_matches_b_exclusion(tmp_path: Path) -> None:
+    """A v2.1 C1 case with one member forced NaN equals B's exclusion.
+
+    D is ranked over the finite-factor members only; the forced member is
+    dropped from the assignment universe exactly as B drops it from its groups.
+    """
+
+    fx = _load_fixture()
+    affected = fx.FORMATIONS[2]
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        force_nan=("B", affected),
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.certified_class == "SIMPLE"
+    b_grouped = _b_grouped_members(diag)
+    for period in diag.periods:
+        assert period.status_t0 == E._envelope.ASSESSED
+        assert period.exposure["n"] == len(b_grouped[period.period])
+    assert len(b_grouped[affected]) == 5
+    assert "B" not in b_grouped[affected]
+    assert len(b_grouped[fx.FORMATIONS[0]]) == 6
+
+
 # ===========================================================================
 # 13. Mutation control and runner support
 # ===========================================================================
@@ -1594,6 +1739,7 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
         "V22-M12",
         "V22-M14",
         "H22-M1",
+        "H22-M2",
     }
     assert required.issubset(set(ids))
     for entry in payload:
