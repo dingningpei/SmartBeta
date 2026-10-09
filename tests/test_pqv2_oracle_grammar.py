@@ -434,6 +434,14 @@ def test_oracle_imports_without_loading_smart_beta() -> None:
 # ---------------------------------------------------------------------------
 # mutation fixture contract (G22-M1 .. G22-M4)
 # ---------------------------------------------------------------------------
+def _module_defines_test(path: Path, name: str) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return any(
+        isinstance(node, ast.FunctionDef) and node.name == name
+        for node in tree.body
+    )
+
+
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(MUTATIONS.read_text(encoding="utf-8"))
     assert [mutation["id"] for mutation in mutations] == [
@@ -441,16 +449,25 @@ def test_mutation_fixture_contract() -> None:
         "G22-M2",
         "G22-M3",
         "G22-M4",
+        "G23-M1",
+        "G23-M2",
+        "G23-M3",
+        "G23-M4",
     ]
-    this_module = sys.modules[__name__]
+    allowed_modules = {
+        "tests/test_pqv2_oracle_grammar.py",
+        "tests/test_pqv2_oracle_events.py",
+    }
     for mutation in mutations:
         source = (REPO_ROOT / mutation["file"]).read_text(encoding="utf-8")
         assert mutation["description"]
         module_name, _, test_name = mutation["test"].partition("::")
-        assert module_name == "tests/test_pqv2_oracle_grammar.py"
-        assert hasattr(this_module, test_name), mutation["id"]
+        assert module_name in allowed_modules, mutation["id"]
+        assert _module_defines_test(
+            REPO_ROOT / module_name, test_name
+        ), mutation["id"]
         assert mutation["edits"], mutation["id"]
         for edit in mutation["edits"]:
             assert edit["old"] and edit["new"] is not None
             assert source.count(edit["old"]) == 1, (mutation["id"], edit["old"])
-            assert edit["old"] != edit["new"], mutation["id"]
+            assert edit["old"] != edit["new"]
