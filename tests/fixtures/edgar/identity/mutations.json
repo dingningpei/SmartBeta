@@ -1,0 +1,57 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must map exactly one candidate to MAPPED",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [],
+    "test": "tests/test_edgar_identity.py::test_verification_unique_candidate_is_mapped"
+  },
+  {
+    "id": "E2-M1",
+    "description": "an ambiguous key mapped to the first candidate",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "    elif len(verified) > 1:",
+        "new": "    elif False:"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_ambiguous_key_is_not_mapped_to_first_candidate"
+  },
+  {
+    "id": "E2-M2",
+    "description": "an unmapped key dropped",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "    return rows",
+        "new": "    return [row for row in rows if row.status == STATUS_MAPPED]"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_unmapped_keys_are_retained"
+  },
+  {
+    "id": "E2-M3",
+    "description": "the name route ignores the interval",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "        if _name_matches_interval(names, key.interval_start, key.interval_end, view):",
+        "new": "        if True:"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_name_route_requires_interval_overlap"
+  },
+  {
+    "id": "E2-M4",
+    "description": "the IM-P UB uses the normal approximation",
+    "file": "smart_beta/dataset_v1/edgar_identity.py",
+    "edits": [
+      {
+        "old": "        return float(_beta.ppf(1.0 - alpha, k + 1, n - k))",
+        "new": "        p = k / n\n        return float(p + 1.6448536269514722 * math.sqrt(p * (1.0 - p) / n))"
+      }
+    ],
+    "test": "tests/test_edgar_identity.py::test_im_p_one_sided_upper_bound_is_exact"
+  }
+]
