@@ -27,8 +27,10 @@ panel.  It implements, exactly:
   session when it is strictly before 16:00 ET on a trading session,
   otherwise to the next trading session.  A missing or unparseable header
   gives ``k_session = null`` with the typed reason
-  ``EVENT_TIME_UNAVAILABLE``; ``filingDate`` is never used for K(e), and
-  there is no JSON fallback whenever a header-time mapping is supplied.
+  ``EVENT_TIME_UNAVAILABLE``; neither ``filingDate`` nor the
+  submissions-JSON ``acceptanceDateTime`` is ever used for K(e), and a
+  missing ``header_times`` mapping fails closed with
+  :class:`EventInputError` (V13-E4 §2).
   An ``8-K/A`` never creates or moves an event (V§4);
 * the V13-E2 recorded facts: ``acceptance_json_raw`` keeps the submissions
   JSON value verbatim and ``json_discrepancy`` classifies it against the
@@ -433,10 +435,10 @@ def classify_json_discrepancy(
 def parse_acceptance_datetime(value: Any) -> datetime:
     """Parse a submissions-JSON ``acceptanceDateTime`` into aware UTC.
 
-    This is **not** the frozen K(e) time source (V13-E2): it is retained for
-    the recorded ``acceptance_json_raw`` comparison and for the legacy
-    no-header-source path used by the pre-L3 E-4 raw-derivation fallback.
-    The SEC field is ISO-8601 (normally ``...Z``); a value that carries no
+    This is **not** the frozen K(e) time source (V13-E2): it is retained
+    only for the recorded ``acceptance_json_raw`` comparison (the
+    ``json_discrepancy`` class).  The SEC field is ISO-8601 (normally
+    ``...Z``); a value that carries no
     offset is read as US Eastern time, because the frozen design states the
     field in ET.  A missing or malformed value fails closed.
     """
@@ -635,17 +637,19 @@ def normalize_key(
     ``filings`` is the flattened per-filing row list for a single CIK (see
     :func:`load_raw_filings`).  ``header_times`` is the V13-E2 per-accession
     header-time mapping (values are the strict 14-digit field, an aware
-    ``datetime``, the raw index-header text or ``None``).  When it is
-    supplied, K(e) is read **only** from the filing's index header: a
-    missing or unparseable entry gives ``k_session = None`` with the
-    ``EVENT_TIME_UNAVAILABLE`` reason and never falls back to the JSON or
-    ``filingDate``.  When it is ``None`` the caller has supplied no header
-    source at all, and the legacy submissions-JSON acceptance time is used
-    so that the pre-L3 E-4 raw-derivation fallback keeps working; the frozen
-    v1.3 build always supplies the header mapping.
+    ``datetime``, the raw index-header text or ``None``).  It is required:
+    K(e) is read **only** from the filing's index header, a missing or
+    unparseable entry gives ``k_session = None`` with the
+    ``EVENT_TIME_UNAVAILABLE`` reason, and there is no fallback to the JSON
+    or ``filingDate``.  A ``None`` mapping has no header source at all and
+    fails closed with :class:`EventInputError` (V13-E4 §2).
     """
+    if header_times is None:
+        raise EventInputError(
+            "normalize_key requires a header_times mapping (V13-E4 §2); "
+            "the JSON acceptanceDateTime is never a K(e) source"
+        )
     rows = [dict(row) for row in filings]
-    use_headers = header_times is not None
 
     # The original 8-K Item 2.02 filing dates, used only by the fallback
     # window rule.  ``filingDate`` is used here as a window bound; it is never
@@ -690,15 +694,11 @@ def normalize_key(
 
         header_et: datetime | None
         k_reason: str | None
-        if use_headers:
-            header_value = header_times.get(accession)
-            header_et = parse_header_wall_clock(header_value)
-            if header_et is None:
-                k_reason = EVENT_TIME_UNAVAILABLE
-            else:
-                k_reason = None
+        header_value = header_times.get(accession)
+        header_et = parse_header_wall_clock(header_value)
+        if header_et is None:
+            k_reason = EVENT_TIME_UNAVAILABLE
         else:
-            header_et = to_eastern(parse_acceptance_datetime(json_raw))
             k_reason = None
 
         if header_et is None:
@@ -750,9 +750,15 @@ def normalize_events(
     ``submissions`` maps a CIK to either an E-1 submissions payload (a
     mapping, flattened with :func:`iter_filings`) or an already-flattened
     sequence of filing rows.  ``header_times`` is the V13-E2 per-accession
-    header-time mapping (see :func:`normalize_key`).  Rows are returned in
-    the deterministic :func:`sort_event_rows` order.
+    header-time mapping (see :func:`normalize_key`); it is required and a
+    ``None`` value fails closed with :class:`EventInputError` (V13-E4 §2).
+    Rows are returned in the deterministic :func:`sort_event_rows` order.
     """
+    if header_times is None:
+        raise EventInputError(
+            "normalize_events requires a header_times mapping (V13-E4 §2); "
+            "the JSON acceptanceDateTime is never a K(e) source"
+        )
     events: list[EventRow] = []
     for raw_key in key_ciks:
         key = _coerce_key(raw_key)
