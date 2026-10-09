@@ -31,6 +31,12 @@ from typing import Any, Mapping, Union
 import numpy as np
 
 from .oracle import (
+    EVENT_ROLE_DAYS_SINCE_EA,
+    EVENT_ROLE_EAR,
+    EVENT_ROLE_RECENT_EA_PREFIX,
+    event_recent_role,
+    event_recent_window,
+    is_event_role,
     lag_frame,
     rank_average,
     rolling_mean,
@@ -55,6 +61,8 @@ __all__ = [
     "children",
     "depth",
     "evaluate",
+    "event_recent_window",
+    "is_event_role",
     "from_dict",
     "legacy_to_ast",
     "to_dict",
@@ -75,10 +83,10 @@ class Field:
     role: str
 
     def __post_init__(self) -> None:
-        if self.role not in _FIELD_ROLES:
+        if self.role not in _FIELD_ROLES and not is_event_role(self.role):
             raise ValueError(
                 f"unknown field role {self.role!r}; expected one of "
-                f"{_FIELD_ROLES}"
+                f"{_FIELD_ROLES} or a frozen event semantic id"
             )
 
 
@@ -340,40 +348,58 @@ def _finite(frame: np.ndarray) -> np.ndarray:
     return out.astype("float64")
 
 
-def evaluate(node: Node, view: Any) -> np.ndarray:
-    """Evaluate a generic AST on one corrected state view."""
+def evaluate(node: Node, view: Any, *, scenario: str = "K0") -> np.ndarray:
+    """Evaluate a generic AST on one corrected state view.
+
+    ``scenario`` selects the P-Q v2.3 event timing scenario (``"K0"`` /
+    ``"K1"``); it is ignored for event-free expressions.
+    """
     shape = (len(view.world.sessions), len(view.world.keys))
-    return _eval(node, view, shape)
+    return _eval(node, view, shape, scenario)
 
 
-def _eval(node: Node, view: Any, shape: tuple[int, int]) -> np.ndarray:
+def _eval(
+    node: Node, view: Any, shape: tuple[int, int], scenario: str = "K0"
+) -> np.ndarray:
     if isinstance(node, Field):
+        if is_event_role(node.role):
+            return view.event_primitive_frame(node.role, scenario)
         return _bridge(_raw_matrix(view, node.role))
     if isinstance(node, Const):
         return np.full(shape, float(node.value), dtype="float64")
     if isinstance(node, Lag):
-        frame = _eval(node.operand, view, shape)
+        frame = _eval(node.operand, view, shape, scenario)
         return lag_frame(frame, int(node.k))
     if isinstance(node, Rolling):
-        frame = _eval(node.operand, view, shape)
+        frame = _eval(node.operand, view, shape, scenario)
         if node.fn == "mean":
             return rolling_mean(frame, int(node.w))
         return rolling_std(frame, int(node.w), ddof=1)
     if isinstance(node, Add):
-        return _finite(_eval(node.left, view, shape) + _eval(node.right, view, shape))
+        return _finite(
+            _eval(node.left, view, shape, scenario)
+            + _eval(node.right, view, shape, scenario)
+        )
     if isinstance(node, Sub):
-        return _finite(_eval(node.left, view, shape) - _eval(node.right, view, shape))
+        return _finite(
+            _eval(node.left, view, shape, scenario)
+            - _eval(node.right, view, shape, scenario)
+        )
     if isinstance(node, Mul):
-        return _finite(_eval(node.left, view, shape) * _eval(node.right, view, shape))
+        return _finite(
+            _eval(node.left, view, shape, scenario)
+            * _eval(node.right, view, shape, scenario)
+        )
     if isinstance(node, Div):
         with np.errstate(divide="ignore", invalid="ignore"):
             quotient = np.divide(
-                _eval(node.left, view, shape), _eval(node.right, view, shape)
+                _eval(node.left, view, shape, scenario),
+                _eval(node.right, view, shape, scenario),
             )
         # division by zero (or inf/inf) yields NaN -- never +/-inf in output.
         return _finite(quotient)
     if isinstance(node, Standardize):
-        return standardize(_eval(node.operand, view, shape), ddof=0)
+        return standardize(_eval(node.operand, view, shape, scenario), ddof=0)
     if isinstance(node, Rank):
-        return rank_average(_eval(node.operand, view, shape))
+        return rank_average(_eval(node.operand, view, shape, scenario))
     raise TypeError(f"not a generic AST node: {type(node).__name__}")

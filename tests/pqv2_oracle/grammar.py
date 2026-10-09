@@ -28,11 +28,15 @@ from . import ast as A
 
 SIMPLE_G = "SIMPLE_G"
 STD_X_RANK_G = "STD_X_RANK_G"
+EVENT_SIMPLE = "EVENT_SIMPLE"
 OUTSIDE = "OUTSIDE"
 
 WINDOW_MIN = 2
 WINDOW_MAX = 504
 LOOKBACK_MAX = 504
+
+#: The P-Q v2.3 event generator seed (plan §3, PQ23-G).
+EVENT_SEED = 20261009
 
 _LAG_VALUES = (0, 1, 2, 3, 5, 21, 63, 126, 231, 252, 504)
 _NUMERATOR_LAGS = tuple(v for v in _LAG_VALUES if v < LOOKBACK_MAX)
@@ -56,6 +60,10 @@ def _bounds_ok(node: A.Node) -> bool:
                 return False
         if isinstance(current, A.Rolling):
             if not (WINDOW_MIN <= current.w <= WINDOW_MAX):
+                return False
+        if isinstance(current, A.Field):
+            window = A.event_recent_window(current.role)
+            if window is not None and not (WINDOW_MIN <= window <= WINDOW_MAX):
                 return False
     return True
 
@@ -246,10 +254,86 @@ def _is_std_x_rank(node: A.Node) -> bool:
     return False
 
 
+def _is_event_field(node: A.Node) -> bool:
+    return isinstance(node, A.Field) and A.is_event_role(node.role)
+
+
+@lru_cache(maxsize=None)
+def _contains_event(node: A.Node) -> bool:
+    return any(_is_event_field(current) for current in A.walk(node))
+
+
+@lru_cache(maxsize=None)
+def _lag_of_event(node: A.Node) -> bool:
+    """True iff any ``Lag`` node wraps an event primitive (forbidden)."""
+    return any(
+        isinstance(current, A.Lag) and _contains_event(current.operand)
+        for current in A.walk(node)
+    )
+
+
+def _is_event_denominator(node: A.Node) -> bool:
+    """EVENT_G ``D``: the SIMPLE_G denominator set, never an event primitive."""
+    if _contains_event(node):
+        return False
+    return _is_D(node)
+
+
+@lru_cache(maxsize=None)
+def _is_event_cell(node: A.Node) -> bool:
+    """EVENT_G ``X`` recognizer: like SIMPLE_G with event-primitive leaves."""
+    if isinstance(node, A.Standardize) or isinstance(node, A.Rank):
+        return False
+    if _is_event_field(node):
+        return True
+    if _is_T(node):
+        return True
+    if _is_N(node):
+        return True
+    if isinstance(node, A.Mul):
+        if isinstance(node.left, A.Const):
+            return _is_event_cell(node.right)
+        if isinstance(node.right, A.Const):
+            return _is_event_cell(node.left)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, A.Add):
+        if isinstance(node.left, A.Const) or isinstance(node.right, A.Const):
+            other = node.right if isinstance(node.left, A.Const) else node.left
+            return _is_event_cell(other)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, A.Sub):
+        if isinstance(node.right, A.Const):
+            return _is_event_cell(node.left)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, A.Div):
+        return _is_event_cell(node.left) and _is_event_denominator(node.right)
+    if isinstance(node, A.Lag):
+        return _is_event_cell(node.operand)
+    return False
+
+
+def _is_event_g(node: A.Node) -> bool:
+    """The E§3 EVENT_G membership decision.
+
+    Requires at least one event primitive, no cross-sectional node, no
+    ``lag`` of an event primitive, event primitives never as divisors, the
+    SIMPLE_G bounds on the price terms, and finite nonzero constants.
+    """
+    if not _bounds_ok(node) or not _constants_ok(node):
+        return False
+    if not _contains_event(node):
+        return False
+    if _lag_of_event(node):
+        return False
+    return _is_event_cell(node)
+
+
 def classify(node: A.Node) -> str:
-    """The oracle's independent A§15A class of a generic expression."""
+    """The oracle's independent A§15A / E§3 class of a generic expression."""
     if not _bounds_ok(node) or not _constants_ok(node):
         return OUTSIDE
+    if _contains_event(node):
+        return EVENT_SIMPLE if _is_event_g(node) else OUTSIDE
     if _is_std_x_rank(node):
         return STD_X_RANK_G
     if _is_E(node):
@@ -320,6 +404,21 @@ def observed_features(node: A.Node) -> frozenset[str]:
                     features.add("b504")
         if _is_std_x_rank(current):
             features.add("F")
+        if _is_event_field(current):
+            features.add("EV")
+            if current.role == A.EVENT_ROLE_EAR:
+                features.add("EV_ear")
+            elif current.role == A.EVENT_ROLE_DAYS_SINCE_EA:
+                features.add("EV_days")
+            else:
+                features.add("EV_recent")
+                window = A.event_recent_window(current.role)
+                if window == WINDOW_MIN:
+                    features.add("EV_recent_w2")
+                if window == WINDOW_MAX:
+                    features.add("EV_recent_w504")
+        if _is_event_g(current):
+            features.add("EVENT_G")
     return frozenset(features)
 
 
@@ -479,11 +578,94 @@ def generate_std_x_rank(n: int = 2000, seed: int = 20261008) -> list[A.Node]:
     return [_STD_BUILDERS[names[i % len(names)]](rng) for i in range(int(n))]
 
 
-def generate_population(seed: int = 20261008, n: int = 2000) -> dict[str, list[A.Node]]:
-    """Both grammar populations, deterministic for a given seed."""
+def _event_primitive(rng: np.random.Generator) -> A.Node:
+    pick = int(rng.integers(3))
+    if pick == 0:
+        return A.Field(A.EVENT_ROLE_EAR)
+    if pick == 1:
+        return A.Field(A.EVENT_ROLE_DAYS_SINCE_EA)
+    return A.Field(A.event_recent_role(_choice(rng, _WINDOWS)))
+
+
+def _D_atom(rng: np.random.Generator) -> A.Node:
+    """A permitted SIMPLE_G denominator (E§3 D set)."""
+    pick = int(rng.integers(3))
+    if pick == 0:
+        return _tri_ratio(rng)
+    if pick == 1:
+        return A.Rolling("std", A.Field("ret"), _choice(rng, _WINDOWS))
+    return A.Rolling("mean", A.Field("dv"), _choice(rng, _WINDOWS))
+
+
+_EVENT_BUILDERS = {
+    "EV_ear": lambda rng: A.Field(A.EVENT_ROLE_EAR),
+    "EV_days": lambda rng: A.Field(A.EVENT_ROLE_DAYS_SINCE_EA),
+    "EV_recent": lambda rng: A.Field(
+        A.event_recent_role(_choice(rng, _WINDOWS))
+    ),
+    "EV_recent_w2": lambda rng: A.Field(A.event_recent_role(WINDOW_MIN)),
+    "EV_recent_w504": lambda rng: A.Field(A.event_recent_role(WINDOW_MAX)),
+    "EV_const_mul": lambda rng: A.Mul(
+        A.Const(_nonzero_constant(rng)), _event_primitive(rng)
+    ),
+    "EV_add_const": lambda rng: A.Add(
+        _event_primitive(rng), A.Const(_constant(rng))
+    ),
+    "EV_sub_const": lambda rng: A.Sub(
+        _event_primitive(rng), A.Const(_constant(rng))
+    ),
+    "EV_mul_simple": lambda rng: A.Mul(
+        _event_primitive(rng), _simple_atom(rng)
+    ),
+    "EV_add_simple": lambda rng: A.Add(
+        _event_primitive(rng), _simple_atom(rng)
+    ),
+    "EV_sub_simple": lambda rng: A.Sub(
+        _event_primitive(rng), _simple_atom(rng)
+    ),
+    "EV_div_D_T": lambda rng: A.Div(_event_primitive(rng), _tri_ratio(rng)),
+    "EV_div_D_dv": lambda rng: A.Div(
+        _event_primitive(rng),
+        A.Rolling("mean", A.Field("dv"), _choice(rng, _WINDOWS)),
+    ),
+    "EV_div_D_ret_std": lambda rng: A.Div(
+        _event_primitive(rng),
+        A.Rolling("std", A.Field("ret"), _choice(rng, _WINDOWS)),
+    ),
+    "EV_event_div_D": lambda rng: A.Div(_event_primitive(rng), _D_atom(rng)),
+    "EV_ear_plus_days": lambda rng: A.Add(
+        A.Field(A.EVENT_ROLE_EAR), A.Field(A.EVENT_ROLE_DAYS_SINCE_EA)
+    ),
+    "EV_recent_mul_days": lambda rng: A.Mul(
+        A.Field(A.event_recent_role(_choice(rng, _WINDOWS))),
+        A.Field(A.EVENT_ROLE_DAYS_SINCE_EA),
+    ),
+    "EV_lag_simple_mixed": lambda rng: A.Add(
+        _event_primitive(rng),
+        A.Lag(_simple_atom(rng), _choice(rng, _LAG_VALUES)),
+    ),
+    "EV_nested": lambda rng: A.Sub(
+        A.Mul(A.Const(_nonzero_constant(rng)), _event_primitive(rng)),
+        _simple_atom(rng),
+    ),
+}
+
+
+def generate_event(n: int = 2000, seed: int = EVENT_SEED) -> list[A.Node]:
+    """``n`` seeded EVENT_G grammar members of depth ``<= 4`` (plan §3)."""
+    rng = _make_rng(seed)
+    names = tuple(_EVENT_BUILDERS)
+    return [_EVENT_BUILDERS[names[i % len(names)]](rng) for i in range(int(n))]
+
+
+def generate_population(
+    seed: int = 20261008, n: int = 2000, event_seed: int = EVENT_SEED
+) -> dict[str, list[A.Node]]:
+    """All grammar populations, deterministic for a given seed."""
     return {
         SIMPLE_G: generate_simple(n, seed),
         STD_X_RANK_G: generate_std_x_rank(n, seed),
+        EVENT_SIMPLE: generate_event(n, event_seed),
     }
 
 
@@ -584,3 +766,73 @@ def c1_spec_expressions() -> dict[str, A.Node]:
     """The seven C1 expressions as generic ASTs, from the frozen JSON fixture."""
     payload = json.loads(C1_SPECS_PATH.read_text(encoding="utf-8"))
     return {name: A.from_dict(expression) for name, expression in payload.items()}
+
+
+# ---------------------------------------------------------------------------
+# E§7 EVENT_G adversarial cases
+# ---------------------------------------------------------------------------
+def event_members() -> dict[str, A.Node]:
+    """Named valid EVENT_G members (each must classify EVENT_SIMPLE)."""
+    days = A.Field(A.EVENT_ROLE_DAYS_SINCE_EA)
+    ear = A.Field(A.EVENT_ROLE_EAR)
+    recent = A.Field(A.event_recent_role(21))
+    ratio = _ratio_pair()
+    return {
+        "ear": ear,
+        "days_since_ea": days,
+        "recent_ea": recent,
+        "recent_w2": A.Field(A.event_recent_role(WINDOW_MIN)),
+        "recent_w504": A.Field(A.event_recent_role(WINDOW_MAX)),
+        "const_mul_ear": A.Mul(A.Const(2.0), ear),
+        "ear_add_const": A.Add(ear, A.Const(1.0)),
+        "ear_div_tri": A.Div(ear, ratio),
+        "ear_plus_days": A.Add(ear, days),
+        "ear_mul_days": A.Mul(ear, days),
+        "ear_sub_simple": A.Sub(ear, A.Rolling("mean", A.Field("ret"), 21)),
+        "days_div_dv": A.Div(days, A.Rolling("mean", A.Field("dv"), 21)),
+        "mixed": A.Add(A.Mul(recent, ratio), days),
+    }
+
+
+def event_divisor_cases() -> dict[str, A.Node]:
+    """Event primitives as divisors: NOT CERTIFIED (E§3)."""
+    return {
+        "ear_divisor": A.Div(A.Field("tri"), A.Field(A.EVENT_ROLE_EAR)),
+        "days_divisor": A.Div(
+            A.Field("tri"), A.Field(A.EVENT_ROLE_DAYS_SINCE_EA)
+        ),
+        "recent_divisor": A.Div(
+            A.Field("tri"), A.Field(A.event_recent_role(21))
+        ),
+        "ratio_over_ear": A.Div(_ratio_pair(), A.Field(A.EVENT_ROLE_EAR)),
+    }
+
+
+def event_cross_section_cases() -> dict[str, A.Node]:
+    """Event primitives inside ``standardize`` / ``rank``: NOT CERTIFIED."""
+    return {
+        "standardize_ear": A.Standardize(A.Field(A.EVENT_ROLE_EAR)),
+        "rank_days": A.Rank(A.Field(A.EVENT_ROLE_DAYS_SINCE_EA)),
+        "ear_in_std_x_rank": A.Mul(
+            A.Standardize(
+                A.Div(A.Field(A.EVENT_ROLE_EAR), A.Const(2.0))
+            ),
+            A.Rank(_dv_ratio_default()),
+        ),
+    }
+
+
+def event_lag_cases() -> dict[str, A.Node]:
+    """A ``lag`` of an event primitive: NOT CERTIFIED (E§3)."""
+    return {
+        "lag_ear": A.Lag(A.Field(A.EVENT_ROLE_EAR), 5),
+        "lag_recent": A.Lag(A.Field(A.event_recent_role(21)), 3),
+    }
+
+
+def event_bounds_cases() -> dict[str, A.Node]:
+    """``recent_ea`` windows outside ``[2, 504]``: NOT CERTIFIED."""
+    return {
+        "recent_w1": A.Field(A.event_recent_role(1)),
+        "recent_w505": A.Field(A.event_recent_role(505)),
+    }

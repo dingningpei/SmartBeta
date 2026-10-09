@@ -50,5 +50,57 @@
   ],
   "test": "tests/test_pqv2_oracle_grammar.py::test_forbidden_divisor_is_outside",
   "expected": "killed"
+ },
+ {
+  "id": "G23-M1",
+  "description": "the oracle reads the TRI row label as the TRI date (bridge lag ignored), so ear uses the wrong sessions",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        row = self.world.pos_of(date) + 1",
+    "new": "        row = self.world.pos_of(date)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_events.py::test_ear_uses_bridge_lagged_tri_dates",
+  "expected": "killed"
+ },
+ {
+  "id": "G23-M2",
+  "description": "the evaluator observes an event at K instead of K+1, so the announcement window is incomplete",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "            if pk + 1 > prev_pos:",
+    "new": "            if pk > prev_pos:"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_events.py::test_observability_requires_complete_announcement_window",
+  "expected": "killed"
+ },
+ {
+  "id": "G23-M3",
+  "description": "B_e uses the draft's symmetric +-15 min window ([15:45, 16:15)) instead of the frozen [15:45, 16:00)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "B_E_END = time(16, 0)",
+    "new": "B_E_END = time(16, 15)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_events.py::test_1605_acceptance_has_no_k1_scenario",
+  "expected": "killed"
+ },
+ {
+  "id": "G23-M4",
+  "description": "the EVENT_G classifier admits an event primitive as a divisor",
+  "file": "tests/pqv2_oracle/grammar.py",
+  "edits": [
+   {
+    "old": "def _is_event_denominator(node: A.Node) -> bool:\n    \"\"\"EVENT_G ``D``: the SIMPLE_G denominator set, never an event primitive.\"\"\"\n    if _contains_event(node):\n        return False\n    return _is_D(node)",
+    "new": "def _is_event_denominator(node: A.Node) -> bool:\n    \"\"\"EVENT_G ``D``: the SIMPLE_G denominator set, never an event primitive.\"\"\"\n    if _contains_event(node):\n        return True\n    return _is_D(node)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_events.py::test_event_primitive_as_divisor_is_outside",
+  "expected": "killed"
  }
 ]

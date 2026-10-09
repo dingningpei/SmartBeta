@@ -46,6 +46,7 @@ Only ``numpy``, ``pandas`` and ``itertools`` are imported.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import time
 from itertools import product
 from typing import Iterable, Mapping, Sequence
 
@@ -58,6 +59,72 @@ import pandas as pd
 S2_LO = 0.5
 S2_HI = 1.5
 MISDATED_WINDOW = 5
+
+#: P-Q v2.3 event timing scenarios (M1b §3).
+SCENARIO_K0 = "K0"
+SCENARIO_K1 = "K1"
+EVENT_SCENARIOS = (SCENARIO_K0, SCENARIO_K1)
+
+#: The frozen [15:45, 16:00) America/New_York pre-close boundary (M1b §3).
+B_E_START = time(15, 45)
+B_E_END = time(16, 0)
+
+#: Event-lookback bound (plan §2 / E§2): 504 trading sessions.
+EVENT_LOOKBACK = 504
+
+#: Identity-map statuses whose event cells are NOT_ASSESSED (M1b §2).
+MAPPED = "MAPPED"
+FOREIGN_FILER = "FOREIGN_FILER"
+AMBIGUOUS = "AMBIGUOUS"
+NO_FILINGS_IN_INTERVAL = "NO_FILINGS_IN_INTERVAL"
+NO_CANDIDATE = "NO_CANDIDATE"
+CONTRADICTED = "CONTRADICTED"
+
+UNMAPPED_STATUSES = (AMBIGUOUS, NO_FILINGS_IN_INTERVAL, NO_CANDIDATE)
+
+#: The only admitted event type (E§1).
+EVENT_TYPE_EA_8K202 = "EA_8K202"
+
+#: The five M1b event causes, in the frozen precedence order (M1b §2).
+EVENT_CAUSE_RESERVE = "PQV2_EVENT_RESERVE"
+EVENT_CAUSE_IDENTITY_CONTRADICTED = "PQV2_EVENT_IDENTITY_CONTRADICTED"
+EVENT_CAUSE_IDENTITY_UNMAPPED = "PQV2_EVENT_IDENTITY_UNMAPPED"
+EVENT_CAUSE_SOURCE_EXCLUDED = "PQV2_EVENT_SOURCE_EXCLUDED"
+EVENT_CAUSE_TIME_UNAVAILABLE = "PQV2_EVENT_TIME_UNAVAILABLE"
+EVENT_CAUSE_PRECEDENCE = (
+    EVENT_CAUSE_RESERVE,
+    EVENT_CAUSE_IDENTITY_CONTRADICTED,
+    EVENT_CAUSE_IDENTITY_UNMAPPED,
+    EVENT_CAUSE_SOURCE_EXCLUDED,
+    EVENT_CAUSE_TIME_UNAVAILABLE,
+)
+EVENT_CAUSES = frozenset(EVENT_CAUSE_PRECEDENCE)
+
+#: The frozen event semantic ids (plan §2); an event primitive is a Field.
+EVENT_ROLE_EAR = "event_ear_k_kp1"
+EVENT_ROLE_DAYS_SINCE_EA = "event_days_since_ea"
+EVENT_ROLE_RECENT_EA_PREFIX = "event_recent_ea_w"
+EVENT_ROLES = (EVENT_ROLE_EAR, EVENT_ROLE_DAYS_SINCE_EA)
+
+
+def event_recent_role(window: int) -> str:
+    """The frozen semantic id of ``recent_ea(window)``."""
+    return f"{EVENT_ROLE_RECENT_EA_PREFIX}{int(window)}"
+
+
+def event_recent_window(role: str) -> "int | None":
+    """The ``w`` of a ``recent_ea`` semantic id, else ``None``."""
+    if not role.startswith(EVENT_ROLE_RECENT_EA_PREFIX):
+        return None
+    suffix = role[len(EVENT_ROLE_RECENT_EA_PREFIX):]
+    if suffix.isdigit():
+        return int(suffix)
+    return None
+
+
+def is_event_role(role: str) -> bool:
+    """True iff ``role`` is one of the frozen event semantic ids."""
+    return role in EVENT_ROLES or event_recent_window(role) is not None
 
 BRANCH_NONE = "NONE"
 BRANCH_CA = "CA"
@@ -224,6 +291,39 @@ class Stock:
 
 
 @dataclass(frozen=True)
+class EventDatum:
+    """One synthetic v1.3 event, oracle-local.
+
+    ``k_session`` is the v1.3 ``k_session`` (K0); ``None`` models a null-time
+    event (``EVENT_TIME_UNAVAILABLE``).  ``acceptance_et`` is the index-header
+    acceptance **wall clock** in America/New_York (the M1b time source); only
+    its time-of-day is used for the B_e boundary.  ``filing_date`` is the
+    scope proxy (an integer session in the synthetic worlds).
+    """
+
+    k_session: int | None
+    acceptance_et: time | None = None
+    filing_date: int | None = None
+    accession: str = ""
+    form: str = "8-K"
+    event_type: str = EVENT_TYPE_EA_8K202
+
+
+def is_preclose(acceptance_et: time | None) -> bool:
+    """B_e: the acceptance time lies in ``[15:45, 16:00)`` ET (M1b §3).
+
+    The boundary is asymmetric and pre-close: at or after 16:00 the event is
+    already mapped to the next session by v1.3, so no second scenario applies.
+    """
+    return acceptance_et is not None and B_E_START <= acceptance_et < B_E_END
+
+
+def _event_order(event: EventDatum) -> tuple:
+    """Deterministic tie-break for events sharing a knowledge session."""
+    return (event.acceptance_et or time.min, event.accession)
+
+
+@dataclass(frozen=True)
 class Expr:
     """Expression form (M§2 / plan §6.3)."""
 
@@ -269,6 +369,8 @@ class World:
         interior_points: int = 1,
         misdated: bool = True,
         single_misdating: bool = False,
+        event_calendars: Mapping[str, Sequence[EventDatum]] | None = None,
+        key_event_status: Mapping[str, str] | None = None,
     ) -> None:
         self.sessions = tuple(int(s) for s in sessions)
         self.stocks = tuple(stocks)
@@ -295,6 +397,11 @@ class World:
         self.by_key = {stock.key: stock for stock in self.stocks}
         self.column = {key: i for i, key in enumerate(self.keys)}
         self.formations = tuple(sorted(self.universes))
+        self.event_calendars = {
+            key: tuple(events)
+            for key, events in (event_calendars or {}).items()
+        }
+        self.key_event_status = dict(key_event_status or {})
         self._view_cache: dict = {}
         self._states_cache: tuple[FlagState, ...] | None = None
 
@@ -310,6 +417,107 @@ class World:
 
     def formation_end(self, formation: int) -> int:
         return self.sessions[self._pos[formation] + self.h]
+
+    # -- event calendar (P-Q v2.3 / M1b) --------------------------------------
+    def effective_k(self, event: EventDatum, scenario: str) -> int | None:
+        """The M1b scenario knowledge session of one event."""
+        if scenario not in EVENT_SCENARIOS:
+            raise ValueError(f"unknown event scenario {scenario!r}")
+        if event.k_session is None:
+            return None
+        if scenario == SCENARIO_K0:
+            return event.k_session
+        # K1 moves only a pre-close B_e event to the next trusted session.
+        if is_preclose(event.acceptance_et):
+            return self.next_session(event.k_session)
+        return event.k_session
+
+    def _calendar(self, key: str) -> tuple[EventDatum, ...]:
+        return self.event_calendars.get(key, ())
+
+    def event_observed(
+        self, key: str, row: int, scenario: str
+    ) -> EventDatum | None:
+        """e*(row): the latest observed event in the 504-session lookback.
+
+        Observability (plan §2): ``K(e) + 1 <= date(row - 1)``; the chosen e*
+        must satisfy ``K(e*) >= date(row - 1) - 504 sessions``.
+        """
+        status = self.key_event_status.get(key, MAPPED)
+        if status in UNMAPPED_STATUSES or status in (
+            CONTRADICTED,
+            FOREIGN_FILER,
+        ):
+            return None
+        if row <= 0:
+            return None
+        prev_pos = row - 1
+        best: EventDatum | None = None
+        best_key: tuple | None = None
+        for event in self._calendar(key):
+            if event.event_type != EVENT_TYPE_EA_8K202:
+                continue
+            k = self.effective_k(event, scenario)
+            if k is None:
+                continue
+            pk = self.pos_of(k)
+            if pk + 1 > prev_pos:
+                continue
+            marker = (pk, _event_order(event))
+            if best_key is None or marker > best_key:
+                best_key = marker
+                best = event
+        if best is None:
+            return None
+        pk = self.pos_of(self.effective_k(best, scenario))
+        if pk < prev_pos - EVENT_LOOKBACK:
+            return None
+        return best
+
+    def event_causes(self, key: str, row: int, scenario: str) -> frozenset[str]:
+        """The M1b causes for one event-dependent cell (oracle reference)."""
+        status = self.key_event_status.get(key, MAPPED)
+        if status in UNMAPPED_STATUSES:
+            return frozenset({EVENT_CAUSE_IDENTITY_UNMAPPED})
+        if status == CONTRADICTED:
+            return frozenset({EVENT_CAUSE_IDENTITY_CONTRADICTED})
+        if status == FOREIGN_FILER:
+            return frozenset({EVENT_CAUSE_SOURCE_EXCLUDED})
+        if row <= 0:
+            return frozenset()
+        prev_pos = row - 1
+        causes: set[str] = set()
+        event = self.event_observed(key, row, scenario)
+        if event is not None:
+            pk = self.pos_of(self.effective_k(event, scenario))
+            if (
+                self.reserve_start is not None
+                and self.sessions[pk] >= self.reserve_start
+            ):
+                causes.add(EVENT_CAUSE_RESERVE)
+        for candidate in self._calendar(key):
+            if candidate.event_type != EVENT_TYPE_EA_8K202:
+                continue
+            if candidate.k_session is not None or candidate.filing_date is None:
+                continue
+            fp = self.pos_of(candidate.filing_date)
+            if event is not None:
+                pk = self.pos_of(self.effective_k(event, scenario))
+                if pk < fp <= prev_pos:
+                    causes.add(EVENT_CAUSE_TIME_UNAVAILABLE)
+            elif prev_pos - EVENT_LOOKBACK <= fp <= prev_pos:
+                causes.add(EVENT_CAUSE_TIME_UNAVAILABLE)
+        return frozenset(causes)
+
+    def event_primary_cause(
+        self, key: str, row: int, scenario: str
+    ) -> str | None:
+        """The highest-precedence M1b event cause for one cell, else None."""
+        causes = self.event_causes(key, row, scenario)
+        for cause in EVENT_CAUSE_PRECEDENCE:
+            if cause in causes:
+                return cause
+        return None
 
     # -- state enumeration ----------------------------------------------------
     def _lam_grid(self, m_obs: float) -> tuple[float, ...]:
@@ -458,7 +666,8 @@ class _StateView:
     def __init__(self, world: World, state: Sequence[FlagState]) -> None:
         self.world = world
         self.state = tuple(state)
-        self._expr_frame: np.ndarray | None = None
+        self._expr_frame: dict[str, np.ndarray] = {}
+        self._event_frame_cache: dict[tuple[str, str], np.ndarray] = {}
         self._build()
 
     def _build(self) -> None:
@@ -541,17 +750,85 @@ class _StateView:
             cols.append(shifted)
         return np.column_stack(cols)
 
+    # -- event primitives (P-Q v2.3 / M1b) ------------------------------------
+    def tri_at_date(self, key: str, date: int) -> float:
+        """``TRI_dated(date)`` from the D7c frame row whose prev is ``date``.
+
+        The D7c frame is bridge-lagged (row ``r`` holds the field dated
+        ``r - 1``), so the value dated ``date`` sits one row below its
+        position (the E-4-R2 rule).
+        """
+        frame = self.tri_row()
+        row = self.world.pos_of(date) + 1
+        if row >= len(self.world.sessions):
+            return float("nan")
+        return float(frame[row, self.world.column[key]])
+
+    def _event_ear(self, key: str, pk: int) -> float:
+        sessions = self.world.sessions
+        if pk == 0:
+            return float("nan")
+        kp1 = self.world.next_session(sessions[pk])
+        if kp1 is None:
+            return float("nan")
+        km1 = sessions[pk - 1]
+        numer = self.tri_at_date(key, kp1)
+        denom = self.tri_at_date(key, km1)
+        if not (np.isfinite(numer) and np.isfinite(denom)) or denom == 0.0:
+            return float("nan")
+        return numer / denom - 1.0
+
+    def event_primitive_frame(
+        self, role: str, scenario: str = SCENARIO_K0
+    ) -> np.ndarray:
+        """The per-(row, key) matrix of one event primitive for a scenario.
+
+        A caused cell (M1b) and a cell with no observed e* are NaN.
+        """
+        cache_key = (role, scenario)
+        cached = self._event_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        n = len(self.world.sessions)
+        out = np.full((n, len(self.world.keys)), np.nan, dtype="float64")
+        window = event_recent_window(role)
+        for j, key in enumerate(self.world.keys):
+            for row in range(n):
+                if self.world.event_causes(key, row, scenario):
+                    continue
+                event = self.world.event_observed(key, row, scenario)
+                if event is None:
+                    continue
+                pk = self.world.pos_of(
+                    self.world.effective_k(event, scenario)
+                )
+                days = (row - 1) - pk
+                if role == EVENT_ROLE_EAR:
+                    value = self._event_ear(key, pk)
+                elif role == EVENT_ROLE_DAYS_SINCE_EA:
+                    value = float(days)
+                elif window is not None:
+                    value = 1.0 if days <= window else 0.0
+                else:  # pragma: no cover - Field validates the role
+                    raise ValueError(f"unknown event role {role!r}")
+                if np.isfinite(value):
+                    out[row, j] = value
+        self._event_frame_cache[cache_key] = out
+        return out
+
     # -- expression -----------------------------------------------------------
-    def expr_frame(self) -> np.ndarray:
-        if self._expr_frame is not None:
-            return self._expr_frame
+    def expr_frame(self, scenario: str = SCENARIO_K0) -> np.ndarray:
+        cached = self._expr_frame.get(scenario)
+        if cached is not None:
+            return cached
         if self.world.expression_ast is not None:
             from . import ast as _ast
 
-            self._expr_frame = _ast.evaluate(
-                self.world.expression_ast, self
+            frame = _ast.evaluate(
+                self.world.expression_ast, self, scenario=scenario
             )
-            return self._expr_frame
+            self._expr_frame[scenario] = frame
+            return frame
         expr = self.world.expression
         tri_row = self.tri_row()
         if expr.kind == "ratio":
@@ -573,14 +850,18 @@ class _StateView:
                 dv_row, expr.w_l
             )
             frame = standardize(momentum, ddof=0) * rank_average(value)
-        self._expr_frame = frame
+        self._expr_frame[scenario] = frame
         return frame
 
-    def factor_row(self, formation: int) -> np.ndarray:
-        return self.expr_frame()[formation]
+    def factor_row(
+        self, formation: int, scenario: str = SCENARIO_K0
+    ) -> np.ndarray:
+        return self.expr_frame(scenario)[formation]
 
-    def factor_values(self, formation: int) -> dict[str, float]:
-        row = self.factor_row(formation)
+    def factor_values(
+        self, formation: int, scenario: str = SCENARIO_K0
+    ) -> dict[str, float]:
+        row = self.factor_row(formation, scenario)
         return {
             key: float(row[self.world.column[key]])
             for key in self.world.keys
@@ -588,9 +869,11 @@ class _StateView:
         }
 
     # -- grouping -------------------------------------------------------------
-    def group_map(self, formation: int) -> dict[str, int]:
+    def group_map(
+        self, formation: int, scenario: str = SCENARIO_K0
+    ) -> dict[str, int]:
         w = self.world
-        row = self.factor_row(formation)
+        row = self.factor_row(formation, scenario)
         members = sorted(w.universes[formation])
         values = np.array(
             [row[w.column[key]] for key in members], dtype="float64"
@@ -603,8 +886,10 @@ class _StateView:
                 out[key] = int(group)
         return out
 
-    def legs(self, formation: int) -> tuple[frozenset[str], frozenset[str]]:
-        groups = self.group_map(formation)
+    def legs(
+        self, formation: int, scenario: str = SCENARIO_K0
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        groups = self.group_map(formation, scenario)
         top = frozenset(k for k, g in groups.items() if g == self.world.n_groups)
         bottom = frozenset(k for k, g in groups.items() if g == 1)
         return top, bottom
@@ -667,19 +952,23 @@ def enumerate_states(world: World) -> tuple[tuple[FlagState, ...], ...]:
 
 
 def factor_values(
-    world: World, state: Sequence[FlagState], formation: int
+    world: World,
+    state: Sequence[FlagState],
+    formation: int,
+    *,
+    event_scenario: str = SCENARIO_K0,
 ) -> dict[str, float]:
     """Raw factor values at ``formation`` for one state (debug aid)."""
-    return world.view(state).factor_values(formation)
+    return world.view(state).factor_values(formation, event_scenario)
 
 
 def reachable_assignments(
-    world: World, formation: int
+    world: World, formation: int, *, event_scenario: str = SCENARIO_K0
 ) -> set[tuple[frozenset[str], frozenset[str]]]:
     """All (top, bottom) economic legs reachable over the correction set."""
     out: set[tuple[frozenset[str], frozenset[str]]] = set()
     for state in world.states():
-        top, bottom = world.view(state).legs(formation)
+        top, bottom = world.view(state).legs(formation, event_scenario)
         out.add((top, bottom))
     return out
 
@@ -714,21 +1003,31 @@ def _formation_index(world: World, formation: int) -> int:
     return world.formations.index(formation)
 
 
-def _state_series(world: World, state: Sequence[FlagState]):
+def _state_series(
+    world: World,
+    state: Sequence[FlagState],
+    event_scenario: str = SCENARIO_K0,
+):
     view = world.view(state)
-    groups = [view.group_map(f) for f in world.formations]
+    groups = [view.group_map(f, event_scenario) for f in world.formations]
     turnovers = turnover_series(groups)
     return view, groups, turnovers
 
 
-def ls_min(world: World, formation: int, scenario: str = "T0") -> float | None:
+def ls_min(
+    world: World,
+    formation: int,
+    scenario: str = "T0",
+    *,
+    event_scenario: str = SCENARIO_K0,
+) -> float | None:
     """Minimum realized long-short over the correction set (or ``None``)."""
     index = _formation_index(world, formation)
     f = world.formations[index]
     e = world.formation_end(f)
     best: float | None = None
     for state in world.states():
-        view, groups, turnovers = _state_series(world, state)
+        view, groups, turnovers = _state_series(world, state, event_scenario)
         top = {k for k, g in groups[index].items() if g == world.n_groups}
         bottom = {k for k, g in groups[index].items() if g == 1}
         long_vals = [
@@ -749,11 +1048,14 @@ def ls_min(world: World, formation: int, scenario: str = "T0") -> float | None:
     return best
 
 
-def turnover_max(world: World, formation: int) -> float:
+def turnover_max(
+    world: World, formation: int, *, event_scenario: str = SCENARIO_K0
+) -> float:
     """Maximum turnover at ``formation`` over the correction set."""
     index = _formation_index(world, formation)
     return max(
-        _state_series(world, state)[2][index] for state in world.states()
+        _state_series(world, state, event_scenario)[2][index]
+        for state in world.states()
     )
 
 
@@ -807,6 +1109,8 @@ def _union_world(
     reserve_start: int | None = None,
     sign: int = 1,
     universes: Mapping[int, Sequence[str]] | None = None,
+    event_calendars: Mapping[str, Sequence[EventDatum]] | None = None,
+    key_event_status: Mapping[str, str] | None = None,
 ) -> World:
     if universes is None:
         universes = {formation: tuple(universe)}
@@ -826,6 +1130,8 @@ def _union_world(
         interior_points=interior_points,
         misdated=misdated,
         single_misdating=single_misdating,
+        event_calendars=event_calendars,
+        key_event_status=key_event_status,
     )
 
 
