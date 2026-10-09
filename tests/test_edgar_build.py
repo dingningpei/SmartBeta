@@ -290,6 +290,28 @@ def _ev_t_world(*, spike: float, count: int = 200):
     return _returns(sessions, values), events
 
 
+def _ev_t_partial_world(*, usable: int = 7, total: int = 10):
+    """``total`` events whose returns exist for only the first ``usable`` keys.
+
+    The remaining keys have no return column at all, so their current return
+    is absent and their trailing window is empty: V13-E1 classifies them as
+    unusable (not failures).
+    """
+    sessions = [date(2017, 1, 1) + timedelta(days=i) for i in range(500)]
+    usable_keys = [f"K{index:04d}" for index in range(usable)]
+    values = {key: [0.01] * 500 for key in usable_keys}
+    events: list[EventRow] = []
+    for index in range(total):
+        key = f"K{index:04d}"
+        event_session = sessions[200 + index]
+        if key in values:
+            # D7c bridge lag (M§10): the observation dated ``event_session``
+            # is carried by the following row, so the spike lives there.
+            values[key][201 + index] = 0.10
+        events.append(_event(key, event_session, accession=f"A{index:04d}"))
+    return _returns(sessions, values), events
+
+
 def test_ev_t_gate_passes_when_information_session_spikes() -> None:
     returns, events = _ev_t_world(spike=0.10)
     result = B.run_ev_t_gate(events, returns)
@@ -326,7 +348,49 @@ def test_ev_t_gate_not_certified_when_returns_missing() -> None:
         returns._values.iloc[-1:].copy()
     )
     result = B.run_ev_t_gate(events, narrowed)
+    assert result.metrics["n_usable"] == 0
+    assert result.metrics["n_unusable"] == 200
+    assert result.metrics["fraction"] is None
     assert result.status == GATE_NOT_CERTIFIED
+
+
+def test_ev_t_gate_passes_on_usable_fraction_despite_unusable_events() -> None:
+    """V13-E1: unusable events are excluded, not counted as failures.
+
+    Seven usable hits out of ten candidates give ``hits / usable == 1.0`` and
+    PASS even though fewer than the sample size were usable.  The forbidden
+    ``usable < sample_size -> NOT_CERTIFIED`` rule is mutation E4-M7, so this
+    test fails whenever that rule is restored.
+    """
+    returns, events = _ev_t_partial_world(usable=7, total=10)
+    result = B.run_ev_t_gate(events, returns)
+    assert result.metrics["sample_size"] == 10
+    assert result.metrics["n_usable"] == 7
+    assert result.metrics["n_unusable"] == 3
+    assert result.metrics["fraction"] == 1.0
+    # ``worst_case_fraction`` counts unusable events as misses, for review
+    # only: here 7 / 10.  It never gates.
+    assert result.metrics["worst_case_fraction"] == pytest.approx(0.7)
+    assert result.status == GATE_PASS
+
+
+def test_manifest_records_unusable_ev_t_diagnostics(tmp_path: Path) -> None:
+    """The manifest reports ``n_unusable`` and ``worst_case_fraction``."""
+    returns, events = _ev_t_partial_world(usable=7, total=10)
+    rows = [_identity(f"K{index:04d}") for index in range(10)]
+    manifest = B.build(
+        tmp_path,
+        "acq",
+        identity_rows=rows,
+        events=events,
+        returns=returns,
+        write=False,
+    )
+    ev_t = manifest["gates"]["EV_T"]
+    assert ev_t["status"] == GATE_PASS
+    assert ev_t["metrics"]["n_usable"] == 7
+    assert ev_t["metrics"]["n_unusable"] == 3
+    assert ev_t["metrics"]["worst_case_fraction"] == pytest.approx(0.7)
 
 
 def test_ev_t_sample_is_order_invariant() -> None:
@@ -714,6 +778,7 @@ def test_mutation_fixture_contract() -> None:
         "E4-M4",
         "E4-M5",
         "E4-M6",
+        "E4-M7",
     ]
     source = (
         REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_build.py"
