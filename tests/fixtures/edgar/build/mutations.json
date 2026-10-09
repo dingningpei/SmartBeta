@@ -77,5 +77,17 @@
       }
     ],
     "test": "tests/test_edgar_build.py::test_d7c_absolute_return_reads_the_dated_observation"
+  },
+  {
+    "id": "E4-M7",
+    "description": "the usable < sample_size -> NOT_CERTIFIED rule restored (V13-E1: unusable is not counted as a failure)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "    if usable == 0:\n        status = GATE_NOT_CERTIFIED",
+        "new": "    if usable == 0 or usable < len(sample):\n        status = GATE_NOT_CERTIFIED"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_ev_t_gate_passes_on_usable_fraction_despite_unusable_events"
   }
 ]

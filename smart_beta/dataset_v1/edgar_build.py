@@ -528,26 +528,34 @@ def run_ev_t_gate(
 
     usable = 0
     hits = 0
-    missing = 0
+    unusable = 0
     for event in sample:
         current = returns.absolute_return(event.security_key, event.k_session)
         trailing = returns.trailing_absolute_returns(
             event.security_key, event.k_session, trailing_sessions
         )
         if current is None or not trailing:
-            missing += 1
+            unusable += 1
             continue
         usable += 1
         if current > statistics.median(trailing):
             hits += 1
 
+    # V13-E1: an event with no finite current return or an empty trailing
+    # window is *unusable* and is not counted as a failure.  The EV-T
+    # fraction is therefore ``hits / usable`` and PASS requires
+    # ``fraction >= threshold`` with ``usable >= 1``; a short usable sample is
+    # not, by itself, a reason to withhold certification.  ``worst_case_fraction``
+    # (hits / sample_size, i.e. unusable counted as misses) is reported for
+    # review only and never gates.
     fraction = (hits / usable) if usable else None
+    worst_case_fraction = (hits / len(sample)) if sample else None
     sample_hash = sha256_hex(
         canonical_json([event.accession for event in sample])
     )
-    if usable == 0 or usable < take:
+    if usable == 0:
         status = GATE_NOT_CERTIFIED
-        detail = "insufficient usable development returns for the EV-T sample"
+        detail = "no usable development returns for the EV-T sample"
     elif fraction is not None and fraction >= threshold:
         status = GATE_PASS
         detail = "the knowledge session return exceeds the trailing median often enough"
@@ -562,9 +570,15 @@ def run_ev_t_gate(
             "sample_size": len(sample),
             "target_sample_size": int(sample_size),
             "n_usable": usable,
-            "n_missing": missing,
+            "n_unusable": unusable,
+            "n_missing": unusable,
             "n_hits": hits,
             "fraction": float(fraction) if fraction is not None else None,
+            "worst_case_fraction": (
+                float(worst_case_fraction)
+                if worst_case_fraction is not None
+                else None
+            ),
             "sample_sha256": sample_hash,
             "trailing_sessions": int(trailing_sessions),
             "seed": int(seed),
