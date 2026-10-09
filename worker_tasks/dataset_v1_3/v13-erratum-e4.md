@@ -27,3 +27,22 @@
      - `acceptance_json_raw` and `json_discrepancy` remain recorded facts;
      - mutation E3-M9 (the JSON fallback restored).
 - **Interfaces:** unchanged otherwise. The L2 and L3 relpaths are as merged.
+
+## Addendum E-4-R3 (user-approved 2026-10-09: "批准E-4-R3")
+
+- **Defect:** `run_ev_t_gate` returns NOT_CERTIFIED when the usable events number fewer
+  than the sample size. That rule is not in any frozen document. V13-E1 states that an
+  event with no finite current return or an empty window is "unusable (not counted as
+  a failure)".
+- **Disclosure:** this was found after the corrected EV-T run was seen:
+  - 150 hits of 191 usable (78.5%), 9 unusable;
+  - the pre-E-4-R2 misaligned run gave 56.5% and is recorded as invalid.
+
+  The decision does not depend on the outcome. Under the most conservative reading
+  (unusable counted as misses) the fraction is 150/200 = 75.0%, also ≥ 0.60.
+- **Correction:** the EV-T fraction = hits / usable, per V13-E1. PASS iff fraction ≥ 0.60
+  and usable ≥ 1. The manifest also records `n_unusable` and `worst_case_fraction` =
+  hits / sample_size (reported, not gating). The threshold, sample size, seed (1304) and
+  window (252) are unchanged.
+- **Mutation:** E4-M7 (the `usable < sample_size → NOT_CERTIFIED` rule restored) must be
+  killed.
