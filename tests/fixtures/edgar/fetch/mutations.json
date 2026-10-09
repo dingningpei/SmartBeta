@@ -65,5 +65,29 @@
       }
     ],
     "test": "tests/test_edgar_fetch.py::test_build_l3_plan_selects_event_typed_filings"
+  },
+  {
+    "id": "E1-M6",
+    "description": "the earliest periodic filings selected",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "        reverse=True,",
+        "new": "        reverse=False,"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_build_l2_plan_selects_latest_inline_primary_only"
+  },
+  {
+    "id": "E1-M7",
+    "description": "non-inline-XBRL filings selected",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "    return value in (1, True)",
+        "new": "    return True"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_build_l2_plan_excludes_non_inline_xbrl_periodic"
   }
 ]

@@ -90,6 +90,17 @@ def _submissions_payload() -> dict:
     return json.loads(_fixture_text("submissions/CIK0000320193.json"))
 
 
+def _l2_payload(cik: int) -> dict:
+    return json.loads(
+        (FIXTURES / "l2" / "submissions" / f"CIK{cik:010d}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+L2_INTERVAL = (date(2020, 1, 1), date(2021, 12, 31))
+
+
 def _fetcher(transport, calls, **kwargs) -> E.SecEdgarFetcher:
     kwargs.setdefault("contact", SYNTHETIC_CONTACT)
     kwargs.setdefault("sleep", lambda seconds: None)
@@ -476,32 +487,130 @@ def test_paginated_requests_from_submissions() -> None:
     assert names == {320193: ("CIK0000320193-submissions-001.json",)}
 
 
-def test_build_l2_plan_selects_periodic_filings() -> None:
-    sample = [E.SampleKey("K-AAPL", 320193, date(2023, 1, 1), date(2023, 12, 31))]
-    plan = E.build_l2_plan(sample, submissions={320193: _submissions_payload()})
-    assert len(plan) == 4
-    kinds = [request.kind for request in plan]
-    assert kinds.count("filing_index") == 2
-    assert kinds.count("primary_doc") == 2
-    urls = [request.url for request in plan]
-    assert any("000032019323000064" in url for url in urls)
-    assert any("000032019323000010" in url for url in urls)
-    # The 8-K is not a periodic filing and never enters the L2 plan.
-    assert not any("000032019323000077" in url for url in urls)
+def test_build_l2_plan_selects_latest_inline_primary_only() -> None:
+    sample = [E.SampleKey("K-L2-A", 7654321, *L2_INTERVAL)]
+    plan = E.build_l2_plan(sample, submissions={7654321: _l2_payload(7654321)})
+    # V13-E3 §1: the latest two inline-XBRL periodic filings, primary document
+    # only (the filing index JSON is no longer required).  Within
+    # 2020-01-01..2021-12-31 these are the 2021-11-01 10-Q and the 2021-04-01
+    # 10-K; the earlier 10-Qs are dropped by the limit.
+    assert [request.kind for request in plan] == ["primary_doc", "primary_doc"]
+    assert [request.accession for request in plan] == [
+        "0007654321-21-000002",
+        "0007654321-21-000001",
+    ]
+    assert [request.relpath for request in plan] == [
+        "symbol_evidence/7654321/000765432121000002/k21q3.htm",
+        "symbol_evidence/7654321/000765432121000001/k21.htm",
+    ]
+    assert [request.url for request in plan] == [
+        "https://www.sec.gov/Archives/edgar/data/7654321/000765432121000002/k21q3.htm",
+        "https://www.sec.gov/Archives/edgar/data/7654321/000765432121000001/k21.htm",
+    ]
+    # The 8-K, the 10-K/A amendment, the non-inline 10-K and the out-of-interval
+    # 2022 10-Q contribute nothing; no index.json is ever planned.
+    assert all(request.kind != "filing_index" for request in plan)
+    assert all("index.json" not in request.relpath for request in plan)
+
+
+def test_build_l2_plan_excludes_non_inline_xbrl_periodic() -> None:
+    rows = E.iter_filings(_l2_payload(7654321))
+    selected = E.select_periodic_filings(
+        rows, interval_start=L2_INTERVAL[0], interval_end=L2_INTERVAL[1]
+    )
+    # The non-inline 10-K (2021-12-15) is the most recent periodic filing yet
+    # is never selected; the amendment (10-K/A) is excluded as well.
+    assert [row["accessionNumber"] for row in selected] == [
+        "0007654321-21-000002",
+        "0007654321-21-000001",
+    ]
+    assert "0007654321-21-000004" not in {
+        row["accessionNumber"] for row in selected
+    }
+
+
+def test_select_periodic_filings_tie_break_by_accession() -> None:
+    def row(accession: str, form: str = "10-Q") -> dict:
+        return {
+            "form": form,
+            "filingDate": "2020-05-01",
+            "accessionNumber": accession,
+            "isInlineXBRL": 1,
+        }
+
+    rows = [row("A-2"), row("A-1"), row("A-3")]
+    selected = E.select_periodic_filings(
+        rows, interval_start=date(2020, 1, 1), interval_end=date(2020, 12, 31)
+    )
+    # Same filingDate: the higher accession wins the first slot.
+    assert [row["accessionNumber"] for row in selected] == ["A-3", "A-2"]
+
+
+def test_select_periodic_filings_excludes_amendments() -> None:
+    rows = [
+        {
+            "form": "10-K/A",
+            "filingDate": "2021-05-01",
+            "accessionNumber": "A-1",
+            "isInlineXBRL": 1,
+        },
+        {
+            "form": "10-K",
+            "filingDate": "2021-04-01",
+            "accessionNumber": "A-2",
+            "isInlineXBRL": 1,
+        },
+    ]
+    selected = E.select_periodic_filings(
+        rows, interval_start=date(2021, 1, 1), interval_end=date(2021, 12, 31)
+    )
+    assert [row["accessionNumber"] for row in selected] == ["A-2"]
 
 
 def test_l2_plan_interval_filter_excludes_outside_filings() -> None:
-    sample = [E.SampleKey("K-AAPL", 320193, date(2023, 3, 1), date(2023, 12, 31))]
-    plan = E.build_l2_plan(sample, submissions={320193: _submissions_payload()})
-    # Only the 2023-05-05 10-Q is inside the interval.
-    assert len(plan) == 2
+    sample = [E.SampleKey("K-L2-A", 7654321, date(2020, 1, 1), date(2020, 12, 31))]
+    plan = E.build_l2_plan(sample, submissions={7654321: _l2_payload(7654321)})
+    # Only the 2020 inline periodics count; the latest two are 2020-11-01 and
+    # 2020-08-01.
+    assert [request.accession for request in plan] == [
+        "0007654321-20-000003",
+        "0007654321-20-000002",
+    ]
+
+
+def test_l2_no_inline_key_gets_no_request_and_is_listed(tmp_path: Path) -> None:
+    sample = [
+        E.SampleKey("K-L2-A", 7654321, *L2_INTERVAL),
+        E.SampleKey("K-L2-NONE", 7654322, date(2020, 1, 1), date(2020, 12, 31)),
+    ]
+    submissions = {
+        7654321: _l2_payload(7654321),
+        7654322: _l2_payload(7654322),
+    }
+    plan = E.build_l2_plan(sample, submissions=submissions)
+    # The key with no inline-XBRL periodic filing contributes no request.
+    assert {request.security_key for request in plan} == {"K-L2-A"}
+    assert E.no_inline_xbrl_keys(sample, submissions=submissions) == ("K-L2-NONE",)
+    store = E.RawStore(tmp_path / "staging")
+    relpath = E.write_no_inline_xbrl(
+        store, E.no_inline_xbrl_keys(sample, submissions=submissions)
+    )
+    assert relpath == "symbol_evidence/no_inline_xbrl.json"
+    assert json.loads(store.read(relpath).decode("utf-8")) == ["K-L2-NONE"]
+
+
+def test_write_no_inline_xbrl_sorts_and_dedupes(tmp_path: Path) -> None:
+    store = E.RawStore(tmp_path / "staging")
+    relpath = E.write_no_inline_xbrl(store, ["K-B", "K-A", "K-B"])
+    assert relpath == E.L2_NO_INLINE_RELPATH == "symbol_evidence/no_inline_xbrl.json"
+    assert store.read(relpath) == b'["K-A","K-B"]'
 
 
 def test_l2_plan_stops_over_budget() -> None:
-    sample = [E.SampleKey("K-AAPL", 320193, date(2023, 1, 1), date(2023, 12, 31))]
+    sample = [E.SampleKey("K-L2-A", 7654321, *L2_INTERVAL)]
     with pytest.raises(E.RequestBudgetExceeded):
         E.build_l2_plan(
-            sample, submissions={320193: _submissions_payload()}, max_requests=1
+            sample, submissions={7654321: _l2_payload(7654321)}, max_requests=1
         )
 
 
@@ -719,6 +828,8 @@ def test_mutation_fixture_contract() -> None:
         "E1-M3",
         "E1-M4",
         "E1-M5",
+        "E1-M6",
+        "E1-M7",
     ]
     source = (REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_fetch.py").read_text(
         encoding="utf-8"

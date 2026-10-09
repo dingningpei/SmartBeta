@@ -63,6 +63,8 @@ __all__ = [
     "FetchRequest",
     "L3_EVENT_FORMS",
     "L3_FILING_DATE_FLOOR",
+    "L2_NO_INLINE_RELPATH",
+    "L2_PERIODIC_FORMS",
     "MAX_RATE",
     "REQUEST_CAP",
     "RawStore",
@@ -88,6 +90,7 @@ __all__ = [
     "headers_relpath",
     "iter_filings",
     "is_retry_status",
+    "no_inline_xbrl_keys",
     "paginated_requests_from_submissions",
     "parse_acceptance_datetime_header",
     "parse_acceptance_header",
@@ -98,6 +101,7 @@ __all__ = [
     "sha256_bytes",
     "sha256_hex",
     "validate_submission_payload",
+    "write_no_inline_xbrl",
 ]
 
 # ---------------------------------------------------------------------------
@@ -144,13 +148,19 @@ FILING_COLUMNS = (
     "primaryDocument",
 )
 
-#: Periodic report forms used by the L2 symbol-evidence selection (V§3, §4).
+#: Periodic report forms used by the identity/status computation (E-2).  The
+#: amendments are kept here for the interval-verification semantics.
 PERIODIC_FORMS = frozenset(
     {"10-Q", "10-Q/A", "10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
 )
 
+#: L2 periodic forms (V13-E3 §1): 10-K, 10-Q, 20-F, 40-F; amendments excluded.
+L2_PERIODIC_FORMS = frozenset({"10-Q", "10-K", "20-F", "40-F"})
 L2_MAX_FILINGS_PER_KEY = 2
 L2_REQUEST_BUDGET = 1_000
+
+#: The raw-store relpath of the NO_INLINE_XBRL_FILING key list (V13-E3 §1).
+L2_NO_INLINE_RELPATH = "symbol_evidence/no_inline_xbrl.json"
 
 #: L3 — one index-header page per event-typed filing (erratum V13-E2 §5):
 #: an original 8-K with Item 2.02, a 10-Q, 10-K, 6-K, 20-F or 40-F.  The
@@ -1034,6 +1044,18 @@ def paginated_requests_from_submissions(
     return result
 
 
+def _is_inline_xbrl(row: Mapping[str, Any]) -> bool:
+    """Whether a filing row carries the real-SEC ``isInlineXBRL`` flag.
+
+    The Addendum to V13-E2 records that submissions rows carry
+    ``isInlineXBRL`` as ``0`` / ``1``; a legacy boolean is also accepted.
+    """
+    value = row.get("isInlineXBRL")
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return value in (1, True)
+
+
 def _periodic_date(row: Mapping[str, Any]) -> str | None:
     value = row.get("filingDate") or row.get("filing_date")
     return str(value) if value else None
@@ -1046,11 +1068,19 @@ def select_periodic_filings(
     interval_end: date | None,
     limit: int = L2_MAX_FILINGS_PER_KEY,
 ) -> tuple[Mapping[str, Any], ...]:
-    """The ≤ ``limit`` periodic filings inside ``[interval_start, interval_end]``."""
+    """The latest ≤ ``limit`` inline-XBRL periodic filings in the interval.
+
+    V13-E3 §1: only 10-K / 10-Q / 20-F / 40-F originals (amendments
+    excluded) with a truthy ``isInlineXBRL`` inside
+    ``[interval_start, interval_end]``; the latest by ``filingDate``, ties
+    broken by ``accessionNumber``.
+    """
     selected: list[Mapping[str, Any]] = []
     for row in rows:
         form = str(row.get("form") or "")
-        if form not in PERIODIC_FORMS:
+        if form not in L2_PERIODIC_FORMS:
+            continue
+        if not _is_inline_xbrl(row):
             continue
         filed = _periodic_date(row)
         if filed is None:
@@ -1068,7 +1098,8 @@ def select_periodic_filings(
         key=lambda row: (
             _periodic_date(row) or "",
             str(row.get("accessionNumber") or ""),
-        )
+        ),
+        reverse=True,
     )
     return tuple(selected[:limit])
 
@@ -1091,7 +1122,15 @@ def build_l2_plan(
     filings_per_key: int = L2_MAX_FILINGS_PER_KEY,
     max_requests: int = L2_REQUEST_BUDGET,
 ) -> tuple[FetchRequest, ...]:
-    """L2: the filing index JSON plus the primary document(s) per sampled key."""
+    """L2: the primary document of the latest ≤ 2 inline-XBRL periodics/key.
+
+    V13-E3 §1: only the primary document is fetched (the filing index JSON is
+    no longer required); a key with no inline-XBRL periodic filing in its
+    interval contributes no request and is recorded by
+    :func:`no_inline_xbrl_keys` / :func:`write_no_inline_xbrl`.  The raw-store
+    relpath is unchanged from E-1:
+    ``symbol_evidence/<int cik>/<accession without dashes>/<primaryDocument>``.
+    """
     requests: list[FetchRequest] = []
     for key in sorted(sample, key=lambda item: item.security_key):
         rows = iter_filings(submissions.get(int(key.cik), {}))
@@ -1103,34 +1142,56 @@ def build_l2_plan(
         )
         for row in selected:
             accession = str(row.get("accessionNumber") or "")
-            if not accession:
+            document = row.get("primaryDocument")
+            if not accession or not document:
                 continue
             folder = accession.replace("-", "")
             requests.append(
                 FetchRequest(
-                    filing_index_url(key.cik, accession),
-                    f"symbol_evidence/{int(key.cik)}/{folder}/index.json",
-                    "filing_index",
+                    primary_document_url(key.cik, accession, str(document)),
+                    f"symbol_evidence/{int(key.cik)}/{folder}/{document}",
+                    "primary_doc",
                     security_key=key.security_key,
                     cik=int(key.cik),
                     accession=accession,
                 )
             )
-            document = row.get("primaryDocument")
-            if document:
-                requests.append(
-                    FetchRequest(
-                        primary_document_url(key.cik, accession, str(document)),
-                        f"symbol_evidence/{int(key.cik)}/{folder}/{document}",
-                        "primary_doc",
-                        security_key=key.security_key,
-                        cik=int(key.cik),
-                        accession=accession,
-                    )
-                )
     planned = tuple(requests)
     check_request_budget(planned, max_requests=max_requests)
     return planned
+
+
+def no_inline_xbrl_keys(
+    sample: Sequence[SampleKey],
+    *,
+    submissions: Mapping[int, Mapping[str, Any]],
+    filings_per_key: int = L2_MAX_FILINGS_PER_KEY,
+) -> tuple[str, ...]:
+    """The sorted security keys with no inline-XBRL periodic filing (V13-E3 §1)."""
+    keys: list[str] = []
+    for key in sorted(sample, key=lambda item: item.security_key):
+        rows = iter_filings(submissions.get(int(key.cik), {}))
+        selected = select_periodic_filings(
+            rows,
+            interval_start=key.interval_start,
+            interval_end=key.interval_end,
+            limit=filings_per_key,
+        )
+        if not selected:
+            keys.append(key.security_key)
+    return tuple(sorted(set(keys)))
+
+
+def write_no_inline_xbrl(store: RawStore, keys: Iterable[str]) -> str:
+    """Write the sorted NO_INLINE_XBRL_FILING key list to the raw store.
+
+    The binding interface (V13-E3 §1) is
+    ``symbol_evidence/no_inline_xbrl.json``: a sorted JSON list of
+    ``security_key``.  Returns the relpath written.
+    """
+    ordered = sorted({str(key) for key in keys})
+    store.write_json(L2_NO_INLINE_RELPATH, ordered)
+    return L2_NO_INLINE_RELPATH
 
 
 # ---------------------------------------------------------------------------
