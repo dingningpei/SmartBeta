@@ -1,0 +1,93 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated source must pass the identity test",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_source_sha256_matches_file_bytes"
+  },
+  {
+    "id": "P-M1",
+    "description": "ddof = 0 in the sample standard deviation (population sd instead of sample sd)",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "        variance = sum_sq / dof",
+        "new": "        variance = sum_sq / t_periods"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_golden_values"
+  },
+  {
+    "id": "P-M2",
+    "description": "normal quantile and CDF instead of the Student-t family",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "_T = scipy.stats.t",
+        "new": "_T = scipy.stats.norm"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_golden_values"
+  },
+  {
+    "id": "P-M3",
+    "description": "two-sided p-value instead of the one-sided p-value",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "        p_one_sided = 1.0 - _T.cdf(t_stat, dof)",
+        "new": "        p_one_sided = 2.0 * (1.0 - _T.cdf(t_stat, dof))"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_formula_matches_independent_naive_reference"
+  },
+  {
+    "id": "P-M4",
+    "description": "the T < MIN_PERIODS check removed from the procedure",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "        if t_periods < MIN_PERIODS:",
+        "new": "        if False:  # P-M4"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_failure_insufficient_sample_direct"
+  },
+  {
+    "id": "P-M5",
+    "description": "the direction sign ignored (theta' not oriented)",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "            oriented.append(sign * float(value))",
+        "new": "            oriented.append(float(value))"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_direction_sign_affects_result"
+  },
+  {
+    "id": "P-M6",
+    "description": "the upper bound uses a plain standard error instead of the t-quantile term",
+    "file": "smart_beta/science/procedures/nonoverlap_t_one_sided.py",
+    "edits": [
+      {
+        "old": "        upper_bound = mean + quantile * se",
+        "new": "        upper_bound = mean + se"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_golden_values"
+  },
+  {
+    "id": "P-M7",
+    "description": "the Monte-Carlo seed changed",
+    "file": "tests/fixtures/science/procedures/nonoverlap_t/mc_study.py",
+    "edits": [
+      {
+        "old": "MC_SEED = 20261009",
+        "new": "MC_SEED = 20261010"
+      }
+    ],
+    "test": "tests/test_science_procedure_nonoverlap_t_one_sided.py::test_dossier_tables_reproduce_bit_identically"
+  }
+]
