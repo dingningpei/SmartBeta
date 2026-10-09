@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import textwrap
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -45,6 +46,7 @@ __all__ = [
     "MethodologyAuthority",
     "AUTHORITY_V2",
     "AUTHORITY_V2_1",
+    "AUTHORITY_V2_2",
     "CURRENT_AUTHORITY",
     "METHODOLOGY_SHA256",
     "CS_ID",
@@ -125,6 +127,8 @@ class MethodologyAuthority:
     cs_id: str
     ed_id: str
     ce_id: str
+    base_methodology_relative: str | None = None
+    base_methodology_sha256: str | None = None
 
 
 #: Historical P-Q v2 authority (document preserved byte-identical, M§17).
@@ -151,8 +155,23 @@ AUTHORITY_V2_1 = MethodologyAuthority(
     ce_id="605fec93812d4165b6bf455a9fb453cd7c0c6c4a9f5a2a0fc418b53b0d0dbaaf",
 )
 
+#: Current P-Q v2.2 authority (amendment A§15; plan §1).  It binds the
+#: document-only amendment and, alongside it, its preserved P-Q v2.1 base.
+AUTHORITY_V2_2 = MethodologyAuthority(
+    version="P-Q v2.2",
+    methodology_relative="docs/discovery_dataset_v1_2_pq_v2_2_amendment.md",
+    methodology_sha256=(
+        "ab12886cdbac42725bcc283d2e37567e15340b3b80cb603f2a4df8a31a77af76"
+    ),
+    cs_id="432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2",
+    ed_id="a67afc6b319721da5a11f419681ca1d489046e627dfe43242ea6eb54f36388ef",
+    ce_id="81cafb32030681023be9328c0ceda1d9d78e502071377692b19dc302ce699d5d",
+    base_methodology_relative=AUTHORITY_V2_1.methodology_relative,
+    base_methodology_sha256=AUTHORITY_V2_1.methodology_sha256,
+)
+
 #: The authority a fresh evaluation must bind.
-CURRENT_AUTHORITY = AUTHORITY_V2_1
+CURRENT_AUTHORITY = AUTHORITY_V2_2
 
 #: SHA-256 of the current methodology document.
 METHODOLOGY_SHA256 = CURRENT_AUTHORITY.methodology_sha256
@@ -314,13 +333,65 @@ def _extract_code_block_after(lines: Sequence[str], header: str) -> str:
     return "\n".join(block)
 
 
+def _base_identity_lines(
+    root: Path, authority: MethodologyAuthority
+) -> dict[str, str]:
+    """Extract the three canonical lines from ``authority``'s base document."""
+
+    text = (root / authority.base_methodology_relative).read_text(encoding="utf-8")
+    lines = text.splitlines()
+    return {
+        key: _extract_code_block_after(lines, header)
+        for key, header in IDENTITY_HEADERS
+    }
+
+
+def _amendment_identity_lines(
+    root: Path,
+    authority: MethodologyAuthority,
+    base_lines: Mapping[str, str],
+) -> dict[str, str]:
+    """Reproduce the v2.2 identity lines from the committed documents (plan §1).
+
+    The P-Q v2.2 amendment is document-only.  It carries the CE canonical line
+    literally (indented under its ``CE-ID v2.2`` heading), leaves the CS line
+    unchanged, and specifies the ED line as the base v2.1 rule list plus
+    ``add_sub_support_union`` with version ``pq-v2.2-ed-3``.  All three lines
+    are therefore recomputed from the amendment and its preserved base, never
+    from a duplicated literal, so a constant that cannot be reproduced from
+    those documents would fail here.
+    """
+
+    base_ed = json.loads(base_lines["ED"])
+    base_ed["rules"].append("add_sub_support_union")
+    base_ed["version"] = "pq-v2.2-ed-3"
+    ed_line = json.dumps(base_ed, separators=(",", ":"), ensure_ascii=True)
+
+    amendment_lines = methodology_path(root, authority).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    ce_line = _extract_code_block_after(amendment_lines, "CE-ID v2.2")
+    ce_line = textwrap.dedent(ce_line)
+
+    return {"CS": base_lines["CS"], "ED": ed_line, "CE": ce_line}
+
+
 def identity_lines(
     repo_root: Path | str | None = None,
     authority: MethodologyAuthority = CURRENT_AUTHORITY,
 ) -> dict[str, str]:
-    """Return the canonical identity lines keyed ``"CS"``, ``"ED"``, ``"CE"``."""
+    """Return the canonical identity lines keyed ``"CS"``, ``"ED"``, ``"CE"``.
 
-    text = methodology_path(repo_root, authority).read_text(encoding="utf-8")
+    An amendment-based authority (its ``base_methodology_relative`` is set)
+    reproduces all three from the amendment and its preserved base; the full
+    methodology documents extract them from their own headers.
+    """
+
+    root = _repo_root(repo_root)
+    if authority.base_methodology_relative is not None:
+        base_lines = _base_identity_lines(root, authority)
+        return _amendment_identity_lines(root, authority, base_lines)
+    text = methodology_path(root, authority).read_text(encoding="utf-8")
     lines = text.splitlines()
     return {
         key: _extract_code_block_after(lines, header)
@@ -372,6 +443,19 @@ def verify_authority(
         )
 
     if authority is CURRENT_AUTHORITY:
+        base_relative = authority.base_methodology_relative
+        if base_relative is not None:
+            base_document = root / base_relative
+            if not base_document.is_file():
+                raise PQv2BindingError(
+                    f"base methodology document missing: {base_document}"
+                )
+            actual_base = _sha256_file(base_document)
+            if actual_base != authority.base_methodology_sha256:
+                raise PQv2BindingError(
+                    "base methodology document SHA-256 mismatch: "
+                    f"{actual_base} != {authority.base_methodology_sha256}"
+                )
         for preserved in PRESERVED_AUTHORITIES:
             preserved_path = root / preserved.methodology_relative
             if not preserved_path.is_file():
