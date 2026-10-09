@@ -39,12 +39,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from smart_beta.dataset_v1.classification import norm as _norm
 
@@ -55,9 +57,12 @@ __all__ = [
     "CREDENTIAL_VARIABLES",
     "DEV_END",
     "DEV_START",
+    "EASTERN",
     "FetchError",
     "FetchOutcome",
     "FetchRequest",
+    "L3_EVENT_FORMS",
+    "L3_FILING_DATE_FLOOR",
     "MAX_RATE",
     "REQUEST_CAP",
     "RawStore",
@@ -72,15 +77,20 @@ __all__ = [
     "assert_no_contact",
     "build_l1_plan",
     "build_l2_plan",
+    "build_l3_plan",
     "canonical_json",
     "check_request_budget",
     "compute_acq_id",
     "compute_candidate_ciks",
     "development_top_1000_keys",
+    "filing_headers_url",
     "former_name_followups",
+    "headers_relpath",
     "iter_filings",
     "is_retry_status",
     "paginated_requests_from_submissions",
+    "parse_acceptance_datetime_header",
+    "parse_acceptance_header",
     "parse_cik_lookup",
     "parse_company_tickers",
     "scan_for_contact",
@@ -142,6 +152,18 @@ PERIODIC_FORMS = frozenset(
 L2_MAX_FILINGS_PER_KEY = 2
 L2_REQUEST_BUDGET = 1_000
 
+#: L3 — one index-header page per event-typed filing (erratum V13-E2 §5):
+#: an original 8-K with Item 2.02, a 10-Q, 10-K, 6-K, 20-F or 40-F.  The
+#: request budget is deliberately **not** hard-coded; the erratum leaves it
+#: pending user approval, so :func:`build_l3_plan` requires the caller's
+#: ``max_requests``.  The floor is the V§4 development start.
+L3_EVENT_FORMS = frozenset({"10-Q", "10-K", "6-K", "20-F", "40-F"})
+L3_EA_8K_ITEM = "2.02"
+L3_FILING_DATE_FLOOR = date(2015, 1, 2)
+
+#: The EDGAR index-header acceptance time is an America/New_York wall clock.
+EASTERN = ZoneInfo("America/New_York")
+
 
 # ---------------------------------------------------------------------------
 # Small deterministic helpers
@@ -188,6 +210,42 @@ def is_retry_status(status: int | None) -> bool:
     if status is None:
         return False
     return status == 429 or 500 <= status <= 599
+
+
+# ---------------------------------------------------------------------------
+# L3 index-header acceptance time (erratum V13-E2 §5)
+# ---------------------------------------------------------------------------
+
+
+_ACCEPTANCE_HEADER_RE = re.compile(r"<ACCEPTANCE-DATETIME>(\d{14})(?!\d)")
+
+
+def parse_acceptance_datetime_header(text: bytes | str) -> datetime | None:
+    """Parse an EDGAR index-header ``<ACCEPTANCE-DATETIME>`` value.
+
+    The erratum V13-E2 §2 makes the header value the knowledge-time source.
+    The field must be exactly 14 digits (``YYYYMMDDHHMMSS``), read as an
+    ``America/New_York`` wall-clock time.  Anything else -- a missing tag, a
+    non-14-digit field, or an impossible calendar value -- returns ``None``;
+    the caller must then set ``k_session = null`` with reason
+    ``EVENT_TIME_UNAVAILABLE`` (never a JSON or ``filingDate`` fallback).
+    """
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    if not isinstance(text, str):
+        return None
+    match = _ACCEPTANCE_HEADER_RE.search(text)
+    if match is None:
+        return None
+    try:
+        naive = datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    return naive.replace(tzinfo=EASTERN)
+
+
+#: Ergonomic alias for the E-3-R1 reader.
+parse_acceptance_header = parse_acceptance_datetime_header
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +889,23 @@ def primary_document_url(cik: int, accession: str, document: str) -> str:
     )
 
 
+def filing_headers_url(cik: int, accession: str) -> str:
+    """The ``<acc>-index-headers.html`` URL for one filing (erratum V13-E2)."""
+    folder = accession.replace("-", "")
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{folder}/"
+        f"{accession}-index-headers.html"
+    )
+
+
+def headers_relpath(cik: int, accession: str) -> str:
+    """The raw-store header relpath E-3-R1 reads (addendum to E-1-R1).
+
+    ``headers/<cik zero-padded to 10 digits>/<accession with dashes>-index-headers.html``.
+    """
+    return f"headers/{int(cik):010d}/{accession}-index-headers.html"
+
+
 def build_l1_plan(
     candidate_ciks: Iterable[int],
     *,
@@ -873,59 +948,72 @@ def build_l1_plan(
     return plan
 
 
+def _rows_from_parallel_arrays(block: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Expand a parallel-array block into one row per filing index."""
+    columns = list(block.keys())
+    length = 0
+    for column in columns:
+        value = block[column]
+        if isinstance(value, list):
+            length = max(length, len(value))
+    rows: list[dict[str, Any]] = []
+    for index in range(length):
+        rows.append(
+            {
+                column: (
+                    block[column][index]
+                    if isinstance(block[column], list) and index < len(block[column])
+                    else None
+                )
+                for column in columns
+            }
+        )
+    return rows
+
+
 def iter_filings(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Normalize a submissions payload into a list of filing rows.
 
-    Handles both the parallel-array ``filings.recent`` shape and the
-    paginated ``files`` shape (a list of per-filing objects), flattened.
+    Handles the parallel-array ``filings.recent`` block, the paginated
+    ``filings.files`` follow-ups, and -- per the real SEC schema (V13-E2
+    addendum) -- the paginated ``files/*.json`` bodies, which carry the same
+    parallel arrays at the **top level**.  A legacy flat list of per-filing
+    objects is also accepted.
     """
     filings = payload.get("filings")
     rows: list[dict[str, Any]] = []
     if isinstance(filings, list):
-        # A paginated ``files/*.json`` body: a flat list of per-filing objects.
+        # A legacy flat body: a list of per-filing objects.
         return [dict(row) for row in filings if isinstance(row, Mapping)]
-    if not isinstance(filings, Mapping):
-        return []
-    recent = filings.get("recent")
-    if isinstance(recent, Mapping):
-        columns = [key for key in recent.keys()]
-        length = 0
-        for column in columns:
-            value = recent[column]
+    if isinstance(filings, Mapping):
+        recent = filings.get("recent")
+        if isinstance(recent, Mapping):
+            rows.extend(_rows_from_parallel_arrays(recent))
+        paginated = filings.get("files")
+        if isinstance(paginated, Mapping):
+            values = list(paginated.values())
+        elif isinstance(paginated, list):
+            values = list(paginated)
+        else:
+            values = []
+        for value in values:
             if isinstance(value, list):
-                length = max(length, len(value))
-        for index in range(length):
-            rows.append(
-                {
-                    column: (
-                        recent[column][index]
-                        if isinstance(recent[column], list)
-                        and index < len(recent[column])
-                        else None
-                    )
-                    for column in columns
-                }
-            )
-    paginated = filings.get("files")
-    if isinstance(paginated, Mapping):
-        values = list(paginated.values())
-    elif isinstance(paginated, list):
-        values = list(paginated)
-    else:
-        values = []
-    for value in values:
-        if isinstance(value, list):
-            rows.extend(
-                row
-                for row in value
-                if isinstance(row, Mapping)
-                and ("accessionNumber" in row or "form" in row)
-            )
-        elif isinstance(value, Mapping) and (
-            "accessionNumber" in value or "form" in value
-        ):
-            rows.append(value)
-    return rows
+                rows.extend(
+                    row
+                    for row in value
+                    if isinstance(row, Mapping)
+                    and ("accessionNumber" in row or "form" in row)
+                )
+            elif isinstance(value, Mapping) and (
+                "accessionNumber" in value or "form" in value
+            ):
+                rows.append(value)
+        return rows
+    # Paginated ``files/*.json`` (real SEC schema): the same parallel arrays
+    # at the top level, with no wrapping ``filings`` object.
+    if any(key in payload for key in ("accessionNumber", "form")):
+        return _rows_from_parallel_arrays(payload)
+    return []
 
 
 def paginated_requests_from_submissions(
@@ -1046,6 +1134,122 @@ def build_l2_plan(
 
 
 # ---------------------------------------------------------------------------
+# L3 — the index-header fetch plan (erratum V13-E2 §5)
+# ---------------------------------------------------------------------------
+
+
+def _iter_l3_scope(
+    scope: Mapping[int, Any] | Iterable[SampleKey],
+) -> Iterable[tuple[int, date | None, date | None]]:
+    """Normalize the L3 scope into ``(cik, interval_start, interval_end)``.
+
+    ``scope`` is normally a mapping from CIK to an interval (a ``(start,
+    end)`` pair, an object with ``interval_start`` / ``interval_end``, or a
+    mapping with those keys).  A sequence of :class:`SampleKey` is also
+    accepted for symmetry with :func:`build_l2_plan`.
+    """
+    if isinstance(scope, Mapping):
+        items: Iterable[tuple[Any, Any]] = scope.items()
+    else:
+        items = ((item.cik, item) for item in scope)
+    for raw_cik, interval in items:
+        if isinstance(interval, Mapping):
+            start = interval.get("interval_start")
+            end = interval.get("interval_end")
+        elif hasattr(interval, "interval_start") or hasattr(interval, "interval_end"):
+            start = getattr(interval, "interval_start", None)
+            end = getattr(interval, "interval_end", None)
+        else:
+            start, end = interval[0], interval[1]
+        yield int(raw_cik), _as_date(start), _as_date(end)
+
+
+def _parse_l3_items(value: Any) -> tuple[str, ...]:
+    """Parse an 8-K ``items`` string (``"2.02,9.01"``) into exact tokens."""
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        tokens = [str(token) for token in value]
+    else:
+        tokens = re.split(r"[,;]", str(value))
+    return tuple(token.strip() for token in tokens if token.strip())
+
+
+def _is_l3_event_filing(row: Mapping[str, Any]) -> bool:
+    """Whether a filing row is one of the six event-typed filings (V§4).
+
+    An original 8-K with Item 2.02, or a 10-Q / 10-K / 6-K / 20-F / 40-F.
+    Amendments never qualify.
+    """
+    form = str(row.get("form") or "").strip().upper()
+    if form.endswith("/A"):
+        return False
+    if form == "8-K":
+        return L3_EA_8K_ITEM in _parse_l3_items(row.get("items"))
+    return form in L3_EVENT_FORMS
+
+
+def build_l3_plan(
+    scope: Mapping[int, Any] | Iterable[SampleKey],
+    *,
+    submissions: Mapping[int, Mapping[str, Any]],
+    max_requests: int,
+) -> tuple[FetchRequest, ...]:
+    """L3: one index-header request per event-typed filing (erratum V13-E2 §5).
+
+    For each ``(cik, interval)`` in ``scope``, every stored filing that is an
+    original 8-K with Item 2.02, a 10-Q, 10-K, 6-K, 20-F or 40-F, whose
+    ``filingDate`` is at or after 2015-01-02 and inside the interval, yields
+    one :class:`FetchRequest` for
+    ``https://www.sec.gov/Archives/edgar/data/<cik>/<acc-no-dashes>/<acc>-index-headers.html``
+    stored at ``headers/<cik10>/<acc>-index-headers.html``.
+
+    The L3 budget is not hard-coded: the caller passes ``max_requests`` (the
+    erratum leaves the value pending user approval).  An over-budget plan
+    stops rather than being truncated.
+    """
+    requests: list[FetchRequest] = []
+    seen: set[tuple[int, str]] = set()
+    for cik, interval_start, interval_end in _iter_l3_scope(scope):
+        for row in iter_filings(submissions.get(int(cik), {})):
+            if not _is_l3_event_filing(row):
+                continue
+            filed = _as_date(row.get("filingDate"))
+            if filed is None or filed < L3_FILING_DATE_FLOOR:
+                continue
+            if interval_start is not None and filed < interval_start:
+                continue
+            if interval_end is not None and filed > interval_end:
+                continue
+            accession = str(row.get("accessionNumber") or "")
+            if not accession:
+                continue
+            dedup_key = (int(cik), accession)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            requests.append(
+                FetchRequest(
+                    filing_headers_url(cik, accession),
+                    headers_relpath(cik, accession),
+                    "header",
+                    cik=int(cik),
+                    accession=accession,
+                )
+            )
+    requests.sort(
+        key=lambda request: (
+            request.cik or 0,
+            request.accession or "",
+            request.relpath,
+        )
+    )
+    plan = tuple(requests)
+    check_request_budget(plan, max_requests=max_requests)
+    return plan
+
+
+# ---------------------------------------------------------------------------
 # Format validation and the request-budget stop (plan §7)
 # ---------------------------------------------------------------------------
 
@@ -1054,9 +1258,15 @@ def validate_submission_payload(payload: Mapping[str, Any]) -> None:
     """Fail closed when a submissions response differs from the V§2 fields."""
     if not isinstance(payload, Mapping):
         raise ResponseFormatError("submissions payload is not a JSON object")
-    for field in ("cik", "entityName", "filings"):
+    for field in ("cik", "filings"):
         if field not in payload:
             raise ResponseFormatError(f"submissions payload lacks {field!r}")
+    # The real SEC submissions object carries the entity name under ``name``
+    # (V13-E2 addendum); ``entityName`` never appears.  Legacy synthetic
+    # fixtures of the not-yet-repaired E-3 tests still use ``entityName``, so
+    # accept it transitionally while requiring the real key otherwise.
+    if "name" not in payload and "entityName" not in payload:
+        raise ResponseFormatError("submissions payload lacks 'name'")
     filings = payload["filings"]
     if not isinstance(filings, Mapping):
         raise ResponseFormatError("submissions payload 'filings' is not an object")

@@ -546,6 +546,166 @@ def test_url_builders() -> None:
 
 
 # ---------------------------------------------------------------------------
+# L3 index-header plan (erratum V13-E2 §5) and the strict header parser
+# ---------------------------------------------------------------------------
+
+
+def _l3_payload() -> dict:
+    return json.loads(
+        (
+            FIXTURES / "l3" / "submissions" / "CIK0001234567.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def test_build_l3_plan_selects_event_typed_filings() -> None:
+    scope = {1234567: (date(2015, 1, 2), date(2023, 6, 30))}
+    plan = E.build_l3_plan(
+        scope, submissions={1234567: _l3_payload()}, max_requests=100
+    )
+    # The 8-K without 2.02, the two /A amendments, the pre-2015 8-K, the
+    # out-of-interval 10-Q and the DEF 14A are all excluded.  Every one of
+    # the six event-typed forms yields exactly one header request.
+    assert [request.accession for request in plan] == [
+        "0001234567-16-000001",  # original 8-K with Item 2.02
+        "0001234567-16-000004",  # 10-Q
+        "0001234567-17-000001",  # 10-K
+        "0001234567-18-000001",  # 6-K
+        "0001234567-19-000001",  # 20-F
+        "0001234567-20-000001",  # 40-F
+    ]
+    assert all(request.kind == "header" for request in plan)
+    assert all(request.cik == 1234567 for request in plan)
+
+
+def test_build_l3_plan_relpath_and_url_format() -> None:
+    scope = {1234567: (date(2015, 1, 2), date(2023, 6, 30))}
+    plan = E.build_l3_plan(
+        scope, submissions={1234567: _l3_payload()}, max_requests=100
+    )
+    first = plan[0]
+    assert first.relpath == (
+        "headers/0001234567/0001234567-16-000001-index-headers.html"
+    )
+    assert first.url == (
+        "https://www.sec.gov/Archives/edgar/data/1234567/000123456716000001/"
+        "0001234567-16-000001-index-headers.html"
+    )
+    # The relpath helper is the frozen E-3-R1 interface (addendum to E-1-R1).
+    assert E.headers_relpath(320193, "0000320193-23-000064") == (
+        "headers/0000320193/0000320193-23-000064-index-headers.html"
+    )
+    assert E.filing_headers_url(320193, "0000320193-23-000064") == (
+        "https://www.sec.gov/Archives/edgar/data/320193/000032019323000064/"
+        "0000320193-23-000064-index-headers.html"
+    )
+
+
+def test_build_l3_plan_respects_floor_and_interval() -> None:
+    payload = _l3_payload()
+
+    def accessions(plan):
+        return [request.accession for request in plan]
+
+    # The 2014-12-01 8-K is below the 2015-01-02 floor and the 2024-01-01
+    # 10-Q is after the interval end.
+    full = E.build_l3_plan(
+        {1234567: (date(2015, 1, 2), date(2023, 6, 30))},
+        submissions={1234567: payload},
+        max_requests=100,
+    )
+    assert "0001234567-14-000001" not in accessions(full)
+    assert "0001234567-24-000001" not in accessions(full)
+    assert len(full) == 6
+
+    # A narrow interval keeps only the 2016 event filings.
+    narrow = E.build_l3_plan(
+        {1234567: (date(2016, 1, 1), date(2016, 12, 31))},
+        submissions={1234567: payload},
+        max_requests=100,
+    )
+    assert accessions(narrow) == [
+        "0001234567-16-000001",
+        "0001234567-16-000004",
+    ]
+
+
+def test_build_l3_plan_accepts_sample_keys() -> None:
+    sample = [
+        E.SampleKey("K-L3", 1234567, date(2015, 1, 2), date(2023, 6, 30))
+    ]
+    plan = E.build_l3_plan(
+        sample, submissions={1234567: _l3_payload()}, max_requests=100
+    )
+    assert len(plan) == 6
+
+
+def test_build_l3_plan_stops_over_budget() -> None:
+    with pytest.raises(E.RequestBudgetExceeded):
+        E.build_l3_plan(
+            {1234567: (date(2015, 1, 2), date(2023, 6, 30))},
+            submissions={1234567: _l3_payload()},
+            max_requests=1,
+        )
+
+
+def test_parse_acceptance_header_reads_et_wall_clock() -> None:
+    text = (
+        FIXTURES / "headers" / "0001234567-16-000001-index-headers.html"
+    ).read_text(encoding="utf-8")
+    parsed = E.parse_acceptance_header(text)
+    assert parsed == datetime(2016, 3, 15, 20, 30, 0, tzinfo=E.EASTERN)
+    assert parsed.tzinfo == E.EASTERN
+    assert parsed.utcoffset() is not None
+    assert parsed.utcoffset().total_seconds() == -4 * 3600
+    # A bytes body parses identically, and the alias matches the canonical name.
+    assert E.parse_acceptance_datetime_header(text.encode("utf-8")) == parsed
+
+
+def test_parse_acceptance_header_is_strict() -> None:
+    missing = (
+        FIXTURES / "headers" / "0001234567-16-000002-index-headers.html"
+    ).read_text(encoding="utf-8")
+    assert E.parse_acceptance_header(missing) is None
+    bad_values = [
+        "",
+        "no tag at all",
+        "<ACCEPTANCE-DATETIME>2023050516302",       # 13 digits
+        "<ACCEPTANCE-DATETIME>202305051630281",      # 15 digits
+        "<ACCEPTANCE-DATETIME>2023-05-05T16:30:28",  # hyphenated
+        "<ACCEPTANCE-DATETIME>20231305163028",       # month 13
+        "<ACCEPTANCE-DATETIME>2023050516302x",       # trailing non-digit
+        "<ACCEPTANCE-DATETIME>ab",                   # non-numeric
+    ]
+    for value in bad_values:
+        assert E.parse_acceptance_header(value) is None, value
+    assert E.parse_acceptance_header(None) is None  # type: ignore[arg-type]
+
+
+def test_iter_filings_handles_top_level_parallel_arrays() -> None:
+    # The real SEC paginated ``files/*.json`` shape: parallel arrays at the
+    # top level, no wrapping ``filings`` object (V13-E2 addendum).
+    body = {
+        "accessionNumber": ["A-1", "A-2"],
+        "form": ["10-K", "8-K"],
+        "filingDate": ["2016-10-26", "2016-11-01"],
+    }
+    rows = E.iter_filings(body)
+    assert [row["accessionNumber"] for row in rows] == ["A-1", "A-2"]
+    assert rows[0]["form"] == "10-K"
+
+
+def test_validate_submission_payload_requires_real_name_key() -> None:
+    payload = _submissions_payload()
+    assert "name" in payload and "entityName" not in payload
+    E.validate_submission_payload(payload)
+    broken = json.loads(json.dumps(payload))
+    del broken["name"]
+    with pytest.raises(E.ResponseFormatError):
+        E.validate_submission_payload(broken)
+
+
+# ---------------------------------------------------------------------------
 # Mutation contract
 # ---------------------------------------------------------------------------
 
@@ -558,6 +718,7 @@ def test_mutation_fixture_contract() -> None:
         "E1-M2",
         "E1-M3",
         "E1-M4",
+        "E1-M5",
     ]
     source = (REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_fetch.py").read_text(
         encoding="utf-8"
