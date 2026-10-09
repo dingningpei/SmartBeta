@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -22,6 +23,7 @@ import textwrap
 import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -197,6 +199,9 @@ def test_frozen_gate_constants() -> None:
     assert B.EV_T_THRESHOLD == 0.60
     assert B.GATE_NAMES == ("IM_P", "EV_C", "EV_T")
     assert B.SCHEMA == "discovery-dataset-v1-edgar-build-v1"
+    assert B.DEFAULT_IM_P_SEED == 1302
+    assert B.DEFAULT_EV_T_SEED == 1304
+    assert B.DEFAULT_BUILD_SEED == B.DEFAULT_EV_T_SEED
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +457,6 @@ def test_build_reads_emitted_artifacts(tmp_path: Path) -> None:
 def test_build_derives_from_the_raw_acquisition(tmp_path: Path) -> None:
     raw = tmp_path / "raw" / "edgar-acq"
     raw.parent.mkdir(parents=True)
-    import shutil
-
     shutil.copytree(FIXTURES / "raw", raw)
     keys = [
         {
@@ -473,6 +476,107 @@ def test_build_derives_from_the_raw_acquisition(tmp_path: Path) -> None:
     assert manifest["counts"]["ea_8k202_events"] == 1
     identity_path = tmp_path / "derived" / "edgar-acq" / "identity_map.parquet"
     assert identity_path.exists()
+
+
+def _raw_keys() -> list[dict]:
+    return [
+        {
+            "security_key": "K1",
+            "ticker": "AAA",
+            "interval_start": date(2016, 1, 1),
+            "interval_end": date(2020, 12, 31),
+        }
+    ]
+
+
+def test_build_derives_im_p_evidence_from_the_raw_store(tmp_path: Path) -> None:
+    """The raw build reads the IM-P evidence from the E-1 symbol store."""
+    raw = tmp_path / "raw" / "edgar-acq"
+    raw.parent.mkdir(parents=True)
+    shutil.copytree(FIXTURES / "raw", raw)
+    returns = _returns([date(2016, 3, 14), date(2016, 3, 15)], {"K1": [0.01, 0.10]})
+    B.build(tmp_path, "acq", keys=_raw_keys(), returns=returns)
+    frame = pq.read_table(
+        tmp_path / "derived" / "edgar-acq" / "identity_map.parquet"
+    ).to_pandas()
+    verdicts = dict(zip(frame["security_key"], frame["audit_verdict"]))
+    # The stored symbol_evidence/1/.../aaa-cover.htm carries ``dei:TradingSymbol``
+    # ``AAA`` and the D4 ticker is ``AAA``: the raw path must stamp CONFIRMED.
+    assert verdicts["K1"] == AUDIT_CONFIRMED
+
+
+def test_build_event_times_come_from_the_headers(tmp_path: Path) -> None:
+    """K(e) is the index-header time, not the submissions-JSON time (E4-M5).
+
+    The stored 8-K header accepts at 14:30 ET (2016-03-15, inside the
+    session) while its JSON ``acceptanceDateTime`` is 16:30 ET (after the
+    close, 2016-03-16).  Omitting the header mapping falls back to the JSON
+    and would move K(e) a day forward.
+    """
+    raw = tmp_path / "raw" / "edgar-acq"
+    raw.parent.mkdir(parents=True)
+    shutil.copytree(FIXTURES / "raw", raw)
+    returns = _returns([date(2016, 3, 14), date(2016, 3, 15)], {"K1": [0.01, 0.10]})
+    manifest = B.build(tmp_path, "acq", keys=_raw_keys(), returns=returns)
+    assert manifest["seeds"] == {"im_p_seed": 1302, "ev_t_seed": 1304}
+    frame = pq.read_table(
+        tmp_path / "derived" / "edgar-acq" / "events.parquet"
+    ).to_pandas()
+    ea8k = frame[frame["event_type"] == "EA_8K202"]
+    assert len(ea8k) == 1
+    assert ea8k.iloc[0]["acceptance_json_raw"] == "2016-03-15T20:30:00.000Z"
+    assert ea8k.iloc[0]["k_session"] == date(2016, 3, 15)
+
+
+def test_im_p_sample_uses_the_im_p_seed(tmp_path: Path, monkeypatch) -> None:
+    """The raw IM-P sample is selected with ``im_p_seed``, not ``ev_t_seed``.
+
+    Mutation E4-M4 passes the EV-T seed to ``_derive_identity_rows``; the
+    captured sample then becomes the 1304 selection, and this test fails.
+    Only the raw store reads and the identity resolution are stubbed (the
+    sample selection, seeding and IM-P wiring stay real).
+    """
+    rows = [_identity(f"A{index:04d}", route=ROUTE_TICKER) for index in range(105)]
+    rows += [
+        _identity(
+            f"E{index:04d}",
+            route=ROUTE_NAME,
+            start=date(2010, 1, 1),
+            end=date(2018, 12, 31),
+        )
+        for index in range(105)
+    ]
+    monkeypatch.setattr(
+        B,
+        "load_edgar_reference",
+        lambda root: SimpleNamespace(
+            company_tickers={},
+            cik_lookup={},
+            submissions={},
+            issuer_names={},
+        ),
+    )
+    monkeypatch.setattr(B, "resolve_identity", lambda keys, **kwargs: list(rows))
+    captured: dict[str, list[str]] = {}
+
+    def _fake_symbol_evidence(raw_root: Path, sample_rows: list[dict]) -> dict:
+        captured["sample"] = [str(row["security_key"]) for row in sample_rows]
+        return {}
+
+    monkeypatch.setattr(B, "build_symbol_evidence", _fake_symbol_evidence)
+    keys = [
+        {"security_key": row.security_key, "ticker": row.security_key}
+        for row in rows
+    ]
+    B.build(
+        tmp_path,
+        "acq",
+        keys=keys,
+        events=[],
+        returns=_returns([], {}),
+        write=False,
+    )
+    assert captured["sample"] == list(B.select_im_p_sample(rows, seed=1302))
 
 
 def test_build_manifest_hash_stable_across_hash_seeds(tmp_path: Path) -> None:
@@ -537,6 +641,8 @@ def test_mutation_fixture_contract() -> None:
         "E4-M1",
         "E4-M2",
         "E4-M3",
+        "E4-M4",
+        "E4-M5",
     ]
     source = (
         REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_build.py"
