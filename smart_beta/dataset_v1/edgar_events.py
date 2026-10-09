@@ -6,19 +6,34 @@ Authority:
   (``c9daa54b…b269``), "V§n" below;
 * the frozen plan ``docs/discovery_dataset_v1_3_implementation_plan.md`` —
   §1 row E-3, §2 security, §3 interfaces, §4 timing / event-type / firewall
-  tests (owner E-3), §5 mutations (prefix ``E3``), §7 stops.
+  tests (owner E-3), §5 mutations (prefix ``E3``), §7 stops;
+* the binding erratum ``worker_tasks/dataset_v1_3/v13-erratum-e2.md``
+  (FROZEN 2026-10-08), which supersedes the V§4 submissions-JSON time
+  source.  Its Addendum freezes the real SEC submissions schema and the
+  EDGAR index-header relpath.
 
-This module turns E-1's stored ``submissions`` bytes into the V§4 event
+This module turns E-1's stored ``submissions`` bytes and (after E-1L phase
+L3) the stored EDGAR ``...-index-headers.html`` pages into the V§4 event
 panel.  It implements, exactly:
 
 * the V§4 event types — ``EA_8K202`` (an original 8-K whose ``items``
   include 2.02), ``EA_PERIODIC_FALLBACK`` (a 10-Q/10-K with no ``EA_8K202``
   in ``[report period end, filing]``), and the FPI types ``FPI_6K`` /
   ``FPI_20F`` — with amendments never creating an event (V§4);
-* the V§4 knowledge-time rule: ``acceptanceDateTime`` (US Eastern time) maps
-  to the containing session when it is before 16:00 ET on a trading session,
-  otherwise to the next trading session; ``filingDate`` is never used for
-  K(e); an ``8-K/A`` never creates or moves an event (V§4);
+* the V§4 knowledge-time rule **as amended by V13-E2**: the time source is
+  the 14-digit ``<ACCEPTANCE-DATETIME>`` field of the stored EDGAR index
+  header ``headers/<cik10>/<accession>-index-headers.html``, read as an
+  America/New_York wall clock.  The header time maps to the containing
+  session when it is strictly before 16:00 ET on a trading session,
+  otherwise to the next trading session.  A missing or unparseable header
+  gives ``k_session = null`` with the typed reason
+  ``EVENT_TIME_UNAVAILABLE``; ``filingDate`` is never used for K(e), and
+  there is no JSON fallback whenever a header-time mapping is supplied.
+  An ``8-K/A`` never creates or moves an event (V§4);
+* the V13-E2 recorded facts: ``acceptance_json_raw`` keeps the submissions
+  JSON value verbatim and ``json_discrepancy`` classifies it against the
+  header time as ``EXACT_UTC``, ``PLUS_ONE_OFFSET`` or ``OTHER``.  The JSON
+  value is never a time source;
 * the M1b §3 boundary fact ``B_e`` — acceptance within ±15 minutes of the
   session close (16:00 ET by default, an injected early-close time otherwise)
   — recorded as a fact, never applied to K(e);
@@ -64,9 +79,15 @@ __all__ = [
     "EA_PERIODIC_FALLBACK",
     "EVENT_COLUMNS",
     "EVENT_SCHEMA",
+    "EVENT_TIME_UNAVAILABLE",
     "EVENT_TYPES",
     "FPI_6K",
     "FPI_20F",
+    "HEADERS_DIRNAME",
+    "JSON_DISCREPANCY_CLASSES",
+    "JSON_EXACT_UTC",
+    "JSON_OTHER",
+    "JSON_PLUS_ONE_OFFSET",
     "MARKET_CLOSE_ET",
     "RESERVE_START",
     # errors
@@ -80,8 +101,13 @@ __all__ = [
     "KeyCik",
     # timing
     "boundary_flag",
+    "classify_json_discrepancy",
+    "header_relpath",
     "knowledge_session",
+    "load_raw_header_times",
     "parse_acceptance_datetime",
+    "parse_header_wall_clock",
+    "parse_index_header_acceptance",
     "to_eastern",
     # normalization
     "classify_form",
@@ -123,7 +149,24 @@ PERIODIC_FALLBACK_FORMS = frozenset({"10-Q", "10-K"})
 FPI_6K_FORMS = frozenset({"6-K"})
 FPI_ANNUAL_FORMS = frozenset({"20-F", "40-F"})
 
-#: The event panel column order (plan §3).
+#: The V13-E2 typed reason for an event whose header time is unavailable.
+EVENT_TIME_UNAVAILABLE = "EVENT_TIME_UNAVAILABLE"
+
+#: The V13-E2 ``json_discrepancy`` classes.
+JSON_EXACT_UTC = "EXACT_UTC"
+JSON_PLUS_ONE_OFFSET = "PLUS_ONE_OFFSET"
+JSON_OTHER = "OTHER"
+JSON_DISCREPANCY_CLASSES: tuple[str, ...] = (
+    JSON_EXACT_UTC,
+    JSON_PLUS_ONE_OFFSET,
+    JSON_OTHER,
+)
+
+#: The E-1 raw-store header directory and the index-header file suffix.
+HEADERS_DIRNAME = "headers"
+INDEX_HEADERS_SUFFIX = "-index-headers.html"
+
+#: The event panel column order (plan §3, extended by V13-E2).
 EVENT_COLUMNS: tuple[str, ...] = (
     "security_key",
     "cik",
@@ -133,8 +176,11 @@ EVENT_COLUMNS: tuple[str, ...] = (
     "acceptance_utc",
     "acceptance_et",
     "k_session",
+    "k_reason",
     "boundary_flag",
     "report_period",
+    "acceptance_json_raw",
+    "json_discrepancy",
 )
 
 #: The event panel PyArrow schema (plan §3; deterministic and explicit).
@@ -148,14 +194,19 @@ EVENT_SCHEMA = pa.schema(
         pa.field("acceptance_utc", pa.string()),
         pa.field("acceptance_et", pa.string()),
         pa.field("k_session", pa.date32()),
+        pa.field("k_reason", pa.string()),
         pa.field("boundary_flag", pa.bool_()),
         pa.field("report_period", pa.date32()),
+        pa.field("acceptance_json_raw", pa.string()),
+        pa.field("json_discrepancy", pa.string()),
     ]
 )
 
 EASTERN = ZoneInfo("America/New_York")
 _UTC = timezone.utc
 _ITEMS_SPLIT_RE = re.compile(r"[,;]")
+_ACCEPTANCE_14_RE = re.compile(r"^\d{14}$")
+_HEADER_FIELD_RE = re.compile(r"<ACCEPTANCE-DATETIME>\s*(\d{14})(?!\d)")
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +247,14 @@ class KeyCik:
 class EventRow:
     """One normalized V§4 event fact.
 
-    ``acceptance_utc`` / ``acceptance_et`` are timezone-aware ``datetime``
-    values; ``k_session`` is the V§4 knowledge session; ``boundary_flag`` is
-    the M1b §3 fact ``B_e``; ``report_period`` is the filing's ``reportDate``.
+    ``acceptance_utc`` / ``acceptance_et`` and ``k_session`` are the header
+    (knowledge-time) values from the V13-E2 erratum; each is ``None`` when
+    the filing's index header is missing or unparseable, in which case
+    ``k_reason`` is ``EVENT_TIME_UNAVAILABLE``.  ``boundary_flag`` is the
+    M1b §3 fact ``B_e``; ``report_period`` is the filing's ``reportDate``.
+    ``acceptance_json_raw`` is the verbatim submissions-JSON
+    ``acceptanceDateTime`` (never a time source) and ``json_discrepancy``
+    classifies it against the header time.
     """
 
     security_key: str
@@ -206,11 +262,14 @@ class EventRow:
     accession: str
     form: str
     event_type: str
-    acceptance_utc: datetime
-    acceptance_et: datetime
-    k_session: date
+    acceptance_utc: datetime | None
+    acceptance_et: datetime | None
+    k_session: date | None
     boundary_flag: bool
     report_period: date | None
+    acceptance_json_raw: str | None = None
+    json_discrepancy: str | None = None
+    k_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,17 +307,138 @@ def _parse_date(value: Any) -> date | None:
 
 
 # ---------------------------------------------------------------------------
-# Knowledge timing (V§4)
+# EDGAR index-header time source (V13-E2)
+# ---------------------------------------------------------------------------
+
+
+def parse_index_header_acceptance(value: Any) -> str | None:
+    """Extract the strict 14-digit EDGAR ``<ACCEPTANCE-DATETIME>`` field.
+
+    ``value`` may be the raw index-header HTML text, a bytes value, or the
+    14-digit field itself.  Anything that is not exactly a 14-digit
+    ``YYYYMMDDHHMMSS`` field returns ``None`` (the V13-E2 "unparseable
+    header" path).
+    """
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    elif isinstance(value, str):
+        text = value
+    else:
+        return None
+    stripped = text.strip()
+    if _ACCEPTANCE_14_RE.match(stripped):
+        return stripped
+    match = _HEADER_FIELD_RE.search(text)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def parse_header_wall_clock(value: Any) -> datetime | None:
+    """Read a stored header value as an America/New_York wall-clock time.
+
+    The strict 14-digit field is interpreted as US Eastern time (never UTC);
+    an aware ``datetime`` is converted to Eastern and a naive one is assumed
+    to already be Eastern.  A missing or unparseable value returns ``None``.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=EASTERN)
+        return value.astimezone(EASTERN)
+    raw = parse_index_header_acceptance(value)
+    if raw is None:
+        return None
+    try:
+        dt = datetime.strptime(raw, "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=EASTERN)
+
+
+def header_relpath(cik: int, accession: str) -> PurePosixPath:
+    """The E-1L L3 relpath of a filing's index-header page."""
+    return (
+        PurePosixPath(HEADERS_DIRNAME)
+        / f"{int(cik):010d}"
+        / f"{accession}{INDEX_HEADERS_SUFFIX}"
+    )
+
+
+def load_raw_header_times(
+    raw_root: str | Path,
+    cik: int,
+    accessions: Iterable[str] | None = None,
+) -> dict[str, str | None]:
+    """Read the per-accession header-time mapping from the E-1 raw store.
+
+    Headers live at ``headers/<cik10>/<accession>-index-headers.html``.
+    Each value is the strict 14-digit field, or ``None`` when the page is
+    absent or unparseable.  When ``accessions`` is omitted, every header
+    page present for the CIK is read.
+    """
+    directory = Path(raw_root) / HEADERS_DIRNAME / f"{int(cik):010d}"
+    if accessions is None:
+        if not directory.is_dir():
+            return {}
+        accessions = [
+            path.name[: -len(INDEX_HEADERS_SUFFIX)]
+            for path in sorted(directory.glob(f"*{INDEX_HEADERS_SUFFIX}"))
+        ]
+    result: dict[str, str | None] = {}
+    for accession in accessions:
+        accession = str(accession)
+        path = directory / f"{accession}{INDEX_HEADERS_SUFFIX}"
+        if not path.is_file():
+            result[accession] = None
+            continue
+        result[accession] = parse_index_header_acceptance(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+    return result
+
+
+def classify_json_discrepancy(
+    header_et: datetime | None,
+    acceptance_json_raw: str | None,
+) -> str | None:
+    """The V13-E2 ``json_discrepancy`` class of the recorded JSON value.
+
+    ``EXACT_UTC`` when the JSON value read as UTC is exactly the header
+    instant; ``PLUS_ONE_OFFSET`` when it is later by exactly one US Eastern
+    offset (+4 h EDT / +5 h EST); ``OTHER`` otherwise.  ``None`` when the
+    header or the JSON value is absent.
+    """
+    if header_et is None or acceptance_json_raw is None:
+        return None
+    try:
+        json_utc = parse_acceptance_datetime(acceptance_json_raw)
+    except EventFormatError:
+        return JSON_OTHER
+    delta = json_utc - header_et.astimezone(_UTC)
+    if delta == timedelta(0):
+        return JSON_EXACT_UTC
+    offset = -header_et.utcoffset()
+    if offset is not None and delta == offset:
+        return JSON_PLUS_ONE_OFFSET
+    return JSON_OTHER
+
+
+# ---------------------------------------------------------------------------
+# Knowledge timing (V§4, amended by V13-E2)
 # ---------------------------------------------------------------------------
 
 
 def parse_acceptance_datetime(value: Any) -> datetime:
-    """Parse a stored ``acceptanceDateTime`` into an aware UTC ``datetime``.
+    """Parse a submissions-JSON ``acceptanceDateTime`` into aware UTC.
 
-    The SEC field is ISO-8601 (normally ``...Z``).  A value that carries no
+    This is **not** the frozen K(e) time source (V13-E2): it is retained for
+    the recorded ``acceptance_json_raw`` comparison and for the legacy
+    no-header-source path used by the pre-L3 E-4 raw-derivation fallback.
+    The SEC field is ISO-8601 (normally ``...Z``); a value that carries no
     offset is read as US Eastern time, because the frozen design states the
-    field in ET; every offset-carrying value is converted to UTC.  A missing
-    or malformed value fails closed (the plan §7 stop).
+    field in ET.  A missing or malformed value fails closed.
     """
     if isinstance(value, datetime):
         dt = value
@@ -448,14 +628,24 @@ def normalize_key(
     *,
     calendar: TradingCalendar,
     early_closes: Mapping[date, time] | None = None,
+    header_times: Mapping[str, Any] | None = None,
 ) -> list[EventRow]:
     """Normalize one key's stored filing rows into V§4 event facts.
 
     ``filings`` is the flattened per-filing row list for a single CIK (see
-    :func:`load_raw_filings`).  Every recognized event form must carry an
-    ``acceptanceDateTime``; a missing one fails closed (plan §7).
+    :func:`load_raw_filings`).  ``header_times`` is the V13-E2 per-accession
+    header-time mapping (values are the strict 14-digit field, an aware
+    ``datetime``, the raw index-header text or ``None``).  When it is
+    supplied, K(e) is read **only** from the filing's index header: a
+    missing or unparseable entry gives ``k_session = None`` with the
+    ``EVENT_TIME_UNAVAILABLE`` reason and never falls back to the JSON or
+    ``filingDate``.  When it is ``None`` the caller has supplied no header
+    source at all, and the legacy submissions-JSON acceptance time is used
+    so that the pre-L3 E-4 raw-derivation fallback keeps working; the frozen
+    v1.3 build always supplies the header mapping.
     """
     rows = [dict(row) for row in filings]
+    use_headers = header_times is not None
 
     # The original 8-K Item 2.02 filing dates, used only by the fallback
     # window rule.  ``filingDate`` is used here as a window bound; it is never
@@ -495,9 +685,37 @@ def normalize_key(
             if any(report_period <= d <= filed for d in ea8k_dates):
                 continue
 
-        acceptance_utc = parse_acceptance_datetime(row.get("acceptanceDateTime"))
-        acceptance_et = to_eastern(acceptance_utc)
-        k_session = knowledge_session(acceptance_utc, calendar)
+        json_raw = row.get("acceptanceDateTime")
+        acceptance_json_raw = None if json_raw is None else str(json_raw)
+
+        header_et: datetime | None
+        k_reason: str | None
+        if use_headers:
+            header_value = header_times.get(accession)
+            header_et = parse_header_wall_clock(header_value)
+            if header_et is None:
+                k_reason = EVENT_TIME_UNAVAILABLE
+            else:
+                k_reason = None
+        else:
+            header_et = to_eastern(parse_acceptance_datetime(json_raw))
+            k_reason = None
+
+        if header_et is None:
+            acceptance_utc = None
+            acceptance_et = None
+            k_session = None
+            boundary = False
+            json_discrepancy = None
+        else:
+            acceptance_et = header_et
+            acceptance_utc = header_et.astimezone(_UTC)
+            k_session = knowledge_session(acceptance_utc, calendar)
+            boundary = boundary_flag(acceptance_et, calendar, early_closes)
+            json_discrepancy = classify_json_discrepancy(
+                header_et, acceptance_json_raw
+            )
+
         events.append(
             EventRow(
                 security_key=str(security_key),
@@ -508,10 +726,11 @@ def normalize_key(
                 acceptance_utc=acceptance_utc,
                 acceptance_et=acceptance_et,
                 k_session=k_session,
-                boundary_flag=boundary_flag(
-                    acceptance_et, calendar, early_closes
-                ),
+                boundary_flag=boundary,
                 report_period=report_period,
+                acceptance_json_raw=acceptance_json_raw,
+                json_discrepancy=json_discrepancy,
+                k_reason=k_reason,
             )
         )
     return events
@@ -523,14 +742,16 @@ def normalize_events(
     *,
     calendar: TradingCalendar,
     early_closes: Mapping[date, time] | None = None,
+    header_times: Mapping[str, Any] | None = None,
     validate: bool = True,
 ) -> list[EventRow]:
     """Normalize a key→CIK map against stored submissions into event rows.
 
     ``submissions`` maps a CIK to either an E-1 submissions payload (a
     mapping, flattened with :func:`iter_filings`) or an already-flattened
-    sequence of filing rows.  Rows are returned in the deterministic
-    :func:`sort_event_rows` order.
+    sequence of filing rows.  ``header_times`` is the V13-E2 per-accession
+    header-time mapping (see :func:`normalize_key`).  Rows are returned in
+    the deterministic :func:`sort_event_rows` order.
     """
     events: list[EventRow] = []
     for raw_key in key_ciks:
@@ -547,6 +768,7 @@ def normalize_events(
                 _filing_rows(payload),
                 calendar=calendar,
                 early_closes=early_closes,
+                header_times=header_times,
             )
         )
     return sort_event_rows(events)
@@ -558,12 +780,13 @@ def normalize_events(
 
 
 def sort_event_rows(rows: Iterable[EventRow]) -> list[EventRow]:
-    """The deterministic event-panel row order."""
+    """The deterministic event-panel row order (null sessions sorted last)."""
     return sorted(
         rows,
         key=lambda row: (
             row.security_key,
-            row.k_session,
+            row.k_session is None,
+            row.k_session if row.k_session is not None else date.min,
             row.accession,
             row.event_type,
             row.form,
@@ -585,18 +808,25 @@ def _events_table(rows: Iterable[EventRow]) -> pa.Table:
         "form": [row.form for row in ordered],
         "event_type": [row.event_type for row in ordered],
         "acceptance_utc": [
-            row.acceptance_utc.isoformat() for row in ordered
+            row.acceptance_utc.isoformat() if row.acceptance_utc is not None else None
+            for row in ordered
         ],
-        "acceptance_et": [row.acceptance_et.isoformat() for row in ordered],
+        "acceptance_et": [
+            row.acceptance_et.isoformat() if row.acceptance_et is not None else None
+            for row in ordered
+        ],
         "k_session": pa.array(
             [row.k_session for row in ordered], type=pa.date32()
         ),
+        "k_reason": [row.k_reason for row in ordered],
         "boundary_flag": pa.array(
             [row.boundary_flag for row in ordered], type=pa.bool_()
         ),
         "report_period": pa.array(
             [row.report_period for row in ordered], type=pa.date32()
         ),
+        "acceptance_json_raw": [row.acceptance_json_raw for row in ordered],
+        "json_discrepancy": [row.json_discrepancy for row in ordered],
     }
     return pa.table(data, schema=EVENT_SCHEMA)
 
@@ -622,12 +852,13 @@ def split_by_firewall(
     """Split rows into ``(development, reserve)`` at ``2023-07-03``.
 
     A row whose ``k_session`` is at or after ``RESERVE_START`` is reserve
-    data and may never be written to a development path.
+    data and may never be written to a development path.  A row with no
+    usable ``k_session`` (``EVENT_TIME_UNAVAILABLE``) is not reserve data.
     """
     development: list[EventRow] = []
     reserve: list[EventRow] = []
     for row in sort_event_rows(rows):
-        if row.k_session >= RESERVE_START:
+        if row.k_session is not None and row.k_session >= RESERVE_START:
             reserve.append(row)
         else:
             development.append(row)
@@ -737,8 +968,8 @@ class EventDevelopmentAccessor:
         if frame.empty:
             return frame
 
-        sessions = pd.to_datetime(frame["k_session"]).dt.date
-        if bool((sessions >= RESERVE_START).any()):
+        sessions = pd.to_datetime(frame["k_session"], errors="coerce")
+        if bool((sessions >= pd.Timestamp(RESERVE_START)).any()):
             raise EventFirewallError(
                 "the development event panel contains a sealed-reserve row"
             )
@@ -747,9 +978,13 @@ class EventDevelopmentAccessor:
             allowed = {str(key) for key in security_keys}
             frame = frame[frame["security_key"].isin(allowed)]
         if start_date is not None:
-            frame = frame[sessions.loc[frame.index] >= start_date]
+            frame = frame[
+                sessions.loc[frame.index] >= pd.Timestamp(start_date)
+            ]
         if end_date is not None:
-            frame = frame[sessions.loc[frame.index] <= end_date]
+            frame = frame[
+                sessions.loc[frame.index] <= pd.Timestamp(end_date)
+            ]
         return frame.reset_index(drop=True)
 
 

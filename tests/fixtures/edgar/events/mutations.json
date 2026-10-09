@@ -8,12 +8,12 @@
   },
   {
     "id": "E3-M1",
-    "description": "filingDate used for K(e) instead of acceptanceDateTime",
+    "description": "filingDate used for K(e) instead of the index header time",
     "file": "smart_beta/dataset_v1/edgar_events.py",
     "edits": [
       {
-        "old": "        acceptance_utc = parse_acceptance_datetime(row.get(\"acceptanceDateTime\"))",
-        "new": "        acceptance_utc = parse_acceptance_datetime(row.get(\"filingDate\"))"
+        "old": "            header_value = header_times.get(accession)",
+        "new": "            header_value = row.get(\"filingDate\")"
       }
     ],
     "test": "tests/test_edgar_events.py::test_filing_date_is_never_the_knowledge_time"
@@ -65,5 +65,41 @@
       }
     ],
     "test": "tests/test_edgar_events.py::test_periodic_fallback_is_typed_separately"
+  },
+  {
+    "id": "E3-M6",
+    "description": "JSON used when the header is missing",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "            if header_et is None:\n                k_reason = EVENT_TIME_UNAVAILABLE",
+        "new": "            if header_et is None:\n                header_et = to_eastern(parse_acceptance_datetime(json_raw))\n                k_reason = None"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_missing_header_gives_event_time_unavailable"
+  },
+  {
+    "id": "E3-M7",
+    "description": "the header parsed as UTC instead of America/New_York",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    return dt.replace(tzinfo=EASTERN)",
+        "new": "    return dt.replace(tzinfo=_UTC)"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_header_is_read_as_eastern_wall_clock"
+  },
+  {
+    "id": "E3-M8",
+    "description": "the discrepancy class computed with the wrong offset sign",
+    "file": "smart_beta/dataset_v1/edgar_events.py",
+    "edits": [
+      {
+        "old": "    offset = -header_et.utcoffset()",
+        "new": "    offset = header_et.utcoffset()"
+      }
+    ],
+    "test": "tests/test_edgar_events.py::test_json_discrepancy_plus_one_offset"
   }
 ]
