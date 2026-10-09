@@ -17,17 +17,26 @@ frozen methodology (``docs/discovery_dataset_v1_2_pq_v2_methodology.md``):
 * :func:`dependency_windows` — the exact M§10 dependency rules for the
   certified node set (log-linear TRI ratios with prefix cancellation, lag,
   rolling windows, constant multiplication/subtraction and cross-sectional
-  standardization/ranking).  It reproduces the M§10 Campaign-1 table.
+  standardization/ranking).  It reproduces the M§10 Campaign-1 table.  Under
+  P-Q v2.3 an event primitive is a price-independent leaf, so the price
+  windows of an ``EVENT_G`` expression are recovered here; the event-anchored
+  ``ear`` window is supplied per key by :func:`event_windows`.
+* :func:`event_windows` / :func:`event_cell_causes` — the per-key, per-scenario
+  P-Q v2.3 event-anchored algebraic window ``(K(e*)-1, K(e*)+1]`` (E§2) and the
+  M1b cause set of one event-dependent cell (M1b §2).
 * :func:`input_uncertainty` — the per-cell input-uncertainty map: ``A_t``
   membership for the simple class, and the M / V interval plus the reserve
   firewall for the ``STD_X_RANK`` class (M§10 primitive dependency, Prop. 2,
   the DV non-claim).  In P-Q v2.1 every cell additionally carries its
   dependency-local :class:`~smart_beta.dataset_v1.pqv2_core.CauseSet`
-  (M§8A.2, M§8A.4), computed from A's ``UnresolvedFlag`` values.
+  (M§8A.2, M§8A.4), computed from A's ``UnresolvedFlag`` values.  Under
+  P-Q v2.3 it also accepts per-key event windows (reached by the unchanged
+  M§8A algebraic rule) and the M1b event-cause sources from PQ23-B.
 
 Nothing here reads a dataset artifact, the reserve, holdout, ``raw/`` or
 ``dsc_evidence``.  The only repository files touched are the read-only imports
-``pqv2_core``, ``smart_beta.spec`` and the D7b ``canonical_json`` helper.
+``pqv2_core``, ``pqv2_events``, ``smart_beta.spec`` and the D7b
+``canonical_json`` helper.
 """
 
 from __future__ import annotations
@@ -35,10 +44,12 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, ClassVar, Iterator, Mapping, Sequence
 
 from smart_beta.dataset_v1 import pqv2_core as _core
+from smart_beta.dataset_v1 import pqv2_events as _events
 from smart_beta.dataset_v1.delisting_bridge import canonical_json as _canonical_json
 from smart_beta.spec.expression import (
     Add,
@@ -58,6 +69,7 @@ from smart_beta.spec.expression import (
 __all__ = [
     "SIMPLE",
     "STD_X_RANK",
+    "EVENT_SIMPLE",
     "CertifiedClass",
     "CERTIFIED",
     "CERTIFIED_ED_ID",
@@ -67,6 +79,8 @@ __all__ = [
     "Window",
     "Windows",
     "dependency_windows",
+    "event_windows",
+    "event_cell_causes",
     "ObservedValues",
     "InputUncertainty",
     "input_uncertainty",
@@ -77,9 +91,10 @@ __all__ = [
 # CE classifier (M§15, CE-ID)
 # ---------------------------------------------------------------------------
 
-#: The two certified expression classes.
+#: The certified expression classes (P-Q v2.1/v2.2 plus the P-Q v2.3 EVENT_G).
 SIMPLE = "SIMPLE"
 STD_X_RANK = "STD_X_RANK"
+EVENT_SIMPLE = "EVENT_SIMPLE"
 
 #: The frozen identity constants the certified table is enumerated under.
 CERTIFIED_ED_ID = _core.ED_ID
@@ -96,7 +111,8 @@ class CertifiedClass(str):
 
     SIMPLE = SIMPLE
     STD_X_RANK = STD_X_RANK
-    ALL: ClassVar[tuple[str, ...]] = (SIMPLE, STD_X_RANK)
+    EVENT_SIMPLE = EVENT_SIMPLE
+    ALL: ClassVar[tuple[str, ...]] = (SIMPLE, STD_X_RANK, EVENT_SIMPLE)
 
     def __new__(
         cls,
@@ -201,6 +217,45 @@ WINDOW_MIN = 2
 WINDOW_MAX = 504
 LOOKBACK_MAX = 504
 
+#: The E§3 (grammar §2) event semantic ids (plan §2 frozen literals).  The
+#: event roles *are* these semantic ids, so an event ``Field`` role is the
+#: semantic id itself (never the short grammar spelling ``ear``).
+EVENT_EAR = _events.EVENT_EA_KKP1
+EVENT_DAYS_SINCE_EA = _events.EVENT_DAYS_SINCE_EA
+EVENT_RECENT_EA_PREFIX = _events.EVENT_RECENT_EA_PREFIX
+
+#: The M1b event-time scenario names (plan §2), owned by PQ23-B.
+EVENT_SCENARIOS = _events.SCENARIOS
+EVENT_SCENARIO_K0 = _events.SCENARIO_K0
+EVENT_SCENARIO_K1 = _events.SCENARIO_K1
+
+
+def _event_recent_window(role: Any) -> int | None:
+    """The ``W`` of an ``event_recent_ea_w<W>`` role, else ``None``."""
+
+    if not isinstance(role, str) or not role.startswith(EVENT_RECENT_EA_PREFIX):
+        return None
+    suffix = role[len(EVENT_RECENT_EA_PREFIX) :]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _is_event_role(role: Any) -> bool:
+    """True iff ``role`` is one of the frozen §2 event semantic ids."""
+
+    if role in (EVENT_EAR, EVENT_DAYS_SINCE_EA):
+        return True
+    return _event_recent_window(role) is not None
+
+
+def _is_event_field(node: Expr) -> bool:
+    return isinstance(node, Field) and _is_event_role(node.role)
+
+
+def _contains_event(node: Expr) -> bool:
+    return any(_is_event_field(current) for current in _walk_expr(node))
+
 
 def _finite_nonzero(value: float) -> bool:
     return math.isfinite(value) and value != 0.0
@@ -216,7 +271,7 @@ def _walk_expr(node: Expr) -> Iterator[Expr]:
 
 def _bounds_ok(node: Expr) -> bool:
     """A§15A common bounds: every lag ``0 <= k <= 504``, every window
-    ``2 <= w <= 504``."""
+    ``2 <= w <= 504`` and every ``event_recent_ea_w<W>`` window ``2 <= W <= 504``."""
 
     for current in _walk_expr(node):
         if isinstance(current, Lag):
@@ -224,6 +279,10 @@ def _bounds_ok(node: Expr) -> bool:
                 return False
         if isinstance(current, Rolling):
             if not (WINDOW_MIN <= current.window <= WINDOW_MAX):
+                return False
+        if isinstance(current, Field):
+            window = _event_recent_window(current.role)
+            if window is not None and not (WINDOW_MIN <= window <= WINDOW_MAX):
                 return False
     return True
 
@@ -437,6 +496,155 @@ def _roles_ok(factor_spec: Any) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# E§3 EVENT_G grammar recognizer (P-Q v2.3)
+# ---------------------------------------------------------------------------
+
+
+def _roles_ok_v2_3(factor_spec: Any) -> bool:
+    """The P-Q v2.3 role rule: a §2 event semantic id or the frozen D7c table.
+
+    An event role's alias **is** its semantic id (the frozen §2 literal), so the
+    expression ``Field`` roles and the declared semantic identities cannot
+    drift.  The frozen D7c aliases (``tri``/``ret``/``dv``) keep their exact
+    A§15A meanings.
+    """
+
+    for item in factor_spec.inputs:
+        alias = item.alias
+        semantic = item.requirement.semantic_id
+        if _is_event_role(alias):
+            if semantic != alias:
+                return False
+            window = _event_recent_window(alias)
+            if window is not None and not (WINDOW_MIN <= window <= WINDOW_MAX):
+                return False
+            continue
+        expected = _ROLE_SEMANTIC.get(alias)
+        if expected is None or semantic != expected:
+            return False
+    return True
+
+
+def _lag_of_event(node: Expr) -> bool:
+    """True iff any ``Lag`` node wraps an event primitive (E§3: forbidden)."""
+
+    return any(
+        isinstance(current, Lag) and _contains_event(current.operand)
+        for current in _walk_expr(node)
+    )
+
+
+def _is_event_denominator(node: Expr) -> bool:
+    """EVENT_G ``D``: the SIMPLE_G denominator set, never an event primitive."""
+
+    if _contains_event(node):
+        return False
+    return _is_D(node)
+
+
+def _is_event_cell(node: Expr) -> bool:
+    """EVENT_G ``X`` recognizer: like SIMPLE_G with event-primitive leaves."""
+
+    if isinstance(node, CrossSectional):
+        return False
+    if _is_event_field(node):
+        return True
+    if _is_T(node) or _is_N(node):
+        return True
+    if isinstance(node, Mul):
+        if isinstance(node.left, Literal):
+            return _is_event_cell(node.right)
+        if isinstance(node.right, Literal):
+            return _is_event_cell(node.left)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, Add):
+        if isinstance(node.left, Literal) or isinstance(node.right, Literal):
+            other = node.right if isinstance(node.left, Literal) else node.left
+            return _is_event_cell(other)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, Sub):
+        if isinstance(node.right, Literal):
+            return _is_event_cell(node.left)
+        return _is_event_cell(node.left) and _is_event_cell(node.right)
+    if isinstance(node, Div):
+        return _is_event_cell(node.left) and _is_event_denominator(node.right)
+    if isinstance(node, Lag):
+        return _is_event_cell(node.operand)
+    return False
+
+
+def _is_event_g(node: Expr) -> bool:
+    """The E§3 EVENT_G membership decision.
+
+    Requires at least one event primitive, no cross-sectional node, no ``lag``
+    of an event primitive, event primitives never as divisors, the SIMPLE_G
+    bounds on the price terms, and finite nonzero constants.
+    """
+
+    if not _bounds_ok(node) or not _constants_ok(node):
+        return False
+    if not _contains_event(node):
+        return False
+    if _lag_of_event(node):
+        return False
+    return _is_event_cell(node)
+
+
+def _certify_v2_3(factor_spec: Any) -> CertifiedClass | _core.NotAssessed:
+    """The P-Q v2.3 classifier (E§3 EVENT_G; v2.2 grammar otherwise).
+
+    An event-free expression is still certified under the unchanged A§15A
+    ``SIMPLE_G`` / ``STD_X_RANK_G`` rules (the amendment only adds EVENT_G and
+    the M1b causes); an event-bearing expression must be a member of EVENT_G.
+    """
+
+    if int(factor_spec.sign) != 1:
+        return _core.NotAssessed(
+            _core.PQV2_SIGN_NOT_CERTIFIED,
+            f"sign={factor_spec.sign} is not certified (sign +1 only, E§3)",
+        )
+    if not _roles_ok_v2_3(factor_spec):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "input role/semantic mismatch (E§3: an event role's alias is its §2 "
+            "event semantic id; the D7c aliases tri/ret/dv keep their A§15A "
+            "semantic ids only)",
+        )
+    expression = factor_spec.expression
+    if not _bounds_ok(expression):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "E§3 bounds violated (0 <= lag <= 504, 2 <= window <= 504, "
+            "2 <= recent_ea window <= 504)",
+        )
+    if not _constants_ok(expression):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "E§3 constant rule violated (multiplier/divisor must be finite "
+            "and nonzero)",
+        )
+    if _contains_event(expression):
+        if _is_event_g(expression):
+            return _certified_class(
+                EVENT_SIMPLE, factor_spec, _core.AUTHORITY_V2_3
+            )
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "expression is outside the E§3 EVENT_G grammar (an event primitive "
+            "is never a divisor, never lagged and never in a cross-sectional "
+            "node)",
+        )
+    if _is_std_x_rank(expression):
+        return _certified_class(STD_X_RANK, factor_spec, _core.AUTHORITY_V2_3)
+    if _is_E(expression):
+        return _certified_class(SIMPLE, factor_spec, _core.AUTHORITY_V2_3)
+    return _core.NotAssessed(
+        _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+        "expression is outside the A§15A SIMPLE_G / STD_X_RANK_G grammar",
+    )
+
+
 def _certified_class(
     name: str, factor_spec: Any, authority: _core.MethodologyAuthority
 ) -> CertifiedClass:
@@ -521,6 +729,10 @@ def certify(
       (``SIMPLE_G`` / ``STD_X_RANK_G``); the seven C1 keys remain a hypothesis
       label table only.  The returned :class:`CertifiedClass` carries the
       identity fields of the authority passed.
+    * :data:`pqv2_core.AUTHORITY_V2_3` adds the E§3 ``EVENT_G`` grammar: an
+      event-bearing expression is classified :data:`EVENT_SIMPLE` (or
+      ``NOT_CERTIFIED``); an event-free expression keeps the A§15A class.  An
+      event role under v2.1 or v2.2 is ``NOT_CERTIFIED`` (unchanged).
     * any other authority raises :class:`pqv2_core.PQv2BindingError`.
     """
 
@@ -528,8 +740,10 @@ def certify(
         return _certify_v2_1(factor_spec)
     if authority == _core.AUTHORITY_V2_2:
         return _certify_v2_2(factor_spec)
+    if authority == _core.AUTHORITY_V2_3:
+        return _certify_v2_3(factor_spec)
     raise _core.PQv2BindingError(
-        "certify() requires an admitted authority (P-Q v2.1 or v2.2), got "
+        "certify() requires an admitted authority (P-Q v2.1, v2.2 or v2.3), got "
         f"{authority!r}"
     )
 
@@ -606,6 +820,241 @@ def dependency_windows(expression: Expr) -> Windows | _core.NotAssessed:
     )
 
 
+# ---------------------------------------------------------------------------
+# P-Q v2.3 event-anchored windows and M1b cell causes (E§2, M1b §2)
+# ---------------------------------------------------------------------------
+
+
+def _as_session(value: Any) -> date:
+    """Coerce a session value to a ``date`` (``pd.Timestamp`` is a datetime)."""
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raise _core.PQv2InputError(f"session {value!r} is not a calendar date")
+
+
+def _formation_positions(
+    formation: Any, sessions: Sequence[Any] | None
+) -> dict[date, int]:
+    """The per-session formation-relative offset map for one formation row.
+
+    ``formation`` is either an already-built ``{session: offset}`` mapping (the
+    same converter ``input_uncertainty`` consumes) or, together with
+    ``sessions``, a formation session or row position from which the map is
+    built.
+    """
+
+    if sessions is not None:
+        grid = tuple(_as_session(value) for value in sessions)
+        base: int | None
+        if isinstance(formation, bool):
+            raise _core.PQv2InputError("formation must not be a bool")
+        if isinstance(formation, int):
+            base = int(formation)
+        else:
+            wanted = _as_session(formation)
+            base = None
+            for index, session in enumerate(grid):
+                if session == wanted:
+                    base = index
+                    break
+            if base is None:
+                raise _core.PQv2InputError(
+                    f"formation {formation!r} is not a trusted session"
+                )
+        if not (0 <= base < len(grid)):
+            raise _core.PQv2InputError(
+                f"formation position {base} is outside [0, {len(grid)})"
+            )
+        return {session: index - base for index, session in enumerate(grid)}
+    if isinstance(formation, Mapping):
+        positions: dict[date, int] = {}
+        for session, offset in formation.items():
+            positions[_as_session(session)] = int(offset)
+        if not positions:
+            raise _core.PQv2InputError("formation position mapping is empty")
+        return positions
+    raise _core.PQv2InputError(
+        "event_windows/event_cell_causes need a {session: offset} mapping or a "
+        "formation session together with the sessions grid"
+    )
+
+
+def _check_event_scenario(scenario: Any) -> None:
+    if scenario not in EVENT_SCENARIOS:
+        raise _core.PQv2InputError(
+            f"unknown event scenario {scenario!r}; expected {EVENT_SCENARIOS}"
+        )
+
+
+def _event_order_key(event: _events.EventRecord) -> tuple[Any, ...]:
+    """The deterministic tie-break for events sharing a knowledge session."""
+
+    return (event.acceptance_et is not None, event.acceptance_et, event.accession)
+
+
+def _event_scenario_k(
+    event: _events.EventRecord, scenario: str, positions: Mapping[date, int]
+) -> date | None:
+    """The M1b scenario knowledge session of one event (M1b §3).
+
+    ``K0`` is the recorded ``k_session``; ``K1`` moves a pre-close ``B_e``
+    event to the next trusted session and leaves every other event unchanged.
+    """
+
+    if scenario == EVENT_SCENARIO_K0:
+        return event.k_session
+    if not _events.is_preclose_b_e(event.acceptance_et, frozenset(positions)):
+        return event.k_session
+    offset = positions.get(event.k_session)
+    if offset is None:
+        return None
+    for session, value in positions.items():
+        if value == offset + 1:
+            return session
+    return None
+
+
+def _best_event(
+    layer: Any, key: str, positions: Mapping[date, int], scenario: str
+) -> tuple[tuple[Any, ...], _events.EventRecord, date, int] | None:
+    """The latest observed ``e*`` at ``date(f-1)`` (M1b §2 / plan §2).
+
+    Observed iff ``K(e) + 1 <= date(f-1)``; e* must satisfy the 504-session
+    lookback floor.  Ties on the knowledge session break on the recorded
+    acceptance time then accession.  A key whose identity is blocked (M1b
+    §2 identity/source causes) has no usable events, mirroring the oracle.
+    """
+
+    identity_blocked = any(
+        cause != _core.PQV2_EVENT_RESERVE for cause in layer.key_causes(key)
+    )
+    if identity_blocked:
+        return None
+    previous_offset = -1
+    best = None
+    for event in layer.events_by_key.get(key, ()):
+        k_session = _event_scenario_k(event, scenario, positions)
+        if k_session is None:
+            continue
+        k_offset = positions.get(k_session)
+        if k_offset is None:
+            continue
+        if k_offset + 1 > previous_offset:
+            continue
+        if k_offset < previous_offset - _events.LOOKBACK_SESSIONS:
+            continue
+        marker = (k_offset, _event_order_key(event))
+        if best is None or marker > best[0]:
+            best = (marker, event, k_session, k_offset)
+    return best
+
+
+def _session_at(positions: Mapping[date, int], offset: int) -> date | None:
+    for session, value in positions.items():
+        if value == offset:
+            return session
+    return None
+
+
+def event_windows(
+    layer: Any,
+    key: str,
+    formation: Any,
+    scenario: str,
+    *,
+    sessions: Sequence[Any] | None = None,
+) -> Windows:
+    """The per-key event-anchored algebraic window of one formation (E§2).
+
+    The ``ear`` primitive is ``TRI(K(e*)+1) / TRI(K(e*)-1) - 1``; in the
+    formation-relative ``(y, x]`` convention that is the single window
+    ``(K(e*)-1, K(e*)+1]``.  ``days_since_ea`` and ``recent_ea(w)`` have no
+    price dependency, so they contribute nothing here.  Returns an empty
+    :class:`Windows` when no ``e*`` is observed (including the 504-session
+    lookback edge).
+
+    ``formation`` is the ``{session: offset}`` map (or, with ``sessions``, the
+    formation session / row position).  The window is **per key**, computed
+    from that key's own event calendar; there is deliberately no uniform
+    offset default.
+    """
+
+    _check_event_scenario(scenario)
+    if not isinstance(layer, _events.EventLayer):
+        raise _core.PQv2InputError("layer must be an EventLayer")
+    positions = _formation_positions(formation, sessions)
+    best = _best_event(layer, key, positions, scenario)
+    if best is None:
+        return Windows()
+    k_offset = best[3]
+    return Windows(algebraic=((k_offset - 1, k_offset + 1),))
+
+
+def event_cell_causes(
+    layer: Any,
+    key: str,
+    formation: Any,
+    scenario: str,
+    *,
+    sessions: Sequence[Any] | None = None,
+) -> _core.CauseSet:
+    """The M1b cause set of one event-dependent cell (M1b §2, E§4).
+
+    Key-scoped causes (RESERVE / IDENTITY_CONTRADICTED / IDENTITY_UNMAPPED /
+    SOURCE_EXCLUDED) always apply.  ``TIME_UNAVAILABLE`` is cell-scoped: an
+    in-scope null-time event filed in ``(K(e*), date(f-1)]`` when ``e*``
+    exists, or inside the 504-session lookback when it does not.  Mirroring the
+    independent oracle, a key that already carries a key-scoped cause does not
+    additionally report ``TIME_UNAVAILABLE`` (its events are already unusable).
+    """
+
+    _check_event_scenario(scenario)
+    if not isinstance(layer, _events.EventLayer):
+        raise _core.PQv2InputError("layer must be an EventLayer")
+    positions = _formation_positions(formation, sessions)
+    key_scoped = layer.key_causes(key)
+    reasons: list[str] = list(key_scoped)
+    identity_scoped = [
+        cause for cause in key_scoped if cause != _core.PQV2_EVENT_RESERVE
+    ]
+    if not identity_scoped:
+        previous_session = _session_at(positions, -1)
+        if previous_session is None:
+            raise _core.PQv2InputError(
+                "the formation position map has no previous session (offset -1)"
+            )
+        best = _best_event(layer, key, positions, scenario)
+        nulls = layer.null_time_by_key.get(key, ())
+        if best is not None:
+            k_session = best[2]
+            for event in nulls:
+                if event.filing_date is None or (
+                    k_session < event.filing_date <= previous_session
+                ):
+                    reasons.append(_core.PQV2_EVENT_TIME_UNAVAILABLE)
+                    break
+        else:
+            floor = _session_at(
+                positions, -1 - _events.LOOKBACK_SESSIONS
+            )
+            for event in nulls:
+                if event.filing_date is None:
+                    reasons.append(_core.PQV2_EVENT_TIME_UNAVAILABLE)
+                    break
+                if event.filing_date > previous_session:
+                    continue
+                # A grid shorter than the 504-session lookback has no floor
+                # session; every grid session is then inside it, so only the
+                # upper bound (date(f-1)) binds.
+                if floor is None or floor <= event.filing_date:
+                    reasons.append(_core.PQV2_EVENT_TIME_UNAVAILABLE)
+                    break
+    return _core.CauseSet(tuple(reasons))
+
+
 # -- internal dependency descriptor ----------------------------------------
 
 
@@ -658,6 +1107,11 @@ def _analyze(node: Expr) -> _Dep | None:
             return _Dep(tri=None, returns=[(-2, -1)])
         if node.role == "dv":
             return _Dep(tri=None, dv_long=[(-2, -1)])
+        if _is_event_role(node.role):
+            # A P-Q v2.3 event primitive is price-independent: its
+            # event-anchored algebraic window is supplied per key by
+            # :func:`event_windows`, never by this expression-level analyzer.
+            return _Dep(tri=None)
         return None
     if isinstance(node, Lag):
         inner = _analyze(node.operand)
@@ -1369,6 +1823,53 @@ def _std_x_rank_cell(
     return m_interval, v_interval, uncertain
 
 
+def _with_event_windows(
+    windows: Windows,
+    event_windows: Mapping[str, Any] | None,
+    key: str,
+) -> Windows:
+    """Merge one key's event-anchored algebraic windows into the price windows.
+
+    The unchanged M§8A algebraic reach rule then sees the union; the numerical
+    and cross-sectional parts of the dependency are unchanged.
+    """
+
+    if not event_windows:
+        return windows
+    entry = event_windows.get(key)
+    if entry is None:
+        return windows
+    if isinstance(entry, Windows):
+        algebraic = tuple(entry.algebraic)
+    else:
+        algebraic = tuple((int(window[0]), int(window[1])) for window in entry)
+    if not algebraic:
+        return windows
+    return Windows(
+        algebraic=tuple(windows.algebraic) + algebraic,
+        numerical_returns=windows.numerical_returns,
+        numerical_dv_short=windows.numerical_dv_short,
+        numerical_dv_long=windows.numerical_dv_long,
+        numerical_dv=windows.numerical_dv,
+        cross_sectional=windows.cross_sectional,
+        m_operand=windows.m_operand,
+        v_operand=windows.v_operand,
+    )
+
+
+def _event_causes_for(
+    event_causes: Mapping[str, Any] | None, key: str
+) -> _core.CauseSet | None:
+    if not event_causes:
+        return None
+    entry = event_causes.get(key)
+    if entry is None:
+        return None
+    if isinstance(entry, _core.CauseSet):
+        return entry
+    return _core.CauseSet.from_iterable(entry)
+
+
 def input_uncertainty(
     cls: str,
     windows: Windows,
@@ -1376,6 +1877,9 @@ def input_uncertainty(
     formation_pos: Any,
     keys: Sequence[str],
     observed: Mapping[str, ObservedValues] | None = None,
+    *,
+    event_windows: Mapping[str, Any] | None = None,
+    event_causes: Mapping[str, Any] | None = None,
 ) -> InputUncertainty:
     """Per-cell input uncertainty for one formation.
 
@@ -1387,6 +1891,14 @@ def input_uncertainty(
     ``dv`` values for the ``STD_X_RANK`` intervals.  ``source_set.unknown_by_key``
     must hold A's ``UnresolvedFlag`` values; the per-cell cause set is persisted
     in ``causes`` and ``unknown`` is exactly ``not causes.is_empty`` (M§8A.2).
+
+    For P-Q v2.3, ``event_windows`` supplies per-key event-anchored algebraic
+    windows (from :func:`event_windows`); they are reached by the unchanged M§8A
+    algebraic rule.  ``event_causes`` supplies the per-key M1b cause set (from
+    :func:`event_cell_causes`); it is unioned into the dependency-local cause
+    set, so an event-caused cell is exactly a cell whose ``causes`` is
+    non-empty.  Both are optional and default to ``None``, leaving the
+    P-Q v2.1/v2.2 behaviour byte-identical.
     """
 
     if cls not in (SIMPLE, STD_X_RANK):
@@ -1402,6 +1914,7 @@ def input_uncertainty(
     m_intervals: dict[str, _core.PositiveInterval] = {}
     v_intervals: dict[str, _core.PositiveInterval] = {}
     for key in key_list:
+        cell_windows = _with_event_windows(windows, event_windows, key)
         transitions = tuple(source_set.transitions_by_key.get(key, ()))
         candidates = tuple(source_set.candidates_by_key.get(key, ()))
         unknown_flags = _normalize_unknown(
@@ -1416,17 +1929,20 @@ def input_uncertainty(
             if candidate.s not in unresolved_sessions
         )
         cell_causes = _cell_causes(
-            windows, cls, formation_pos, unknown_flags, candidates
+            cell_windows, cls, formation_pos, unknown_flags, candidates
         )
+        extra_causes = _event_causes_for(event_causes, key)
+        if extra_causes is not None:
+            cell_causes = cell_causes.union(extra_causes)
         causes[key] = cell_causes
         unknown[key] = not cell_causes.is_empty
         if cls == SIMPLE:
             uncertain[key] = _simple_cell(
-                windows, formation_pos, transitions, factor_candidates
+                cell_windows, formation_pos, transitions, factor_candidates
             )
         else:
             m_interval, v_interval, is_uncertain = _std_x_rank_cell(
-                windows,
+                cell_windows,
                 formation_pos,
                 transitions,
                 factor_candidates,

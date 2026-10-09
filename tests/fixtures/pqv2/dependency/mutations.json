@@ -361,5 +361,53 @@
       }
     ],
     "test": "tests/test_pqv2_dependency.py::test_certify_rejects_perturbed_window"
+  },
+  {
+    "id": "C23-M1",
+    "description": "an event primitive is admitted as a divisor",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if isinstance(node, Div):\n        return _is_event_cell(node.left) and _is_event_denominator(node.right)",
+        "new": "    if isinstance(node, Div):\n        return _is_event_cell(node.left) and _is_event_cell(node.right)  # C23-M1"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_event_divisor_is_rejected"
+  },
+  {
+    "id": "C23-M2",
+    "description": "the event window is offset-uniform (not per key)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    k_offset = best[3]",
+        "new": "    k_offset = -2  # C23-M2: uniform offset"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_event_window_is_per_key"
+  },
+  {
+    "id": "C23-M3",
+    "description": "an M1b cause is dropped from the cell cause set",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "            cell_causes = cell_causes.union(extra_causes)",
+        "new": "            cell_causes = cell_causes  # C23-M3: event cause dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_event_cause_is_attached_to_the_cell"
+  },
+  {
+    "id": "C23-M4",
+    "description": "EVENT_G is accepted under the v2.2 authority",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if authority == _core.AUTHORITY_V2_2:\n        return _certify_v2_2(factor_spec)",
+        "new": "    if authority == _core.AUTHORITY_V2_2:\n        return _certify_v2_3(factor_spec)  # C23-M4: v2.2 gets EVENT_G"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_event_spec_is_not_certified_under_v2_1_or_v2_2"
   }
 ]
