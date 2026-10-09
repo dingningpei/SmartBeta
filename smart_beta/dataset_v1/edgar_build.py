@@ -396,9 +396,17 @@ class D7cDevelopmentReturns:
     :func:`~smart_beta.dataset_v1.trusted_inputs.load_trusted_inputs` accessor;
     tests may inject the same frame directly.
 
-    Every lookup refuses a session at or after the sealed reserve boundary
-    ``2023-07-03`` (V§5) and never substitutes another session, a fill, an
-    interpolation or ``lambda = 1``.
+    The D7c bridge lag (M§10: row ``d`` holds the observation of
+    ``prev(d)``) is honoured explicitly: the observation **dated** ``session``
+    is carried by the row that immediately follows the row labelled
+    ``session`` in the frame's own row order.  A session with no such row
+    (not a label, or the final label) is unusable and yields ``None`` rather
+    than another row's value.
+
+    Every lookup refuses an observation date at or after the sealed reserve
+    boundary ``2023-07-03`` (V§5), never reads beyond the development frame,
+    and never substitutes another session, a fill, an interpolation or
+    ``lambda = 1``.
     """
 
     def __init__(
@@ -419,6 +427,15 @@ class D7cDevelopmentReturns:
             if parsed is not None:
                 self._positions[parsed] = label
         self._ordered = sorted(self._positions)
+        # D7c bridge-lag alignment (M§10: row ``d`` holds the observation of
+        # ``prev(d)``).  The observation dated ``session`` is carried by the
+        # row immediately following the row labelled ``session`` in the
+        # frame's own row order; the first row carries no dated observation.
+        self._observation_rows: dict[date, Any] = {
+            self._ordered[index]: self._positions[self._ordered[index + 1]]
+            for index in range(len(self._ordered) - 1)
+        }
+        self._observation_dates = self._ordered[:-1]
 
     @property
     def input_name(self) -> str:
@@ -448,9 +465,14 @@ class D7cDevelopmentReturns:
             )
 
     def absolute_return(self, security_key: str, session: date) -> float | None:
-        """``|daily_total_return|`` at ``session``, or ``None`` if unavailable."""
+        """``|daily_total_return|`` **dated** ``session``, or ``None``.
+
+        The returned value is the observation dated ``session`` (the row
+        whose ``prev`` is ``session``), never the row merely labelled
+        ``session``.
+        """
         self._assert_development(session)
-        label = self._positions.get(session)
+        label = self._observation_rows.get(session)
         if label is None or security_key not in self._values.columns:
             return None
         value = float(self._values.at[label, security_key])
@@ -464,12 +486,17 @@ class D7cDevelopmentReturns:
         session: date,
         sessions: int = EV_T_TRAILING_SESSIONS,
     ) -> list[float]:
-        """The finite ``|daily_total_return|`` observations strictly before ``session``."""
+        """The finite ``|daily_total_return|`` observations **dated** before ``session``.
+
+        The window is aligned on observation dates: each value returned is
+        the observation dated one of the ``sessions`` sessions strictly
+        before ``session``, read from that observation's own row.
+        """
         self._assert_development(session)
         if sessions <= 0:
             return []
-        position = bisect.bisect_left(self._ordered, session)
-        window = self._ordered[max(0, position - sessions) : position]
+        position = bisect.bisect_left(self._observation_dates, session)
+        window = self._observation_dates[max(0, position - sessions) : position]
         out: list[float] = []
         for day in window:
             value = self.absolute_return(security_key, day)
