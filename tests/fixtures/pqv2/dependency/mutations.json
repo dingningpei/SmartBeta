@@ -257,5 +257,109 @@
       }
     ],
     "test": "tests/test_pqv2_dependency.py::test_v21_non_unresolved_flag_entries_raise"
+  },
+  {
+    "id": "V22-M01",
+    "description": "certify falls back to enumerated keys only (the A\u00a715A grammar is ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if _is_std_x_rank(expression):\n        name = STD_X_RANK\n    elif _is_E(expression):\n        name = SIMPLE",
+        "new": "    if canonical_key(factor_spec) in CERTIFIED:\n        name = CERTIFIED[canonical_key(factor_spec)][0]\n    elif False:  # V22-M01: grammar ignored, enumerated keys only\n        name = SIMPLE"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_simple_grammar_accepts_every_production"
+  },
+  {
+    "id": "V22-M02",
+    "description": "Add/Sub merges log-linear exponents instead of the support union",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        if _is_const(left):\n            return right\n        return _union(left, right)\n    if isinstance(node, Add):",
+        "new": "        if _is_const(left):\n            return right\n        return _merge(left, right, sign=1.0)  # V22-M02: exponents merged\n    if isinstance(node, Add):"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_add_sub_support_union_not_exponent_merge"
+  },
+  {
+    "id": "V22-M03",
+    "description": "a forbidden divisor (rolling_mean(ret)) accepted",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if _is_ret_rolling(node, RollingOp.STD):\n        return True\n    if _is_dv_mean(node):",
+        "new": "    if _is_ret_rolling(node, RollingOp.STD) or _is_ret_rolling(node, RollingOp.MEAN):  # V22-M03\n        return True\n    if _is_dv_mean(node):"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_simple_grammar_rejects_every_violation"
+  },
+  {
+    "id": "V22-M04",
+    "description": "standardize(ratio - c) accepted into STD_X_RANK_G",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if not isinstance(node, Div):\n        return None\n    a = _tri_ref(node.left)",
+        "new": "    if isinstance(node, Sub) and isinstance(node.right, Literal):  # V22-M04\n        node = node.left\n    if not isinstance(node, Div):\n        return None\n    a = _tri_ref(node.left)"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_std_x_rank_rejects_violations"
+  },
+  {
+    "id": "V22-M05",
+    "description": "lookback 505 or window 1 accepted",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "            if not (WINDOW_MIN <= current.window <= WINDOW_MAX):",
+        "new": "            if not (1 <= current.window <= WINDOW_MAX):  # V22-M05: window 1 accepted"
+      },
+      {
+        "old": "            if not (0 <= current.periods <= LOOKBACK_MAX):",
+        "new": "            if not (0 <= current.periods):  # V22-M05: lookback 505 accepted"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_simple_rolling_window_bounds_reject"
+  },
+  {
+    "id": "V22-M06",
+    "description": "a cross-sectional node accepted inside SIMPLE_G",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if isinstance(node, CrossSectional):\n        return False\n    if _is_T(node) or _is_N(node):",
+        "new": "    if isinstance(node, CrossSectional):\n        return _is_E(node.operand)  # V22-M06: cross-sectional admitted\n    if _is_T(node) or _is_N(node):"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_simple_grammar_rejects_cross_sectional_node"
+  },
+  {
+    "id": "V22-M07",
+    "description": "a STD_X_RANK_G with w1 >= w2, or a nested wrapper, accepted",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "        if WINDOW_MIN <= w1 < w2 <= WINDOW_MAX:\n            return True",
+        "new": "        if WINDOW_MIN <= w1 and WINDOW_MIN <= w2 and w2 <= WINDOW_MAX:  # V22-M07\n            return True"
+      },
+      {
+        "old": "    if not isinstance(node, Mul):\n        return False\n    for standardize_side, rank_side in (",
+        "new": "    if isinstance(node, (Add, Sub)) and isinstance(node.right, Literal):  # V22-M07\n        node = node.left\n    if not isinstance(node, Mul):\n        return False\n    for standardize_side, rank_side in ("
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_std_x_rank_rejects_w1_ge_w2_and_nesting"
+  },
+  {
+    "id": "V22-M13",
+    "description": "v2.1 certification falls through to the v2.2 grammar",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if entry is None:\n        return _core.NotAssessed(\n            _core.PQV2_EXPRESSION_NOT_CERTIFIED,\n            f\"expression key {key} is not one of the seven CE-certified keys\",\n        )",
+        "new": "    if entry is None:\n        return _certify_v2_2(factor_spec)  # V22-M13: v2.1 falls through to the grammar"
+      }
+    ],
+    "test": "tests/test_pqv2_dependency.py::test_certify_rejects_perturbed_window"
   }
 ]

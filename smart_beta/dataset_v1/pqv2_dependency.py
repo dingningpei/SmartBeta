@@ -5,12 +5,15 @@ This module is the PQ2-C deliverable of the frozen P-Q v2 implementation plan
 (``docs/discovery_dataset_v1_2_pq_v2_implementation_plan.md``) and implements the
 frozen methodology (``docs/discovery_dataset_v1_2_pq_v2_methodology.md``):
 
-* :func:`certify` — the enumerative certified-expression (CE) classifier
-  (M§15, CE-ID).  It matches a :class:`~smart_beta.spec.factor_spec.FactorSpec`
-  only by the SHA-256 of the D7b-canonical JSON of its
-  ``(expression, sign, input-roles)`` triple against the seven frozen
-  Campaign-1 expressions; there is deliberately **no structural "looks
-  similar" acceptance**.
+* :func:`certify` — the certified-expression (CE) classifier.  Under the
+  default (P-Q v2.1) authority it is the enumerative classifier (M§15,
+  CE-ID): a :class:`~smart_beta.spec.factor_spec.FactorSpec` matches only by
+  the SHA-256 of the D7b-canonical JSON of its ``(expression, sign,
+  input-roles)`` triple against the seven frozen Campaign-1 expressions, with
+  deliberately **no structural "looks similar" acceptance**.  When called with
+  the admitted P-Q v2.2 authority (:data:`pqv2_core.AUTHORITY_V2_2`) it is the
+  A§15A grammar recognizer (``SIMPLE_G`` / ``STD_X_RANK_G``); the seven C1
+  labels remain a hypothesis label table, not a gate.
 * :func:`dependency_windows` — the exact M§10 dependency rules for the
   certified node set (log-linear TRI ratios with prefix cancellation, lag,
   rolling windows, constant multiplication/subtraction and cross-sectional
@@ -33,11 +36,12 @@ import hashlib
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, ClassVar, Mapping, Sequence
+from typing import Any, ClassVar, Iterator, Mapping, Sequence
 
 from smart_beta.dataset_v1 import pqv2_core as _core
 from smart_beta.dataset_v1.delisting_bridge import canonical_json as _canonical_json
 from smart_beta.spec.expression import (
+    Add,
     CrossSectional,
     CrossSectionalOp,
     Div,
@@ -95,12 +99,17 @@ class CertifiedClass(str):
     ALL: ClassVar[tuple[str, ...]] = (SIMPLE, STD_X_RANK)
 
     def __new__(
-        cls, name: str, hypothesis: str | None = None
+        cls,
+        name: str,
+        hypothesis: str | None = None,
+        *,
+        ed_id: str | None = None,
+        ce_id: str | None = None,
     ) -> "CertifiedClass":
         obj = super().__new__(cls, name)
         obj.hypothesis = hypothesis
-        obj.ed_id = CERTIFIED_ED_ID
-        obj.ce_id = CERTIFIED_CE_ID
+        obj.ed_id = CERTIFIED_ED_ID if ed_id is None else ed_id
+        obj.ce_id = CERTIFIED_CE_ID if ce_id is None else ce_id
         return obj
 
     @property
@@ -174,15 +183,271 @@ def canonical_key(factor_spec: Any) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def certify(factor_spec: Any) -> CertifiedClass | _core.NotAssessed:
-    """Classify ``factor_spec`` against the seven frozen CE expressions.
+# ---------------------------------------------------------------------------
+# A§15A grammar recognizer (P-Q v2.2)
+# ---------------------------------------------------------------------------
 
-    * ``sign != +1`` -> :data:`pqv2_core.PQV2_SIGN_NOT_CERTIFIED` **before** the
-      hash lookup, so a sign-flipped Campaign spec reports sign;
-    * a key outside :data:`CERTIFIED` -> :data:`pqv2_core.PQV2_EXPRESSION_NOT_CERTIFIED`;
-    * otherwise the matching :class:`CertifiedClass`.
-    """
+#: The frozen D7c role <-> semantic-id table (A§15A common rules).
+_ROLE_SEMANTIC: Mapping[str, str] = MappingProxyType(
+    {
+        "tri": "total_return_index",
+        "ret": "daily_total_return",
+        "dv": "dollar_volume",
+    }
+)
 
+#: A§15A common-rule bounds: ``2 <= w <= 504`` and ``0 <= k <= 504``.
+WINDOW_MIN = 2
+WINDOW_MAX = 504
+LOOKBACK_MAX = 504
+
+
+def _finite_nonzero(value: float) -> bool:
+    return math.isfinite(value) and value != 0.0
+
+
+def _walk_expr(node: Expr) -> Iterator[Expr]:
+    stack: list[Expr] = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(current.children())
+
+
+def _bounds_ok(node: Expr) -> bool:
+    """A§15A common bounds: every lag ``0 <= k <= 504``, every window
+    ``2 <= w <= 504``."""
+
+    for current in _walk_expr(node):
+        if isinstance(current, Lag):
+            if not (0 <= current.periods <= LOOKBACK_MAX):
+                return False
+        if isinstance(current, Rolling):
+            if not (WINDOW_MIN <= current.window <= WINDOW_MAX):
+                return False
+    return True
+
+
+def _constants_ok(node: Expr) -> bool:
+    """A§15A constant rule: a multiplier or divisor constant is finite and
+    nonzero (the AST already rejects non-finite literals)."""
+
+    for current in _walk_expr(node):
+        if isinstance(current, Literal):
+            if not math.isfinite(current.value):
+                return False
+        if isinstance(current, Mul):
+            for side in (current.left, current.right):
+                if isinstance(side, Literal) and not _finite_nonzero(side.value):
+                    return False
+        if isinstance(current, Div) and isinstance(current.right, Literal):
+            if not _finite_nonzero(current.right.value):
+                return False
+    return True
+
+
+def _tri_exponent(node: Expr) -> int | None:
+    """The net TRI log-linear exponent of a monomial, or ``None``."""
+
+    if isinstance(node, Field):
+        return 1 if node.role == "tri" else None
+    if isinstance(node, Literal):
+        return 0 if _finite_nonzero(node.value) else None
+    if isinstance(node, Lag):
+        return _tri_exponent(node.operand)
+    if isinstance(node, Mul):
+        left = _tri_exponent(node.left)
+        right = _tri_exponent(node.right)
+        if left is None or right is None:
+            return None
+        return left + right
+    if isinstance(node, Div):
+        left = _tri_exponent(node.left)
+        right = _tri_exponent(node.right)
+        if left is None or right is None:
+            return None
+        return left - right
+    return None
+
+
+def _contains_tri(node: Expr) -> bool:
+    return any(
+        isinstance(current, Field) and current.role == "tri"
+        for current in _walk_expr(node)
+    )
+
+
+def _is_T(node: Expr) -> bool:
+    """A pure TRI monomial with zero net exponent (A§15A.1 ``T``)."""
+
+    exponent = _tri_exponent(node)
+    if exponent is None or exponent != 0:
+        return False
+    return _contains_tri(node)
+
+
+def _is_ret_rolling(node: Expr, op: RollingOp) -> bool:
+    return (
+        isinstance(node, Rolling)
+        and node.op is op
+        and isinstance(node.operand, Field)
+        and node.operand.role == "ret"
+    )
+
+
+def _is_dv_mean(node: Expr) -> bool:
+    return (
+        isinstance(node, Rolling)
+        and node.op is RollingOp.MEAN
+        and isinstance(node.operand, Field)
+        and node.operand.role == "dv"
+    )
+
+
+def _is_N(node: Expr) -> bool:
+    """A numerical atom (A§15A.1 ``N``): a ret rolling mean/std, a dv-mean
+    ratio, or a lag of either."""
+
+    if _is_ret_rolling(node, RollingOp.MEAN) or _is_ret_rolling(node, RollingOp.STD):
+        return True
+    if isinstance(node, Div):
+        return _is_dv_mean(node.left) and _is_dv_mean(node.right)
+    if isinstance(node, Lag):
+        return _is_N(node.operand)
+    return False
+
+
+def _is_D(node: Expr) -> bool:
+    """A permitted divisor (A§15A.1 ``D``): a pure zero-net TRI monomial, a
+    ret rolling std, a dv rolling mean, or a lag of any of these."""
+
+    if _is_T(node):
+        return True
+    if _is_ret_rolling(node, RollingOp.STD):
+        return True
+    if _is_dv_mean(node):
+        return True
+    if isinstance(node, Lag):
+        return _is_D(node.operand)
+    return False
+
+
+def _is_E(node: Expr) -> bool:
+    """The A§15A.1 ``E`` production (no cross-sectional node anywhere)."""
+
+    if isinstance(node, CrossSectional):
+        return False
+    if _is_T(node) or _is_N(node):
+        return True
+    if isinstance(node, Mul):
+        if isinstance(node.left, Literal):
+            return _is_E(node.right)
+        if isinstance(node.right, Literal):
+            return _is_E(node.left)
+        return _is_E(node.left) and _is_E(node.right)
+    if isinstance(node, Add):
+        if isinstance(node.left, Literal) or isinstance(node.right, Literal):
+            other = node.right if isinstance(node.left, Literal) else node.left
+            return _is_E(other)
+        return _is_E(node.left) and _is_E(node.right)
+    if isinstance(node, Sub):
+        if isinstance(node.right, Literal):
+            return _is_E(node.left)
+        return _is_E(node.left) and _is_E(node.right)
+    if isinstance(node, Div):
+        return _is_E(node.left) and _is_D(node.right)
+    if isinstance(node, Lag):
+        return _is_E(node.operand)
+    return False
+
+
+def _tri_ref(node: Expr) -> int | None:
+    if isinstance(node, Field) and node.role == "tri":
+        return 0
+    if (
+        isinstance(node, Lag)
+        and isinstance(node.operand, Field)
+        and node.operand.role == "tri"
+        and node.periods >= 0
+    ):
+        return node.periods
+    return None
+
+
+def _pure_tri_ratio(node: Expr) -> tuple[int, int] | None:
+    """``lag(tri,a)/lag(tri,b)`` with ``0 <= a < b <= 504`` (A§15A.2)."""
+
+    if not isinstance(node, Div):
+        return None
+    a = _tri_ref(node.left)
+    b = _tri_ref(node.right)
+    if a is None or b is None:
+        return None
+    if not (0 <= a < b <= LOOKBACK_MAX):
+        return None
+    return (a, b)
+
+
+def _dv_mean_window(node: Expr) -> int | None:
+    if _is_dv_mean(node):
+        return node.window
+    return None
+
+
+def _is_std_x_rank(node: Expr) -> bool:
+    """The exact A§15A.2 top-level shape."""
+
+    if not isinstance(node, Mul):
+        return False
+    for standardize_side, rank_side in (
+        (node.left, node.right),
+        (node.right, node.left),
+    ):
+        if not isinstance(standardize_side, CrossSectional):
+            continue
+        if standardize_side.op is not CrossSectionalOp.STANDARDIZE:
+            continue
+        if not isinstance(rank_side, CrossSectional):
+            continue
+        if rank_side.op is not CrossSectionalOp.RANK:
+            continue
+        if _pure_tri_ratio(standardize_side.operand) is None:
+            continue
+        value = rank_side.operand
+        if not isinstance(value, Div):
+            continue
+        w1 = _dv_mean_window(value.left)
+        w2 = _dv_mean_window(value.right)
+        if w1 is None or w2 is None:
+            continue
+        if WINDOW_MIN <= w1 < w2 <= WINDOW_MAX:
+            return True
+    return False
+
+
+def _roles_ok(factor_spec: Any) -> bool:
+    """A§15A common rule: every declared input role must be its D7c field."""
+
+    for item in factor_spec.inputs:
+        expected = _ROLE_SEMANTIC.get(item.alias)
+        if expected is None:
+            return False
+        if item.requirement.semantic_id != expected:
+            return False
+    return True
+
+
+def _certified_class(
+    name: str, factor_spec: Any, authority: _core.MethodologyAuthority
+) -> CertifiedClass:
+    entry = CERTIFIED.get(canonical_key(factor_spec))
+    hypothesis = None if entry is None else entry[1]
+    return CertifiedClass(
+        name, hypothesis, ed_id=authority.ed_id, ce_id=authority.ce_id
+    )
+
+
+def _certify_v2_1(factor_spec: Any) -> CertifiedClass | _core.NotAssessed:
     if int(factor_spec.sign) != 1:
         return _core.NotAssessed(
             _core.PQV2_SIGN_NOT_CERTIFIED,
@@ -196,7 +461,77 @@ def certify(factor_spec: Any) -> CertifiedClass | _core.NotAssessed:
             f"expression key {key} is not one of the seven CE-certified keys",
         )
     name, hypothesis = entry
-    return CertifiedClass(name, hypothesis)
+    return CertifiedClass(
+        name,
+        hypothesis,
+        ed_id=_core.AUTHORITY_V2_1.ed_id,
+        ce_id=_core.AUTHORITY_V2_1.ce_id,
+    )
+
+
+def _certify_v2_2(factor_spec: Any) -> CertifiedClass | _core.NotAssessed:
+    if int(factor_spec.sign) != 1:
+        return _core.NotAssessed(
+            _core.PQV2_SIGN_NOT_CERTIFIED,
+            f"sign={factor_spec.sign} is not certified (sign +1 only, A§15A)",
+        )
+    if not _roles_ok(factor_spec):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "input role/semantic mismatch (A§15A common rules: tri"
+            "<->total_return_index, ret<->daily_total_return, "
+            "dv<->dollar_volume only)",
+        )
+    expression = factor_spec.expression
+    if not _bounds_ok(expression):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "A§15A bounds violated (0 <= lag <= 504, 2 <= window <= 504)",
+        )
+    if not _constants_ok(expression):
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "A§15A constant rule violated (multiplier/divisor must be finite "
+            "and nonzero)",
+        )
+    if _is_std_x_rank(expression):
+        name = STD_X_RANK
+    elif _is_E(expression):
+        name = SIMPLE
+    else:
+        return _core.NotAssessed(
+            _core.PQV2_EXPRESSION_NOT_CERTIFIED,
+            "expression is outside the A§15A SIMPLE_G / STD_X_RANK_G grammar",
+        )
+    return _certified_class(name, factor_spec, _core.AUTHORITY_V2_2)
+
+
+def certify(
+    factor_spec: Any,
+    *,
+    authority: _core.MethodologyAuthority = _core.CURRENT_AUTHORITY,
+) -> CertifiedClass | _core.NotAssessed:
+    """Classify ``factor_spec`` under an admitted authority.
+
+    * :data:`pqv2_core.AUTHORITY_V2_1` (the default) is the exact enumerated-key
+      behaviour: ``sign != +1`` -> :data:`pqv2_core.PQV2_SIGN_NOT_CERTIFIED`
+      **before** the hash lookup; a key outside :data:`CERTIFIED` ->
+      :data:`pqv2_core.PQV2_EXPRESSION_NOT_CERTIFIED`.
+    * :data:`pqv2_core.AUTHORITY_V2_2` is the A§15A grammar recognizer
+      (``SIMPLE_G`` / ``STD_X_RANK_G``); the seven C1 keys remain a hypothesis
+      label table only.  The returned :class:`CertifiedClass` carries the
+      identity fields of the authority passed.
+    * any other authority raises :class:`pqv2_core.PQv2BindingError`.
+    """
+
+    if authority == _core.AUTHORITY_V2_1:
+        return _certify_v2_1(factor_spec)
+    if authority == _core.AUTHORITY_V2_2:
+        return _certify_v2_2(factor_spec)
+    raise _core.PQv2BindingError(
+        "certify() requires an admitted authority (P-Q v2.1 or v2.2), got "
+        f"{authority!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +551,8 @@ class Windows:
 
     ``algebraic`` are TRI-ratio supports ``(y, x]`` (a return at offset ``u`` is
     algebraic iff ``y < u <= x``); ``numerical_returns`` are ``ret`` windows whose
-    every return is a numerical dependency; ``numerical_dv_short`` /
+    every return is a numerical dependency; ``numerical_dv`` are the simple-class
+    ``rolling_mean(dv, w)`` windows (A§15A.1 generic dv); ``numerical_dv_short`` /
     ``numerical_dv_long`` are the dv windows of the ``STD_X_RANK`` volume ratio
     (short window and containing long window).  ``m_operand`` / ``v_operand`` are
     the certified ``STD_X_RANK`` sub-expressions (the momentum operand and the
@@ -227,6 +563,7 @@ class Windows:
     numerical_returns: tuple[Window, ...] = ()
     numerical_dv_short: tuple[Window, ...] = ()
     numerical_dv_long: tuple[Window, ...] = ()
+    numerical_dv: tuple[Window, ...] = ()
     cross_sectional: bool = False
     m_operand: Expr | None = None
     v_operand: Expr | None = None
@@ -237,6 +574,7 @@ class Windows:
             "numerical_returns": [list(window) for window in self.numerical_returns],
             "numerical_dv_short": [list(window) for window in self.numerical_dv_short],
             "numerical_dv_long": [list(window) for window in self.numerical_dv_long],
+            "numerical_dv": [list(window) for window in self.numerical_dv],
             "cross_sectional": self.cross_sectional,
         }
 
@@ -250,7 +588,7 @@ def dependency_windows(expression: Expr) -> Windows | _core.NotAssessed:
             _core.PQV2_EXPRESSION_NOT_CERTIFIED,
             "expression node is outside the certified M§10 rule set",
         )
-    support = _tri_support(dep.tri)
+    support = dep.support if dep.support_only else _tri_support(dep.tri)
     if support is None:
         return _core.NotAssessed(
             _core.PQV2_EXPRESSION_NOT_CERTIFIED,
@@ -261,6 +599,7 @@ def dependency_windows(expression: Expr) -> Windows | _core.NotAssessed:
         numerical_returns=tuple(sorted(set(dep.returns))),
         numerical_dv_short=tuple(sorted(set(dep.dv_short))),
         numerical_dv_long=tuple(sorted(set(dep.dv_long))),
+        numerical_dv=tuple(sorted(set(dep.numerical_dv))),
         cross_sectional=dep.cross,
         m_operand=dep.m_operand,
         v_operand=dep.v_operand,
@@ -276,18 +615,25 @@ class _Dep:
 
     ``tri is None`` means "no TRI component"; ``tri == {}`` is a pure constant
     (no dependency).  ``tri`` maps a TRI age ``q`` (TRI dated ``f - q``) to a
-    log-linear exponent.  ``returns`` / ``dv_short`` / ``dv_long`` are numerical
-    windows; ``cross`` records a cross-sectional node and the operands are kept
-    for the ``STD_X_RANK`` component disclosure.
+    log-linear exponent.  ``returns`` / ``dv_short`` / ``dv_long`` /
+    ``numerical_dv`` are numerical windows; ``cross`` records a cross-sectional
+    node and the operands are kept for the ``STD_X_RANK`` component disclosure.
+    ``support_only`` marks an Add/Sub (or a Mul/Div of a support-only operand)
+    result whose algebraic support is the conservative **union** of the
+    operands' supports (A§15A.1): the log-linear exponents are never merged
+    across it and ``support`` holds the union directly.
     """
 
     tri: dict[int, float] | None = None
     returns: list[Window] = field(default_factory=list)
     dv_short: list[Window] = field(default_factory=list)
     dv_long: list[Window] = field(default_factory=list)
+    numerical_dv: list[Window] = field(default_factory=list)
     cross: bool = False
     m_operand: Expr | None = None
     v_operand: Expr | None = None
+    support_only: bool = False
+    support: tuple[Window, ...] | None = None
 
 
 def _is_const(dep: _Dep) -> bool:
@@ -296,7 +642,9 @@ def _is_const(dep: _Dep) -> bool:
         and not dep.returns
         and not dep.dv_short
         and not dep.dv_long
+        and not dep.numerical_dv
         and not dep.cross
+        and not dep.support_only
     )
 
 
@@ -331,6 +679,8 @@ def _analyze(node: Expr) -> _Dep | None:
             return right
         if _is_const(right):
             return left
+        if left.support_only or right.support_only:
+            return _union(left, right)
         return _merge(left, right, sign=1.0)
     if isinstance(node, Div):
         return _analyze_div(node)
@@ -343,8 +693,18 @@ def _analyze(node: Expr) -> _Dep | None:
             return left
         if _is_const(left):
             return right
-        return None
-    # ``Add`` and every node outside the certified whitelist.
+        return _union(left, right)
+    if isinstance(node, Add):
+        left = _analyze(node.left)
+        right = _analyze(node.right)
+        if left is None or right is None:
+            return None
+        if _is_const(right):
+            return left
+        if _is_const(left):
+            return right
+        return _union(left, right)
+    # every node outside the certified whitelist.
     return None
 
 
@@ -363,6 +723,14 @@ def _analyze_rolling(node: Rolling) -> _Dep | None:
     if isinstance(node.operand, Field) and node.operand.role == "ret":
         if node.op in (RollingOp.MEAN, RollingOp.STD):
             return _Dep(tri=None, returns=[_rolling_window(node.window)])
+    if (
+        isinstance(node.operand, Field)
+        and node.operand.role == "dv"
+        and node.op is RollingOp.MEAN
+    ):
+        # A§15A.1 generic dv: a simple-class ``rolling_mean(dv, w)`` is a
+        # numerical dv dependency (reach applies ``dv_{prev,s}``).
+        return _Dep(tri=None, numerical_dv=[_rolling_window(node.window)])
     return None
 
 
@@ -381,6 +749,8 @@ def _analyze_div(node: Div) -> _Dep | None:
         return None
     if _is_const(right):
         return left
+    if left.support_only or right.support_only:
+        return _union(left, right)
     return _merge(left, right, sign=-1.0)
 
 
@@ -391,7 +761,7 @@ def _analyze_cross_section(node: CrossSectional) -> _Dep | None:
     if node.op is CrossSectionalOp.STANDARDIZE:
         if inner.tri is None or inner.tri == {}:
             return None
-        if inner.returns or inner.dv_short or inner.dv_long:
+        if inner.returns or inner.dv_short or inner.dv_long or inner.numerical_dv:
             return None
         return _Dep(tri=inner.tri, cross=True, m_operand=node.operand)
     if node.op is CrossSectionalOp.RANK:
@@ -425,13 +795,51 @@ def _merge(left: _Dep, right: _Dep, *, sign: float) -> _Dep:
         returns=list(left.returns) + list(right.returns),
         dv_short=list(left.dv_short) + list(right.dv_short),
         dv_long=list(left.dv_long) + list(right.dv_long),
+        numerical_dv=list(left.numerical_dv) + list(right.numerical_dv),
         cross=left.cross or right.cross,
         m_operand=left.m_operand or right.m_operand,
         v_operand=left.v_operand or right.v_operand,
     )
 
 
+def _dep_support(dep: _Dep) -> tuple[Window, ...] | None:
+    """The bounded algebraic support of a sub-expression (or ``None``)."""
+
+    if dep.support_only:
+        return dep.support
+    return _tri_support(dep.tri)
+
+
+def _union(left: _Dep, right: _Dep) -> _Dep | None:
+    """Conservative support union for Add/Sub (A§15A.1).
+
+    Both operands must have a bounded algebraic support and their supports are
+    united; the log-linear exponents are **never** merged across the node, so a
+    later ``Mul``/``Div`` with a support-only operand stays support-only.
+    """
+
+    left_support = _dep_support(left)
+    right_support = _dep_support(right)
+    if left_support is None or right_support is None:
+        return None
+    return _Dep(
+        tri=None,
+        returns=list(left.returns) + list(right.returns),
+        dv_short=list(left.dv_short) + list(right.dv_short),
+        dv_long=list(left.dv_long) + list(right.dv_long),
+        numerical_dv=list(left.numerical_dv) + list(right.numerical_dv),
+        cross=left.cross or right.cross,
+        support_only=True,
+        support=tuple(sorted(set(left_support) | set(right_support))),
+    )
+
+
 def _shift(dep: _Dep, periods: int) -> _Dep:
+    support = None
+    if dep.support_only:
+        support = tuple(
+            (y - periods, x - periods) for (y, x) in dep.support
+        )
     return _Dep(
         tri=(
             {age + periods: exponent for age, exponent in dep.tri.items()}
@@ -441,9 +849,12 @@ def _shift(dep: _Dep, periods: int) -> _Dep:
         returns=[(y - periods, x - periods) for (y, x) in dep.returns],
         dv_short=[(y - periods, x - periods) for (y, x) in dep.dv_short],
         dv_long=[(y - periods, x - periods) for (y, x) in dep.dv_long],
+        numerical_dv=[(y - periods, x - periods) for (y, x) in dep.numerical_dv],
         cross=dep.cross,
         m_operand=dep.m_operand,
         v_operand=dep.v_operand,
+        support_only=dep.support_only,
+        support=support,
     )
 
 
@@ -716,8 +1127,9 @@ def _unresolved_reaches(
     The reach rules are the unchanged M§6 / M§7 / M§10 rules applied to the
     flag: its own algebraic position ``[y, next(x)]``; the numerical window
     ``{prev s, s, next s}`` (SIMPLE) or the dv cells ``{prev s, s}``
-    (STD_X_RANK); and the MISDATED pair effects of its recorded candidates.
-    Reach attaches causes only — it never contributes a factor or an interval.
+    (STD_X_RANK, and the A§15A.1 generic-dv / dv-mean windows in SIMPLE); and
+    the MISDATED pair effects of its recorded candidates.  Reach attaches
+    causes only — it never contributes a factor or an interval.
     """
 
     s_off = _offset(formation_pos, flag.s)
@@ -734,8 +1146,12 @@ def _unresolved_reaches(
         )
         if s_off in dv_cells or prev_off in dv_cells:
             return True
-    elif _returns_effect(windows.numerical_returns, s_off, prev_off, next_off):
-        return True
+    else:
+        if _returns_effect(windows.numerical_returns, s_off, prev_off, next_off):
+            return True
+        dv_cells = _simple_dv_cells(windows)
+        if s_off in dv_cells or prev_off in dv_cells:
+            return True
     for candidate in candidates:
         d_off = _offset(formation_pos, candidate.d)
         if _candidate_hits_algebraic(windows.algebraic, s_off, d_off):
@@ -770,6 +1186,20 @@ def _cell_causes(
     return _core.CauseSet.from_iterable(reasons)
 
 
+def _simple_dv_cells(windows: Windows) -> set[int]:
+    """The simple-class dv cells ``{prev s, s}`` a flag can move.
+
+    A§15A.1 generic dv (``numerical_dv``) and the dv-mean ratio windows are
+    all reached through the D7c close branches at ``s`` and ``prev(s)``.
+    """
+
+    return (
+        _window_cells(windows.numerical_dv)
+        | _window_cells(windows.numerical_dv_short)
+        | _window_cells(windows.numerical_dv_long)
+    )
+
+
 def _simple_cell(
     windows: Windows,
     formation_pos: Any,
@@ -777,16 +1207,20 @@ def _simple_cell(
     candidates: Sequence[_core.MisdatedCandidate],
 ) -> bool:
     uncertain = False
+    dv_cells = _simple_dv_cells(windows)
     for transition in transitions:
         s_off = _offset(formation_pos, transition.s)
+        prev_off = _offset(formation_pos, transition.prev_s)
         if _algebraic_affected(windows.algebraic, s_off):
             uncertain = True
         if _returns_effect(
             windows.numerical_returns,
             s_off,
-            _offset(formation_pos, transition.prev_s),
+            prev_off,
             _offset(formation_pos, transition.next_s),
         ):
+            uncertain = True
+        if s_off in dv_cells or prev_off in dv_cells:
             uncertain = True
     for candidate in candidates:
         s_off = _offset(formation_pos, candidate.s)

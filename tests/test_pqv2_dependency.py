@@ -33,14 +33,20 @@ from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_dependency as D
 from smart_beta.spec.expression import (
     Add,
+    Mul,
+    Sub,
     difference,
     field,
     lag,
     literal,
+    rank,
     ratio,
+    rolling_mean,
     rolling_std,
+    rolling_sum,
+    standardize,
 )
-from smart_beta.spec.factor_spec import FactorSpec
+from smart_beta.spec.factor_spec import FactorInput, FactorSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests/fixtures/pqv2/dependency/frozen_table.json"
@@ -201,7 +207,9 @@ def test_certify_rejects_sign_minus_one_before_lookup() -> None:
 
 
 def test_certify_rejects_perturbed_window() -> None:
-    # Window changed by one: lag(tri,22)/lag(tri,252) instead of 21/252.
+    # Window changed by one: lag(tri,22)/lag(tri,252) instead of 21/252.  P-Q
+    # v2.1 stays the exact enumerated-key classifier, so the perturbed
+    # expression is NOT_CERTIFIED under the default authority.
     perturbed = dataclasses.replace(
         _H1(),
         expression=ratio(lag(field("tri"), 22), lag(field("tri"), 252)),
@@ -209,6 +217,20 @@ def test_certify_rejects_perturbed_window() -> None:
     result = D.certify(perturbed)
     assert isinstance(result, C.NotAssessed)
     assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+    # The ADM-4 motivating perturbation (C1-H1 lag 252 -> 251) was
+    # NOT_CERTIFIED in v2.1; under the v2.2 grammar it is SIMPLE.
+    adm4 = dataclasses.replace(
+        _H1(),
+        expression=ratio(lag(field("tri"), 21), lag(field("tri"), 251)),
+    )
+    rejected = D.certify(adm4, authority=C.AUTHORITY_V2_1)
+    assert isinstance(rejected, C.NotAssessed)
+    assert rejected.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+    certified = D.certify(adm4, authority=C.AUTHORITY_V2_2)
+    assert isinstance(certified, D.CertifiedClass)
+    assert str(certified) == D.SIMPLE
+    assert certified.hypothesis is None
 
 
 def test_certify_rejects_extra_node() -> None:
@@ -1111,6 +1133,425 @@ def test_v21_unresolved_flag_contributes_no_factor_or_interval() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 7. P-Q v2.2 A§15A grammar certification (authority-selected)
+# ---------------------------------------------------------------------------
+
+_V21 = C.AUTHORITY_V2_1
+_V22 = C.AUTHORITY_V2_2
+
+
+def _input(alias: str) -> FactorInput:
+    for spec in _campaign_specs().values():
+        for item in spec.inputs:
+            if item.alias == alias:
+                return item
+    raise KeyError(alias)
+
+
+def _grammar_spec(expression, *, aliases=("tri",), sign=1):
+    return dataclasses.replace(
+        _H1(),
+        expression=expression,
+        inputs=tuple(_input(alias) for alias in aliases),
+        sign=sign,
+        hypothesis=None,
+    )
+
+
+def _class_of(expression, *, aliases=("tri",), authority=_V22):
+    return D.certify(
+        _grammar_spec(expression, aliases=aliases), authority=authority
+    )
+
+
+def _tri_ratio(a: int = 21, b: int = 252):
+    numerator = field("tri") if a == 0 else lag(field("tri"), a)
+    return ratio(numerator, lag(field("tri"), b))
+
+
+def _dv_ratio(w1: int = 21, w2: int = 252):
+    return ratio(rolling_mean(field("dv"), w1), rolling_mean(field("dv"), w2))
+
+
+def _std_x_rank(m, v):
+    return Mul(standardize(m), rank(v))
+
+
+_SIMPLE_ACCEPT = [
+    ("T", _tri_ratio(), ("tri",)),
+    ("T_a0", _tri_ratio(0, 252), ("tri",)),
+    (
+        "T_monomial",
+        ratio(
+            Mul(lag(field("tri"), 1), lag(field("tri"), 3)),
+            Mul(lag(field("tri"), 2), lag(field("tri"), 2)),
+        ),
+        ("tri",),
+    ),
+    ("N_ret_mean", rolling_mean(field("ret"), 21), ("ret",)),
+    ("N_ret_std", rolling_std(field("ret"), 21), ("ret",)),
+    ("N_dv_ratio", _dv_ratio(), ("dv",)),
+    ("N_lag", lag(rolling_mean(field("ret"), 21), 5), ("ret",)),
+    ("E_const_mul", Mul(literal(2.0), _tri_ratio()), ("tri",)),
+    ("E_add_const", Add(_tri_ratio(), literal(1.0)), ("tri",)),
+    ("E_const_add", Add(literal(1.0), _tri_ratio()), ("tri",)),
+    ("E_sub_const", Sub(_tri_ratio(), literal(1.0)), ("tri",)),
+    (
+        "E_mul_E",
+        Mul(_tri_ratio(), rolling_mean(field("ret"), 21)),
+        ("tri", "ret"),
+    ),
+    ("E_div_D_T", ratio(_tri_ratio(), _tri_ratio(2, 5)), ("tri",)),
+    (
+        "E_div_D_ret_std",
+        ratio(_tri_ratio(), rolling_std(field("ret"), 21)),
+        ("tri", "ret"),
+    ),
+    (
+        "E_div_D_dv_mean",
+        ratio(_tri_ratio(), rolling_mean(field("dv"), 21)),
+        ("tri", "dv"),
+    ),
+    (
+        "E_div_D_lag",
+        ratio(_tri_ratio(), lag(rolling_mean(field("dv"), 21), 3)),
+        ("tri", "dv"),
+    ),
+    ("E_add_E", Add(_tri_ratio(), rolling_mean(field("ret"), 21)), ("tri", "ret")),
+    ("E_sub_E", Sub(_tri_ratio(), rolling_mean(field("ret"), 21)), ("tri", "ret")),
+    ("E_lag_E", lag(_tri_ratio(), 5), ("tri",)),
+]
+
+
+_SIMPLE_REJECT = [
+    ("raw_tri", field("tri"), ("tri",)),
+    ("raw_ret", field("ret"), ("ret",)),
+    ("raw_dv", field("dv"), ("dv",)),
+    (
+        "forbid_div_ret_mean",
+        ratio(_tri_ratio(), rolling_mean(field("ret"), 21)),
+        ("tri", "ret"),
+    ),
+    (
+        "forbid_div_lag_ret_mean",
+        ratio(_tri_ratio(), lag(rolling_mean(field("ret"), 21), 3)),
+        ("tri", "ret"),
+    ),
+    (
+        "forbid_div_sum",
+        ratio(_tri_ratio(), rolling_sum(field("ret"), 21)),
+        ("tri", "ret"),
+    ),
+    (
+        "forbid_div_add",
+        ratio(
+            _tri_ratio(),
+            Add(rolling_mean(field("ret"), 21), rolling_std(field("ret"), 21)),
+        ),
+        ("tri", "ret"),
+    ),
+    ("cross_standardize", standardize(_tri_ratio()), ("tri",)),
+    ("cross_rank", rank(_dv_ratio()), ("dv",)),
+    (
+        "cross_inside_add",
+        Add(_tri_ratio(), standardize(_tri_ratio())),
+        ("tri",),
+    ),
+    ("const_mul_zero", Mul(literal(0.0), _tri_ratio()), ("tri",)),
+    ("div_zero", ratio(_tri_ratio(), literal(0.0)), ("tri",)),
+]
+
+
+@pytest.mark.parametrize(
+    "expression,aliases",
+    [case[1:] for case in _SIMPLE_ACCEPT],
+    ids=[case[0] for case in _SIMPLE_ACCEPT],
+)
+def test_simple_grammar_accepts_every_production(expression, aliases) -> None:
+    result = _class_of(expression, aliases=aliases)
+    assert isinstance(result, D.CertifiedClass)
+    assert str(result) == D.SIMPLE
+    assert result.ed_id == _V22.ed_id
+    assert result.ce_id == _V22.ce_id
+
+
+@pytest.mark.parametrize(
+    "expression,aliases",
+    [case[1:] for case in _SIMPLE_REJECT],
+    ids=[case[0] for case in _SIMPLE_REJECT],
+)
+def test_simple_grammar_rejects_every_violation(expression, aliases) -> None:
+    result = _class_of(expression, aliases=aliases)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_simple_grammar_rejects_cross_sectional_node() -> None:
+    # A cross-sectional node is never part of SIMPLE_G (A§15A.1), even wrapped
+    # inside an otherwise-admissible composition.
+    for expression in (
+        standardize(_tri_ratio()),
+        Add(_tri_ratio(), rank(_dv_ratio())),
+        Mul(_tri_ratio(), standardize(_tri_ratio())),
+    ):
+        result = _class_of(expression, aliases=("tri", "dv"))
+        assert isinstance(result, C.NotAssessed)
+        assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+@pytest.mark.parametrize("window", [2, 504])
+def test_simple_rolling_window_bounds_accept(window) -> None:
+    expression = ratio(_tri_ratio(), rolling_mean(field("dv"), window))
+    result = _class_of(expression, aliases=("tri", "dv"))
+    assert isinstance(result, D.CertifiedClass)
+    assert str(result) == D.SIMPLE
+
+
+@pytest.mark.parametrize("window", [1, 505])
+def test_simple_rolling_window_bounds_reject(window) -> None:
+    expression = ratio(_tri_ratio(), rolling_mean(field("dv"), window))
+    result = _class_of(expression, aliases=("tri", "dv"))
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+@pytest.mark.parametrize("k,accepted", [(0, True), (504, True), (505, False)])
+def test_simple_lag_bound(k, accepted) -> None:
+    result = _class_of(lag(_tri_ratio(), k), aliases=("tri",))
+    if accepted:
+        assert isinstance(result, D.CertifiedClass)
+        assert str(result) == D.SIMPLE
+    else:
+        assert isinstance(result, C.NotAssessed)
+        assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_std_x_rank_accepts_exact_shape() -> None:
+    cases = [
+        (_tri_ratio(21, 252), _dv_ratio(21, 252)),
+        (_tri_ratio(0, 504), _dv_ratio(2, 504)),
+        (_tri_ratio(21, 126), _dv_ratio(2, 3)),
+    ]
+    for m, v in cases:
+        result = _class_of(_std_x_rank(m, v), aliases=("tri", "dv"))
+        assert isinstance(result, D.CertifiedClass)
+        assert str(result) == D.STD_X_RANK
+    # Either operand order is the frozen shape.
+    swapped = Mul(rank(_dv_ratio()), standardize(_tri_ratio()))
+    result = _class_of(swapped, aliases=("tri", "dv"))
+    assert isinstance(result, D.CertifiedClass)
+    assert str(result) == D.STD_X_RANK
+
+
+_STD_X_RANK_REJECT = [
+    ("shift", _std_x_rank(Sub(_tri_ratio(), literal(1.0)), _dv_ratio())),
+    ("scale", _std_x_rank(Mul(_tri_ratio(), literal(2.0)), _dv_ratio())),
+    (
+        "w1_gt_w2",
+        _std_x_rank(
+            _tri_ratio(),
+            ratio(rolling_mean(field("dv"), 252), rolling_mean(field("dv"), 21)),
+        ),
+    ),
+    (
+        "w1_eq_w2",
+        _std_x_rank(
+            _tri_ratio(),
+            ratio(rolling_mean(field("dv"), 21), rolling_mean(field("dv"), 21)),
+        ),
+    ),
+    ("a_gt_b", _std_x_rank(_tri_ratio(252, 21), _dv_ratio())),
+    ("a_eq_b", _std_x_rank(_tri_ratio(21, 21), _dv_ratio())),
+    ("b_505", _std_x_rank(_tri_ratio(0, 505), _dv_ratio())),
+    (
+        "w2_505",
+        _std_x_rank(_tri_ratio(), _dv_ratio(21, 505)),
+    ),
+    (
+        "nested_wrapper",
+        Add(_std_x_rank(_tri_ratio(), _dv_ratio()), literal(1.0)),
+    ),
+    ("no_rank", standardize(_tri_ratio())),
+    ("no_standardize", rank(_dv_ratio())),
+    ("ret_wrapped", _std_x_rank(rolling_std(field("ret"), 21), _dv_ratio())),
+]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [case[1] for case in _STD_X_RANK_REJECT],
+    ids=[case[0] for case in _STD_X_RANK_REJECT],
+)
+def test_std_x_rank_rejects_violations(expression) -> None:
+    result = _class_of(expression, aliases=("tri", "dv", "ret"))
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_std_x_rank_rejects_w1_ge_w2_and_nesting() -> None:
+    # Explicit names for the frozen mutation V22-M07.
+    assert isinstance(
+        _class_of(
+            _std_x_rank(
+                _tri_ratio(),
+                ratio(
+                    rolling_mean(field("dv"), 252),
+                    rolling_mean(field("dv"), 21),
+                ),
+            ),
+            aliases=("tri", "dv"),
+        ),
+        C.NotAssessed,
+    )
+    assert isinstance(
+        _class_of(
+            Add(_std_x_rank(_tri_ratio(), _dv_ratio()), literal(1.0)),
+            aliases=("tri", "dv", "ret"),
+        ),
+        C.NotAssessed,
+    )
+
+
+def test_add_sub_support_union_not_exponent_merge() -> None:
+    t1 = ratio(lag(field("tri"), 1), lag(field("tri"), 21))
+    t2 = ratio(lag(field("tri"), 21), lag(field("tri"), 252))
+    windows = D.dependency_windows(Sub(t1, t2))
+    assert isinstance(windows, D.Windows)
+    # The conservative union, never the merged single run (-253, -2].
+    assert windows.algebraic == ((-253, -22), (-22, -2))
+    merged = D._merge(D._analyze(t1), D._analyze(t2), sign=-1.0)
+    assert D._tri_support(merged.tri) == ((-253, -2),)
+
+
+def test_add_sub_same_operand_union_is_nonempty() -> None:
+    t1 = ratio(lag(field("tri"), 1), lag(field("tri"), 21))
+    windows = D.dependency_windows(Sub(t1, t1))
+    assert isinstance(windows, D.Windows)
+    assert windows.algebraic == ((-22, -2),)
+    # A naive exponent merge cancels the operand with itself.
+    merged = D._merge(D._analyze(t1), D._analyze(t1), sign=-1.0)
+    assert D._tri_support(merged.tri) == ()
+
+
+def test_support_only_stays_union_through_mul_and_div() -> None:
+    t1 = ratio(lag(field("tri"), 1), lag(field("tri"), 21))
+    t2 = ratio(lag(field("tri"), 21), lag(field("tri"), 252))
+    t3 = ratio(lag(field("tri"), 5), lag(field("tri"), 9))
+    combined = Sub(t1, t2)
+    expected = ((-253, -22), (-22, -2), (-10, -6))
+    mul = D.dependency_windows(Mul(combined, t3))
+    assert isinstance(mul, D.Windows)
+    assert mul.algebraic == expected
+    div = D.dependency_windows(ratio(combined, t3))
+    assert isinstance(div, D.Windows)
+    assert div.algebraic == expected
+    # A lag shifts the whole union.
+    shifted = D.dependency_windows(lag(combined, 5))
+    assert isinstance(shifted, D.Windows)
+    assert shifted.algebraic == ((-258, -27), (-27, -7))
+
+
+def test_add_unbounded_tri_operand_is_rejected() -> None:
+    expression = Add(field("tri"), _tri_ratio())
+    result = _class_of(expression, aliases=("tri",))
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+    assert isinstance(D.dependency_windows(expression), C.NotAssessed)
+
+
+def test_simple_generic_dv_windows() -> None:
+    expression = ratio(_tri_ratio(), rolling_mean(field("dv"), 21))
+    result = _class_of(expression, aliases=("tri", "dv"))
+    assert isinstance(result, D.CertifiedClass)
+    assert str(result) == D.SIMPLE
+    windows = D.dependency_windows(expression)
+    assert isinstance(windows, D.Windows)
+    assert windows.numerical_dv == ((-22, -1),)
+    assert windows.numerical_dv_short == ()
+    assert windows.numerical_dv_long == ()
+    # The lag of the generic dv window shifts with it.
+    shifted = D.dependency_windows(lag(expression, 3))
+    assert isinstance(shifted, D.Windows)
+    assert shifted.numerical_dv == ((-25, -4),)
+
+
+def test_simple_generic_dv_reach_is_prev_and_s() -> None:
+    windows = D.Windows(numerical_dv=((-3, -1),))
+    assert not _causes_for(windows, (_flag(-1),)).is_empty  # s in cells
+    assert not _causes_for(windows, (_flag(0),)).is_empty  # prev(s) = -1 in cells
+    assert _causes_for(windows, (_flag(-4),)).is_empty  # s = -5/-4 outside
+    transition = C.UncertainTransition("SUS", -1, -2, 0, 1.2, C.s2_relative(1.2))
+    source = C.SourceSet(transitions_by_key={"SUS": (transition,)})
+    result = D.input_uncertainty(D.SIMPLE, windows, source, 0, ["SUS"])
+    assert result.uncertain["SUS"] is True
+
+
+def test_certified_identity_fields_follow_authority() -> None:
+    spec = _H1()
+    v21 = D.certify(spec, authority=_V21)
+    v22 = D.certify(spec, authority=_V22)
+    assert isinstance(v21, D.CertifiedClass)
+    assert isinstance(v22, D.CertifiedClass)
+    assert (v21.ed_id, v21.ce_id) == (_V21.ed_id, _V21.ce_id)
+    assert (v22.ed_id, v22.ce_id) == (_V22.ed_id, _V22.ce_id)
+    assert str(v21) == str(v22) == D.SIMPLE
+    assert v21.hypothesis == v22.hypothesis == "C1-H1"
+
+
+def test_certify_rejects_non_admitted_authority() -> None:
+    with pytest.raises(C.PQv2BindingError):
+        D.certify(_H1(), authority=C.AUTHORITY_V2)
+    with pytest.raises(C.PQv2BindingError):
+        D.certify(_H1(), authority="P-Q v9-not-admitted")
+
+
+def test_c1_specs_certify_under_v2_2_with_identical_windows() -> None:
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    specs = _campaign_specs()
+    for entry in fixture["entries"]:
+        spec = specs[entry["hypothesis"]]
+        certified = D.certify(spec, authority=_V22)
+        assert isinstance(certified, D.CertifiedClass)
+        assert str(certified) == entry["certified_class"]
+        assert certified.hypothesis == entry["hypothesis"]
+        assert (certified.ed_id, certified.ce_id) == (_V22.ed_id, _V22.ce_id)
+        windows = D.dependency_windows(spec.expression)
+        assert isinstance(windows, D.Windows)
+        assert [list(window) for window in windows.algebraic] == entry["algebraic"]
+        assert [
+            list(window) for window in windows.numerical_returns
+        ] == entry["numerical_returns"]
+        assert [
+            list(window) for window in windows.numerical_dv_short
+        ] == entry["numerical_dv_short"]
+        assert [
+            list(window) for window in windows.numerical_dv_long
+        ] == entry["numerical_dv_long"]
+        assert windows.numerical_dv == ()
+
+
+def test_role_semantic_mismatch_is_rejected_under_v2_2() -> None:
+    tri_input = _input("tri")
+    bad_requirement = dataclasses.replace(
+        tri_input.requirement, semantic_id="daily_total_return"
+    )
+    spec = dataclasses.replace(
+        _H1(),
+        inputs=(FactorInput(alias="tri", requirement=bad_requirement),),
+    )
+    result = D.certify(spec, authority=_V22)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_sign_check_precedes_grammar_under_v2_2() -> None:
+    spec = _grammar_spec(_tri_ratio(), sign=-1)
+    result = D.certify(spec, authority=_V22)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_SIGN_NOT_CERTIFIED
+
+
+# ---------------------------------------------------------------------------
 # Mutation fixture contract
 # ---------------------------------------------------------------------------
 
@@ -1140,6 +1581,14 @@ def test_mutation_fixture_contract() -> None:
         "C21-M7",
         "C21-M8",
         "C21-M9",
+        "V22-M01",
+        "V22-M02",
+        "V22-M03",
+        "V22-M04",
+        "V22-M05",
+        "V22-M06",
+        "V22-M07",
+        "V22-M13",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_dependency.py").read_text(
         encoding="utf-8"
