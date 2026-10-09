@@ -22,15 +22,19 @@ import json
 import math
 import socket
 import sys
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import pqv2_oracle.ast as A
+import pqv2_oracle.grammar as G
 import pqv2_oracle.oracle as O
 
 from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_dependency as D
+from smart_beta.dataset_v1 import pqv2_events as EV
 from smart_beta.spec.expression import (
     Add,
     Mul,
@@ -39,14 +43,22 @@ from smart_beta.spec.expression import (
     field,
     lag,
     literal,
+    parse_expression,
     rank,
     ratio,
+    referenced_roles,
     rolling_mean,
     rolling_std,
     rolling_sum,
     standardize,
 )
 from smart_beta.spec.factor_spec import FactorInput, FactorSpec
+from smart_beta.spec.requirements import (
+    DataRequirement,
+    Frequency,
+    ObservationPeriod,
+    Unit,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests/fixtures/pqv2/dependency/frozen_table.json"
@@ -1552,6 +1564,501 @@ def test_sign_check_precedes_grammar_under_v2_2() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 8. P-Q v2.3 EVENT_G certification, event windows and M1b causes
+# ---------------------------------------------------------------------------
+
+_V23 = C.AUTHORITY_V2_3
+
+#: The oracle's class vocabulary mapped onto the production names.
+_CLASS_MAP = {
+    G.SIMPLE_G: D.SIMPLE,
+    G.STD_X_RANK_G: D.STD_X_RANK,
+    G.EVENT_SIMPLE: D.EVENT_SIMPLE,
+    G.OUTSIDE: "OUTSIDE",
+}
+
+
+def _role_input(role: str) -> FactorInput:
+    """A FactorInput for a §2 event semantic id or a frozen D7c role."""
+
+    if role in ("tri", "ret", "dv"):
+        return _input(role)
+    period = (
+        ObservationPeriod.PERIOD
+        if role == D.EVENT_EAR
+        else ObservationPeriod.INSTANT
+    )
+    units = Unit.FRACTION if role == D.EVENT_EAR else Unit.COUNT
+    return FactorInput(
+        alias=role,
+        requirement=DataRequirement(
+            semantic_id=role,
+            frequency=Frequency.DAILY,
+            observation_period=period,
+            units=units,
+        ),
+    )
+
+
+def _event_spec(expression, roles, *, sign: int = 1) -> FactorSpec:
+    return dataclasses.replace(
+        _H1(),
+        expression=expression,
+        inputs=tuple(_role_input(role) for role in roles),
+        sign=sign,
+        hypothesis=None,
+    )
+
+
+def _v23_class(expression) -> str:
+    spec = _event_spec(expression, referenced_roles(expression))
+    result = D.certify(spec, authority=_V23)
+    if isinstance(result, D.CertifiedClass):
+        return str(result)
+    return "OUTSIDE"
+
+
+def _as_expr(node) -> object:
+    """Parse an independent oracle AST node into the production AST."""
+
+    return parse_expression(A.to_dict(node))
+
+
+def test_event_members_certify_event_simple() -> None:
+    for name, node in G.event_members().items():
+        expression = _as_expr(node)
+        result = D.certify(
+            _event_spec(expression, referenced_roles(expression)),
+            authority=_V23,
+        )
+        assert isinstance(result, D.CertifiedClass), name
+        assert str(result) == D.EVENT_SIMPLE, name
+        assert result.ed_id == _V23.ed_id
+        assert result.ce_id == _V23.ce_id
+        assert result.hypothesis is None
+
+
+def test_event_violations_are_not_certified() -> None:
+    cases: dict[str, object] = {}
+    cases.update(G.event_divisor_cases())
+    cases.update(G.event_cross_section_cases())
+    cases.update(G.event_lag_cases())
+    cases.update(G.event_bounds_cases())
+    for name, node in cases.items():
+        expression = _as_expr(node)
+        result = D.certify(
+            _event_spec(expression, referenced_roles(expression)),
+            authority=_V23,
+        )
+        assert isinstance(result, C.NotAssessed), name
+        assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED, name
+
+
+def test_event_divisor_is_rejected() -> None:
+    # C23-M1: an event primitive is never admitted as a divisor (E§3).
+    for name, node in G.event_divisor_cases().items():
+        expression = _as_expr(node)
+        result = D.certify(
+            _event_spec(expression, referenced_roles(expression)),
+            authority=_V23,
+        )
+        assert isinstance(result, C.NotAssessed), name
+
+
+def test_event_classifier_matches_oracle() -> None:
+    nodes = list(G.event_members().values())
+    nodes += list(G.event_divisor_cases().values())
+    nodes += list(G.event_cross_section_cases().values())
+    nodes += list(G.event_lag_cases().values())
+    nodes += list(G.generate_event(200))
+    for node in nodes:
+        expression = _as_expr(node)
+        assert _v23_class(expression) == _CLASS_MAP[G.classify(node)]
+
+
+def test_event_free_expressions_keep_their_class_under_v2_3() -> None:
+    specs = _campaign_specs()
+    expected = {
+        "C1-H1": D.SIMPLE,
+        "C1-H2": D.SIMPLE,
+        "C1-H3": D.SIMPLE,
+        "C1-H4": D.STD_X_RANK,
+        "C1-H5": D.STD_X_RANK,
+        "C1-H6": D.SIMPLE,
+        "C1-H7": D.SIMPLE,
+    }
+    for hypothesis, name in expected.items():
+        result = D.certify(specs[hypothesis], authority=_V23)
+        assert isinstance(result, D.CertifiedClass), hypothesis
+        assert str(result) == name, hypothesis
+        assert (result.ed_id, result.ce_id) == (_V23.ed_id, _V23.ce_id)
+
+
+def test_event_spec_is_not_certified_under_v2_1_or_v2_2() -> None:
+    # C23-M4: EVENT_G is recognised only under the v2.3 authority.
+    expression = _as_expr(G.event_members()["ear"])
+    spec = _event_spec(expression, (D.EVENT_EAR,))
+    for authority in (C.AUTHORITY_V2_1, C.AUTHORITY_V2_2):
+        result = D.certify(spec, authority=authority)
+        assert isinstance(result, C.NotAssessed)
+        assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_event_role_semantic_mismatch_is_rejected() -> None:
+    expression = _as_expr(G.event_members()["ear"])
+    requirement = DataRequirement(
+        semantic_id=D.EVENT_DAYS_SINCE_EA,
+        frequency=Frequency.DAILY,
+        observation_period=ObservationPeriod.INSTANT,
+        units=Unit.COUNT,
+    )
+    spec = dataclasses.replace(
+        _H1(),
+        expression=expression,
+        inputs=(FactorInput(alias=D.EVENT_EAR, requirement=requirement),),
+        hypothesis=None,
+    )
+    result = D.certify(spec, authority=_V23)
+    assert isinstance(result, C.NotAssessed)
+    assert result.reason == C.PQV2_EXPRESSION_NOT_CERTIFIED
+
+
+def test_event_expression_dependency_windows_are_price_only() -> None:
+    ear = _as_expr(G.event_members()["ear"])
+    windows = D.dependency_windows(ear)
+    assert isinstance(windows, D.Windows)
+    assert windows.algebraic == ()
+    mixed = _as_expr(G.event_members()["ear_div_tri"])
+    divisor = ratio(field("tri"), lag(field("tri"), 21))
+    expected = D.dependency_windows(divisor)
+    result = D.dependency_windows(mixed)
+    assert isinstance(result, D.Windows)
+    assert result.algebraic == expected.algebraic
+    assert result.algebraic != ()
+
+
+# -- synthetic v1.3 event layers -------------------------------------------
+
+_D0 = date(2001, 1, 1)
+
+
+def _session(index: int) -> date:
+    return _D0 + timedelta(days=index)
+
+
+def _event(
+    key: str,
+    k_session: int,
+    *,
+    acceptance: time = time(10, 0),
+    accession: str | None = None,
+) -> EV.EventRecord:
+    return EV.EventRecord(
+        security_key=key,
+        cik=1,
+        accession=accession or f"{key}-{k_session}",
+        form="8-K",
+        event_type=EV.EA_8K202,
+        k_session=_session(k_session),
+        acceptance_et=datetime.combine(_session(k_session), acceptance),
+        acceptance_json_raw=None,
+        filing_date=None,
+        boundary_flag=False,
+    )
+
+
+def _null(key: str, filing_session: int) -> EV.NullTimeEvent:
+    return EV.NullTimeEvent(
+        security_key=key,
+        accession=f"{key}-null",
+        filing_date=_session(filing_session),
+        raw_acceptance_json=None,
+    )
+
+
+def _layer(
+    events: Mapping[str, tuple[EV.EventRecord, ...]],
+    *,
+    status: Mapping[str, str] | None = None,
+    verdict: Mapping[str, str] | None = None,
+    null_time: Mapping[str, tuple[EV.NullTimeEvent, ...]] | None = None,
+    reserve: bool = False,
+) -> EV.EventLayer:
+    status = dict(status or {})
+    verdict = dict(verdict or {})
+    null_time = dict(null_time or {})
+    keys = set(events) | set(status) | set(verdict) | set(null_time)
+    return EV.EventLayer(
+        acq_id="acq",
+        ev_id="ev",
+        keys=tuple(sorted(keys)),
+        status_by_key={key: status.get(key, "MAPPED") for key in keys},
+        verdict_by_key={key: verdict.get(key, "") for key in keys},
+        interval_by_key={key: (None, None) for key in keys},
+        events_by_key={key: tuple(events.get(key, ())) for key in keys},
+        null_time_by_key={key: tuple(null_time.get(key, ())) for key in keys},
+        reserve_incident=reserve,
+    )
+
+
+def _positions(grid, formation: int) -> dict[date, int]:
+    return {session: index - formation for index, session in enumerate(grid)}
+
+
+def test_event_window_is_per_key() -> None:
+    # C23-M2: the window is per key; a uniform offset must not be used.
+    layer = _layer({"A": (_event("A", 10),), "B": (_event("B", 15),)})
+    grid = [_session(i) for i in range(30)]
+    positions = _positions(grid, 25)
+    window_a = D.event_windows(layer, "A", positions, EV.SCENARIO_K0)
+    window_b = D.event_windows(layer, "B", positions, EV.SCENARIO_K0)
+    assert window_a.algebraic == ((-16, -14),)
+    assert window_b.algebraic == ((-11, -9),)
+    assert window_a.algebraic != window_b.algebraic
+
+
+def test_event_window_preclose_k1_shift() -> None:
+    layer = _layer(
+        {
+            "P": (_event("P", 18, acceptance=time(15, 50)),),
+            "L": (_event("L", 18, acceptance=time(16, 5)),),
+        }
+    )
+    grid = [_session(i) for i in range(30)]
+    positions = _positions(grid, 25)
+    preclose_k0 = D.event_windows(layer, "P", positions, EV.SCENARIO_K0)
+    preclose_k1 = D.event_windows(layer, "P", positions, EV.SCENARIO_K1)
+    assert preclose_k0.algebraic == ((-8, -6),)
+    assert preclose_k1.algebraic == ((-7, -5),)
+    # a 16:05 acceptance is already the next session in K0: no K1 scenario
+    late_k0 = D.event_windows(layer, "L", positions, EV.SCENARIO_K0)
+    late_k1 = D.event_windows(layer, "L", positions, EV.SCENARIO_K1)
+    assert late_k0.algebraic == late_k1.algebraic == ((-8, -6),)
+
+
+def test_event_observability_requires_complete_window() -> None:
+    layer = _layer({"A": (_event("A", 24),), "B": (_event("B", 23),)})
+    grid = [_session(i) for i in range(30)]
+    positions = _positions(grid, 25)
+    # K + 1 <= date(f - 1) = session 24: K = 24 is not observed, K = 23 is
+    assert D.event_windows(layer, "A", positions, EV.SCENARIO_K0).algebraic == ()
+    assert D.event_windows(layer, "B", positions, EV.SCENARIO_K0).algebraic == (
+        (-3, -1),
+    )
+
+
+def test_event_lookback_edge_504_and_505() -> None:
+    layer = _layer({"E": (_event("E", 14),), "F": (_event("F", 13),)})
+    grid = [_session(i) for i in range(520)]
+    positions = _positions(grid, 519)
+    edge = D.event_windows(layer, "E", positions, EV.SCENARIO_K0)
+    beyond = D.event_windows(layer, "F", positions, EV.SCENARIO_K0)
+    assert edge.algebraic == ((-506, -504),)
+    assert beyond.algebraic == ()
+
+
+def test_event_cell_causes_each_m1b_source() -> None:
+    grid = [_session(i) for i in range(30)]
+    positions = _positions(grid, 25)
+    layer = _layer(
+        {
+            "NULL": (_event("NULL", 18),),
+            "PLAIN": (_event("PLAIN", 18),),
+        },
+        status={"UNMAP": "AMBIGUOUS", "FPI": "FOREIGN_FILER"},
+        verdict={"CONTRA": "CONTRADICTED"},
+        null_time={"NULL": (_null("NULL", 22),)},
+    )
+    assert D.event_cell_causes(layer, "PLAIN", positions, "K0").is_empty
+    assert set(
+        D.event_cell_causes(layer, "NULL", positions, "K0").to_list()
+    ) == {C.PQV2_EVENT_TIME_UNAVAILABLE}
+    assert set(
+        D.event_cell_causes(layer, "UNMAP", positions, "K0").to_list()
+    ) == {C.PQV2_EVENT_IDENTITY_UNMAPPED}
+    assert set(
+        D.event_cell_causes(layer, "CONTRA", positions, "K0").to_list()
+    ) == {C.PQV2_EVENT_IDENTITY_CONTRADICTED}
+    assert set(
+        D.event_cell_causes(layer, "FPI", positions, "K0").to_list()
+    ) == {C.PQV2_EVENT_SOURCE_EXCLUDED}
+
+
+def test_event_cell_causes_reserve_incident() -> None:
+    layer = _layer({"R": (_event("R", 18),)}, reserve=True)
+    grid = [_session(i) for i in range(30)]
+    positions = _positions(grid, 25)
+    assert set(
+        D.event_cell_causes(layer, "R", positions, "K0").to_list()
+    ) == {C.PQV2_EVENT_RESERVE}
+    assert D.event_windows(layer, "R", positions, "K0").algebraic == ((-8, -6),)
+
+
+# -- oracle cross-check (windows and causes) -------------------------------
+
+_EVENT_CROSSCHECK_CASES = (
+    {"key": "PLAIN", "events": ((18, time(10, 0)),)},
+    {"key": "PRECLOSE", "events": ((18, time(15, 50)),)},
+    {"key": "LATE", "events": ((18, time(16, 5)),)},
+    {"key": "NULL", "events": ((18, time(10, 0)),), "null": 22},
+    {
+        "key": "MULTI",
+        "events": ((15, time(10, 0)), (18, time(10, 0))),
+    },
+    {
+        "key": "UNMAP",
+        "events": ((18, time(10, 0)),),
+        "status": "AMBIGUOUS",
+    },
+    {
+        "key": "CONTRA",
+        "events": ((18, time(10, 0)),),
+        "status": "CONTRADICTED",
+    },
+    {
+        "key": "FPI",
+        "events": ((18, time(10, 0)),),
+        "status": "FOREIGN_FILER",
+    },
+)
+
+
+def _crosscheck_layer() -> EV.EventLayer:
+    events: dict[str, tuple[EV.EventRecord, ...]] = {}
+    null_time: dict[str, tuple[EV.NullTimeEvent, ...]] = {}
+    status: dict[str, str] = {}
+    verdict: dict[str, str] = {}
+    for case in _EVENT_CROSSCHECK_CASES:
+        key = case["key"]
+        events[key] = tuple(
+            _event(key, k, acceptance=acceptance)
+            for k, acceptance in case["events"]
+        )
+        if "null" in case:
+            null_time[key] = (_null(key, case["null"]),)
+        if case.get("status") == "CONTRADICTED":
+            verdict[key] = "CONTRADICTED"
+        elif case.get("status"):
+            status[key] = case["status"]
+    return _layer(
+        events, status=status, verdict=verdict, null_time=null_time
+    )
+
+
+def _crosscheck_world(n: int):
+    stocks = [
+        O._stock(f"C{i}", _growth(n, 1.01 * (1 + 0.002 * i)))
+        for i in range(4)
+    ]
+    calendars: dict[str, tuple[O.EventDatum, ...]] = {}
+    statuses: dict[str, str] = {}
+    for case in _EVENT_CROSSCHECK_CASES:
+        key = case["key"]
+        stocks.append(O._stock(key, _growth(n, 1.02)))
+        datums = [
+            O.EventDatum(k_session=k, acceptance_et=acceptance)
+            for k, acceptance in case["events"]
+        ]
+        if "null" in case:
+            datums.append(
+                O.EventDatum(k_session=None, filing_date=case["null"])
+            )
+        calendars[key] = tuple(datums)
+        if case.get("status"):
+            statuses[key] = case["status"]
+    return O._union_world(
+        n=n,
+        stocks=stocks,
+        expression=O.Expr("ratio", k1=2, k2=5),
+        formation=n - 5,
+        universe=[stock.key for stock in stocks],
+        event_calendars=calendars,
+        key_event_status=statuses or None,
+    )
+
+
+@pytest.mark.parametrize("scenario", [O.SCENARIO_K0, O.SCENARIO_K1])
+@pytest.mark.parametrize("formation", [10, 20, 25, 29])
+def test_event_windows_and_causes_match_oracle(scenario, formation) -> None:
+    n = 30
+    grid = [_session(i) for i in range(n)]
+    positions = _positions(grid, formation)
+    layer = _crosscheck_layer()
+    world = _crosscheck_world(n)
+    for case in _EVENT_CROSSCHECK_CASES:
+        key = case["key"]
+        window = D.event_windows(layer, key, positions, scenario)
+        causes = set(
+            D.event_cell_causes(layer, key, positions, scenario).to_list()
+        )
+        event = world.event_observed(key, formation, scenario)
+        if event is None:
+            assert window.algebraic == (), (key, formation, scenario)
+        else:
+            position = world.pos_of(world.effective_k(event, scenario))
+            assert window.algebraic == (
+                (position - formation - 1, position - formation + 1),
+            ), (key, formation, scenario)
+        assert causes == set(
+            world.event_causes(key, formation, scenario)
+        ), (key, formation, scenario)
+
+
+def test_input_uncertainty_reaches_event_window_and_carries_event_causes() -> None:
+    event_window = {"SUS": D.Windows(algebraic=((-11, -9),))}
+    event_causes = {"SUS": C.CauseSet.of(C.PQV2_EVENT_TIME_UNAVAILABLE)}
+    near = C.SourceSet(
+        transitions_by_key={
+            "SUS": (C.UncertainTransition("SUS", -8, -9, -7, 1.2, C.s2_relative(1.2)),)
+        }
+    )
+    result = D.input_uncertainty(
+        D.SIMPLE,
+        D.Windows(),
+        near,
+        0,
+        ["SUS"],
+        event_windows=event_window,
+        event_causes=event_causes,
+    )
+    assert result.causes["SUS"].to_list() == [C.PQV2_EVENT_TIME_UNAVAILABLE]
+    assert result.unknown["SUS"] is True
+    assert result.uncertain["SUS"] is True
+    far = C.SourceSet(
+        transitions_by_key={
+            "SUS": (C.UncertainTransition("SUS", -12, -13, -11, 1.2, C.s2_relative(1.2)),)
+        }
+    )
+    missed = D.input_uncertainty(
+        D.SIMPLE,
+        D.Windows(),
+        far,
+        0,
+        ["SUS"],
+        event_windows=event_window,
+        event_causes=event_causes,
+    )
+    assert missed.uncertain["SUS"] is False
+    assert missed.unknown["SUS"] is True
+
+
+def test_event_cause_is_attached_to_the_cell() -> None:
+    # C23-M3: an M1b cause from B must enter the cell cause set.
+    event_causes = {"SUS": C.CauseSet.of(C.PQV2_EVENT_IDENTITY_UNMAPPED)}
+    result = D.input_uncertainty(
+        D.SIMPLE,
+        D.Windows(),
+        C.SourceSet(),
+        0,
+        ["SUS"],
+        event_windows={"SUS": D.Windows()},
+        event_causes=event_causes,
+    )
+    assert result.causes["SUS"].to_list() == [C.PQV2_EVENT_IDENTITY_UNMAPPED]
+    assert result.unknown["SUS"] is True
+
+
+# ---------------------------------------------------------------------------
 # Mutation fixture contract
 # ---------------------------------------------------------------------------
 
@@ -1589,6 +2096,10 @@ def test_mutation_fixture_contract() -> None:
         "V22-M06",
         "V22-M07",
         "V22-M13",
+        "C23-M1",
+        "C23-M2",
+        "C23-M3",
+        "C23-M4",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_dependency.py").read_text(
         encoding="utf-8"
