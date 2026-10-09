@@ -417,6 +417,18 @@
     "test": "tests/test_pqv2_evaluation.py::test_grammar_member_nan_factor_long_lookback_end_to_end"
   },
   {
+    "id": "H22-M3",
+    "description": "full cross-check tier silently ignores PQV2_FULL_CROSSCHECK and runs the 50-member subset",
+    "file": "tests/test_pqv2_grammar_crosscheck.py",
+    "edits": [
+      {
+        "old": "    if full_tier:\n        return full\n    return full[:_DEFAULT_SUBSET]",
+        "new": "    return full[:_DEFAULT_SUBSET]  # H22-M3: full tier ignores the flag"
+      }
+    ],
+    "test": "tests/test_pqv2_grammar_crosscheck.py::test_full_tier_flag_selects_full_population"
+  },
+  {
     "id": "V22-M14",
     "description": "a declaration bound to a non-admitted authority accepted",
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",

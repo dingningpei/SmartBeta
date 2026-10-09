@@ -19,6 +19,17 @@ certification/assignment stack:
 The oracle side (``pqv2_oracle``) imports **no** production code; the
 independence audit lives in ``tests/test_pqv2_oracle_grammar.py``.
 
+Two tiers (PQ22-E2 erratum, user-approved option (a); amends plan §4/§6
+without weakening any evidence requirement):
+
+* **default** -- the deterministic frozen prefix ``generate_population(seed=
+  20261008)[:50]`` per class, plus the full A§16 adversarial set and every
+  non-population test (target runtime ``<= 60`` s).  A gating test asserts the
+  subset is exactly that frozen prefix so it cannot drift;
+* **full tier** -- ``PQV2_FULL_CROSSCHECK=1`` runs the full ``N = 2000`` per
+  class population unchanged.  The I3/I6 v2.2 recertification evidence must
+  come from this tier, recorded with its counts and runtime.
+
 No production artifact, reserve, holdout, ``raw/``, ``dsc_evidence`` or
 Knowledge-PIT path is read.  No network call is made.
 """
@@ -27,6 +38,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
 import socket
 from pathlib import Path
 
@@ -176,16 +188,54 @@ def _factor_spec(node: A.Node) -> FactorSpec:
 
 
 # ---------------------------------------------------------------------------
-# Population helpers
+# Population helpers (two-tier: frozen 50-member prefix by default)
 # ---------------------------------------------------------------------------
+
+_FULL_CROSSCHECK_ENV = "PQV2_FULL_CROSSCHECK"
+_GENERATOR_SEED = 20261008
+_FULL_POPULATION_N = 2000
+_DEFAULT_SUBSET = 50
+
+# The frozen prefix hashes of ``generate_population(seed=20261008)[:50]`` for
+# each class.  Hard-coded so a generator or subset change cannot slip through
+# unnoticed in the default tier.
+_FROZEN_SIMPLE_PREFIX_HASH = (
+    "8d62f8caa070f0d5c8c36b37a6565a2d80e8d2e4e5e0908f58fd33c6f3dab2ea"
+)
+_FROZEN_STD_PREFIX_HASH = (
+    "4b19f4b61d92367f18f07110b5b842f90bef055e4659466e7e99365df80daedc"
+)
+
+
+def _full_tier() -> bool:
+    """Whether ``PQV2_FULL_CROSSCHECK=1`` selects the full population."""
+
+    return os.environ.get(_FULL_CROSSCHECK_ENV) == "1"
+
+
+def _select_population(
+    full: list[A.Node], *, full_tier: bool | None = None
+) -> list[A.Node]:
+    """Default tier: the frozen 50-member prefix.  Full tier: everything."""
+
+    if full_tier is None:
+        full_tier = _full_tier()
+    if full_tier:
+        return full
+    return full[:_DEFAULT_SUBSET]
+
+
+def _population(grammar: str) -> list[A.Node]:
+    full = G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)[grammar]
+    return _select_population(full)
 
 
 def _simple_population() -> list[A.Node]:
-    return G.generate_population(seed=20261008, n=2000)[G.SIMPLE_G]
+    return _population(G.SIMPLE_G)
 
 
 def _std_population() -> list[A.Node]:
-    return G.generate_population(seed=20261008, n=2000)[G.STD_X_RANK_G]
+    return _population(G.STD_X_RANK_G)
 
 
 def _adversarial() -> dict[str, A.Node]:
@@ -198,20 +248,82 @@ def _adversarial() -> dict[str, A.Node]:
 
 
 def test_population_sizes_and_determinism() -> None:
+    full_simple = G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)[
+        G.SIMPLE_G
+    ]
+    full_std = G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)[
+        G.STD_X_RANK_G
+    ]
+    assert len(full_simple) == _FULL_POPULATION_N
+    assert len(full_std) == _FULL_POPULATION_N
+    assert A.canonical_list_hash(full_simple) == A.canonical_list_hash(
+        G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)[G.SIMPLE_G]
+    )
+    assert A.canonical_list_hash(full_std) == A.canonical_list_hash(
+        G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)[
+            G.STD_X_RANK_G
+        ]
+    )
     simple = _simple_population()
     std = _std_population()
-    assert len(simple) == 2000
-    assert len(std) == 2000
-    assert A.canonical_list_hash(simple) == A.canonical_list_hash(
-        G.generate_population(seed=20261008, n=2000)[G.SIMPLE_G]
-    )
-    assert A.canonical_list_hash(std) == A.canonical_list_hash(
-        G.generate_population(seed=20261008, n=2000)[G.STD_X_RANK_G]
-    )
+    expected = _FULL_POPULATION_N if _full_tier() else _DEFAULT_SUBSET
+    assert len(simple) == expected
+    assert len(std) == expected
     for node in simple:
         assert G.classify(node) == G.SIMPLE_G
     for node in std:
         assert G.classify(node) == G.STD_X_RANK_G
+
+
+def test_default_subset_is_frozen_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gating test: the default subset is exactly the frozen seeded prefix."""
+
+    monkeypatch.delenv(_FULL_CROSSCHECK_ENV, raising=False)
+    full = G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)
+    full_simple = full[G.SIMPLE_G]
+    full_std = full[G.STD_X_RANK_G]
+
+    simple = _population(G.SIMPLE_G)
+    std = _population(G.STD_X_RANK_G)
+
+    assert len(simple) == _DEFAULT_SUBSET
+    assert len(std) == _DEFAULT_SUBSET
+    # Seed and indices: the subset is the frozen prefix of the full population.
+    assert simple == full_simple[:_DEFAULT_SUBSET]
+    assert std == full_std[:_DEFAULT_SUBSET]
+    assert A.canonical_list_hash(simple) == _FROZEN_SIMPLE_PREFIX_HASH
+    assert A.canonical_list_hash(std) == _FROZEN_STD_PREFIX_HASH
+
+
+def test_full_tier_flag_selects_full_population(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag-aware test: ``PQV2_FULL_CROSSCHECK=1`` must run the full population.
+
+    H22-M3 (the full tier silently ignoring the flag and running the subset)
+    fails here.
+    """
+
+    full = G.generate_population(seed=_GENERATOR_SEED, n=_FULL_POPULATION_N)
+    full_simple = full[G.SIMPLE_G]
+    full_std = full[G.STD_X_RANK_G]
+
+    # Explicit flag path.
+    assert _select_population(full_simple, full_tier=True) == full_simple
+    assert _select_population(full_std, full_tier=True) == full_std
+    assert _select_population(full_simple, full_tier=False) == full_simple[
+        :_DEFAULT_SUBSET
+    ]
+
+    # Environment-driven path, exactly as the operator launches the full tier.
+    monkeypatch.setenv(_FULL_CROSSCHECK_ENV, "1")
+    assert _full_tier() is True
+    simple = _population(G.SIMPLE_G)
+    std = _population(G.STD_X_RANK_G)
+    assert len(simple) == _FULL_POPULATION_N
+    assert len(std) == _FULL_POPULATION_N
+    assert simple == full_simple
+    assert std == full_std
 
 
 @pytest.mark.parametrize("node", _simple_population(), ids=lambda n: A.canonical(n)[:10])
