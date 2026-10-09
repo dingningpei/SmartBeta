@@ -65,5 +65,17 @@
       }
     ],
     "test": "tests/test_edgar_build.py::test_build_event_times_come_from_the_headers"
+  },
+  {
+    "id": "E4-M6",
+    "description": "row-label read restored: EV-T reads the value labelled K(e) instead of the observation dated K(e)",
+    "file": "smart_beta/dataset_v1/edgar_build.py",
+    "edits": [
+      {
+        "old": "        label = self._observation_rows.get(session)",
+        "new": "        label = self._positions.get(session)"
+      }
+    ],
+    "test": "tests/test_edgar_build.py::test_d7c_absolute_return_reads_the_dated_observation"
   }
 ]

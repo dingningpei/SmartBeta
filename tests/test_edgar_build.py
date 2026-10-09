@@ -275,13 +275,15 @@ def test_ev_c_not_certified_without_key_years() -> None:
 
 
 def _ev_t_world(*, spike: float, count: int = 200):
-    sessions = [date(2017, 1, 1) + timedelta(days=i) for i in range(400)]
-    values = {f"K{i:04d}": [0.01] * 400 for i in range(count)}
+    sessions = [date(2017, 1, 1) + timedelta(days=i) for i in range(500)]
+    values = {f"K{i:04d}": [0.01] * 500 for i in range(count)}
     events: list[EventRow] = []
     for index in range(count):
         key = f"K{index:04d}"
         event_session = sessions[200 + index]
-        values[key][200 + index] = spike
+        # D7c bridge lag (M§10): the observation dated ``event_session`` is
+        # carried by the *following* row, so that is where the spike lives.
+        values[key][201 + index] = spike
         events.append(
             _event(key, event_session, accession=f"A{index:04d}")
         )
@@ -329,14 +331,15 @@ def test_ev_t_gate_not_certified_when_returns_missing() -> None:
 
 def test_ev_t_sample_is_order_invariant() -> None:
     """The seeded sample is taken over the sorted panel (mutation E4-M2)."""
-    sessions = [date(2017, 1, 1) + timedelta(days=i) for i in range(400)]
+    sessions = [date(2017, 1, 1) + timedelta(days=i) for i in range(500)]
     values: dict[str, list[float]] = {}
     events: list[EventRow] = []
     for index in range(400):
         key = f"K{index:04d}"
-        values[key] = [0.01] * 400
+        values[key] = [0.01] * 500
         # Every event session spikes; only the sampled key set can differ.
-        values[key][200] = 0.10
+        # The observation dated sessions[200] is carried by row 201.
+        values[key][201] = 0.10
         events.append(_event(key, sessions[200], accession=f"A{index:04d}"))
     returns = _returns(sessions, values)
 
@@ -348,15 +351,82 @@ def test_ev_t_sample_is_order_invariant() -> None:
 
 
 def test_d7c_returns_refuses_the_reserve() -> None:
-    """EV-T fails closed on a sealed-reserve session (mutation E4-M3)."""
-    sessions = [date(2023, 6, 29), RESERVE_START]
-    returns = _returns(sessions, {"K1": [0.01, 0.10]})
+    """EV-T fails closed on a sealed-reserve observation date (E4-M3)."""
+    sessions = [date(2023, 6, 28), date(2023, 6, 29), date(2023, 6, 30)]
+    returns = _returns(sessions, {"K1": [0.01, 0.02, 0.03]})
     with pytest.raises(ReserveFirewallError):
         returns.absolute_return("K1", RESERVE_START)
     with pytest.raises(ReserveFirewallError):
         returns.trailing_absolute_returns("K1", RESERVE_START)
-    # A development session is still readable.
-    assert returns.absolute_return("K1", date(2023, 6, 29)) == pytest.approx(0.01)
+    # The observation dated 2023-06-28 is still a development date and is
+    # carried by the following 2023-06-29 row.
+    assert returns.absolute_return("K1", date(2023, 6, 28)) == pytest.approx(0.02)
+
+
+def test_d7c_absolute_return_reads_the_dated_observation() -> None:
+    """The value dated ``s`` is the row whose ``prev`` is ``s`` (E4-M6).
+
+    Under the D7c bridge lag (M§10) the row labelled ``s`` carries the
+    observation dated ``prev(s)``, so a restored row-label read returns the
+    wrong value on every in-range session and this test fails.
+    """
+    sessions = [
+        date(2020, 1, 6),
+        date(2020, 1, 7),
+        date(2020, 1, 8),
+        date(2020, 1, 9),
+    ]
+    returns = _returns(sessions, {"K1": [0.11, 0.22, 0.33, 0.44]})
+    assert returns.absolute_return("K1", date(2020, 1, 6)) == pytest.approx(0.22)
+    assert returns.absolute_return("K1", date(2020, 1, 7)) == pytest.approx(0.33)
+    assert returns.absolute_return("K1", date(2020, 1, 8)) == pytest.approx(0.44)
+
+
+def test_d7c_absolute_return_uses_the_frame_row_order_across_gaps() -> None:
+    """``next`` is the frame's own successor, not the calendar's next day."""
+    sessions = [date(2020, 1, 3), date(2020, 1, 6), date(2020, 1, 7)]
+    returns = _returns(sessions, {"K1": [0.11, 0.22, 0.33]})
+    # Friday's observation (dated 01-03) is carried by the next row, Monday.
+    assert returns.absolute_return("K1", date(2020, 1, 3)) == pytest.approx(0.22)
+    # The weekend is not a row, so it holds no observation.
+    assert returns.absolute_return("K1", date(2020, 1, 4)) is None
+    assert returns.absolute_return("K1", date(2020, 1, 5)) is None
+
+
+def test_d7c_absolute_return_at_the_last_development_date_is_unusable() -> None:
+    """The final row has no successor, so its dated value is absent."""
+    sessions = [date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 8)]
+    returns = _returns(sessions, {"K1": [0.11, 0.22, 0.33]})
+    assert returns.absolute_return("K1", date(2020, 1, 8)) is None
+    # Out-of-frame sessions never borrow another row.
+    assert returns.absolute_return("K1", date(2020, 1, 5)) is None
+    assert returns.absolute_return("K1", date(2020, 1, 9)) is None
+
+
+def test_d7c_trailing_returns_are_aligned_on_observation_dates() -> None:
+    """The trailing window holds observations *dated* before ``s``."""
+    sessions = [
+        date(2020, 1, 6),
+        date(2020, 1, 7),
+        date(2020, 1, 8),
+        date(2020, 1, 9),
+        date(2020, 1, 10),
+    ]
+    returns = _returns(sessions, {"K1": [0.5, 0.1, 0.2, 0.3, 0.4]})
+    # Observations dated 01-06..01-09 live on rows 01-07..01-10.  Strictly
+    # before 01-09 the two most recent dated observations are 01-07 (0.2) and
+    # 01-08 (0.3) -- never the 01-09 value itself.
+    assert returns.trailing_absolute_returns("K1", date(2020, 1, 9), 2) == [
+        pytest.approx(0.2),
+        pytest.approx(0.3),
+    ]
+    assert returns.trailing_absolute_returns("K1", date(2020, 1, 9), 252) == [
+        pytest.approx(0.1),
+        pytest.approx(0.2),
+        pytest.approx(0.3),
+    ]
+    # No dated observation exists before the first development session.
+    assert returns.trailing_absolute_returns("K1", date(2020, 1, 6), 252) == []
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +713,7 @@ def test_mutation_fixture_contract() -> None:
         "E4-M3",
         "E4-M4",
         "E4-M5",
+        "E4-M6",
     ]
     source = (
         REPO_ROOT / "smart_beta" / "dataset_v1" / "edgar_build.py"
