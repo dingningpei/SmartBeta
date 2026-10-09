@@ -1,0 +1,54 @@
+[
+ {
+  "id": "G22-M1",
+  "description": "the generic evaluator drops the D7c bridge lag (row r no longer holds the field dated r-1), so it no longer reproduces the legacy forms",
+  "file": "tests/pqv2_oracle/ast.py",
+  "edits": [
+   {
+    "old": "    out[1:] = raw[:-1]",
+    "new": "    out[:] = raw"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_grammar.py::test_generic_matches_legacy_ratio",
+  "expected": "killed"
+ },
+ {
+  "id": "G22-M2",
+  "description": "the classifier admits a cross-sectional node (standardize/rank) inside SIMPLE_G",
+  "file": "tests/pqv2_oracle/grammar.py",
+  "edits": [
+   {
+    "old": "    if isinstance(node, (A.Standardize, A.Rank)):\n        return False",
+    "new": "    if isinstance(node, (A.Standardize, A.Rank)):\n        return True"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_grammar.py::test_cross_sectional_node_in_simple_is_outside",
+  "expected": "killed"
+ },
+ {
+  "id": "G22-M3",
+  "description": "the generator ignores the frozen seed (fresh PCG64 entropy instead), so two same-seed draws differ",
+  "file": "tests/pqv2_oracle/grammar.py",
+  "edits": [
+   {
+    "old": "    return np.random.Generator(np.random.PCG64(int(seed)))",
+    "new": "    return np.random.Generator(np.random.PCG64())"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_grammar.py::test_generator_determinism",
+  "expected": "killed"
+ },
+ {
+  "id": "G22-M4",
+  "description": "the classifier admits rolling_mean(ret) as a permitted divisor",
+  "file": "tests/pqv2_oracle/grammar.py",
+  "edits": [
+   {
+    "old": "    if _is_ret_rolling(node, \"std\"):\n        return True",
+    "new": "    if _is_ret_rolling(node, \"std\") or _is_ret_rolling(node, \"mean\"):\n        return True"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_grammar.py::test_forbidden_divisor_is_outside",
+  "expected": "killed"
+ }
+]

@@ -1,0 +1,248 @@
+{
+ "C1-H1": {
+  "left": {
+   "op": "lag",
+   "operand": {
+    "op": "field",
+    "role": "tri"
+   },
+   "periods": 21
+  },
+  "op": "div",
+  "right": {
+   "op": "lag",
+   "operand": {
+    "op": "field",
+    "role": "tri"
+   },
+   "periods": 252
+  }
+ },
+ "C1-H2": {
+  "left": {
+   "op": "lag",
+   "operand": {
+    "op": "field",
+    "role": "tri"
+   },
+   "periods": 21
+  },
+  "op": "div",
+  "right": {
+   "op": "lag",
+   "operand": {
+    "op": "field",
+    "role": "tri"
+   },
+   "periods": 126
+  }
+ },
+ "C1-H3": {
+  "left": {
+   "op": "const",
+   "value": -1.0
+  },
+  "op": "mul",
+  "right": {
+   "left": {
+    "op": "field",
+    "role": "tri"
+   },
+   "op": "div",
+   "right": {
+    "op": "lag",
+    "operand": {
+     "op": "field",
+     "role": "tri"
+    },
+    "periods": 21
+   }
+  }
+ },
+ "C1-H4": {
+  "left": {
+   "fn": "standardize",
+   "op": "cross_section",
+   "operand": {
+    "left": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 21
+    },
+    "op": "div",
+    "right": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 252
+    }
+   }
+  },
+  "op": "mul",
+  "right": {
+   "fn": "rank",
+   "op": "cross_section",
+   "operand": {
+    "left": {
+     "fn": "mean",
+     "op": "rolling",
+     "operand": {
+      "op": "field",
+      "role": "dv"
+     },
+     "window": 21
+    },
+    "op": "div",
+    "right": {
+     "fn": "mean",
+     "op": "rolling",
+     "operand": {
+      "op": "field",
+      "role": "dv"
+     },
+     "window": 252
+    }
+   }
+  }
+ },
+ "C1-H5": {
+  "left": {
+   "fn": "standardize",
+   "op": "cross_section",
+   "operand": {
+    "left": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 21
+    },
+    "op": "div",
+    "right": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 126
+    }
+   }
+  },
+  "op": "mul",
+  "right": {
+   "fn": "rank",
+   "op": "cross_section",
+   "operand": {
+    "left": {
+     "fn": "mean",
+     "op": "rolling",
+     "operand": {
+      "op": "field",
+      "role": "dv"
+     },
+     "window": 21
+    },
+    "op": "div",
+    "right": {
+     "fn": "mean",
+     "op": "rolling",
+     "operand": {
+      "op": "field",
+      "role": "dv"
+     },
+     "window": 252
+    }
+   }
+  }
+ },
+ "C1-H6": {
+  "left": {
+   "left": {
+    "left": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 21
+    },
+    "op": "div",
+    "right": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 252
+    }
+   },
+   "op": "sub",
+   "right": {
+    "op": "const",
+    "value": 1.0
+   }
+  },
+  "op": "div",
+  "right": {
+   "op": "lag",
+   "operand": {
+    "fn": "std",
+    "op": "rolling",
+    "operand": {
+     "op": "field",
+     "role": "ret"
+    },
+    "window": 231
+   },
+   "periods": 21
+  }
+ },
+ "C1-H7": {
+  "left": {
+   "left": {
+    "left": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 21
+    },
+    "op": "div",
+    "right": {
+     "op": "lag",
+     "operand": {
+      "op": "field",
+      "role": "tri"
+     },
+     "periods": 126
+    }
+   },
+   "op": "sub",
+   "right": {
+    "op": "const",
+    "value": 1.0
+   }
+  },
+  "op": "div",
+  "right": {
+   "op": "lag",
+   "operand": {
+    "fn": "std",
+    "op": "rolling",
+    "operand": {
+     "op": "field",
+     "role": "ret"
+    },
+    "window": 105
+   },
+   "periods": 21
+  }
+ }
+}

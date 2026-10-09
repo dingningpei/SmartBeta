@@ -257,7 +257,8 @@ class World:
         sessions: Sequence[int],
         stocks: Sequence[Stock],
         universes: Mapping[int, Iterable[str]],
-        expression: Expr,
+        expression: Expr | None = None,
+        expression_ast: object | None = None,
         h: int = 1,
         n_groups: int = 5,
         q: float = 0.20,
@@ -274,7 +275,10 @@ class World:
         self.universes = {
             int(f): frozenset(members) for f, members in universes.items()
         }
+        if expression is None and expression_ast is None:
+            raise ValueError("a World needs an expression or an expression_ast")
         self.expression = expression
+        self.expression_ast = expression_ast
         self.h = int(h)
         self.n_groups = int(n_groups)
         self.q = float(q)
@@ -541,6 +545,13 @@ class _StateView:
     def expr_frame(self) -> np.ndarray:
         if self._expr_frame is not None:
             return self._expr_frame
+        if self.world.expression_ast is not None:
+            from . import ast as _ast
+
+            self._expr_frame = _ast.evaluate(
+                self.world.expression_ast, self
+            )
+            return self._expr_frame
         expr = self.world.expression
         tri_row = self.tri_row()
         if expr.kind == "ratio":
@@ -781,7 +792,8 @@ def _union_world(
     *,
     n: int,
     stocks: Sequence[Stock],
-    expression: Expr,
+    expression: Expr | None = None,
+    expression_ast: object | None = None,
     formation: int,
     universe: Sequence[str],
     h: int = 1,
@@ -803,6 +815,7 @@ def _union_world(
         stocks=stocks,
         universes={f: tuple(members) for f, members in universes.items()},
         expression=expression,
+        expression_ast=expression_ast,
         h=h,
         n_groups=n_groups,
         q=q,
