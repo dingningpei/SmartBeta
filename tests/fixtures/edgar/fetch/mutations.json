@@ -1,0 +1,57 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the byte-exact fetch test",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [],
+    "test": "tests/test_edgar_fetch.py::test_fetch_writes_byte_exact_and_records"
+  },
+  {
+    "id": "E1-M1",
+    "description": "the SEC contact written to the fetch log",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "                    \"outcome\": record.outcome,\n                }",
+        "new": "                    \"outcome\": record.outcome,\n                    \"contact\": self._contact,\n                }"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_contact_absent_from_every_written_byte"
+  },
+  {
+    "id": "E1-M2",
+    "description": "the rate cap removed",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "        self._min_interval = 1.0 / max_rate if max_rate > 0 else 0.0",
+        "new": "        self._min_interval = 0.0"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_rate_cap_enforced"
+  },
+  {
+    "id": "E1-M3",
+    "description": "404 retried",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "    return status == 429 or 500 <= status <= 599",
+        "new": "    return status is not None"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_retry_policy_is_narrow"
+  },
+  {
+    "id": "E1-M4",
+    "description": "a request issued without a contact",
+    "file": "smart_beta/dataset_v1/edgar_fetch.py",
+    "edits": [
+      {
+        "old": "        if not self._contact:\n            raise ContactMissing(\"SEC_CONTACT is required for SEC retrieval\")",
+        "new": "        if False:\n            raise ContactMissing(\"SEC_CONTACT is required for SEC retrieval\")"
+      }
+    ],
+    "test": "tests/test_edgar_fetch.py::test_contact_required_before_any_request"
+  }
+]
