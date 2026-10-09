@@ -91,3 +91,17 @@ mapped intervals:
 | periodic | 55,544 |
 | 6-K | 48,797 |
 | 20-F | 1,629 |
+
+## L3 scope decision (user, 2026-10-09: "(1) 不含 6-K（推荐）")
+
+- **Scope:** L3 fetches index headers for the following, for MAPPED and FOREIGN_FILER
+  keys within each key's interval with `filingDate` ≥ 2015-01-02:
+  - original 8-K with Item 2.02;
+  - 10-Q and 10-K;
+  - 20-F and 40-F.
+- **Budget:** ≤ **125,000** requests at ≤ 8 requests/s. The scoped census is about
+  115,600.
+- **6-K:** **not fetched.** `FPI_6K` events are retained with `k_session = null` and the
+  reason `EVENT_TIME_UNAVAILABLE`. They are never dropped and never used.
+- **Implementation:** the planner filters the E-1 `build_l3_plan` output by form, in the
+  E-1L runner. No code change.
