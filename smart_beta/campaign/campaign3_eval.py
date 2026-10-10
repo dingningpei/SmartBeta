@@ -50,6 +50,7 @@ from smart_beta.spec.factor_spec import FactorSpec, factor_spec_hash
 __all__ = [
     # frozen literals
     "AUTHORITY",
+    "EVENT_SCENARIOS",
     "TA_UNIVERSE",
     "TA_N_GROUPS",
     "TA_HORIZON",
@@ -63,6 +64,7 @@ __all__ = [
     # declaration / certification
     "build_ta_declaration",
     "assert_is_fold",
+    "event_roles",
     "certify_candidate",
     "is_certified",
     # evaluation
@@ -74,6 +76,11 @@ __all__ = [
 
 #: The frozen P-Q v2.3 authority (spec section 4 "T-A evaluation").
 AUTHORITY = _core.AUTHORITY_V2_3
+
+#: The P-Q v2.3 event-timing scenarios (owned by PQ23-B; grammar section 3).
+#: The bridge reuses the sealed literals and never invents its own; an
+#: ``EVENT_SIMPLE`` candidate is evaluated under exactly these scenarios.
+EVENT_SCENARIOS: tuple[str, ...] = tuple(_evaluation.EVENT_SCENARIOS)
 
 #: T-A search universe / evaluation literals (spec section 4). The TOP_1000
 #: cost review is a P5 item; P4 fixes them here.
@@ -140,6 +147,27 @@ def assert_is_fold(fold: Fold) -> Fold:
             f"T-A evaluation is IS-only; refused fold role {fold.role.value!r}"
         )
     return fold
+
+
+def event_roles(factor_spec: FactorSpec) -> tuple[str, ...]:
+    """The P-Q v2.3 section 2 event semantic ids the spec declares, in order.
+
+    An ``EVENT_SIMPLE`` candidate declares one or more of
+    ``event_ear_k_kp1`` / ``event_days_since_ea`` / ``event_recent_ea_w<W>``;
+    a non-event candidate declares none.  The predicate is the sealed
+    :mod:`smart_beta.dataset_v1.pqv2_dependency` role check, so this bridge
+    never invents an event role.
+    """
+    if not isinstance(factor_spec, FactorSpec):
+        raise Campaign3EvaluationError(
+            f"event_roles requires a FactorSpec, got {type(factor_spec).__name__}"
+        )
+    roles: list[str] = []
+    for item in factor_spec.inputs:
+        semantic = item.requirement.semantic_id
+        if _dependency._is_event_role(semantic) and semantic not in roles:
+            roles.append(semantic)
+    return tuple(roles)
 
 
 def certify_candidate(factor_spec: FactorSpec) -> Any:
@@ -383,9 +411,25 @@ class TaEvaluator:
     repo_root: Path | str | None = None
     persist_dir: Path | str | None = None
     diagnostics_sink: Callable[[Any], None] | None = None
+    #: The PQ23-B v1.3 development event layer.  Required for a candidate that
+    #: declares an event role; ignored by a non-event candidate.
+    event_layer: Any | None = None
+    #: Optional P-Q v2.3 event-timing scenario passed through to the sealed
+    #: entry point.  The event path always records both scenarios; this is
+    #: forwarded for interface parity (a non-``None`` value must be one of
+    #: :data:`EVENT_SCENARIOS`).
+    event_scenario: str | None = None
 
     def __post_init__(self) -> None:
         assert_is_fold(self.fold)
+        if (
+            self.event_scenario is not None
+            and self.event_scenario not in EVENT_SCENARIOS
+        ):
+            raise Campaign3EvaluationError(
+                f"event_scenario must be one of {EVENT_SCENARIOS}, "
+                f"got {self.event_scenario!r}"
+            )
 
     def __call__(self, proposal: Any) -> TaEvaluation:
         factor_spec = proposal.proposed_factor_spec
@@ -393,6 +437,21 @@ class TaEvaluator:
             raise Campaign3EvaluationError(
                 "TaEvaluator requires a FactorSpec proposal"
             )
+        roles = event_roles(factor_spec)
+        if roles:
+            # An event-role candidate is evaluated under both P-Q v2.3 event
+            # scenarios.  The bound event layer is required; a missing layer
+            # fails closed rather than silently evaluating as non-event.
+            if self.event_layer is None:
+                raise Campaign3EvaluationError(
+                    "an event candidate requires the bound event_layer"
+                )
+            bound_layer = self.event_layer
+            expected_scenarios: tuple[str, ...] = EVENT_SCENARIOS
+        else:
+            # Non-event candidate: exactly one evaluation, no event role.
+            bound_layer = None
+            expected_scenarios = ()
         panel = self.panel_builder(factor_spec)
         declaration = self.declaration_builder(factor_spec, panel)
         diagnostics = evaluate_ta_diagnostics(
@@ -412,9 +471,29 @@ class TaEvaluator:
             pq_read_records_fn=self.pq_read_records_fn,
             sessions=self.sessions,
             repo_root=self.repo_root,
+            event_layer=bound_layer,
+            event_scenario=self.event_scenario,
         )
+        # The bound event layer drives the sealed P-Q v2.3 K0/K1 dispatch, so
+        # an event candidate must record exactly both scenario dimensions.
+        recorded_scenarios = tuple(diagnostics.event_scenarios)
+        if recorded_scenarios != expected_scenarios:
+            raise Campaign3EvaluationError(
+                "the evaluation recorded scenarios "
+                f"{recorded_scenarios!r}, expected {expected_scenarios!r}"
+            )
+        if roles:
+            for scenario in EVENT_SCENARIOS:
+                if not any(
+                    cell.event_scenario == scenario for cell in diagnostics.cells
+                ):
+                    raise Campaign3EvaluationError(
+                        f"the event candidate is missing {scenario!r} scenario cells"
+                    )
         # Write-ahead (E6): persist the diagnostics before any feedback is
-        # formed from them.
+        # formed from them.  For an event candidate the single merged artifact
+        # carries each scenario's cells (and the scenario-suffixed metrics are
+        # built from it below).
         if self.persist_dir is not None:
             _store.persist(diagnostics, self.persist_dir)
         if self.diagnostics_sink is not None:

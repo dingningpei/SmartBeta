@@ -1,0 +1,14 @@
+[
+ {
+  "id": "E-M1",
+  "description": "the event candidate is evaluated only under K0 (the K1 scenario cells are never produced)",
+  "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+  "edits": [
+   {
+    "old": "    for cell in other_cells:\n        cells.append(\n            _replace(\n                cell,\n                cell=f\"{cell.cell}-{EVENT_SCENARIO_K1}\",\n                event_scenario=EVENT_SCENARIO_K1,\n                declaration_hash=declaration_hash,\n            )\n        )",
+    "new": "    for cell in ():  # mutation E-M1: the K1 scenario is not evaluated\n        pass"
+   }
+  ],
+  "test": "tests/test_campaign3_eval_events.py::test_event_candidate_evaluated_under_both_scenarios"
+ }
+]
