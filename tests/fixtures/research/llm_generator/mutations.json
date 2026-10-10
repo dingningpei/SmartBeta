@@ -1,0 +1,54 @@
+[
+ {
+  "id": "G3-M1",
+  "description": "the prompt includes OOS feedback (the IS-only firewall is bypassed)",
+  "file": "smart_beta/research/llm_generator.py",
+  "edits": [
+   {
+    "old": "    for fold in experiment.is_folds:",
+    "new": "    for fold in experiment.is_folds + experiment.oos_folds:"
+   },
+   {
+    "old": "    for experiment in feedback.experiments:\n        if experiment.oos_folds or experiment.walk_forward_folds:\n            raise LlmGeneratorError(\n                \"the generator prompt must never include out-of-sample or \"\n                \"walk-forward evidence; refusing to render this feedback\"\n            )\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_research_llm_generator.py::test_oos_feedback_is_refused"
+ },
+ {
+  "id": "G3-M2",
+  "description": "the model id is not recorded in the invocation settings",
+  "file": "smart_beta/research/llm_generator.py",
+  "edits": [
+   {
+    "old": "            (\"model\", self._model_id),\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_research_llm_generator.py::test_model_id_is_recorded"
+ },
+ {
+  "id": "G3-M3",
+  "description": "a silent retry on an API error (the typed failure is not the only attempt)",
+  "file": "smart_beta/research/llm_generator.py",
+  "edits": [
+   {
+    "old": "        except Exception as exc:  # noqa: BLE001 - mapped to one typed failure\n            # Exactly one attempt is made (the SDK client is built with\n            # max_retries=0); an API/transport error is a typed failure and is\n            # never silently retried.\n            raise GeneratorFailureError(\n                f\"anthropic messages.create failed ({type(exc).__name__})\"\n            ) from exc\n",
+    "new": "        except Exception as exc:  # noqa: BLE001 - MUTATED silent retry\n            try:\n                response = self._client.messages.create(**request_kwargs)\n            except Exception as exc2:\n                raise GeneratorFailureError(\n                    f\"anthropic messages.create failed ({type(exc2).__name__})\"\n                ) from exc2\n"
+   }
+  ],
+  "test": "tests/test_research_llm_generator.py::test_api_error_is_a_typed_failure_and_is_never_retried"
+ },
+ {
+  "id": "G3-M4",
+  "description": "the API key is written into the raw artifact",
+  "file": "smart_beta/research/llm_generator.py",
+  "edits": [
+   {
+    "old": "        raw_artifact = RawArtifact(content=text)",
+    "new": "        raw_artifact = RawArtifact(content=os.environ.get(\"ANTHROPIC_API_KEY\", \"\") + text)"
+   }
+  ],
+  "test": "tests/test_research_llm_generator.py::test_api_key_is_read_only_for_the_real_client_and_never_stored"
+ }
+]
