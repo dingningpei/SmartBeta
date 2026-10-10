@@ -1,0 +1,109 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated source must pass the identity test",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_source_sha256_matches_file_bytes"
+  },
+  {
+    "id": "E-M1",
+    "description": "the LLSW default nu = round(0.4 * T^(2/3)) instead of the frozen nu = round(T^(2/3))",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "    return round(t_periods ** (2.0 / 3.0))",
+        "new": "    return round(0.4 * t_periods ** (2.0 / 3.0))"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_nu_follows_the_frozen_rule_by_T"
+  },
+  {
+    "id": "E-M2",
+    "description": "the cosine argument uses t instead of the half-integer t - 1/2",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "                argument = math.pi * harmonic * (period - 0.5) / t_periods",
+        "new": "                argument = math.pi * harmonic * period / t_periods"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_golden_values"
+  },
+  {
+    "id": "E-M3",
+    "description": "the standard normal reference instead of the Student-t_nu reference",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "        p_one_sided = 1.0 - _T.cdf(statistic, nu)",
+        "new": "        p_one_sided = 1.0 - scipy.stats.norm.cdf(statistic)"
+      },
+      {
+        "old": "        quantile = _T.ppf(1.0 - float(bound_alpha), nu)",
+        "new": "        quantile = scipy.stats.norm.ppf(1.0 - float(bound_alpha))"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_golden_values"
+  },
+  {
+    "id": "E-M4",
+    "description": "a two-sided p-value instead of the one-sided p-value",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "        p_one_sided = 1.0 - _T.cdf(statistic, nu)",
+        "new": "        p_one_sided = 2.0 * (1.0 - _T.cdf(statistic, nu))"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_formula_matches_independent_naive_reference"
+  },
+  {
+    "id": "E-M5",
+    "description": "the T < MIN_PERIODS check removed from the procedure",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "        if t_periods < MIN_PERIODS:",
+        "new": "        if False:  # E-M5"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_failure_insufficient_sample_direct"
+  },
+  {
+    "id": "E-M6",
+    "description": "the direction sign ignored (theta' not oriented)",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "            oriented.append(sign * float(value))",
+        "new": "            oriented.append(float(value))"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_direction_sign_affects_result"
+  },
+  {
+    "id": "E-M7",
+    "description": "the Monte-Carlo seed changed away from the frozen PCG64(20261011)",
+    "file": "tests/fixtures/science/procedures/ewc_t23/mc_study.py",
+    "edits": [
+      {
+        "old": "MC_SEED = 20261011",
+        "new": "MC_SEED = 20261010"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_dossier_tables_reproduce_bit_identically"
+  },
+  {
+    "id": "E-M8",
+    "description": "omega-hat^2 computed from mean(Lambda)^2 instead of mean(Lambda^2)",
+    "file": "smart_beta/science/procedures/ewc_t23_one_sided.py",
+    "edits": [
+      {
+        "old": "        omega_squared = math.fsum(lam * lam for lam in lambdas) / nu",
+        "new": "        omega_squared = (math.fsum(lambdas) / nu) ** 2"
+      }
+    ],
+    "test": "tests/test_science_procedure_ewc_t23_one_sided.py::test_golden_values"
+  }
+]
