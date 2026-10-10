@@ -1,0 +1,146 @@
+[
+ {
+  "id": "S-M1",
+  "description": "the D9 ranking uses B instead of the L envelope",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "RANK_FAMILY: str = \"L\"",
+    "new": "RANK_FAMILY: str = \"B\"  # mutation S-M1: ranking uses B, not L"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_ranking_uses_l_envelope_not_b"
+ },
+ {
+  "id": "S-M2",
+  "description": "the rank statistic uses the max over scenarios instead of the min",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return min(statistics)",
+    "new": "    return max(statistics)  # mutation S-M2: max instead of min"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_ranking_uses_minimum_not_maximum"
+ },
+ {
+  "id": "S-M3",
+  "description": "the declared sign is ignored (the L series is not oriented)",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "        return int(sign)",
+    "new": "        return 1  # mutation S-M3: the declared sign is ignored"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_ranking_applies_declared_sign"
+ },
+ {
+  "id": "S-M4",
+  "description": "T-B is evaluated before the TB_SELECTION record is written",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    if not selection.written:",
+    "new": "    if False:  # mutation S-M4: the TB_SELECTION write is not required"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_tb_evaluation_requires_selection_write"
+ },
+ {
+  "id": "S-M5",
+  "description": "a seventh hypothesis touches T-B",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return tuple(selection.selected_ids) + (selection.control_id,)",
+    "new": "    return tuple(selection.selected_ids) + (selection.control_id, \"UNSELECTED-H7\")  # mutation S-M5: a seventh hypothesis touches T-B"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_tb_firewall_rejects_seventh_hypothesis"
+ },
+ {
+  "id": "S-M6",
+  "description": "the D8 floor checks B only, dropping the L envelope",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "FLOOR_FAMILIES: tuple[str, ...] = (\"B\", \"L\")",
+    "new": "FLOOR_FAMILIES: tuple[str, ...] = (\"B\",)  # mutation S-M6: B only"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_floor_requires_b_and_l_all_scenarios"
+ },
+ {
+  "id": "S-M7",
+  "description": "the positive control is forwardable",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    if result.hypothesis_id == control_id:",
+    "new": "    if False:  # mutation S-M7: the control is forwardable"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_control_never_forwarded"
+ },
+ {
+  "id": "S-M8",
+  "description": "the D8 floor is Holm-adjusted (the P4 relic)",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return bool(float(result.p_one_sided) <= float(alpha))",
+    "new": "    return bool(float(result.p_one_sided) <= float(alpha) / 8.0)  # mutation S-M8: Holm-adjusted"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_floor_is_unadjusted_not_holm"
+ },
+ {
+  "id": "S-M9",
+  "description": "the D12 break-even cost is used as a forwarding gate",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return result.floor_pass",
+    "new": "    return result.floor_pass and result.break_even_cost_bps is not None and result.break_even_cost_bps >= ONE_WAY_COST_BPS  # mutation S-M9: break-even gates"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_break_even_is_not_a_gate"
+ },
+ {
+  "id": "S-M10",
+  "description": "the B series is read from cell.period_values instead of the export",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return record.periods, record.b_series",
+    "new": "    return record.periods, tuple(float(value) for value in diagnostics.cell(cell_name).period_values)  # mutation S-M10: B from cell.period_values"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_b_series_read_from_export_not_cell"
+ },
+ {
+  "id": "S-M11",
+  "description": "the L series is not restricted to B's finite-period index",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    return record.periods, record.l_series",
+    "new": "    return record.periods, tuple(float(value) for value in diagnostics.cell(cell_name).period_values)  # mutation S-M11: L not restricted to B's finite index"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_l_series_restricted_to_b_finite_index"
+ },
+ {
+  "id": "S-M12",
+  "description": "the consumer-side pqv2_series binding/export check is skipped",
+  "file": "smart_beta/campaign/campaign3_screen.py",
+  "edits": [
+   {
+    "old": "    if export.diagnostics_hash != diagnostics_hash:",
+    "new": "    if False:  # mutation S-M12: the binding/export check is skipped"
+   }
+  ],
+  "test": "tests/test_campaign3_screen.py::test_export_binding_check_fail_closed"
+ }
+]
