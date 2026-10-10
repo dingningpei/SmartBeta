@@ -50,6 +50,7 @@ from smart_beta.research.llm_generator_deepseek import (
     BASE_URL,
     Campaign3DeepSeekGenerator,
     DeepSeekLlmGeneratorError,
+    DeepSeekGeneratorFailure,
     DeepSeekLengthTruncationError,
     FINISH_REASON_LENGTH,
     FINISH_REASON_STOP,
@@ -57,6 +58,7 @@ from smart_beta.research.llm_generator_deepseek import (
     MAX_TOKENS,
     MODEL_ID,
     PROVIDER,
+    REASONING_EFFORT,
 )
 from smart_beta.research.loop import GeneratorFailureError
 
@@ -235,7 +237,8 @@ def _history_with_proposal() -> GeneratorVisibleResearchHistory:
 def test_frozen_literals():
     assert PROVIDER == "deepseek"
     assert MODEL_ID == "deepseek-v4-flash"
-    assert MAX_TOKENS == 8000
+    assert MAX_TOKENS == 32000
+    assert REASONING_EFFORT == "low"
     assert BASE_URL == "https://api.deepseek.com"
     assert API_KEY_ENV == "DEEPSEEK_API_KEY"
     assert GENERATOR_IDENTITY == "deepseek:deepseek-v4-flash"
@@ -254,9 +257,16 @@ def test_request_shape_is_exactly_the_frozen_one():
     generator(_empty_history(), _is_feedback())
     assert len(client.calls) == 1
     kwargs = client.calls[0]
-    assert list(kwargs) == ["model", "messages", "max_tokens", "stream"]
+    assert list(kwargs) == [
+        "model",
+        "messages",
+        "max_tokens",
+        "reasoning_effort",
+        "stream",
+    ]
     assert kwargs["model"] == "deepseek-v4-flash"
-    assert kwargs["max_tokens"] == 8000
+    assert kwargs["max_tokens"] == 32000
+    assert kwargs["reasoning_effort"] == "low"
     assert kwargs["stream"] is False
     messages = kwargs["messages"]
     assert isinstance(messages, list) and len(messages) == 2
@@ -377,6 +387,7 @@ def test_response_model_and_finish_reason_are_recorded():
     assert generator.last_call.tokens_used == 120
     assert generator.last_call.prompt_tokens == 100
     assert generator.last_call.completion_tokens == 20
+    assert generator.last_call.reasoning_effort == "low"
 
 
 def test_reasoning_content_is_excluded_from_the_artifact():
@@ -397,13 +408,14 @@ def test_model_id_and_settings_are_recorded():
     generator = Campaign3DeepSeekGenerator(client=_FakeClient(response=_response("{}")))
     assert generator.provider == "deepseek"
     assert generator.model_id == "deepseek-v4-flash" == MODEL_ID
-    assert generator.max_tokens == MAX_TOKENS == 8000
+    assert generator.max_tokens == MAX_TOKENS == 32000
     assert generator.base_url == BASE_URL
     assert generator.identity == GENERATOR_IDENTITY
     settings = dict(generator.settings)
     assert settings["model"] == "deepseek-v4-flash"
     assert settings["provider"] == "deepseek"
-    assert settings["max_tokens"] == 8000
+    assert settings["max_tokens"] == 32000
+    assert settings["reasoning_effort"] == "low"
     assert settings["base_url"] == "https://api.deepseek.com"
     assert settings["temperature"] is None
 
@@ -421,8 +433,18 @@ def test_length_truncation_is_a_typed_failure():
     with pytest.raises(DeepSeekLengthTruncationError) as excinfo:
         generator(_empty_history(), _is_feedback())
     assert isinstance(excinfo.value, GeneratorFailureError)
+    assert isinstance(excinfo.value, DeepSeekGeneratorFailure)
+    # Erratum A2-E1: the failure carries the provider-reported usage even
+    # though the truncated response is never accepted as a candidate.
+    assert excinfo.value.tokens_used == 11 + 7
     assert len(client.calls) == 1
     assert generator.last_finish_reason == "length"
+    assert generator.last_call is not None
+    assert generator.last_call.tokens_used == 11 + 7
+
+
+def test_default_failed_call_carries_zero_tokens():
+    assert DeepSeekGeneratorFailure("no usage").tokens_used == 0
 
 
 def test_api_error_is_a_typed_failure_and_is_never_retried():
@@ -537,7 +559,7 @@ def test_invalid_history_and_feedback_types_are_refused():
 def test_mutation_fixture_contract():
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
     assert [mutation["id"] for mutation in mutations] == [
-        f"D3-M{i}" for i in range(1, 7)
+        f"D3-M{i}" for i in range(1, 10)
     ]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
@@ -551,7 +573,15 @@ def test_mutation_fixture_contract():
         assert test_name, mutation["id"]
         module_source = (_REPO_ROOT / module_name).read_text(encoding="utf-8")
         assert f"def {test_name.split('[')[0]}" in module_source, mutation["id"]
-    # D3-M1..D3-M5 target the C3-D adapter; D3-M6 targets the executor identity.
-    for mutation in mutations[:5]:
-        assert mutation["file"] == "smart_beta/research/llm_generator_deepseek.py"
-    assert mutations[5]["file"] == "smart_beta/campaign/campaign3_generation.py"
+    # D3-M1..D3-M5 and the erratum additions D3-M7..D3-M9 target the C3-D
+    # adapter or the executor; D3-M6 targets the executor identity.
+    by_id = {mutation["id"]: mutation for mutation in mutations}
+    for mutation_id in ("D3-M1", "D3-M2", "D3-M3", "D3-M4", "D3-M5"):
+        assert (
+            by_id[mutation_id]["file"]
+            == "smart_beta/research/llm_generator_deepseek.py"
+        )
+    assert by_id["D3-M6"]["file"] == "smart_beta/campaign/campaign3_generation.py"
+    assert by_id["D3-M7"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
+    assert by_id["D3-M8"]["file"] == "smart_beta/campaign/campaign3_generation.py"
+    assert by_id["D3-M9"]["file"] == "smart_beta/campaign/campaign3_generation.py"

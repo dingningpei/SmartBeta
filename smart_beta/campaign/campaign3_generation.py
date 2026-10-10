@@ -130,7 +130,8 @@ CAMPAIGN3_FAMILY_ID = hashlib.sha256(
 #: Frozen budget / seed literals (spec section 4).
 DEFAULT_SEED = 20261012
 DEFAULT_MAX_PROPOSAL_BUDGET = 100
-DEFAULT_MAX_LLM_TOKEN_BUDGET = 2_000_000
+#: Raised from 2,000,000 to 4,000,000 by erratum A2-E1 (a hard stop).
+DEFAULT_MAX_LLM_TOKEN_BUDGET = 4_000_000
 DEFAULT_MAX_LLM_COST_BUDGET = 150.0
 DRY_RUN_MAX_LLM_COST_BUDGET = 5.0
 
@@ -261,6 +262,20 @@ class CandidateEvaluator(Protocol):
     """``proposal -> TaEvaluation`` (T-A, IS-only)."""
 
     def __call__(self, proposal: Any) -> TaEvaluation: ...
+
+
+def _failure_tokens_used(exc: BaseException) -> int:
+    """The provider-reported tokens carried by a failed generator call.
+
+    Erratum A2-E1: a generator failure raised **after** the provider returned
+    a usage block (for example a ``finish_reason == 'length'`` truncation) must
+    carry ``tokens_used``; an API error without usage adds 0. A malformed or
+    negative value is treated as 0 rather than trusted.
+    """
+    tokens = getattr(exc, "tokens_used", 0)
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+        return 0
+    return tokens
 
 
 def _coerce_generation_output(output: Any) -> GenerationOutput:
@@ -454,6 +469,8 @@ class Campaign3RunManifest:
     n_not_certified: int
     n_duplicates: int
     n_evaluated: int
+    failed_calls: int
+    failed_call_tokens: int
     tokens_used: int
     cost_used: float | None
     stop_reason: str
@@ -473,6 +490,8 @@ class Campaign3RunManifest:
             "n_not_certified": self.n_not_certified,
             "n_duplicates": self.n_duplicates,
             "n_evaluated": self.n_evaluated,
+            "failed_calls": self.failed_calls,
+            "failed_call_tokens": self.failed_call_tokens,
             "tokens_used": self.tokens_used,
             "cost_used": self.cost_used,
             "stop_reason": self.stop_reason,
@@ -538,6 +557,8 @@ class Campaign3Executor:
     _tokens_used: int = 0
     _cost_used: float = 0.0
     _generator_calls: int = 0
+    _failed_calls: int = 0
+    _failed_call_tokens: int = 0
     _stop_reason: Campaign3StopReason | None = None
 
     def __post_init__(self) -> None:
@@ -564,6 +585,16 @@ class Campaign3Executor:
     @property
     def generator_calls(self) -> int:
         return self._generator_calls
+
+    @property
+    def failed_calls(self) -> int:
+        """The count of generator calls that raised (never retried)."""
+        return self._failed_calls
+
+    @property
+    def failed_call_tokens(self) -> int:
+        """The provider-reported tokens carried by failed generator calls."""
+        return self._failed_call_tokens
 
     @property
     def tokens_used(self) -> int:
@@ -632,6 +663,15 @@ class Campaign3Executor:
         try:
             output = self.generator(visible, feedback)
         except Exception as exc:  # typed failure: recorded, never retried
+            # A failed call is still counted (erratum A2-E1). When the provider
+            # returned usage before the failure (e.g. a length truncation), the
+            # failure carries `tokens_used`; those tokens are added to the
+            # running total so the token hard stop counts them. An API error
+            # without usage adds 0 but is still counted as a failed call.
+            failed_tokens = _failure_tokens_used(exc)
+            self._failed_calls += 1
+            self._failed_call_tokens += failed_tokens
+            self._tokens_used += failed_tokens
             raise Campaign3GeneratorFailure(type(exc).__name__) from exc
         coerced = _coerce_generation_output(output)
         self._hook("after_generate_before_persist")
@@ -855,6 +895,8 @@ class Campaign3Executor:
             ),
             n_duplicates=len(self._duplicate_proposals),
             n_evaluated=len(self._evaluated),
+            failed_calls=self._failed_calls,
+            failed_call_tokens=self._failed_call_tokens,
             tokens_used=self._tokens_used,
             cost_used=self.cost_used,
             stop_reason=self._stop_reason.value,
