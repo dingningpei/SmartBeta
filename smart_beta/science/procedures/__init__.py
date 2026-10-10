@@ -26,6 +26,7 @@ from smart_beta.science.procedures.nonoverlap_t_one_sided import (
     build_procedure,
     register,
 )
+from smart_beta.science.procedures.ewc_t23_one_sided import EWCT23OneSided
 
 __all__ = [
     "PROCEDURE_ID",
