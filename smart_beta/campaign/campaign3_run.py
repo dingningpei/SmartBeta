@@ -40,8 +40,11 @@ constructed.
 
 **C3-S / PQS seam.**  ``campaign3_screen`` (C3-S, repaired as C3-S-R1) and
 ``pqv2_series`` (PQS) are concurrent tasks.  This module imports them by their
-public names behind :func:`load_screen_runner` / :func:`_load_export_series`;
-when they are absent it falls back to a documented stub interface and says so.
+public names behind :func:`load_screen_runner` / :func:`_load_export_series`.
+There is **no implicit stub**: :func:`load_screen_runner` raises
+:class:`C3ConfigurationError` when ``campaign3_screen`` (or its ``run_screen``)
+is absent, and a ``STUBBED_*`` screen report is refused unless the test-only
+``allow_stub_screen=True`` flag is set explicitly.
 """
 
 from __future__ import annotations
@@ -1211,17 +1214,18 @@ def build_tb_evaluator(
 
 
 def stub_screen_runner(**kwargs: Any) -> dict[str, Any]:
-    """A documented fallback when ``campaign3_screen`` is not merged.
+    """A **test-only** fallback screen runner (never resolved implicitly).
 
-    It records the upstream bundle and returns a ``STUBBED`` report; it is
-    **not** a substitute for C3-S's D9/D8/D10 logic and must be replaced by
-    the real module (C3-S / C3-S-R1) before a production run.
+    It returns a ``STUBBED_C3_S`` report.  It exists so the offline tests can
+    inject a deterministic runner explicitly; :func:`load_screen_runner` never
+    falls back to it, and :meth:`Campaign3Run.run` refuses the resulting
+    report unless ``allow_stub_screen=True`` is set explicitly (test-only).
     """
     return {
         "status": "STUBBED_C3_S",
         "note": (
-            "campaign3_screen is not present on this branch; the C3-S "
-            "selection tier is stubbed behind load_screen_runner()"
+            "test-only stub injected explicitly; the real C3-S selection "
+            "tier (C3-S / C3-S-R1) is required for a production run"
         ),
         "candidate_ids": [
             item.get("hypothesis_id")
@@ -1232,11 +1236,20 @@ def stub_screen_runner(**kwargs: Any) -> dict[str, Any]:
 
 
 def load_screen_runner() -> Callable[..., Any]:
-    """Return ``campaign3_screen.run_screen`` when merged; else the stub."""
+    """Return the merged ``campaign3_screen.run_screen``; fail closed.
+
+    C3-R-R1: there is **no implicit stub fallback**.  A missing
+    ``campaign3_screen`` module — or one that exposes no ``run_screen`` — is a
+    :class:`C3ConfigurationError`, so a production run can never silently
+    proceed with a stubbed selection tier.
+    """
     try:
         module = importlib.import_module("smart_beta.campaign.campaign3_screen")
     except ImportError:
-        return stub_screen_runner
+        raise C3ConfigurationError(
+            "campaign3_screen is not merged; the C3-S selection tier is "
+            "required and no implicit stub is accepted"
+        ) from None
     runner = getattr(module, "run_screen", None)
     if runner is None:
         raise C3ConfigurationError(
@@ -1343,6 +1356,10 @@ class Campaign3Run:
     a2_path: Path | str = A2_PATH
     control: ControlHypothesis = CONTROL
     screen_runner: Callable[..., Any] | None = None
+    #: Test-only escape hatch: when explicitly ``True`` a screen runner that
+    #: returns a ``STUBBED_*`` report is accepted.  Production runs leave it
+    #: ``False`` so a stubbed selection tier can never pass silently.
+    allow_stub_screen: bool = False
     tb_evaluator: Any | None = None
     registry: Any | None = None
     admission_records: Sequence[Any] = ()
@@ -1353,8 +1370,6 @@ class Campaign3Run:
 
     def __post_init__(self) -> None:
         self.bindings = verify_bindings(self.bindings)
-        if self.screen_runner is None:
-            self.screen_runner = load_screen_runner()
         if self.attempt_id is not None and not isinstance(self.attempt_id, str):
             raise C3ConfigurationError("attempt_id must be text")
 
@@ -1441,6 +1456,13 @@ class Campaign3Run:
         run_dir = run_dir_for(attempt_id, self.run_root)
         journal = RunJournal(run_dir)
 
+        # The C3-S selection tier is required: there is no implicit stub
+        # fallback.  A runner is either explicitly injected or resolved from
+        # the merged campaign3_screen module, which raises when it is absent.
+        screen_runner = self.screen_runner
+        if screen_runner is None:
+            screen_runner = load_screen_runner()
+
         # (c) the terminal pinned at launch must not have moved.
         if self.launch_terminal is not None:
             verify_kpit_terminal(self.knowledge_log.path, self.launch_terminal)
@@ -1458,7 +1480,7 @@ class Campaign3Run:
             stored = journal.read("report")
             screen_report = dict(stored) if isinstance(stored, Mapping) else None
         else:
-            screen_report = self._run_screen(journal, generation)
+            screen_report = self._run_screen(journal, generation, screen_runner)
 
         manifest = dict(generation.manifest)
         manifest["attempt_id"] = attempt_id
@@ -1478,7 +1500,10 @@ class Campaign3Run:
         )
 
     def _run_screen(
-        self, journal: RunJournal, generation: GenerationSnapshot
+        self,
+        journal: RunJournal,
+        generation: GenerationSnapshot,
+        screen_runner: Callable[..., Any],
     ) -> Mapping[str, Any]:
         from smart_beta.campaign import campaign3_eval as _ev
 
@@ -1493,7 +1518,6 @@ class Campaign3Run:
             ),
         }
         journal.write("ranking", ranking_payload)
-        screen_runner = self.screen_runner or stub_screen_runner
         screen_report = screen_runner(
             candidates=generation.candidates,
             control=control_content(self.control),
@@ -1509,6 +1533,17 @@ class Campaign3Run:
             if hasattr(screen_report, "to_dict")
             else _jsonable(screen_report)
         )
+        # A stubbed selection tier must never pass as a real run.  The only
+        # way to accept a ``STUBBED_*`` report is the test-only explicit flag.
+        status = payload.get("status") if isinstance(payload, Mapping) else None
+        if isinstance(status, str) and status.startswith("STUBBED_") and not (
+            self.allow_stub_screen
+        ):
+            raise C3ConfigurationError(
+                "the screen runner returned a stubbed report "
+                f"(status={status!r}); C3-S is required and no implicit stub is "
+                "accepted (allow_stub_screen is test-only)"
+            )
         # The ranking / T-B stages are recorded by the C3-S module itself
         # (TB_SELECTION write-ahead precedes T-B); the driver records the
         # report stage last.  ``_ev`` is imported so the frozen C3-E literals

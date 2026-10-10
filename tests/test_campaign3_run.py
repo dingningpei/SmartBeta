@@ -572,7 +572,69 @@ def test_stub_screen_runner_is_explicit_when_c3s_absent():
         control={"hypothesis_id": R.CONTROL_HYPOTHESIS_ID},
     )
     assert report["status"] == "STUBBED_C3_S"
-    assert "campaign3_screen" in report["note"]
+    assert "test-only" in report["note"]
+
+
+def test_load_screen_runner_fail_closed_without_c3s():
+    """Kills mutation R-M6 (implicit stub fallback restored)."""
+    # campaign3_screen is not on this branch: resolution must raise, never
+    # return the test-only stub.
+    with pytest.raises(R.C3ConfigurationError):
+        R.load_screen_runner()
+
+
+def _run_without_injected_runner(tmp_path: Path) -> R.Campaign3Run:
+    return R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(1),
+        generator=_scripted_generator(1),
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=KnowledgeLog(tmp_path / "kpit.jsonl"),
+        run_root=tmp_path / "runs",
+        screen_runner=None,
+    )
+
+
+def test_run_without_explicit_screen_runner_is_fail_closed(tmp_path):
+    runner = _run_without_injected_runner(tmp_path)
+    with pytest.raises(R.C3ConfigurationError):
+        runner.run()
+    # Nothing has been generated or written ahead when the runner is missing.
+    assert not (tmp_path / "runs").exists() or not any(
+        (tmp_path / "runs").rglob("generation.json")
+    )
+
+
+def test_stub_screen_report_requires_the_explicit_allow_flag(tmp_path):
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    generator = _scripted_generator(1)
+    strict = R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(1),
+        generator=generator,
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=log,
+        run_root=tmp_path / "runs",
+        screen_runner=R.stub_screen_runner,
+        allow_stub_screen=False,
+    )
+    with pytest.raises(R.C3ConfigurationError):
+        strict.run()
+
+    # The test-only flag makes the stubbed tier explicit and accepted.
+    lenient = R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(1),
+        generator=generator,
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=log,
+        run_root=tmp_path / "runs",
+        screen_runner=R.stub_screen_runner,
+        allow_stub_screen=True,
+    )
+    result = lenient.run()
+    assert result.screen_report is not None
+    assert result.screen_report["status"] == "STUBBED_C3_S"
 
 
 # ---------------------------------------------------------------------------

@@ -58,5 +58,17 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_declarations_use_net_metric"
+ },
+ {
+  "id": "R-M6",
+  "description": "the implicit stub screen-runner fallback is restored (C3-R-R1)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    try:\n        module = importlib.import_module(\"smart_beta.campaign.campaign3_screen\")\n    except ImportError:\n        raise C3ConfigurationError(\n            \"campaign3_screen is not merged; the C3-S selection tier is \"\n            \"required and no implicit stub is accepted\"\n        ) from None",
+    "new": "    try:\n        module = importlib.import_module(\"smart_beta.campaign.campaign3_screen\")\n    except ImportError:\n        return stub_screen_runner"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_load_screen_runner_fail_closed_without_c3s"
  }
 ]
