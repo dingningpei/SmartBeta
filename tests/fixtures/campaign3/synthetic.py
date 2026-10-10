@@ -130,6 +130,7 @@ class ScriptedGenerator:
     factory: Any = None
     calls: list[tuple[Any, Any]] = field(default_factory=list)
     raise_on: set[int] = field(default_factory=set)
+    max_calls: int | None = None
 
     def __post_init__(self) -> None:
         if self.factory is None and not self.outputs:
@@ -137,6 +138,13 @@ class ScriptedGenerator:
 
     def __call__(self, visible: Any, feedback: Any) -> GenerationOutput:
         index = len(self.calls)
+        if self.max_calls is not None and index >= self.max_calls:
+            # A hard bound so a non-terminating executor fails fast instead of
+            # looping forever (e.g. a mutation that stops counting the budget).
+            raise AssertionError(
+                f"ScriptedGenerator exceeded max_calls={self.max_calls}; the "
+                "executor under test is not terminating the run"
+            )
         self.calls.append((visible, feedback))
         if index in self.raise_on:
             raise RuntimeError("synthetic generator failure")

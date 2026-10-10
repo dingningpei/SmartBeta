@@ -1,0 +1,69 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the smoke test",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [],
+    "test": "tests/test_pqv2_series.py::test_control_is_green"
+  },
+  {
+    "id": "PQS-M1",
+    "description": "B series taken from the B cell's envelope period_values",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [
+      {
+        "old": "    b_series = _observed_series(matching, finite_index)",
+        "new": "    b_series = tuple(float(value) for value in b_cell.period_values)"
+      }
+    ],
+    "test": "tests/test_pqv2_series.py::test_b_series_is_not_the_envelope_array"
+  },
+  {
+    "id": "PQS-M2",
+    "description": "L series not restricted to B's finite-period index",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [
+      {
+        "old": "    l_series = _restrict_to_b_index(l_cell, finite_index)",
+        "new": "    l_series = tuple(float(value) for value in l_cell.period_values)"
+      }
+    ],
+    "test": "tests/test_pqv2_series.py::test_l_series_is_restricted_to_b_finite_index"
+  },
+  {
+    "id": "PQS-M3",
+    "description": "the exact binding check removed",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [
+      {
+        "old": "    if (\n        result.value != cell.value\n        or result.t_stat != cell.t_stat\n        or int(result.n_obs) != int(cell.n_obs)\n    ):\n        raise SeriesBindingError(\n            f\"series does not reproduce cell {cell.cell!r}: \"\n            f\"estimator value {result.value!r} != cell value {cell.value!r}, \"\n            f\"t_stat {result.t_stat!r} != {cell.t_stat!r}, \"\n            f\"n_obs {int(result.n_obs)} != {int(cell.n_obs)}\"\n        )",
+        "new": "    pass  # PQS-M3: the exact binding check is removed"
+      }
+    ],
+    "test": "tests/test_pqv2_series.py::test_binding_check_refuses_a_tampered_cell"
+  },
+  {
+    "id": "PQS-M4",
+    "description": "gross returned as the B series (metric ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [
+      {
+        "old": "        _evaluation._b_series_for_metric(scenario_b, diagnostics.metric_basis)",
+        "new": "        _evaluation._b_series_for_metric(scenario_b, _evaluation._GROSS)"
+      }
+    ],
+    "test": "tests/test_pqv2_series.py::test_net_metric_b_series_is_net_not_gross"
+  },
+  {
+    "id": "PQS-M5",
+    "description": "a diagnostics declaration_hash mismatch accepted",
+    "file": "smart_beta/dataset_v1/pqv2_series.py",
+    "edits": [
+      {
+        "old": "    if diagnostics.declaration_hash != declaration.declaration_hash:\n        raise SeriesBindingError(\n            \"the diagnostics' declaration_hash \"\n            f\"{diagnostics.declaration_hash!r} differs from the supplied \"\n            f\"declaration_hash {declaration.declaration_hash!r}\"\n        )",
+        "new": "    pass  # PQS-M5: the declaration mismatch is accepted"
+      }
+    ],
+    "test": "tests/test_pqv2_series.py::test_export_refuses_a_declaration_mismatch"
+  }
+]

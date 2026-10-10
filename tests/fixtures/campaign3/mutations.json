@@ -61,14 +61,62 @@
  },
  {
   "id": "X3-M6",
-  "description": "the proposal budget is off by one (N+1 events)",
+  "description": "the proposal budget is off by one (N+1 candidate entries)",
   "file": "smart_beta/campaign/campaign3_generation.py",
   "edits": [
    {
-    "old": "        if len(self._events) >= self.policy.max_proposal_budget:",
-    "new": "        if len(self._events) > self.policy.max_proposal_budget:"
+    "old": "        if self._used >= self.policy.max_proposal_budget:",
+    "new": "        if self._used > self.policy.max_proposal_budget:"
    }
   ],
   "test": "tests/test_campaign3_generation.py::test_budget_exhaustion_at_exactly_n"
+ },
+ {
+  "id": "X3-M7",
+  "description": "the budget counts events, not candidate entries (erratum P5-E1 regression)",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        if self._used >= self.policy.max_proposal_budget:",
+    "new": "        if len(self._events) >= self.policy.max_proposal_budget:"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_exactly_100_with_truncation"
+ },
+ {
+  "id": "X3-M8",
+  "description": "the surplus entries of the budget-closing call are evaluated instead of truncated",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "            allowed_count = min(len(entries), max(remaining, 0))",
+    "new": "            allowed_count = len(entries)"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_exactly_100_with_truncation"
+ },
+ {
+  "id": "X3-M9",
+  "description": "the BUDGET_TRUNCATED surplus is not taken in response order",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "    return tuple(entries[:allowed_count]), tuple(entries[allowed_count:])",
+    "new": "    return tuple(entries[allowed_count:]), tuple(entries[:allowed_count])"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_exactly_100_with_truncation"
+ },
+ {
+  "id": "X3-M10",
+  "description": "a zero-entry artifact counts 0 instead of 1",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        counted = len(allowed) if entries else 1",
+    "new": "        counted = len(allowed)"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_zero_entry_artifact_counts_one"
  }
 ]

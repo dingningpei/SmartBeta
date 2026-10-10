@@ -55,3 +55,50 @@
 
 Then the real run, under the authorization above. The planner monitors it and stops on
 any hard-stop condition. T-C is never started without a new authorization.
+
+## Erratum P6-E1 (APPROVED 2026-10-10, user: "批准")
+
+**Defect (found by the C3-S worker's disclosure; verified by the planner in
+`pqv2_evaluation.py:1745-1790` and `reserve_chain/confirm.py:373`):**
+
+- In P-Q diagnostics, **every** cell's `period_values` is the composed **envelope**
+  per-period array (`_period_cell_arrays(envelope, scenario)`). This holds for the
+  `B-*` cells too. Only the B cell's scalar `value`/`t_stat` come from the observed D7b
+  B series. The B per-period series is **not persisted** in the diagnostics.
+- P-Q's own L estimate uses the envelope **restricted to B's finite-period index**
+  (`_estimate_l`).
+- **R7-X** `confirm.py` (merged) builds the inference series from `cell.period_values`
+  for both B and L, over all periods. Therefore:
+  - its "B" test is in fact a second L test;
+  - its L test does not restrict to B's finite index.
+  The confirmation estimand ("B **and** L") is therefore not what P7 froze.
+  **No harm was done:** T-C has never run.
+- **P6 §1 (C3-S)** told the worker to reuse that pattern. This is a **planner spec
+  defect**, and C3-S inherited it. The planner's R7-X review missed it.
+
+**Correction (proposed):**
+
+1. A **new module** `smart_beta/dataset_v1/pqv2_series.py` (new file; no certified P-Q
+   module is modified). Given the same arguments as `build_pqv2_diagnostics` plus the
+   resulting diagnostics, it returns per scenario (T0/TS × K0/K1 as applicable):
+   - the **B series** = the D7b observed **net** per-period long-short series
+     (`_reconstruct_b` → `_ScenarioB.net`), restricted to its finite periods;
+   - the **L series** = the envelope per-period values restricted to the B-finite index
+     (`b_periods_<scenario>`);
+   - the **gross and net** per-period series (for the D12 break-even cost).
+   **Binding check (fail closed):** re-applying P-Q's own Phase-7 estimator
+   (`ESTIMATOR_IDENTITY`) to the returned B and L series must reproduce the
+   diagnostics' B and L cell `value`, `t_stat` and `n_obs` **exactly**. Otherwise →
+   `SeriesBindingError`. This proves that the series are the ones P-Q assessed.
+2. **C3-S (returned as C3-S-R1):**
+   - the D9 ranking, the D8 floor and D10 consume `pqv2_series` output only. They never
+     read `cell.period_values`;
+   - D12 uses its gross/net series;
+   - new mutations: S-M10 B read from `cell.period_values`; S-M11 L not restricted to the
+     B-finite index; S-M12 the binding check skipped.
+3. **R7-X-R2** (a repair of merged `confirm.py`): the same switch to `pqv2_series`, plus
+   mutations of the same form (X-M_bseries, X-M_lindex). T-C stays unrun until it
+   merges.
+4. **Ownership:** `pqv2_series.py` and its tests are a new task, **PQS**, which runs
+   first. C3-S-R1 and R7-X-R2 follow (disjoint files). C3-R proceeds in parallel and wires
+   `pqv2_series` into the real T-B evaluator.

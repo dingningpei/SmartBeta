@@ -326,10 +326,17 @@ def test_duplicate_within_one_event_collapses():
     gen = fx.ScriptedGenerator(
         outputs=[G.GenerationOutput(raw_artifact=payload, tokens_used=10)]
     )
-    ex = _executor(generator=gen, evaluator=fx.StubEvaluator())
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=2),
+    )
     result = ex.run()
+    assert result.manifest.n_used == 2
     assert result.manifest.n_proposals == 1
     assert result.manifest.n_evaluated == 1
+    assert result.manifest.n_duplicates == 1
+    assert result.manifest.n_budget_truncated == 0
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +353,8 @@ def test_malformed_raw_artifact_recorded_and_counted():
                 raw_artifact=RawArtifact(content="this is not json"),
                 tokens_used=7,
             )
-        ]
+        ],
+        max_calls=2,
     )
     boundary = GeneratorBoundary()
     ex = _executor(generator=gen, evaluator=fx.StubEvaluator(), boundary=boundary)
@@ -380,6 +388,222 @@ def test_budget_counts_not_certified_events():
     assert result.manifest.n_not_certified == 2
     assert result.manifest.n_evaluated == 0
     assert ex.generator_calls == 2
+
+
+# ---------------------------------------------------------------------------
+# 6c. candidate-entry budget (erratum P5-E1)
+# ---------------------------------------------------------------------------
+
+
+def _multi_candidate_factory(per_call):
+    """A stub generator emitting ``per_call`` distinct candidates per call."""
+
+    def factory(visible, feedback, index):
+        specs = [
+            fx.candidate(
+                fx.simple_spec_dict(numerator_lag=index * per_call + offset)
+            )
+            for offset in range(per_call)
+        ]
+        return fx.generation_output(*specs, tokens_used=10)
+
+    return factory
+
+
+def test_exactly_100_with_truncation():
+    """N = 100 counts candidate entries; the surplus is BUDGET_TRUNCATED."""
+    per_call = 7
+    gen = fx.ScriptedGenerator(factory=_multi_candidate_factory(per_call))
+    ev = fx.StubEvaluator()
+    ex = _executor(
+        generator=gen,
+        evaluator=ev,
+        policy=_policy(max_proposal_budget=100),
+    )
+    result = ex.run()
+    assert result.manifest.n_used == 100
+    assert result.manifest.n_calls == 15
+    assert result.manifest.n_budget_truncated == 5
+    assert result.manifest.n_evaluated == 100
+    assert result.manifest.n_proposals == 100
+    assert ex.generator_calls == 15
+    assert result.manifest.stop_reason == (
+        G.Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED.value
+    )
+    # 14 calls x 7 + 2 from the 15th = exactly 100
+    assert 14 * per_call + 2 == 100
+
+    # The truncation is the response-order surplus of the budget-closing call.
+    closing = ex.events[-1]
+    outcome = ex.boundary.outcome_for(closing.event_id)
+    assert len(outcome.candidates) == 7
+    evaluated_hashes = {item.factor_spec_hash for item in result.evaluations}
+    closing_allowed = {
+        outcome.candidates[i].factor_spec_hash for i in range(2)
+    }
+    assert closing_allowed <= evaluated_hashes
+    assert [item.raw_index for item in result.manifest.budget_truncated] == [2, 3, 4, 5, 6]
+    assert [item.factor_spec_hash for item in result.manifest.budget_truncated] == [
+        outcome.candidates[i].factor_spec_hash for i in range(2, 7)
+    ]
+    truncated_hashes = {
+        item.factor_spec_hash for item in result.manifest.budget_truncated
+    }
+    assert truncated_hashes.isdisjoint(evaluated_hashes)
+    # the surplus is recorded, not registered / certified / frozen / evaluated
+    assert all(
+        item.disposition == "BUDGET_TRUNCATED"
+        for item in result.manifest.budget_truncated
+    )
+    assert len(result.registry) == 100
+    assert len(result.full_history.evidence) == 100
+    # the raw artifact of the closing call stays persisted with all 7 entries
+    assert closing.raw_artifact is not None
+
+
+def test_truncation_not_registered_or_evaluated():
+    specs = [
+        fx.candidate(fx.simple_spec_dict(numerator_lag=lag)) for lag in range(8)
+    ]
+    gen = fx.ScriptedGenerator(outputs=[fx.generation_output(*specs)])
+    ev = fx.StubEvaluator()
+    ex = _executor(
+        generator=gen,
+        evaluator=ev,
+        policy=_policy(max_proposal_budget=5),
+    )
+    result = ex.run()
+    assert result.manifest.n_used == 5
+    assert result.manifest.n_calls == 1
+    assert result.manifest.n_budget_truncated == 3
+    assert result.manifest.n_proposals == 5
+    assert result.manifest.n_evaluated == 5
+    assert ev.calls and len(ev.calls) == 5
+    event = ex.events[0]
+    outcome = ex.boundary.outcome_for(event.event_id)
+    assert result.manifest.budget_truncated[0].event_id == event.event_id
+    assert [item.raw_index for item in result.manifest.budget_truncated] == [5, 6, 7]
+    assert {item.factor_spec_hash for item in result.evaluations} == {
+        outcome.candidates[i].factor_spec_hash for i in range(5)
+    }
+
+
+def test_not_certified_and_duplicate_entries_counted():
+    good = fx.candidate(fx.simple_spec_dict(numerator_lag=21))
+    not_certified = fx.candidate(fx.simple_spec_dict(numerator_lag=22, sign=-1))
+    duplicate = fx.candidate(fx.simple_spec_dict(numerator_lag=21))
+    gen = fx.ScriptedGenerator(
+        outputs=[fx.generation_output(good, not_certified, duplicate)]
+    )
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=3),
+    )
+    result = ex.run()
+    assert result.manifest.n_used == 3
+    assert result.manifest.n_budget_truncated == 0
+    assert result.manifest.n_proposals == 2
+    assert result.manifest.n_certified == 1
+    assert result.manifest.n_not_certified == 1
+    assert result.manifest.n_duplicates == 1
+    assert result.manifest.n_evaluated == 1
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"schema_version": 1, "candidates": []}', "this is not json"],
+)
+def test_zero_entry_artifact_counts_one(content):
+    from smart_beta.research.generator import RawArtifact
+
+    gen = fx.ScriptedGenerator(
+        outputs=[G.GenerationOutput(raw_artifact=RawArtifact(content=content))],
+        max_calls=2,
+    )
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=1),
+    )
+    result = ex.run()
+    assert result.manifest.n_used == 1
+    assert result.manifest.n_calls == 1
+    assert result.manifest.n_budget_truncated == 0
+    assert result.manifest.n_proposals == 0
+    assert result.manifest.n_evaluated == 0
+    assert result.manifest.stop_reason == (
+        G.Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED.value
+    )
+
+
+def test_manifest_n_calls_correct():
+    gen = fx.ScriptedGenerator(factory=_factory_for_lags(fx))
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=4),
+    )
+    result = ex.run()
+    assert result.manifest.n_calls == 4
+    assert result.manifest.n_calls == ex.generator_calls
+    assert result.manifest.n_used == 4
+
+
+def test_manifest_to_dict_exposes_budget_fields():
+    gen = fx.ScriptedGenerator(factory=_multi_candidate_factory(7))
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=8),
+    )
+    body = ex.run().manifest.to_dict()
+    assert body["n_used"] == 8
+    assert body["n_calls"] == 2
+    assert body["n_budget_truncated"] == 6
+    assert [item["raw_index"] for item in body["budget_truncated"]] == [
+        1, 2, 3, 4, 5, 6,
+    ]
+    assert all(
+        item["disposition"] == "BUDGET_TRUNCATED"
+        for item in body["budget_truncated"]
+    )
+
+
+def test_reconcile_between_entries_does_not_double_count():
+    specs = [
+        fx.candidate(fx.simple_spec_dict(numerator_lag=lag))
+        for lag in (31, 32, 33)
+    ]
+    gen = fx.ScriptedGenerator(
+        outputs=[fx.generation_output(*specs, tokens_used=10)]
+    )
+    ev = fx.StubEvaluator()
+    ex = _executor(
+        generator=gen,
+        evaluator=ev,
+        policy=_policy(max_proposal_budget=3),
+        crash_hook=_crash_at("after_evaluate_before_history"),
+    )
+    with pytest.raises(_Crash):
+        ex.run()
+    # the whole event's entries were charged before the crash
+    assert ex._used == 3
+    result = ex.run()
+    assert result.manifest.n_used == 3
+    assert result.manifest.n_budget_truncated == 0
+    assert result.manifest.n_evaluated == 3
+    assert ex.generator_calls == 1
+    assert len(result.full_history.evidence) == 3
+
+
+def test_response_order_guard_fails_closed():
+    class _Candidate:
+        def __init__(self, raw_index):
+            self.raw_index = raw_index
+
+    with pytest.raises(G.Campaign3ConfigurationError):
+        G._assert_response_order((_Candidate(0), _Candidate(2)))
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +956,7 @@ def test_no_network_sdk_import():
 def test_mutation_fixture_contract():
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
     assert [mutation["id"] for mutation in mutations] == [
-        f"X3-M{i}" for i in range(1, 7)
+        f"X3-M{i}" for i in range(1, 11)
     ]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
