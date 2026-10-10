@@ -102,3 +102,54 @@ any hard-stop condition. T-C is never started without a new authorization.
 4. **Ownership:** `pqv2_series.py` and its tests are a new task, **PQS**, which runs
    first. C3-S-R1 and R7-X-R2 follow (disjoint files). C3-R proceeds in parallel and wires
    `pqv2_series` into the real T-B evaluator.
+
+## Erratum P6-E2 (APPROVED 2026-10-10, user: "批准") — production launcher C3-L + real-data preflight
+
+**Gap (a planner spec omission):** C3-R's `run()` takes every dependency by injection, but
+nothing assembles the production dependencies from real data:
+- the FactorSpec → panel builder;
+- the T-A and T-B evaluators over the real partition/folds/overlay/inputs/event layer;
+- the EWC registry and the production admission record (K-PIT seq 10);
+- the screen candidate builder;
+- the TB_SELECTION writer;
+- the DeepSeek generator.
+
+**New task C3-L** (owned, all new: `smart_beta/campaign/campaign3_launch.py`,
+`tests/test_campaign3_launch.py`, `tests/fixtures/campaign3_launch/**`):
+
+1. **`assemble_production(...)`** builds every dependency of
+   `campaign3_run.Campaign3Run` from the real stores:
+   - the panel builder reuses the Campaign-1 production adapter's `panel_of` path
+     (`campaign1.py` ~1636), not new math;
+   - the folds come from the frozen partition (`b4b56dbf…`): IS for T-A; OOS +
+     DEVELOPMENT_SEALED for T-B;
+   - `inference.PRODUCTION_REGISTRY` with the admitted `EWC_T23_ONE_SIDED` and the K-PIT
+     PROCEDURE_ADMISSION record;
+   - the generator is `Campaign3DeepSeekGenerator`, with the key supplied by the caller
+     in memory only.
+2. **`--preflight`:**
+   - runs on a **copy** of the production K-PIT, in a scratch run directory;
+   - the generator is replaced by a fixed raw artifact containing **only** the positive
+     control's FactorSpec;
+   - the real T-A evaluator then evaluates it under K0 and K1, along with the
+     `pqv2_series` export and binding;
+   - it prints **only** `status` / `assessed` / NOT_ASSESSED reason / binding OK / the
+     number of periods per scenario;
+   - **no mean, t, p, return or ranking value** may be printed or written outside the
+     scratch directory;
+   - the production K-PIT hash must be unchanged.
+3. **`--production`:**
+   - requires a passing preflight marker for the same master SHA and bindings;
+   - performs the authorized real run (generation N = 100 → T-A → D9 → TB_SELECTION →
+     T-B → report);
+   - never runs T-C.
+4. **Tests (synthetic):**
+   - assembly with fakes;
+   - preflight prints no statistic (scan the output for numeric statistic fields);
+   - production refuses without a preflight marker;
+   - the K-PIT copy is used in preflight.
+   **Mutations:**
+   - L-M1: preflight writes to the production K-PIT;
+   - L-M2: preflight prints a statistic;
+   - L-M3: production without a marker;
+   - L-M4: the T-B folds include the reserve.
