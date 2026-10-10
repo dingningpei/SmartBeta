@@ -192,8 +192,8 @@
     "file": "smart_beta/dataset_v1/pqv2_core.py",
     "edits": [
       {
-        "old": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.EVENT_RESERVE,\n    NotAssessedReason.SOURCE_UNRESOLVED,",
-        "new": "    NotAssessedReason.SOURCE_UNRESOLVED,\n    NotAssessedReason.EVENT_RESERVE,\n    NotAssessedReason.RESERVE_UNKNOWN,"
+        "old": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.FOLD_END_UNKNOWN,\n    NotAssessedReason.EVENT_RESERVE,\n    NotAssessedReason.SOURCE_UNRESOLVED,",
+        "new": "    NotAssessedReason.SOURCE_UNRESOLVED,\n    NotAssessedReason.FOLD_END_UNKNOWN,\n    NotAssessedReason.EVENT_RESERVE,\n    NotAssessedReason.RESERVE_UNKNOWN,"
       }
     ],
     "test": "tests/test_pqv2_core.py::test_causeset_primary_reserve_over_source"
@@ -317,5 +317,101 @@
       }
     ],
     "test": "tests/test_pqv2_core.py::test_causeset_primary_event_identity_contradicted_over_unmapped"
+  },
+  {
+    "id": "A24-M1",
+    "description": "DEVELOPMENT_FOLD end literal changed away from the frozen 2023-06-30",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "DEVELOPMENT_FOLD = Fold(\"development\", None, date(2023, 6, 30))",
+        "new": "DEVELOPMENT_FOLD = Fold(\"development\", None, date(2023, 7, 3))"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_fold_contract_literal"
+  },
+  {
+    "id": "A24-M2",
+    "description": "PQV2_FOLD_END_UNKNOWN placed before PQV2_RESERVE_UNKNOWN in the CauseSet order",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.FOLD_END_UNKNOWN,\n    NotAssessedReason.EVENT_RESERVE,",
+        "new": "    NotAssessedReason.FOLD_END_UNKNOWN,\n    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.EVENT_RESERVE,"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_fold_end_cause_serializes_and_ranks"
+  },
+  {
+    "id": "A24-M3",
+    "description": "the v2.4 authority is based on v2.2 rather than v2.3",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    base_methodology_relative=AUTHORITY_V2_3.methodology_relative,\n    base_methodology_sha256=AUTHORITY_V2_3.methodology_sha256,",
+        "new": "    base_methodology_relative=AUTHORITY_V2_2.methodology_relative,\n    base_methodology_sha256=AUTHORITY_V2_2.methodology_sha256,"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_v24_authority_constants"
+  },
+  {
+    "id": "A24-M4",
+    "description": "CURRENT_AUTHORITY switched away from the Campaign-2 v2.1 binding to v2.4",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "CURRENT_AUTHORITY = AUTHORITY_V2_1",
+        "new": "CURRENT_AUTHORITY = AUTHORITY_V2_4"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_campaign2_binding_uses_current_v21"
+  },
+  {
+    "id": "A24-M5",
+    "description": "PQV2_FOLD_END_UNKNOWN mapped to UNKNOWN_SOURCE instead of UNKNOWN_RESERVE",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    if (\n        NotAssessedReason.RESERVE_UNKNOWN in cause_set\n        or NotAssessedReason.FOLD_END_UNKNOWN in cause_set\n    ):",
+        "new": "    if NotAssessedReason.RESERVE_UNKNOWN in cause_set:"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_fold_end_cause_serializes_and_ranks"
+  },
+  {
+    "id": "A24-M6",
+    "description": "PQV2_FOLD_END_UNKNOWN is not a short-circuiting UNKNOWN cause",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "UNKNOWN_CAUSES: tuple[str, ...] = (\n    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.FOLD_END_UNKNOWN,\n    NotAssessedReason.SOURCE_UNRESOLVED,\n)",
+        "new": "UNKNOWN_CAUSES: tuple[str, ...] = (\n    NotAssessedReason.RESERVE_UNKNOWN,\n    NotAssessedReason.SOURCE_UNRESOLVED,\n)"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_fold_end_cause_serializes_and_ranks"
+  },
+  {
+    "id": "A24-M7",
+    "description": "the v2.4 authority does not re-verify the v2.3/v2.2/v2.1 chain",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "    if authority is AUTHORITY_V2_4:\n        verify_authority(root, authority=AUTHORITY_V2_3)",
+        "new": "    if False:  # A24-M7: the v2.4 authority chain is not verified\n        verify_authority(root, authority=AUTHORITY_V2_3)"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_v24_authority_chain_verifies_v23_v22_and_v21"
+  },
+  {
+    "id": "A24-M8",
+    "description": "the v2.4 ED/CE lines are taken from the v2.3 base document",
+    "file": "smart_beta/dataset_v1/pqv2_core.py",
+    "edits": [
+      {
+        "old": "            \"ED\": _extract_code_block_after(document_lines, \"ED-ID v2.4\"),\n            \"CE\": _extract_code_block_after(document_lines, \"CE-ID v2.4\"),",
+        "new": "            \"ED\": _extract_code_block_after(document_lines, \"ED-ID v2.3\"),\n            \"CE\": _extract_code_block_after(document_lines, \"CE-ID v2.3\"),"
+      }
+    ],
+    "test": "tests/test_pqv2_core.py::test_v24_canonical_line_recomputation"
   }
 ]

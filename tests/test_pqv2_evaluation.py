@@ -139,9 +139,13 @@ def _build_case(
     tri_overrides: Mapping[tuple[str, date], float] | None = None,
     force_nan: tuple[str, date] | None = None,
     spec_override: Any = None,
+    fold: Any = None,
+    reserve_sessions: Sequence[date] = (),
 ) -> Case:
     fx = _load_fixture()
-    store = fx.SyntheticStore(tmp_path, name="root")
+    store = fx.SyntheticStore(
+        tmp_path, name="root", reserve_sessions=tuple(reserve_sessions)
+    )
     store.standard()
     for key, session_index, beyond in flags:
         store.add_flag(key, fx.SESSIONS[session_index], beyond=beyond)
@@ -187,6 +191,7 @@ def _build_case(
         source_bindings=store.source_bindings,
         pq_bindings=pq_bindings,
         pq_read_records_fn=lambda path: fx.genesis_records(),
+        fold=fold if fold is not None else C.DEVELOPMENT_FOLD,
     )
     return Case(
         fx,
@@ -1479,6 +1484,87 @@ def test_non_admitted_authority_rejected(tmp_path: Path) -> None:
     assert case.diagnostics.not_assessed == C.NotAssessedReason.IDENTITY_MISMATCH
 
 
+# -- P-Q v2.4 fold-firewall declaration and reserve fold --------------------
+
+_V24_DECLARATION = {
+    "methodology_sha256": C.AUTHORITY_V2_4.methodology_sha256,
+    "ed_id": C.AUTHORITY_V2_4.ed_id,
+    "ce_id": C.AUTHORITY_V2_4.ce_id,
+}
+
+#: A synthetic reserve fold: P-Q accepts any Fold (the P7 AccessGrant gate is
+#: not part of this layer).  ``E`` is a real reserve date.
+_RESERVE_FOLD = C.Fold("reserve", C.RESERVE_START, date(2023, 7, 21))
+
+
+def _reserve_sessions(fx: Any, n: int = 3) -> tuple[date, ...]:
+    return tuple(fx.business_days(C.RESERVE_START, n))
+
+
+def test_v24_declaration_resolves_authority(tmp_path: Path) -> None:
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        declaration_overrides=_V24_DECLARATION,
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.methodology_version == C.AUTHORITY_V2_4.version
+    assert (
+        diag.base_methodology_sha256
+        == C.AUTHORITY_V2_4.base_methodology_sha256
+    )
+    # The v2.4 grammar is the unchanged v2.3 one; the default fold is not
+    # recorded, so the payload stays byte-identical to the v2.1-v2.3 shape.
+    assert "fold" not in diag.to_dict()
+    assert diag.fold == C.DEVELOPMENT_FOLD
+
+
+def test_default_fold_diagnostics_omit_fold(tmp_path: Path) -> None:
+    case = _build_case(tmp_path, hypothesis="C1-H1")
+    assert "fold" not in case.diagnostics.to_dict()
+    assert case.diagnostics.fold == C.DEVELOPMENT_FOLD
+
+
+def test_reserve_fold_records_fold_and_fold_end_cause(tmp_path: Path) -> None:
+    """A stitched reserve fold threads to the labels and is recorded (H24-M1)."""
+
+    fx = _load_fixture()
+    case = _build_case(
+        tmp_path,
+        hypothesis="C1-H1",
+        flags=(("A", 261, True),),
+        declaration_overrides=_V24_DECLARATION,
+        fold=_RESERVE_FOLD,
+        reserve_sessions=_reserve_sessions(fx),
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.fold == _RESERVE_FOLD
+    assert diag.to_dict()["fold"] == {
+        "name": "reserve",
+        "start": C.RESERVE_START.isoformat(),
+        "end": date(2023, 7, 21).isoformat(),
+    }
+    reasons = [period.reason_t0 for period in diag.periods]
+    assert C.NotAssessedReason.FOLD_END_UNKNOWN in reasons
+    assert C.NotAssessedReason.RESERVE_UNKNOWN not in reasons
+
+    # The same beyond-E flag on the default fold is the development cause, and
+    # the default-fold payload carries no fold.
+    default = _build_case(
+        tmp_path / "default",
+        hypothesis="C1-H1",
+        flags=(("A", 261, True),),
+    )
+    default_reasons = [
+        period.reason_t0 for period in default.diagnostics.periods
+    ]
+    assert C.NotAssessedReason.RESERVE_UNKNOWN in default_reasons
+    assert C.NotAssessedReason.FOLD_END_UNKNOWN not in default_reasons
+    assert "fold" not in default.diagnostics.to_dict()
+
+
 # -- a grammar-certified (hypothesis-less) member end to end ----------------
 
 
@@ -1802,12 +1888,20 @@ def _build_event_case(
     events: Mapping[str, Sequence[tuple[int, time]]],
     status: Mapping[str, str] | None = None,
     verdict: Mapping[str, str] | None = None,
+    flags: Sequence[tuple[str, int, bool]] = (),
+    reserve_sessions: Sequence[date] = (),
+    fold: Any = None,
+    declaration_overrides: Mapping[str, Any] | None = None,
 ):
     from smart_beta.dataset_v1 import pqv2_events as EV
 
     fx = _load_fixture()
-    store = fx.SyntheticStore(tmp_path, name="root")
+    store = fx.SyntheticStore(
+        tmp_path, name="root", reserve_sessions=tuple(reserve_sessions)
+    )
     store.standard()
+    for key, session_index, beyond in flags:
+        store.add_flag(key, fx.SESSIONS[session_index], beyond=beyond)
     store.build_d7b()
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
@@ -1822,7 +1916,13 @@ def _build_event_case(
     panel = fx.factor_panel(spec, merged, store)
     base = fx.base_declaration(spec, panel)
     declaration = fx.declaration(
-        base, identity_hash=identity_hash, **_V23_DECLARATION
+        base,
+        identity_hash=identity_hash,
+        **(
+            declaration_overrides
+            if declaration_overrides is not None
+            else _V23_DECLARATION
+        ),
     )
     overlay = store.overlay(pq_id=declaration.pq_id, pq_hash=declaration.pq_hash)
     part, _fold, _holdout = fx.partition()
@@ -1839,6 +1939,7 @@ def _build_event_case(
         pq_bindings=pq_bindings,
         pq_read_records_fn=lambda path: fx.genesis_records(),
         event_layer=layer,
+        fold=fold if fold is not None else C.DEVELOPMENT_FOLD,
     )
     return diagnostics
 
@@ -2029,6 +2130,32 @@ def test_event_spec_requires_the_event_layer(tmp_path: Path) -> None:
         )
 
 
+def test_reserve_fold_event_g_records_fold(tmp_path: Path) -> None:
+    """A reserve fold threads through the EVENT_G scenarios and is recorded."""
+
+    fx = _load_fixture()
+    diagnostics = _build_event_case(
+        tmp_path,
+        expression=_ear_expression(),
+        roles=_ear_roles(),
+        events=_all_key_events(_EVENT_MORNING),
+        flags=(("A", 261, True),),
+        reserve_sessions=_reserve_sessions(fx),
+        fold=_RESERVE_FOLD,
+        declaration_overrides=_V24_DECLARATION,
+    )
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == E._dependency.EVENT_SIMPLE
+    assert diagnostics.methodology_version == C.AUTHORITY_V2_4.version
+    assert diagnostics.fold == _RESERVE_FOLD
+    assert diagnostics.to_dict()["fold"]["name"] == "reserve"
+    for scenario in ("T0", "TS"):
+        for event_scenario in ("K0", "K1"):
+            cell = diagnostics.cell(f"L-{scenario}-{event_scenario}")
+            assert cell is not None
+            assert C.PQV2_FOLD_END_UNKNOWN in cell.cause_union
+
+
 # ===========================================================================
 # 13. Mutation control and runner support
 # ===========================================================================
@@ -2081,6 +2208,8 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
         "H23-M1",
         "H23-M2",
         "H23-M3",
+        "H24-M1",
+        "H24-M2",
     }
     assert required.issubset(set(ids))
     for entry in payload:

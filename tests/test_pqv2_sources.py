@@ -1407,3 +1407,132 @@ def test_only_owned_paths_below_root(tmp_path: Path) -> None:
     resolver = R.Resolver(store.root, store.source_bindings.ca)
     with pytest.raises(R.ReserveFirewallError):
         resolver.resolve("reserve_sealed/secret.parquet")
+
+
+# ---------------------------------------------------------------------------
+# P-Q v2.4 reserve fold (PQ24-B)
+# ---------------------------------------------------------------------------
+
+#: The reserve fold used by the PQ24-B source tests: the reserve start and a
+#: July data cutoff E.
+_RESERVE_FOLD = C.Fold("reserve", C.RESERVE_START, date(2023, 7, 21))
+#: A synthetic stitched session grid (dev rows before 2023-07-03, reserve rows
+#: at/after it).
+_RESERVE_SESSIONS = _consecutive(date(2023, 6, 19), 40)
+
+
+def _load_fold(store: _Store, fold: C.Fold) -> C.SourceSet:
+    assert store.source_bindings is not None
+    return S.load_source_set(
+        store.root,
+        overlay=store.overlay(),
+        d7a_bindings=store.source_bindings,
+        ti_inputs=store.trusted(),
+        sessions=store.sessions,
+        fold=fold,
+    )
+
+
+def test_reserve_fold_next_within_fold_resolves(tmp_path: Path) -> None:
+    # A reserve-dated flag whose next(s) is inside the fold's end E resolves;
+    # a flag whose next(s) is beyond E is UNKNOWN_RESERVE.  The default fold's
+    # E would be DEVELOPMENT_END, so B24-M1 kills the first half.
+    sessions = _RESERVE_SESSIONS
+    daily = {"K1": {s: (0.01 if s < C.RESERVE_START else 0.05) for s in sessions}}
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key=daily,
+        flags=[
+            _flag(date(2023, 7, 5), date(2023, 7, 4), date(2023, 7, 6)),
+            _flag(date(2023, 7, 21), date(2023, 7, 20), date(2023, 7, 22)),
+        ],
+    )
+    source = _load_fold(store, _RESERVE_FOLD)
+    transitions = source.transitions_by_key["K1"]
+    assert [t.s for t in transitions] == [date(2023, 7, 5)]
+    assert transitions[0].m_obs == pytest.approx(1.05)
+    assert [(flag.s, flag.state) for flag in source.unknown_by_key["K1"]] == [
+        (date(2023, 7, 21), C.SourceState.UNKNOWN_RESERVE)
+    ]
+
+
+def test_reserve_fold_stitched_source_classification(tmp_path: Path) -> None:
+    # The stitched D7c frame carries dev rows before RESERVE_START and reserve
+    # rows at/after it, so each flag is classified by the source of its own
+    # date.  B24-M2 (limiting the lookup to DEVELOPMENT_END) kills the reserve
+    # half.
+    sessions = _RESERVE_SESSIONS
+    dev_flag = date(2023, 6, 27)  # next(s) 2023-06-28 -> development source
+    reserve_flag = date(2023, 7, 5)  # next(s) 2023-07-06 -> reserve source
+    daily = {"K1": {s: (0.01 if s < C.RESERVE_START else 0.05) for s in sessions}}
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key=daily,
+        flags=[
+            _flag(dev_flag, date(2023, 6, 26), date(2023, 6, 28)),
+            _flag(reserve_flag, date(2023, 7, 4), date(2023, 7, 6)),
+        ],
+    )
+    source = _load_fold(store, _RESERVE_FOLD)
+    by_s = {t.s: t for t in source.transitions_by_key["K1"]}
+    assert by_s[dev_flag].m_obs == pytest.approx(1.01)
+    assert by_s[reserve_flag].m_obs == pytest.approx(1.05)
+    assert source.unknown_by_key == {}
+
+
+def test_reserve_fold_misdated_window_crossing_e(tmp_path: Path) -> None:
+    # The flag's own next(s) is inside E, but its +5 trusted-session window
+    # crosses E, so it is UNKNOWN_RESERVE (firewall §2.2).
+    sessions = _RESERVE_SESSIONS
+    near_end = date(2023, 7, 19)
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {s: 0.01 for s in sessions}},
+        flags=[_flag(near_end, date(2023, 7, 18), date(2023, 7, 20))],
+    )
+    source = _load_fold(store, _RESERVE_FOLD)
+    assert source.transitions_by_key.get("K1", ()) == ()
+    assert [(flag.s, flag.state) for flag in source.unknown_by_key["K1"]] == [
+        (near_end, C.SourceState.UNKNOWN_RESERVE)
+    ]
+
+
+def test_reserve_fold_rejects_bad_fold(tmp_path: Path) -> None:
+    sessions = _consecutive(date(2023, 5, 1), 20)
+    store = _store(tmp_path, sessions=sessions, daily_by_key={}, flags=[])
+    with pytest.raises(C.PQv2InputError):
+        _load_fold(store, "reserve")  # type: ignore[arg-type]
+
+
+def test_no_reserve_open_under_default_fold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = _RESERVE_SESSIONS
+    store = _store(
+        tmp_path,
+        sessions=sessions,
+        daily_by_key={"K1": {s: 0.01 for s in sessions}},
+        flags=[_flag(date(2023, 6, 27), date(2023, 6, 26), date(2023, 6, 28))],
+    )
+    opened: list[str] = []
+    real_open = builtins.open
+    real_read_parquet = pd.read_parquet
+
+    def _open(file: Any, *args: Any, **kwargs: Any):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    def _read_parquet(path: Any, *args: Any, **kwargs: Any):
+        opened.append(str(path))
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _open)
+    monkeypatch.setattr(pd, "read_parquet", _read_parquet)
+    _load(store)
+
+    forbidden = ("reserve_sealed", "raw/", "dsc_evidence", "/raw", "knowledge_pit")
+    assert [path for path in opened if any(tok in path for tok in forbidden)] == []
+    assert opened

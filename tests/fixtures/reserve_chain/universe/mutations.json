@@ -1,0 +1,134 @@
+[
+ {
+  "id": "R7U-M1",
+  "description": "the dev/reserve package bindings are swapped at the reserve entry point",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "        prepared = _prepare_reserve(root, fold, bindings, lookback_bindings, calendar)",
+    "new": "        prepared = _prepare_reserve(root, fold, lookback_bindings, bindings, calendar)"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reserve_fold_lookback_stitching"
+ },
+ {
+  "id": "R7U-M2",
+  "description": "the lookback is taken from the reserve package instead of the development package",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    lookback_obs = _read_parquet(\n        lookback_resolver, lookback_bindings.d3.files[0].relative_path, _OBS_COLUMNS\n    )",
+    "new": "    lookback_obs = _read_parquet(\n        reserve_resolver, bindings.d3.files[0].relative_path, _OBS_COLUMNS\n    )"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reserve_fold_lookback_stitching"
+ },
+ {
+  "id": "R7U-M3",
+  "description": "the reserve ACCESS gate is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/fold.py",
+  "edits": [
+   {
+    "old": "        if self.source == RESERVE and not isinstance(self.grant, AccessGrant):\n            raise ReserveAccessDenied(\n                \"a reserve FoldWindow requires an AccessGrant; refusing before \"\n                \"any path is opened\"\n            )",
+    "new": "        if False:  # mutation R7U-M3: reserve gate bypassed\n            raise ReserveAccessDenied(\"gate bypassed\")"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reserve_fold_requires_access_grant"
+ },
+ {
+  "id": "R7U-M4",
+  "description": "the 252-session listing-age threshold is off by one",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    elif listing_age < U.MIN_LISTING_AGE_SESSIONS:",
+    "new": "    elif listing_age < U.MIN_LISTING_AGE_SESSIONS - 1:"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_listing_age_boundary"
+ },
+ {
+  "id": "R7U-M5",
+  "description": "the 63-session liquidity window is shortened by one",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "        wlo = p - U.LIQUIDITY_WINDOW",
+    "new": "        wlo = p - U.LIQUIDITY_WINDOW + 1"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_liquidity_threshold"
+ },
+ {
+  "id": "R7U-M6",
+  "description": "the 5% missingness rule becomes inclusive (exactly 5% fails)",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    elif numerator * 100 > 5 * denominator:",
+    "new": "    elif numerator * 100 >= 5 * denominator:"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_missingness_five_percent_boundary"
+ },
+ {
+  "id": "R7U-M7",
+  "description": "the ranking drops the security_key tie-break",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    eligible.sort(key=lambda e: (-e[\"median_dv\"], e[\"security_key\"]))",
+    "new": "    eligible.sort(key=lambda e: -e[\"median_dv\"])"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_dv_tie_resolved_by_security_key"
+ },
+ {
+  "id": "R7U-M8",
+  "description": "the TOP_1000 cap excludes rank 1000",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "            evaluation for evaluation in eligible if evaluation[\"rank\"] <= 1000",
+    "new": "            evaluation for evaluation in eligible if evaluation[\"rank\"] < 1000"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_top_1000_cap_excludes_rank_1001"
+ },
+ {
+  "id": "R7U-M9",
+  "description": "the identity-state admissibility check is skipped",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    if key.state != U.STATE_INTERVAL_ASSIGNED:",
+    "new": "    if False:  # mutation R7U-M9: identity state not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reason_precedence_identity_and_exchange"
+ },
+ {
+  "id": "R7U-M10",
+  "description": "the post-fold-end date guard is removed",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    _assert_fold_dates(combined[\"date\"], fold, what)",
+    "new": "    pass  # mutation R7U-M10: post-end dates not refused"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reserve_fold_rejects_post_end_row"
+ },
+ {
+  "id": "R7U-M11",
+  "description": "the eligible-exchange check is skipped",
+  "file": "smart_beta/dataset_v1/reserve_chain/universe_fold.py",
+  "edits": [
+   {
+    "old": "    elif key.exchange not in U.ELIGIBLE_EXCHANGES:",
+    "new": "    elif False:  # mutation R7U-M11: exchange not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_universe.py::test_reason_precedence_identity_and_exchange"
+ }
+]

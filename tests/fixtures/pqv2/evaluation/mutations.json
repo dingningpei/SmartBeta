@@ -12,8 +12,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )",
-        "new": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed) and certified.reason != _core.NotAssessedReason.SIGN_NOT_CERTIFIED:\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )\n    if isinstance(certified, _core.NotAssessed):\n        certified = _dependency.CertifiedClass(\n            _dependency.SIMPLE,\n            \"C1-H1\",\n            ed_id=authority.ed_id,\n            ce_id=authority.ce_id,\n        )"
+        "old": "    certified = _dependency.certify(\n        factor_spec, authority=_certification_authority(authority)\n    )\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            certified.reason,\n            authority=authority,\n            fold=fold,\n        )",
+        "new": "    certified = _dependency.certify(\n        factor_spec, authority=_certification_authority(authority)\n    )\n    if isinstance(certified, _core.NotAssessed) and certified.reason != _core.NotAssessedReason.SIGN_NOT_CERTIFIED:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            certified.reason,\n            authority=authority,\n            fold=fold,\n        )\n    if isinstance(certified, _core.NotAssessed):\n        certified = _dependency.CertifiedClass(\n            _dependency.SIMPLE,\n            \"C1-H1\",\n            ed_id=authority.ed_id,\n            ce_id=authority.ce_id,\n        )"
       },
       {
         "old": "        declaration.base.primary_metric,\n        int(factor_spec.sign),\n        declaration.base.transaction_cost_bps,",
@@ -148,8 +148,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if envelope.gate_reason is not None:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n        )",
-        "new": "    if False:  # H-M9 legacy SIMPLE rule tag accepted\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n        )"
+        "old": "    if envelope.gate_reason is not None:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n            fold=fold,\n        )",
+        "new": "    if False:  # H-M9 legacy SIMPLE rule tag accepted\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            envelope.gate_reason,\n            metric_basis=metric_basis,\n            certified_class=certified,\n            authority=authority,\n            fold=fold,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_legacy_simple_rule_tag_fails_closed"
@@ -172,8 +172,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    if identity_hash != declaration.dataset_identity_hash:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n        )",
-        "new": "    if False:  # H-M11 upstream dataset identity hash ignored\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n        )"
+        "old": "    if identity_hash != declaration.dataset_identity_hash:\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n            fold=fold,\n        )",
+        "new": "    if False:  # H-M11 upstream dataset identity hash ignored\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,\n            authority=authority,\n            fold=fold,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_dataset_identity_mismatch_blank"
@@ -374,8 +374,8 @@
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
-        "old": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )",
-        "new": "    certified = _dependency.certify(factor_spec, authority=authority)\n    if (\n        not isinstance(certified, _core.NotAssessed)\n        and getattr(certified, \"hypothesis\", None) is None\n    ):  # V22-M10 unlabelled grammar spec rejected\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED,\n            authority=authority,\n        )\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration, factor_spec, certified.reason, authority=authority\n        )"
+        "old": "    certified = _dependency.certify(\n        factor_spec, authority=_certification_authority(authority)\n    )\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            certified.reason,\n            authority=authority,\n            fold=fold,\n        )",
+        "new": "    certified = _dependency.certify(\n        factor_spec, authority=_certification_authority(authority)\n    )\n    if (\n        not isinstance(certified, _core.NotAssessed)\n        and getattr(certified, \"hypothesis\", None) is None\n    ):  # V22-M10 unlabelled grammar spec rejected\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            _core.NotAssessedReason.EXPRESSION_NOT_CERTIFIED,\n            authority=authority,\n            fold=fold,\n        )\n    if isinstance(certified, _core.NotAssessed):\n        return _blank_diagnostics(\n            declaration,\n            factor_spec,\n            certified.reason,\n            authority=authority,\n            fold=fold,\n        )"
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_grammar_member_unlabelled_spec_is_assessed"
@@ -475,5 +475,29 @@
       }
     ],
     "test": "tests/test_pqv2_evaluation.py::test_event_cause_recorded_in_diagnostics"
+  },
+  {
+    "id": "H24-M1",
+    "description": "the fold is not threaded to the labels",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        labels[key] = _labels.label_envelope(\n            record,\n            transitions,\n            candidates,\n            unknown,\n            fold=fold,\n            t0_value=scenario_t0.get((formation, key)),\n            ts_value=scenario_ts.get((formation, key)),\n        )",
+        "new": "        labels[key] = _labels.label_envelope(\n            record,\n            transitions,\n            candidates,\n            unknown,\n            t0_value=scenario_t0.get((formation, key)),\n            ts_value=scenario_ts.get((formation, key)),\n        )"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_reserve_fold_records_fold_and_fold_end_cause"
+  },
+  {
+    "id": "H24-M2",
+    "description": "fold appears in default-fold diagnostics",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "        if not self.fold.is_development:\n            body[\"fold\"] = _fold_payload(self.fold)",
+        "new": "        if True:  # H24-M2 default-fold diagnostics must omit fold\n            body[\"fold\"] = _fold_payload(self.fold)"
+      }
+    ],
+    "test": "tests/test_pqv2_evaluation.py::test_default_fold_diagnostics_omit_fold"
   }
 ]

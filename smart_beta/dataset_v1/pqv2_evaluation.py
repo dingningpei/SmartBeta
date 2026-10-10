@@ -204,8 +204,9 @@ def _declaration_authority(
 ) -> _core.MethodologyAuthority | None:
     """Resolve the declaration's admitted authority, or ``None`` (E1 §2).
 
-    The v2.1 (Campaign-2) and v2.2 authorities are both admitted; the historical
-    v2 authority (and any other identity triple) fails closed with ``None``.
+    The v2.1 (Campaign-2), v2.2, v2.3 and v2.4 authorities are all admitted; the
+    historical v2 authority (and any other identity triple) fails closed with
+    ``None``.
     """
 
     if declaration.pq_methodology != PQ_METHODOLOGY:
@@ -223,10 +224,11 @@ def _declaration_authority(
 def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:
     """The typed identity-mismatch reason, or ``None`` when the declaration binds.
 
-    A v2 or v2.1 declaration is *not* rejected: both admitted authorities are
-    accepted (E1 §4: the Campaign-2 v2.1 path stays byte-identical).  Only an
-    identity triple outside :data:`pqv2_core.ADMITTED_AUTHORITIES` (for example
-    the historical v2 authority) is a typed blank ``PQV2_IDENTITY_MISMATCH``.
+    Every admitted authority (v2.1 through v2.4) is accepted: the Campaign-2
+    v2.1 path stays byte-identical (E1 §4) and the v2.4 fold-firewall authority
+    resolves (plan §1).  Only an identity triple outside
+    :data:`pqv2_core.ADMITTED_AUTHORITIES` (for example the historical v2
+    authority) is a typed blank ``PQV2_IDENTITY_MISMATCH``.
     """
 
     authority = _declaration_authority(declaration)
@@ -237,6 +239,33 @@ def _declaration_reason(declaration: PQv2EvaluationDeclaration) -> str | None:
     if declaration.dataset_id != _pq.DATASET_ID:
         return _core.NotAssessedReason.IDENTITY_MISMATCH
     return None
+
+
+def _certification_authority(
+    authority: _core.MethodologyAuthority,
+) -> _core.MethodologyAuthority:
+    """The authority whose grammar certifies the expression.
+
+    P-Q v2.4 amends only the temporal firewall: every grammar, S2/CS and the
+    causes and precedence are the unchanged v2.3 ones (fold-firewall §0).  A
+    v2.4 declaration therefore certifies through the v2.3 chain base while the
+    v2.4 identity is what the diagnostics record; every earlier authority is
+    passed through unchanged.
+    """
+
+    if authority is _core.AUTHORITY_V2_4:
+        return _core.AUTHORITY_V2_3
+    return authority
+
+
+def _fold_payload(fold: _core.Fold) -> dict[str, Any]:
+    """The JSON-safe fold summary recorded in non-default diagnostics (plan §1)."""
+
+    return {
+        "name": fold.name,
+        "start": None if fold.start is None else fold.start.isoformat(),
+        "end": fold.end.isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +396,7 @@ class PQv2Period:
 
 @dataclass(frozen=True)
 class PQv2Diagnostics:
-    """In-memory P-Q v2 diagnostics for one declared development fold."""
+    """In-memory P-Q v2 diagnostics for one declared evaluation fold."""
 
     not_assessed: str | None
     declaration_hash: str
@@ -417,6 +446,10 @@ class PQv2Diagnostics:
     event_scenarios: tuple[str, ...] = ()
     event_scenarios_identical: bool | None = None
     b_diagnostics: Any = field(default=None, compare=False, repr=False)
+    #: The declared evaluation fold (P-Q v2.4 plan §1).  The default development
+    #: fold is deliberately omitted from :meth:`to_dict`, so the v2.1-v2.3
+    #: payloads stay byte-identical; a non-default fold is recorded explicitly.
+    fold: _core.Fold = _core.DEVELOPMENT_FOLD
 
     def cell(self, name: str) -> PQv2Cell | None:
         for item in self.cells:
@@ -469,6 +502,8 @@ class PQv2Diagnostics:
         if self.base_methodology_sha256 is not None:
             body["methodology_version"] = self.methodology_version
             body["base_methodology_sha256"] = self.base_methodology_sha256
+        if not self.fold.is_development:
+            body["fold"] = _fold_payload(self.fold)
         if self.event_scenarios:
             body["event_scenarios"] = list(self.event_scenarios)
             body["event_scenarios_identical"] = self.event_scenarios_identical
@@ -938,6 +973,7 @@ def _labels_for_formation(
     label_by_key: Mapping[tuple[date, str], Mapping[str, Any]],
     scenario_t0: Mapping[tuple[date, str], float],
     scenario_ts: Mapping[tuple[date, str], float],
+    fold: _core.Fold = _core.DEVELOPMENT_FOLD,
 ) -> dict[str, _labels.LabelEnvelope]:
     labels: dict[str, _labels.LabelEnvelope] = {}
     for key in sorted(universe):
@@ -954,6 +990,7 @@ def _labels_for_formation(
             transitions,
             candidates,
             unknown,
+            fold=fold,
             t0_value=scenario_t0.get((formation, key)),
             ts_value=scenario_ts.get((formation, key)),
         )
@@ -1276,6 +1313,7 @@ def _blank_diagnostics(
     metric_basis: str | None = None,
     certified_class: Any = None,
     authority: _core.MethodologyAuthority | None = None,
+    fold: _core.Fold = _core.DEVELOPMENT_FOLD,
 ) -> PQv2Diagnostics:
     declaration_hash = declaration.declaration_hash
     base_methodology_sha256 = (
@@ -1348,6 +1386,7 @@ def _blank_diagnostics(
         methodology_version=None if authority is None else authority.version,
         base_methodology_sha256=base_methodology_sha256,
         b_diagnostics=None,
+        fold=fold,
     )
 
 
@@ -1379,11 +1418,19 @@ def build_pqv2_diagnostics(
     repo_root: Path | str | None = None,
     event_layer: Any | None = None,
     event_scenario: str | None = None,
+    fold: _core.Fold = _core.DEVELOPMENT_FOLD,
     _event_dispatch: bool = True,
 ) -> PQv2Diagnostics:
-    """Evaluate one declared development fold under the frozen P-Q v2 model.
+    """Evaluate one declared fold under the frozen P-Q v2 model.
 
-    For an ``EVENT_SIMPLE`` spec under :data:`pqv2_core.AUTHORITY_V2_3` the
+    ``fold`` declares the evaluation fold (P-Q v2.4 plan §1): it is threaded to
+    the source, label and event layers, so a non-default (reserve) fold applies
+    the firewall's end ``E`` and its ``PQV2_FOLD_END_UNKNOWN`` cause.  The
+    default is the development fold, so the default path is byte-identical to
+    v2.3 and its diagnostics carry no ``fold`` field.
+
+    For an ``EVENT_SIMPLE`` spec under :data:`pqv2_core.AUTHORITY_V2_3` (or the
+    v2.4 fold-firewall authority, whose grammar is the unchanged v2.3 one) the
     caller supplies the v1.3 development ``event_layer`` (PQ23-B); the
     evaluation then builds the K0/K1 event inputs, evaluates the factor panel
     per scenario and records the four-way {T0,TS}x{K0,K1} cells.  Without an
@@ -1395,15 +1442,22 @@ def build_pqv2_diagnostics(
         raise PQv2DeclarationError(
             "declaration must be a PQv2EvaluationDeclaration"
         )
+    if not isinstance(fold, _core.Fold):
+        raise _core.PQv2InputError("fold must be a Fold")
     bindings = bindings if bindings is not None else _d7b.DEFAULT_BINDINGS
 
     # Step 1 - authority and declaration binding, before any data access.
     _core.verify_authority(repo_root)
     authority = _declaration_authority(declaration)
+    if authority is _core.AUTHORITY_V2_4:
+        # The v2.4 fold-firewall authority re-verifies its whole v2.3->v2.2->
+        # v2.1 chain (and the pinned code); the v2.1 current check above is kept
+        # first, byte-identically, for every other declaration.
+        _core.verify_authority(repo_root, authority)
     reason = _declaration_reason(declaration)
     if reason is not None:
         return _blank_diagnostics(
-            declaration, factor_spec, reason, authority=authority
+            declaration, factor_spec, reason, authority=authority, fold=fold
         )
 
     # Step 2 - dataset identity and overlay.
@@ -1421,6 +1475,7 @@ def build_pqv2_diagnostics(
             factor_spec,
             _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,
             authority=authority,
+            fold=fold,
         )
     if identity_hash != declaration.dataset_identity_hash:
         return _blank_diagnostics(
@@ -1428,6 +1483,7 @@ def build_pqv2_diagnostics(
             factor_spec,
             _core.NotAssessedReason.DATASET_IDENTITY_MISMATCH,
             authority=authority,
+            fold=fold,
         )
     if overlay.pq_id != declaration.pq_id or overlay.pq_hash != declaration.pq_hash:
         return _blank_diagnostics(
@@ -1435,20 +1491,32 @@ def build_pqv2_diagnostics(
             factor_spec,
             _core.NotAssessedReason.OVERLAY_MISMATCH,
             authority=authority,
+            fold=fold,
         )
 
     # Step 3 - expression, sign and metric gates.  The resolved admitted
     # authority selects the classifier (E1 §3): v2.1 is the enumerated-key CE
-    # classifier, v2.2 is the A§15A grammar recognizer.
-    certified = _dependency.certify(factor_spec, authority=authority)
+    # classifier, v2.2 is the A§15A grammar recognizer, and v2.4 certifies
+    # through its unchanged v2.3 base (fold-firewall §0).
+    certified = _dependency.certify(
+        factor_spec, authority=_certification_authority(authority)
+    )
     if isinstance(certified, _core.NotAssessed):
         return _blank_diagnostics(
-            declaration, factor_spec, certified.reason, authority=authority
+            declaration,
+            factor_spec,
+            certified.reason,
+            authority=authority,
+            fold=fold,
         )
     windows = _dependency.dependency_windows(factor_spec.expression)
     if isinstance(windows, _core.NotAssessed):
         return _blank_diagnostics(
-            declaration, factor_spec, windows.reason, authority=authority
+            declaration,
+            factor_spec,
+            windows.reason,
+            authority=authority,
+            fold=fold,
         )
     metric_basis = _metric_kind(declaration.base.primary_metric)
     if metric_basis is None:
@@ -1458,6 +1526,7 @@ def build_pqv2_diagnostics(
             _core.NotAssessedReason.METRIC_NOT_CERTIFIED,
             certified_class=certified,
             authority=authority,
+            fold=fold,
         )
 
     # P-Q v2.3 (E§5.3): an EVENT_SIMPLE spec is evaluated under both event
@@ -1482,6 +1551,7 @@ def build_pqv2_diagnostics(
             pq_read_records_fn=pq_read_records_fn,
             sessions=sessions,
             repo_root=repo_root,
+            fold=fold,
         )
 
     # Step 4 - B exactly as D7b, reconstructed and reconciled bit-exactly.
@@ -1501,6 +1571,7 @@ def build_pqv2_diagnostics(
             metric_basis=metric_basis,
             certified_class=certified,
             authority=authority,
+            fold=fold,
         )
     (scenario_t0, scenario_ts), groups, loaded = _reconstruct_b(
         root, declaration, factor_spec, factor_panel, partition, bindings
@@ -1527,6 +1598,7 @@ def build_pqv2_diagnostics(
         else bindings,
         ti_inputs=inputs,
         sessions=session_list,
+        fold=fold,
     )
 
     # Step 6 - STD_X_RANK operand realization and consistency assertion.
@@ -1573,6 +1645,7 @@ def build_pqv2_diagnostics(
             loaded.label_by_key,
             scenario_t0_lookup,
             scenario_ts_lookup,
+            fold=fold,
         )
         labels_by_period[formation] = labels
         cross_keys = _cross_section_keys(m_by_formation, v_by_formation, formation)
@@ -1618,6 +1691,7 @@ def build_pqv2_diagnostics(
             metric_basis=metric_basis,
             certified_class=certified,
             authority=authority,
+            fold=fold,
         )
 
     # Step 9 - the L statistics on B's ordered finite-period index.
@@ -1774,6 +1848,7 @@ def build_pqv2_diagnostics(
             None if authority is None else authority.base_methodology_sha256
         ),
         b_diagnostics=diag_b,
+        fold=fold,
     )
 
 
@@ -1928,6 +2003,7 @@ def _build_event_diagnostics(
     pq_read_records_fn: Any | None,
     sessions: Sequence[date] | None,
     repo_root: Path | str | None,
+    fold: _core.Fold = _core.DEVELOPMENT_FOLD,
 ) -> PQv2Diagnostics:
     """Evaluate an ``EVENT_SIMPLE`` spec under both event scenarios (E§5.3).
 
@@ -1971,6 +2047,7 @@ def _build_event_diagnostics(
         sessions=session_list,
         repo_root=repo_root,
         event_layer=event_layer,
+        fold=fold,
         _event_dispatch=False,
     )
     k0 = build_pqv2_diagnostics(

@@ -102,5 +102,70 @@
   ],
   "test": "tests/test_pqv2_oracle_events.py::test_event_primitive_as_divisor_is_outside",
   "expected": "killed"
+ },
+ {
+  "id": "G24-M1",
+  "description": "the reserve fold reports the development cause PQV2_RESERVE_UNKNOWN instead of the new PQV2_FOLD_END_UNKNOWN",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        return FOLD_CAUSE_FOLD_END if self.is_reserve else FOLD_CAUSE_RESERVE",
+    "new": "        return FOLD_CAUSE_RESERVE"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_fold.py::test_reserve_fold_uses_fold_end_cause",
+  "expected": "killed"
+ },
+ {
+  "id": "G24-M2",
+  "description": "the fold firewall drops the label-endpoint rule (e* == E is no longer UNKNOWN)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "        if e2 == self.sessions[end]:\n            return True",
+    "new": "        if False:\n            return True"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_fold.py::test_development_fold_label_endpoint_unknown",
+  "expected": "killed"
+ },
+ {
+  "id": "G24-M3",
+  "description": "the fold firewall drops the MISDATED-window crossing rule (+5 past E is no longer UNKNOWN)",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "            if self._pos[s] + MISDATED_WINDOW > end:\n                return True",
+    "new": "            if False:\n                return True"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_fold.py::test_reserve_fold_misdated_crossing_unknown",
+  "expected": "killed"
+ },
+ {
+  "id": "G24-M4",
+  "description": "the fold event rule uses K >= E instead of K > E, so an event exactly at the fold end is a spurious incident",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "                and self.sessions[pk] > int(self.fold.end)",
+    "new": "                and self.sessions[pk] >= int(self.fold.end)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_fold.py::test_reserve_fold_event_at_end_admissible",
+  "expected": "killed"
+ },
+ {
+  "id": "G24-M5",
+  "description": "the fold event firewall is dropped, so an event with K > E is not an incident",
+  "file": "tests/pqv2_oracle/oracle.py",
+  "edits": [
+   {
+    "old": "            if (\n                self.fold is not None\n                and self.fold.end is not None\n                and self.sessions[pk] > int(self.fold.end)\n            ):\n                causes.add(EVENT_CAUSE_RESERVE)",
+    "new": "            if False:\n                causes.add(EVENT_CAUSE_RESERVE)"
+   }
+  ],
+  "test": "tests/test_pqv2_oracle_fold.py::test_reserve_fold_event_beyond_incident",
+  "expected": "killed"
  }
 ]
