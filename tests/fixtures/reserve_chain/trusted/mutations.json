@@ -89,7 +89,7 @@
     "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
     "edits": [
       {
-        "old": "    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):",
+        "old": "    if fold.source == RESERVE and not _is_verified_access_grant(fold.grant):",
         "new": "    if fold.source == RESERVE and False:"
       }
     ],

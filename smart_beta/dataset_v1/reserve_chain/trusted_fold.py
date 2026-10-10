@@ -76,6 +76,7 @@ from smart_beta.dataset_v1.reserve_chain.fold import (
     AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
+    _is_verified_access_grant,
 )
 from smart_beta.dataset_v1.reserve_firewall import (
     DevelopmentAccessor,
@@ -738,13 +739,14 @@ def build_trusted_fold(
     """
     if not isinstance(fold, FoldWindow):
         raise TrustedFoldInputError("fold must be a FoldWindow")
-    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):
+    if fold.source == RESERVE and not _is_verified_access_grant(fold.grant):
         # Defense in depth: R7-U's FoldWindow already refuses this at
         # construction.  Re-check here so a forged grantless reserve fold is
         # denied before any path is opened.
         raise ReserveAccessDenied(
-            "a reserve trusted-input derivation requires an AccessGrant; "
-            "refusing before any path is opened"
+            "a reserve trusted-input derivation requires a K-PIT-verified "
+            "AccessGrant (access.AccessGrant.from_kpit); refusing before any "
+            "path is opened"
         )
     bindings = bindings if bindings is not None else T.DEFAULT_BINDINGS
     if not isinstance(bindings, T.Bindings):

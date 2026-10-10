@@ -57,6 +57,25 @@ def _load_fixture():
 
 FX = _load_fixture()
 
+_GRANTS_PATH = (
+    _REPO_ROOT / "tests" / "fixtures" / "reserve_chain" / "confirm" / "synthetic.py"
+)
+
+
+def _load_grants():
+    name = "r7x_confirm_synthetic"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _GRANTS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+_GRANTS = _load_grants()
+
 
 # ---------------------------------------------------------------------------
 # Guards
@@ -131,12 +150,8 @@ def _dev_fold():
 
 
 def _grant(end: date = date(2023, 12, 29)):
-    return F.AccessGrant(
-        hypothesis_id="H-R7T-TEST",
-        procedure_id="EWC_T23_ONE_SIDED",
-        fold_start=F.RESERVE_START,
-        fold_end=end,
-    )
+    # A hand-built grant is refused since R7-X-R1; mint a K-PIT-verified one.
+    return _GRANTS.verified_grant(hypothesis_id="H-R7T-TEST", fold_end=end)
 
 
 def _reserve_fold(end: date = date(2023, 7, 14)):

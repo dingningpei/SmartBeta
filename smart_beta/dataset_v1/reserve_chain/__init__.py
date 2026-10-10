@@ -5,10 +5,10 @@ R7-X access gate/executor) add their own module line when they land.
 """
 
 from smart_beta.dataset_v1.reserve_chain.fold import (
-    AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
 )
+from smart_beta.dataset_v1.reserve_chain.access import AccessGrant
 from smart_beta.dataset_v1.reserve_chain.universe_fold import (
     run_reserve_universe,
     run_universe_fold,

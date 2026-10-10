@@ -61,6 +61,7 @@ from smart_beta.dataset_v1.reserve_chain.fold import (
     AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
+    _is_verified_access_grant,
 )
 from smart_beta.pit.corporate_actions import compute_adjusted_returns
 
@@ -956,13 +957,14 @@ def build_returns_fold(
     """
     if not isinstance(fold, FoldWindow):
         raise ReturnsFoldInputError("fold must be a FoldWindow value")
-    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):
+    if fold.source == RESERVE and not _is_verified_access_grant(fold.grant):
         # Defense in depth: R7-U's FoldWindow already refuses this at
         # construction.  Re-check here so a forged grantless reserve fold is
         # denied before any path is opened.
         raise ReserveAccessDenied(
-            "a reserve returns-fold derivation requires an AccessGrant; "
-            "refusing before any path is opened"
+            "a reserve returns-fold derivation requires a K-PIT-verified "
+            "AccessGrant (access.AccessGrant.from_kpit); refusing before any "
+            "path is opened"
         )
     if not isinstance(hmax, int) or hmax < 1:
         raise ReturnsFoldInputError("hmax must be a positive integer")
