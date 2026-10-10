@@ -1,0 +1,74 @@
+[
+ {
+  "id": "X3-M1",
+  "description": "evaluation before registration (the proposal slot is not claimed first)",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "            self.registry.register(proposal)\n            self._registered[proposal_id] = self.registry.get(proposal_id)",
+    "new": "            self._registered[proposal_id] = None"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_registration_before_evaluation"
+ },
+ {
+  "id": "X3-M2",
+  "description": "a NOT_CERTIFIED candidate is not counted in the manifest",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "            n_not_certified=sum(\n                1 for item in self._certified.values() if not is_certified(item)\n            ),",
+    "new": "            n_not_certified=0,"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_not_certified_candidate_counted"
+ },
+ {
+  "id": "X3-M3",
+  "description": "OOS (T-B) metrics are fed back to the generator",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "            visible, (FeedbackChannel.IS_METRICS,)",
+    "new": "            visible, (FeedbackChannel.OOS_METRICS,)"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_feedback_is_is_only"
+ },
+ {
+  "id": "X3-M4",
+  "description": "a crash after persist is not reconciled and the generator is called again",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        self.reconcile()\n        while True:",
+    "new": "        while True:"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_crash_reconcile_no_regeneration"
+ },
+ {
+  "id": "X3-M5",
+  "description": "the K-PIT GENERATOR freeze is written after the evaluation",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        if proposal_id not in self._frozen:",
+    "new": "        if False:  # mutation X3-M5: the freeze is not written before evaluation"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_kpit_freeze_precedes_evaluation"
+ },
+ {
+  "id": "X3-M6",
+  "description": "the proposal budget is off by one (N+1 events)",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        if len(self._events) >= self.policy.max_proposal_budget:",
+    "new": "        if len(self._events) > self.policy.max_proposal_budget:"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_budget_exhaustion_at_exactly_n"
+ }
+]
