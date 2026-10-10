@@ -26,6 +26,7 @@ import pytest
 from smart_beta.campaign import campaign3_eval as E
 from smart_beta.campaign import campaign3_generation as G
 from smart_beta.research.generator import GeneratorBoundary
+from smart_beta.research.loop import GeneratorFailureError
 from smart_beta.research.history import (
     DevelopmentFoldRole,
     FeedbackChannel,
@@ -144,7 +145,7 @@ def test_policy_literals_frozen():
     assert policy.max_proposal_budget == 100
     assert policy.feedback_channels == (FeedbackChannel.IS_METRICS,)
     assert policy.holdout_visibility is HoldoutVisibility.NONE
-    assert policy.max_llm_token_budget == 2_000_000
+    assert policy.max_llm_token_budget == 4_000_000
     assert policy.max_llm_cost_budget == 150.0
     assert policy.prompt_template_hash == PROMPT_TEMPLATE_HASH
     assert _policy(dry_run=True).max_llm_cost_budget == 5.0
@@ -559,6 +560,93 @@ def test_generator_failure_not_retried():
     assert ex.generator_calls == 1
     assert result.manifest.n_used == 0
     assert result.manifest.stop_reason == G.Campaign3StopReason.GENERATOR_FAILURE.value
+
+
+# ---------------------------------------------------------------------------
+# 10b. failed-call token accounting (erratum A2-E1, mutation D3-M8)
+# ---------------------------------------------------------------------------
+
+
+class _TokenCarryingFailure(GeneratorFailureError):
+    """A typed generator failure that carries provider-reported usage."""
+
+    def __init__(self, tokens_used: int) -> None:
+        super().__init__("the provider returned usage, then the call failed")
+        self.tokens_used = tokens_used
+
+
+def test_failed_call_tokens_are_counted():
+    def factory(visible, feedback, index):
+        raise _TokenCarryingFailure(250)
+
+    gen = fx.ScriptedGenerator(factory=factory)
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=3),
+    )
+    result = ex.run()
+    # The run still stops as GENERATOR_FAILURE: no retry, no candidate, and
+    # n_used is unaffected by the failed call.
+    assert ex.generator_calls == 1
+    assert result.manifest.n_used == 0
+    assert ex.events == ()
+    assert result.manifest.stop_reason == G.Campaign3StopReason.GENERATOR_FAILURE.value
+    # ... but the provider-reported tokens are not dropped.
+    assert result.manifest.failed_calls == 1
+    assert result.manifest.failed_call_tokens == 250
+    assert result.manifest.tokens_used == 250
+
+
+def test_api_error_without_usage_counts_as_failed_call_with_zero_tokens():
+    gen = fx.ScriptedGenerator(
+        outputs=[fx.generation_output(fx.candidate(fx.simple_spec_dict()))],
+        raise_on={0},
+    )
+    ex = _executor(generator=gen, evaluator=fx.StubEvaluator())
+    result = ex.run()
+    assert ex.generator_calls == 1
+    assert result.manifest.stop_reason == G.Campaign3StopReason.GENERATOR_FAILURE.value
+    assert result.manifest.failed_calls == 1
+    assert result.manifest.failed_call_tokens == 0
+    assert result.manifest.tokens_used == 0
+
+
+def test_token_hard_stop_counts_failed_call_tokens():
+    calls = {"n": 0}
+
+    def factory(visible, feedback, index):
+        calls["n"] += 1
+        raise _TokenCarryingFailure(150)
+
+    gen = fx.ScriptedGenerator(factory=factory)
+    ex = _executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        policy=_policy(max_proposal_budget=5, max_llm_token_budget=100),
+    )
+    result = ex.run()
+    assert result.manifest.stop_reason == G.Campaign3StopReason.GENERATOR_FAILURE.value
+    assert result.manifest.tokens_used == 150
+    # The failed-call spend is part of the total the token hard stop checks.
+    assert ex._budget_stop() is G.Campaign3StopReason.LLM_TOKEN_BUDGET_EXHAUSTED
+    resumed = ex.run()
+    assert resumed.manifest.stop_reason == (
+        G.Campaign3StopReason.LLM_TOKEN_BUDGET_EXHAUSTED.value
+    )
+    assert calls["n"] == 1
+
+
+def test_manifest_to_dict_includes_failed_call_fields():
+    gen = fx.ScriptedGenerator(
+        outputs=[fx.generation_output(fx.candidate(fx.simple_spec_dict()))],
+        raise_on={0},
+    )
+    ex = _executor(generator=gen, evaluator=fx.StubEvaluator())
+    manifest = ex.run().manifest
+    body = manifest.to_dict()
+    assert body["failed_calls"] == 1
+    assert body["failed_call_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------

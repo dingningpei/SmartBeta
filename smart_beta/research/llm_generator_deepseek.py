@@ -1,10 +1,12 @@
 """C3-D — Campaign-3 P4 DeepSeek generator adapter (OpenAI-compatible).
 
 This module owns **only** the frozen C3-D task of
-``docs/campaign3_p4_amendment_a2_deepseek.md`` (FROZEN 2026-10-10), which
-supersedes the C3-G Anthropic provider decision (D4) and the
-``claude-opus-5-5`` model literal of ``docs/campaign3_p4_implementation_spec.md``
-sections 3/4. Every other P4 literal is unchanged.
+``docs/campaign3_p4_amendment_a2_deepseek.md`` (FROZEN 2026-10-10) **as
+corrected by its Erratum A2-E1** (``reasoning_effort="low"``,
+``max_tokens = 32000``, and failed-call token accounting), which supersedes the
+C3-G Anthropic provider decision (D4) and the ``claude-opus-5-5`` model literal
+of ``docs/campaign3_p4_implementation_spec.md`` sections 3/4. Every other P4
+literal is unchanged.
 
 The adapter has the same callable interface as C3-G
 (``(visible_history, feedback) -> GenerationOutput``) and **reuses C3-G by
@@ -30,7 +32,11 @@ Frozen literals (amendment section 1)
   ``OpenAI(api_key=..., base_url=..., max_retries=0)`` and used for exactly
   one ``client.chat.completions.create(model=..., messages=[system, user],
   max_tokens=..., stream=False)`` call;
-* the model literal ``deepseek-v4-flash``; ``max_tokens = 8000``;
+* the model literal ``deepseek-v4-flash``; ``max_tokens = 32000``;
+* ``reasoning_effort="low"`` is passed as a named
+  ``chat.completions.create`` parameter (erratum A2-E1: thinking mode is on by
+  default at effort ``high``); the value is recorded in the settings and the
+  call record;
 * no ``temperature`` override (the provider default is recorded as such);
 * the raw artifact is ``choices[0].message.content`` **verbatim** -- a
   provider ``reasoning_content`` field, if present, is never stored (only its
@@ -38,7 +44,9 @@ Frozen literals (amendment section 1)
 * ``response.model`` (the provider may alias the name) and
   ``finish_reason`` are recorded per call;
 * ``finish_reason == "length"`` is a typed failure: the truncated response is
-  never accepted and is never retried;
+  never accepted and is never retried. The failure still carries the
+  provider-reported ``prompt_tokens + completion_tokens`` so the executor can
+  account that spend against the token hard stop (erratum A2-E1);
 * ``tokens_used`` = ``usage.prompt_tokens + usage.completion_tokens``;
   ``cost_used`` only from a run-time :class:`PriceTable`, otherwise ``None``;
 * ``DEEPSEEK_API_KEY`` is read **only** when the real client is constructed,
@@ -75,6 +83,7 @@ __all__ = [
     "PROVIDER",
     "MODEL_ID",
     "MAX_TOKENS",
+    "REASONING_EFFORT",
     "BASE_URL",
     "API_KEY_ENV",
     "GENERATOR_IDENTITY",
@@ -82,6 +91,7 @@ __all__ = [
     "FINISH_REASON_STOP",
     "FINISH_REASON_LENGTH",
     "DeepSeekLlmGeneratorError",
+    "DeepSeekGeneratorFailure",
     "DeepSeekLengthTruncationError",
     "DeepSeekCallRecord",
     "Campaign3DeepSeekGenerator",
@@ -100,8 +110,13 @@ PROVIDER = "deepseek"
 MODEL_ID = "deepseek-v4-flash"
 
 #: The frozen per-invocation output ceiling (the model may spend output tokens
-#: on reasoning).
-MAX_TOKENS = 8000
+#: on reasoning). Raised from 8000 to 32000 by erratum A2-E1 after the D13 dry
+#: run spent the whole 8000-token ceiling on reasoning and returned no content.
+MAX_TOKENS = 32000
+
+#: The frozen thinking-effort literal (erratum A2-E1). DeepSeek thinking mode
+#: is on by default at effort ``high``; the request pins it to ``low``.
+REASONING_EFFORT = "low"
 
 #: The frozen OpenAI-compatible API base URL.
 BASE_URL = "https://api.deepseek.com"
@@ -130,11 +145,34 @@ class DeepSeekLlmGeneratorError(LlmGeneratorError):
     """The C3-D adapter contract is malformed (fail closed)."""
 
 
-class DeepSeekLengthTruncationError(GeneratorFailureError):
+class DeepSeekGeneratorFailure(GeneratorFailureError):
+    """A typed DeepSeek failure that may carry provider-reported usage.
+
+    A failure raised **after** the provider returned a usage block carries
+    ``tokens_used`` (``prompt_tokens + completion_tokens``) so the executor can
+    add the spend to ``tokens_used`` and check the token hard stop (erratum
+    A2-E1). A failure raised without a usage block defaults to ``0``.
+    """
+
+    def __init__(self, message: str, *, tokens_used: int = 0) -> None:
+        super().__init__(message)
+        if (
+            isinstance(tokens_used, bool)
+            or not isinstance(tokens_used, int)
+            or tokens_used < 0
+        ):
+            raise DeepSeekLlmGeneratorError(
+                "tokens_used must be a non-negative integer"
+            )
+        self.tokens_used = tokens_used
+
+
+class DeepSeekLengthTruncationError(DeepSeekGeneratorFailure):
     """The provider stopped at ``max_tokens`` (``finish_reason == 'length'``).
 
     The truncated response is a recorded, typed failure: it is never accepted
-    as a candidate and never silently retried.
+    as a candidate and never silently retried. It still carries the
+    provider-reported ``tokens_used`` because the provider billed the output.
     """
 
 
@@ -154,6 +192,7 @@ class DeepSeekCallRecord:
 
     response_model: str | None
     finish_reason: str | None
+    reasoning_effort: str
     prompt_tokens: int
     completion_tokens: int
     reasoning_tokens: int
@@ -167,6 +206,7 @@ class DeepSeekCallRecord:
         return {
             "response_model": self.response_model,
             "finish_reason": self.finish_reason,
+            "reasoning_effort": self.reasoning_effort,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "reasoning_tokens": self.reasoning_tokens,
@@ -368,6 +408,7 @@ class Campaign3DeepSeekGenerator:
             ("max_tokens", self._max_tokens),
             ("model", self._model_id),
             ("provider", PROVIDER),
+            ("reasoning_effort", REASONING_EFFORT),
             ("temperature", None),
         )
 
@@ -394,6 +435,7 @@ class Campaign3DeepSeekGenerator:
             "model": self._model_id,
             "messages": messages,
             "max_tokens": self._max_tokens,
+            "reasoning_effort": REASONING_EFFORT,
             "stream": False,
         }
         try:
@@ -415,6 +457,7 @@ class Campaign3DeepSeekGenerator:
         self._last_record = DeepSeekCallRecord(
             response_model=response_model,
             finish_reason=finish_reason,
+            reasoning_effort=REASONING_EFFORT,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             reasoning_tokens=reasoning_tokens,
@@ -422,7 +465,8 @@ class Campaign3DeepSeekGenerator:
         if finish_reason == FINISH_REASON_LENGTH:
             raise DeepSeekLengthTruncationError(
                 "the provider stopped at max_tokens (finish_reason == 'length'); "
-                "the truncated response is never accepted and never retried"
+                "the truncated response is never accepted and never retried",
+                tokens_used=prompt_tokens + completion_tokens,
             )
         message = _choice_message(choice)
         content = _message_content(message)

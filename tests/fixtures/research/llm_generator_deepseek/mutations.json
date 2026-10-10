@@ -70,5 +70,41 @@
    }
   ],
   "test": "tests/test_campaign3_generation.py::test_policy_literals_frozen"
+ },
+ {
+  "id": "D3-M7",
+  "description": "the request omits reasoning_effort=low, leaving the provider-default high effort",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "            \"reasoning_effort\": REASONING_EFFORT,\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_request_shape_is_exactly_the_frozen_one"
+ },
+ {
+  "id": "D3-M8",
+  "description": "the executor drops the provider-reported tokens of a failed generator call from tokens_used",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "            self._tokens_used += failed_tokens\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_failed_call_tokens_are_counted"
+ },
+ {
+  "id": "D3-M9",
+  "description": "the LLM token budget literal is reverted to 2,000,000",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "DEFAULT_MAX_LLM_TOKEN_BUDGET = 4_000_000",
+    "new": "DEFAULT_MAX_LLM_TOKEN_BUDGET = 2_000_000"
+   }
+  ],
+  "test": "tests/test_campaign3_generation.py::test_policy_literals_frozen"
  }
 ]
