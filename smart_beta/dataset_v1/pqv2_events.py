@@ -66,6 +66,8 @@ import numpy as np
 import pandas as pd
 
 from smart_beta.dataset_v1.pqv2_core import (
+    DEVELOPMENT_FOLD,
+    Fold,
     PQv2InputError,
     RESERVE_START,
 )
@@ -522,8 +524,8 @@ class EventLayer:
 # ---------------------------------------------------------------------------
 
 
-def _refuse_reserve_path(path: Path) -> None:
-    if "reserve_sealed" in path.parts:
+def _refuse_reserve_path(path: Path, fold: Fold = DEVELOPMENT_FOLD) -> None:
+    if fold.is_development and "reserve_sealed" in path.parts:
         raise EventFirewallError(
             f"development event loader refuses a reserve path: {path}"
         )
@@ -573,24 +575,38 @@ def _in_scope(
 
 
 def load_event_layer(
-    root: Path | str, *, acq_id: str, ev_id: str
+    root: Path | str,
+    *,
+    acq_id: str,
+    ev_id: str,
+    fold: Fold = DEVELOPMENT_FOLD,
 ) -> EventLayer:
-    """Load and verify the v1.3 development event layer (plan §3).
+    """Load and verify the v1.3 event layer for the declared fold (plan §3).
 
-    Verifies ``derived/edgar-<acq_id>/manifest.json`` carries ``ev_id``, reads
+    Under the default development fold it verifies
+    ``derived/edgar-<acq_id>/manifest.json`` carries ``ev_id``, reads
     ``events.parquet`` and ``identity_map.parquet`` and refuses any
-    ``reserve_sealed`` path or any row with ``k_session >= 2023-07-03``.
+    ``reserve_sealed`` path or any row with ``k_session >= 2023-07-03``
+    (byte-identical to v2.3).
+
+    Under a reserve fold it reads ``reserve_sealed/edgar-<acq_id>/`` and admits
+    the reserve rows with ``K(e) <= E``; a row with ``K(e) > E`` is a firewall
+    incident.  The reserve package is opened **only** under a reserve fold
+    (firewall §2.2).
     """
 
     if not isinstance(acq_id, str) or not acq_id:
         raise EventLayerError("acq_id must be a non-empty string")
     if not isinstance(ev_id, str) or not ev_id:
         raise EventLayerError("ev_id must be a non-empty string")
+    if not isinstance(fold, Fold):
+        raise EventLayerError("fold must be a Fold")
 
     root_path = Path(root)
-    _refuse_reserve_path(root_path)
-    build_dir = root_path / "derived" / f"edgar-{acq_id}"
-    _refuse_reserve_path(build_dir)
+    package = "derived" if fold.is_development else "reserve_sealed"
+    build_dir = root_path / package / f"edgar-{acq_id}"
+    _refuse_reserve_path(root_path, fold)
+    _refuse_reserve_path(build_dir, fold)
 
     _verify_manifest(build_dir, acq_id, ev_id)
 
@@ -611,16 +627,24 @@ def load_event_layer(
     if missing:
         raise EventLayerError(f"identity map lacks columns {missing}")
 
-    # V§5 firewall: no development row may carry a reserve-dated K(e).
-    reserve_rows: list[date] = []
+    # Firewall §2.2 / V§5: a development load may carry no reserve-dated
+    # K(e), and any fold refuses a K(e) beyond its end E.  The development
+    # branch keeps the exact v2.3 rule (>= RESERVE_START), so the default path
+    # is byte-identical.
+    incidents: list[date] = []
     for value in events_frame["k_session"]:
         session = _as_date(value)
-        if session is not None and session >= RESERVE_START:
-            reserve_rows.append(session)
-    if reserve_rows:
+        if session is None:
+            continue
+        if fold.is_development:
+            if session >= RESERVE_START:
+                incidents.append(session)
+        elif session > fold.end:
+            incidents.append(session)
+    if incidents:
         raise EventFirewallError(
-            "development event panel contains a sealed-reserve row "
-            f"(k_session >= {RESERVE_START})"
+            "event panel contains a sealed-reserve or beyond-fold-end row "
+            f"(k_session >= {RESERVE_START if fold.is_development else fold.end})"
         )
 
     status_by_key: dict[str, str] = {}

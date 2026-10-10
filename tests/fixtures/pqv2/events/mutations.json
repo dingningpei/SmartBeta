@@ -72,10 +72,26 @@
     "file": "smart_beta/dataset_v1/pqv2_events.py",
     "edits": [
       {
-        "old": "    if reserve_rows:",
+        "old": "    if incidents:",
         "new": "    if False:  # B23-M6: reserve rows read"
       }
     ],
     "test": "tests/test_pqv2_events.py::test_reserve_rows_refused"
+  },
+  {
+    "id": "B24-M4",
+    "description": "the reserve events are read under the default fold",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    package = \"derived\" if fold.is_development else \"reserve_sealed\"",
+        "new": "    package = \"reserve_sealed\"  # B24-M4: always read the reserve package"
+      },
+      {
+        "old": "    if fold.is_development and \"reserve_sealed\" in path.parts:",
+        "new": "    if False:  # B24-M4: reserve events read under the default fold"
+      }
+    ],
+    "test": "tests/test_pqv2_events.py::test_default_fold_reads_development_layer_not_reserve"
   }
 ]

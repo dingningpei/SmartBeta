@@ -32,8 +32,9 @@ from typing import Any, Mapping, Sequence
 
 from smart_beta.dataset_v1.pqv2_core import (
     CauseSet,
-    DEVELOPMENT_END,
+    DEVELOPMENT_FOLD,
     EMPTY_CAUSES,
+    Fold,
     LabelStatus,
     MisdatedCandidate,
     NotAssessedReason,
@@ -64,6 +65,20 @@ POSITION_CLASSES = (FORMATION_ENDPOINT, INTERIOR, ENDING_ENDPOINT)
 
 _STATE_EMPTY = "EMPTY_OBSERVED_PATH_IDENTITY"
 _STATE_COMPLETE = "COMPLETE"
+
+
+def _fold_unknown_cause(fold: Fold) -> str:
+    """The period cause of a beyond-fold-end flag or label (firewall §2).
+
+    The development fold keeps the v2.3 ``PQV2_RESERVE_UNKNOWN`` (the default
+    path is byte-identical to v2.3); every non-development fold uses the new
+    v2.4 ``PQV2_FOLD_END_UNKNOWN``.  The two never co-occur, because each
+    belongs to a different fold.
+    """
+
+    if fold.is_development:
+        return NotAssessedReason.RESERVE_UNKNOWN
+    return NotAssessedReason.FOLD_END_UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -239,10 +254,20 @@ def label_envelope(
     candidates: Sequence[MisdatedCandidate],
     unknown: Any,
     *,
+    fold: Fold = DEVELOPMENT_FOLD,
     t0_value: float | None = None,
     ts_value: float | None = None,
 ) -> LabelEnvelope:
-    """The frozen Candidate-E label envelope of M§6/M§8/M§9."""
+    """The frozen Candidate-E label envelope of M§6/M§8/M§9.
+
+    ``fold`` declares the evaluation fold (P-Q v2.4 plan §1); every temporal
+    firewall boundary uses its end ``E``.  The default is the development fold,
+    whose ``E`` is ``DEVELOPMENT_END`` and whose beyond-end cause is
+    ``PQV2_RESERVE_UNKNOWN``, so the default path is byte-identical to v2.3.
+    """
+
+    if not isinstance(fold, Fold):
+        raise PQv2InputError("fold must be a Fold")
 
     formation = _as_date(_field(label_record, "formation_date"))
     endpoint = _as_date(_field(label_record, "endpoint"))
@@ -295,7 +320,7 @@ def label_envelope(
         )
 
     # M§8A.2 / M§8A.4: dependency-local causes from every reaching unresolved
-    # flag, plus the existing M§8 reserve firewall at e* == DEVELOPMENT_END.
+    # flag, plus the M§8A.2 reserve firewall at e* == the fold end E.
     unresolved = _unresolved_flags(unknown)
     causes = EMPTY_CAUSES
     n_unknown_source = 0
@@ -310,13 +335,19 @@ def label_envelope(
         )
         if not reaches:
             continue
-        causes = causes.union(CauseSet.of(cause_for_source_state(flag.state)))
+        if flag.state == SourceState.UNKNOWN_RESERVE:
+            # A reaching reserve-state flag is a beyond-fold-end flag: under
+            # the reserve fold it carries the v2.4 fold-end cause (firewall §2).
+            cause = _fold_unknown_cause(fold)
+        else:
+            cause = cause_for_source_state(flag.state)
+        causes = causes.union(CauseSet.of(cause))
         if flag.state == SourceState.UNKNOWN_SOURCE:
             n_unknown_source += 1
         else:
             n_unknown_reserve += 1
-    if e_star == DEVELOPMENT_END:
-        causes = causes.union(CauseSet.of(NotAssessedReason.RESERVE_UNKNOWN))
+    if e_star == fold.end:
+        causes = causes.union(CauseSet.of(_fold_unknown_cause(fold)))
 
     if not causes.is_empty:
         return _blank(
