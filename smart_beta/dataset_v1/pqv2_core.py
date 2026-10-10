@@ -8,7 +8,8 @@ implements the core pieces of the frozen methodology
 
 * the versioned authorities (:class:`MethodologyAuthority`, :data:`AUTHORITY_V2`,
   :data:`AUTHORITY_V2_1`, :data:`AUTHORITY_V2_2`, :data:`AUTHORITY_V2_3`,
-  :data:`ADMITTED_AUTHORITIES`, :data:`CURRENT_AUTHORITY`), the four frozen identities
+  :data:`AUTHORITY_V2_4`, :data:`ADMITTED_AUTHORITIES`, :data:`CURRENT_AUTHORITY`),
+  the four frozen identities
   (:data:`METHODOLOGY_SHA256`, :data:`CS_ID`, :data:`ED_ID`, :data:`CE_ID`),
   :func:`verify_authority`, :func:`require_admitted_authority` and
   :func:`require_current_authority`;
@@ -50,6 +51,7 @@ __all__ = [
     "AUTHORITY_V2_1",
     "AUTHORITY_V2_2",
     "AUTHORITY_V2_3",
+    "AUTHORITY_V2_4",
     "ADMITTED_AUTHORITIES",
     "CURRENT_AUTHORITY",
     "METHODOLOGY_SHA256",
@@ -63,6 +65,9 @@ __all__ = [
     "RESERVE_START",
     "MISDATED_WINDOW",
     "MISDATED_ACTION_TYPES",
+    # fold contract
+    "Fold",
+    "DEVELOPMENT_FOLD",
     # errors
     "PQv2Error",
     "PQv2BindingError",
@@ -191,11 +196,30 @@ AUTHORITY_V2_3 = MethodologyAuthority(
     base_methodology_sha256=AUTHORITY_V2_2.methodology_sha256,
 )
 
-#: The authorities an evaluation may explicitly select (E1 §2; v2.3 plan §3).
+#: P-Q v2.4 authority (the fold-parameterized temporal firewall, plan §1).  Its
+#: methodology is the fold-firewall document; its base is the preserved v2.3
+#: event-grammar document, and :func:`verify_authority` walks that chain to
+#: v2.2 and v2.1.  ``CURRENT_AUTHORITY`` deliberately stays v2.1.
+AUTHORITY_V2_4 = MethodologyAuthority(
+    version="P-Q v2.4",
+    methodology_relative="docs/discovery_dataset_v1_2_pq_v2_4_fold_firewall.md",
+    methodology_sha256=(
+        "695973b9f1c7fcbc4979527a7b20ee0150fc5831da34722df5a7a37416aebed0"
+    ),
+    cs_id="432de09746bbc4c16c332d662c24d6d7369787d55e8b704e3a521494b73bdae2",
+    ed_id="f8370828ae292f9e5bfc0a5a4e7054ba79c33fe88c1646793ad0f1d0dcc88d93",
+    ce_id="c40d8724ff6b6ee7862a07e39eb008da0e667a3826599e3850dff4e4993fa4c2",
+    base_methodology_relative=AUTHORITY_V2_3.methodology_relative,
+    base_methodology_sha256=AUTHORITY_V2_3.methodology_sha256,
+)
+
+#: The authorities an evaluation may explicitly select (E1 §2; v2.3 plan §3,
+#: extended by the v2.4 plan §1).
 ADMITTED_AUTHORITIES: tuple[MethodologyAuthority, ...] = (
     AUTHORITY_V2_1,
     AUTHORITY_V2_2,
     AUTHORITY_V2_3,
+    AUTHORITY_V2_4,
 )
 
 #: The authority a fresh execution binds.  It deliberately stays P-Q v2.1:
@@ -301,6 +325,52 @@ class PQv2InputError(PQv2Error):
 
 class PQv2InvariantError(PQv2Error):
     """A frozen invariant was observed to be violated."""
+
+
+# ---------------------------------------------------------------------------
+# Fold contract (P-Q v2.4 plan §1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Fold:
+    """A declared evaluation fold with end session ``end`` (plan §1).
+
+    ``start`` is optional: the development fold has no start (every trusted
+    session up to ``end`` is in scope), while the reserve fold starts at the
+    first reserve session.  P-Q accepts any :class:`Fold`; the reserve gate (a
+    K-PIT ``ACCESS`` grant) lives in P7 ``reserve_chain.access``, not here.
+    """
+
+    name: str
+    start: date | None
+    end: date
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise PQv2InputError(
+                f"Fold name must be a non-empty string, got {self.name!r}"
+            )
+        if self.start is not None and not isinstance(self.start, date):
+            raise PQv2InputError(
+                f"Fold start must be a date or None, got {self.start!r}"
+            )
+        if not isinstance(self.end, date):
+            raise PQv2InputError(f"Fold end must be a date, got {self.end!r}")
+        if self.start is not None and self.start > self.end:
+            raise PQv2InputError(
+                f"Fold start {self.start} is after end {self.end}"
+            )
+
+    @property
+    def is_development(self) -> bool:
+        """True iff this is exactly :data:`DEVELOPMENT_FOLD`."""
+
+        return self == DEVELOPMENT_FOLD
+
+
+#: The frozen development fold (plan §1): the v2.3 default, byte-identical.
+DEVELOPMENT_FOLD = Fold("development", None, date(2023, 6, 30))
 
 
 # ---------------------------------------------------------------------------
@@ -412,14 +482,26 @@ def identity_lines(
 ) -> dict[str, str]:
     """Return the canonical identity lines keyed ``"CS"``, ``"ED"``, ``"CE"``.
 
-    The v2.3 authority carries its ED/CE lines literally in the event-grammar
-    document (its CS line is inherited through the v2.2 chain); a v2.2-style
+    The v2.4 authority carries its ED/CE lines literally in the fold-firewall
+    document (its CS line is inherited through the v2.3 chain); the v2.3
+    authority carries its ED/CE lines literally in the event-grammar document
+    (its CS line is inherited through the v2.2 chain); a v2.2-style
     amendment-based authority reproduces all three from the amendment and its
     preserved base; the full methodology documents extract them from their own
     headers.
     """
 
     root = _repo_root(repo_root)
+    if authority is AUTHORITY_V2_4:
+        base_lines = identity_lines(root, AUTHORITY_V2_3)
+        document_lines = methodology_path(root, authority).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        return {
+            "CS": base_lines["CS"],
+            "ED": _extract_code_block_after(document_lines, "ED-ID v2.4"),
+            "CE": _extract_code_block_after(document_lines, "CE-ID v2.4"),
+        }
     if authority is AUTHORITY_V2_3:
         base_lines = identity_lines(root, AUTHORITY_V2_2)
         document_lines = methodology_path(root, authority).read_text(
@@ -469,7 +551,9 @@ def verify_authority(
         for *any* authority that carries a base, not only the current one
         (E1 §2).  For :data:`AUTHORITY_V2_3` the whole base authority is
         re-verified recursively, so the v2.2 amendment and the v2.1 base are
-        both checked (plan §3).
+        both checked (plan §3).  :data:`AUTHORITY_V2_4` likewise re-verifies
+        the whole v2.3 authority, so the v2.3, v2.2 and v2.1 documents are all
+        checked (plan §1).
     (b) The three canonical identity lines' SHA-256 values equal ``authority``'s
         CS/ED/CE ids.
     (c) Every file in :data:`PINNED_CODE` hashes to its pinned value.
@@ -503,6 +587,9 @@ def verify_authority(
                 "base methodology document SHA-256 mismatch: "
                 f"{actual_base} != {authority.base_methodology_sha256}"
             )
+
+    if authority is AUTHORITY_V2_4:
+        verify_authority(root, authority=AUTHORITY_V2_3)
 
     if authority is AUTHORITY_V2_3:
         verify_authority(root, authority=AUTHORITY_V2_2)
@@ -738,6 +825,7 @@ class NotAssessedReason:
     METRIC_NOT_CERTIFIED = "PQV2_METRIC_NOT_CERTIFIED"
     # period preconditions
     RESERVE_UNKNOWN = "PQV2_RESERVE_UNKNOWN"
+    FOLD_END_UNKNOWN = "PQV2_FOLD_END_UNKNOWN"
     SOURCE_UNRESOLVED = "PQV2_SOURCE_UNRESOLVED"
     SIGMA_SUPPORT = "PQV2_SIGMA_SUPPORT"
     WINSOR_BLOCK = "PQV2_WINSOR_BLOCK"
@@ -760,6 +848,7 @@ class NotAssessedReason:
         SIGN_NOT_CERTIFIED,
         METRIC_NOT_CERTIFIED,
         RESERVE_UNKNOWN,
+        FOLD_END_UNKNOWN,
         SOURCE_UNRESOLVED,
         SIGMA_SUPPORT,
         WINSOR_BLOCK,
@@ -815,6 +904,7 @@ PQV2_EXPRESSION_NOT_CERTIFIED = NotAssessedReason.EXPRESSION_NOT_CERTIFIED
 PQV2_SIGN_NOT_CERTIFIED = NotAssessedReason.SIGN_NOT_CERTIFIED
 PQV2_METRIC_NOT_CERTIFIED = NotAssessedReason.METRIC_NOT_CERTIFIED
 PQV2_RESERVE_UNKNOWN = NotAssessedReason.RESERVE_UNKNOWN
+PQV2_FOLD_END_UNKNOWN = NotAssessedReason.FOLD_END_UNKNOWN
 PQV2_SOURCE_UNRESOLVED = NotAssessedReason.SOURCE_UNRESOLVED
 PQV2_SIGMA_SUPPORT = NotAssessedReason.SIGMA_SUPPORT
 PQV2_WINSOR_BLOCK = NotAssessedReason.WINSOR_BLOCK
@@ -850,6 +940,7 @@ CLASSIFICATION_STATUSES = ClassificationStatus.ALL
 #: reasons are deliberately absent: they are not period causes.
 PERIOD_CAUSE_PRECEDENCE: tuple[str, ...] = (
     NotAssessedReason.RESERVE_UNKNOWN,
+    NotAssessedReason.FOLD_END_UNKNOWN,
     NotAssessedReason.EVENT_RESERVE,
     NotAssessedReason.SOURCE_UNRESOLVED,
     NotAssessedReason.EVENT_IDENTITY_CONTRADICTED,
@@ -861,11 +952,13 @@ PERIOD_CAUSE_PRECEDENCE: tuple[str, ...] = (
     NotAssessedReason.EMPTY_LEG_CONFIGURATION,
 )
 
-#: The price-source UNKNOWN causes; a cell carrying either must short-circuit
-#: before any resolved-state precondition (M§8A.4).  The M1b event causes are a
-#: separate family and are deliberately not listed here.
+#: The price-source UNKNOWN causes; a cell carrying any must short-circuit
+#: before any resolved-state precondition (M§8A.4).  ``PQV2_FOLD_END_UNKNOWN``
+#: is the reserve-fold analogue of ``PQV2_RESERVE_UNKNOWN`` (plan §1).  The M1b
+#: event causes are a separate family and are deliberately not listed here.
 UNKNOWN_CAUSES: tuple[str, ...] = (
     NotAssessedReason.RESERVE_UNKNOWN,
+    NotAssessedReason.FOLD_END_UNKNOWN,
     NotAssessedReason.SOURCE_UNRESOLVED,
 )
 
@@ -992,7 +1085,10 @@ def label_status_for_causes(cause_set: CauseSet) -> str:
         raise PQv2InputError(
             "a label status requires a non-empty cause set with an UNKNOWN cause"
         )
-    if NotAssessedReason.RESERVE_UNKNOWN in cause_set:
+    if (
+        NotAssessedReason.RESERVE_UNKNOWN in cause_set
+        or NotAssessedReason.FOLD_END_UNKNOWN in cause_set
+    ):
         return LabelStatus.UNKNOWN_RESERVE
     return LabelStatus.UNKNOWN_SOURCE
 
