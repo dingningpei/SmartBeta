@@ -34,6 +34,9 @@ from smart_beta.science.knowledge import Channel, KnowledgeLog, RecordKind
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _C3_SYNTHETIC = _REPO_ROOT / "tests" / "fixtures" / "campaign3" / "synthetic.py"
+_SCREEN_SYNTHETIC = (
+    _REPO_ROOT / "tests" / "fixtures" / "campaign3_screen" / "synthetic.py"
+)
 _PQ2H = _REPO_ROOT / "tests" / "fixtures" / "pqv2" / "evaluation" / "fixture.py"
 _MUTATIONS = (
     _REPO_ROOT / "tests" / "fixtures" / "campaign3_run" / "mutations.json"
@@ -59,6 +62,7 @@ def _load_module(name: str, path: Path):
 
 
 fx = _load_module("c3_run_synthetic", _C3_SYNTHETIC)
+scr = _load_module("c3_run_screen_synthetic", _SCREEN_SYNTHETIC)
 
 
 def _load_pq2h():
@@ -111,10 +115,34 @@ class _ScreenSpy:
         return {
             "status": "FAKE_C3_S",
             "candidate_ids": [
-                item["hypothesis_id"] for item in kwargs["candidates"]
+                getattr(item, "hypothesis_id", None)
+                for item in kwargs["candidates"]
             ],
-            "control_id": kwargs["control"]["hypothesis_id"],
+            "control_id": getattr(kwargs["control"], "hypothesis_id", None),
         }
+
+
+def _synthetic_screen_candidates(
+    snapshot: R.GenerationSnapshot,
+) -> tuple[tuple[Any, ...], Any]:
+    """Build synthetic C3-S candidates for the generation snapshot.
+
+    The C3-S synthetic fixture supplies in-memory diagnostics + a verified
+    ``pqv2_series`` export; the driver's real production wiring builds the
+    same pair from the persisted T-A diagnostics.
+    """
+    candidates = tuple(
+        scr.candidate(rec["hypothesis_id"], sign=int(rec.get("sign", 1)))
+        for rec in snapshot.candidates
+    )
+    control = scr.ScreeningCandidate(
+        hypothesis_id=R.CONTROL_HYPOTHESIS_ID,
+        canonical_key=R.CONTROL_HYPOTHESIS_ID,
+        sign=1,
+        diagnostics=None,
+        series_export=None,
+    )
+    return candidates, control
 
 
 def _make_run(
@@ -134,6 +162,7 @@ def _make_run(
         knowledge_log=log,
         run_root=tmp_path / "runs",
         screen_runner=screen_runner or _ScreenSpy(),
+        screen_candidate_builder=_synthetic_screen_candidates,
         launch_terminal=launch_terminal,
     )
     return runner, generator, log
@@ -558,7 +587,7 @@ def test_run_delegates_to_screen_runner(tmp_path):
     result = runner.run()
     assert len(spy.calls) == 1
     call = spy.calls[0]
-    assert call["control"]["hypothesis_id"] == R.CONTROL_HYPOTHESIS_ID
+    assert call["control"].hypothesis_id == R.CONTROL_HYPOTHESIS_ID
     assert len(call["candidates"]) == 2
     assert result.screen_report is not None
     assert result.screen_report["status"] == "FAKE_C3_S"
@@ -566,7 +595,7 @@ def test_run_delegates_to_screen_runner(tmp_path):
     assert {"generation", "ranking", "report"} <= stages
 
 
-def test_stub_screen_runner_is_explicit_when_c3s_absent():
+def test_stub_screen_runner_is_explicit_helper():
     report = R.stub_screen_runner(
         candidates=[{"hypothesis_id": "h1"}],
         control={"hypothesis_id": R.CONTROL_HYPOTHESIS_ID},
@@ -575,12 +604,24 @@ def test_stub_screen_runner_is_explicit_when_c3s_absent():
     assert "test-only" in report["note"]
 
 
-def test_load_screen_runner_fail_closed_without_c3s():
+def test_load_screen_runner_fail_closed_without_c3s(monkeypatch):
     """Kills mutation R-M6 (implicit stub fallback restored)."""
-    # campaign3_screen is not on this branch: resolution must raise, never
-    # return the test-only stub.
+    real_import = R.importlib.import_module
+
+    def _boom(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "smart_beta.campaign.campaign3_screen":
+            raise ImportError("simulated missing C3-S")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(R.importlib, "import_module", _boom)
     with pytest.raises(R.C3ConfigurationError):
         R.load_screen_runner()
+
+
+def test_real_screen_runner_is_available():
+    runner = R.load_screen_runner()
+    assert callable(runner)
+    assert runner.__name__ == "run_screen"
 
 
 def _run_without_injected_runner(tmp_path: Path) -> R.Campaign3Run:
@@ -592,17 +633,27 @@ def _run_without_injected_runner(tmp_path: Path) -> R.Campaign3Run:
         knowledge_log=KnowledgeLog(tmp_path / "kpit.jsonl"),
         run_root=tmp_path / "runs",
         screen_runner=None,
+        screen_candidate_builder=_synthetic_screen_candidates,
     )
 
 
-def test_run_without_explicit_screen_runner_is_fail_closed(tmp_path):
+def test_run_resolves_the_screen_runner_via_load_screen_runner(
+    tmp_path, monkeypatch
+):
+    spy = _ScreenSpy()
+    calls = {"n": 0}
+
+    def loader():
+        calls["n"] += 1
+        return spy
+
+    monkeypatch.setattr(R, "load_screen_runner", loader)
     runner = _run_without_injected_runner(tmp_path)
-    with pytest.raises(R.C3ConfigurationError):
-        runner.run()
-    # Nothing has been generated or written ahead when the runner is missing.
-    assert not (tmp_path / "runs").exists() or not any(
-        (tmp_path / "runs").rglob("generation.json")
-    )
+    runner.launch_terminal = R.pin_kpit_terminal(runner.knowledge_log.path)
+    result = runner.run()
+    assert calls["n"] == 1
+    assert result.screen_report is not None
+    assert result.screen_report["status"] == "FAKE_C3_S"
 
 
 def test_stub_screen_report_requires_the_explicit_allow_flag(tmp_path):
@@ -616,6 +667,7 @@ def test_stub_screen_report_requires_the_explicit_allow_flag(tmp_path):
         knowledge_log=log,
         run_root=tmp_path / "runs",
         screen_runner=R.stub_screen_runner,
+        screen_candidate_builder=_synthetic_screen_candidates,
         allow_stub_screen=False,
     )
     with pytest.raises(R.C3ConfigurationError):
@@ -630,6 +682,7 @@ def test_stub_screen_report_requires_the_explicit_allow_flag(tmp_path):
         knowledge_log=log,
         run_root=tmp_path / "runs",
         screen_runner=R.stub_screen_runner,
+        screen_candidate_builder=_synthetic_screen_candidates,
         allow_stub_screen=True,
     )
     result = lenient.run()
@@ -638,14 +691,99 @@ def test_stub_screen_report_requires_the_explicit_allow_flag(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 9. mutation fixture integrity
+# 9. the real C3-S end-to-end (generation -> ranking -> TB_SELECTION -> T-B -> report)
+# ---------------------------------------------------------------------------
+
+
+def _dynamic_tb_evaluator(hypothesis_id: str) -> Any:
+    """A synthetic T-B evaluator returning a pqv2_series-style export."""
+    return scr.make_tb(hypothesis_id, b=scr.STRONG_POS, l=scr.STRONG_POS)
+
+
+class _HashGenerator:
+    """Wraps a generator and exposes its own prompt-template hash (A2-E2)."""
+
+    def __init__(self, inner: Any, prompt_template_hash: str) -> None:
+        self._inner = inner
+        self.prompt_template_hash = prompt_template_hash
+
+    def __call__(self, visible: Any, feedback: Any) -> Any:
+        return self._inner(visible, feedback)
+
+
+def test_policy_prompt_hash_comes_from_the_generator(tmp_path):
+    generator = _HashGenerator(_scripted_generator(1), "b" * 64)
+    runner = R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(1),
+        generator=generator,
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=KnowledgeLog(tmp_path / "kpit.jsonl"),
+        run_root=tmp_path / "runs",
+        screen_runner=_ScreenSpy(),
+        screen_candidate_builder=_synthetic_screen_candidates,
+    )
+    # The v2 hash carried by the injected generator overrides the policy's v1
+    # literal (erratum A2-E2).
+    assert runner.policy.prompt_template_hash == "b" * 64
+    assert runner.policy.prompt_template_hash == generator.prompt_template_hash
+
+
+def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
+    budget = 5
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    runner = R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(budget),
+        generator=_scripted_generator(budget),
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=log,
+        run_root=tmp_path / "runs",
+        screen_runner=R.load_screen_runner(),
+        screen_candidate_builder=_synthetic_screen_candidates,
+        tb_evaluator=_dynamic_tb_evaluator,
+        registry=scr.registry(),
+        admission_records=[scr.admission_record()],
+    )
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    result = runner.run()
+
+    assert result.stop_reason == G.Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED.value
+    report = dict(result.screen_report or {})
+    assert report["tb_label"] == "DESCRIPTIVE, NOT CLAIMS"
+    selected = report["tb_selection"]["selected_ids"]
+    assert len(selected) == 5
+    assert report["tb_selection"]["control_id"] == R.CONTROL_HYPOTHESIS_ID
+    # exactly the five selected + the control touched T-B
+    assert len(report["tb_results"]) == 6
+    assert report["forwarding"]["decision"] == "FORWARD"
+    assert report["control_verdict"] in ("PIPELINE_OK", "PIPELINE_OR_POWER_WARNING")
+
+    # The TB_SELECTION K-PIT record was written write-ahead.
+    tb_selection = [
+        record
+        for record in log.read()
+        if isinstance(record.payload.get("tb_selection"), Mapping)
+    ]
+    assert len(tb_selection) == 1
+    assert tb_selection[0].payload["tb_selection"]["control_id"] == (
+        R.CONTROL_HYPOTHESIS_ID
+    )
+    # The report landed in the run directory through the real C3-S writer.
+    screen_dir = Path(result.run_dir) / "screen"
+    assert (screen_dir / "campaign3_screen_report.json").is_file()
+    assert (screen_dir / "campaign3_screen_report.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 10. mutation fixture integrity
 # ---------------------------------------------------------------------------
 
 
 def test_mutations_fixture_is_wellformed():
     entries = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
     ids = {entry["id"] for entry in entries}
-    assert {"R-M1", "R-M2", "R-M3", "R-M4", "R-M5"} <= ids
+    assert {"R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6"} <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
         assert target.is_file(), entry["file"]

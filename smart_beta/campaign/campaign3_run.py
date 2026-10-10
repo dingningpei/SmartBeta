@@ -38,13 +38,16 @@ and a temporary run directory.  No production artifact, ``data_store``,
 reserve, holdout or network path is read, and no real generator client is
 constructed.
 
-**C3-S / PQS seam.**  ``campaign3_screen`` (C3-S, repaired as C3-S-R1) and
-``pqv2_series`` (PQS) are concurrent tasks.  This module imports them by their
-public names behind :func:`load_screen_runner` / :func:`_load_export_series`.
-There is **no implicit stub**: :func:`load_screen_runner` raises
-:class:`C3ConfigurationError` when ``campaign3_screen`` (or its ``run_screen``)
-is absent, and a ``STUBBED_*`` screen report is refused unless the test-only
-``allow_stub_screen=True`` flag is set explicitly.
+**C3-S / PQS.**  ``campaign3_screen`` (C3-S + C3-S-R1) and ``pqv2_series``
+(PQS) are merged; this module imports them by their public names behind
+:func:`load_screen_runner` / :func:`_load_export_series`.  There is **no
+implicit stub**: :func:`load_screen_runner` raises :class:`C3ConfigurationError`
+when ``campaign3_screen`` (or its ``run_screen``) is absent, ``run()`` resolves
+the real ``run_screen`` unless a runner is injected explicitly, and a
+``STUBBED_*`` report is refused unless the test-only ``allow_stub_screen=True``
+flag is set explicitly.  The T-A IS diagnostics and their ``pqv2_series``
+export are not in the JSON generation snapshot, so the caller injects
+``screen_candidate_builder`` (a missing builder fails closed).
 """
 
 from __future__ import annotations
@@ -139,7 +142,9 @@ __all__ = [
     "build_tb_evaluator",
     # screen seam
     "load_screen_runner",
+    "load_screen_module",
     "stub_screen_runner",
+    "write_tb_selection_record",
     # driver
     "GenerationSnapshot",
     "Campaign3RunResult",
@@ -1228,10 +1233,12 @@ def stub_screen_runner(**kwargs: Any) -> dict[str, Any]:
             "tier (C3-S / C3-S-R1) is required for a production run"
         ),
         "candidate_ids": [
-            item.get("hypothesis_id")
+            getattr(item, "hypothesis_id", None)
             for item in kwargs.get("candidates", ())
         ],
-        "control_id": kwargs.get("control", {}).get("hypothesis_id"),
+        "control_id": getattr(
+            kwargs.get("control"), "hypothesis_id", None
+        ),
     }
 
 
@@ -1256,6 +1263,17 @@ def load_screen_runner() -> Callable[..., Any]:
             "campaign3_screen is present but exposes no run_screen"
         )
     return runner
+
+
+def load_screen_module() -> Any:
+    """Return the merged ``campaign3_screen`` module; fail closed.
+
+    Same guard as :func:`load_screen_runner`; used by the driver to reach the
+    real ``ScreeningCandidate`` / ``TbDiagnostics`` types when adapting the
+    inferred T-B evaluator.
+    """
+    load_screen_runner()  # fail closed before importing the module
+    return importlib.import_module("smart_beta.campaign.campaign3_screen")
 
 
 # ---------------------------------------------------------------------------
@@ -1336,6 +1354,33 @@ class Campaign3RunResult:
     kpit_record_hashes: tuple[str, ...]
 
 
+def _generator_prompt_template_hash(generator: Any) -> str | None:
+    """The injected generator's own prompt-template hash, when it exposes one.
+
+    Erratum A2-E2: the Campaign-3 policy's ``prompt_template_hash`` must be the
+    v2 template hash carried by the injected DeepSeek generator, never the
+    module-level v1 ``llm_generator.PROMPT_TEMPLATE_HASH`` literal.
+    """
+    value = getattr(generator, "prompt_template_hash", None)
+    if callable(value):
+        value = value()
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _policy_with_generator_prompt_hash(
+    policy: ResearchPolicy, generator: Any
+) -> ResearchPolicy:
+    """Bind the policy's prompt hash to the injected generator (A2-E2)."""
+    import dataclasses as _dataclasses
+
+    prompt_hash = _generator_prompt_template_hash(generator)
+    if prompt_hash is None or policy.prompt_template_hash == prompt_hash:
+        return policy
+    return _dataclasses.replace(policy, prompt_template_hash=prompt_hash)
+
+
 @dataclass
 class Campaign3Run:
     """The C3-R ``run()`` driver.
@@ -1356,6 +1401,14 @@ class Campaign3Run:
     a2_path: Path | str = A2_PATH
     control: ControlHypothesis = CONTROL
     screen_runner: Callable[..., Any] | None = None
+    #: Builds the C3-S ``ScreeningCandidate`` sequence and the control from the
+    #: persisted generation snapshot.  Required for the real screen (the T-A IS
+    #: diagnostics and their ``pqv2_series`` export are not in the snapshot).
+    screen_candidate_builder: (
+        Callable[[GenerationSnapshot], tuple[Sequence[Any], Any]] | None
+    ) = None
+    screen_inference_runner: Callable[..., Any] | None = None
+    screen_report_dir: Path | str | None = None
     #: Test-only escape hatch: when explicitly ``True`` a screen runner that
     #: returns a ``STUBBED_*`` report is accepted.  Production runs leave it
     #: ``False`` so a stubbed selection tier can never pass silently.
@@ -1370,6 +1423,9 @@ class Campaign3Run:
 
     def __post_init__(self) -> None:
         self.bindings = verify_bindings(self.bindings)
+        self.policy = _policy_with_generator_prompt_hash(
+            self.policy, self.generator
+        )
         if self.attempt_id is not None and not isinstance(self.attempt_id, str):
             raise C3ConfigurationError("attempt_id must be text")
 
@@ -1508,8 +1564,8 @@ class Campaign3Run:
         from smart_beta.campaign import campaign3_eval as _ev
 
         # The IS ranking stage consumes the persisted IS series (P6-E1).  The
-        # driver hands the C3-S public API the frozen bundle; C3-S-R1 reads
-        # pqv2_series output, never cell.period_values.
+        # driver hands the real C3-S ``run_screen`` its frozen inputs; C3-S-R1
+        # reads pqv2_series output, never cell.period_values.
         ranking_payload = {
             "candidates": [_jsonable(item) for item in generation.candidates],
             "control": control_content(self.control),
@@ -1518,16 +1574,24 @@ class Campaign3Run:
             ),
         }
         journal.write("ranking", ranking_payload)
-        screen_report = screen_runner(
-            candidates=generation.candidates,
-            control=control_content(self.control),
-            generation=generation,
-            tb_evaluator=self.tb_evaluator,
-            registry=self.registry,
-            admission_records=self.admission_records,
-            procedure_ref=self.procedure_ref,
-            run_dir=journal.root,
-        )
+        candidates, control = self._screen_candidates(generation)
+        screen_kwargs: dict[str, Any] = {
+            "candidates": candidates,
+            "control": control,
+            "registry": self.registry,
+            "admission_records": self.admission_records,
+            "selection_writer": self._selection_writer,
+            "tb_evaluator": self._screen_tb_evaluator,
+            "procedure_ref": self.procedure_ref,
+            "report_dir": (
+                self.screen_report_dir
+                if self.screen_report_dir is not None
+                else journal.root / "screen"
+            ),
+        }
+        if self.screen_inference_runner is not None:
+            screen_kwargs["inference_runner"] = self.screen_inference_runner
+        screen_report = screen_runner(**screen_kwargs)
         payload = (
             screen_report.to_dict()
             if hasattr(screen_report, "to_dict")
@@ -1544,13 +1608,101 @@ class Campaign3Run:
                 f"(status={status!r}); C3-S is required and no implicit stub is "
                 "accepted (allow_stub_screen is test-only)"
             )
-        # The ranking / T-B stages are recorded by the C3-S module itself
-        # (TB_SELECTION write-ahead precedes T-B); the driver records the
-        # report stage last.  ``_ev`` is imported so the frozen C3-E literals
-        # are asserted available before a stage is written.
+        # The TB_SELECTION write-ahead is the C3-S module's responsibility
+        # (``selection_writer`` above); the driver records the report stage
+        # last.  ``_ev`` is imported so the frozen C3-E literals are asserted
+        # available before a stage is written.
         _ = _ev.AUTHORITY
         journal.write("report", {"report": payload})
         return payload
+
+    # -- C3-S adapters ---------------------------------------------------
+    def _screen_candidates(
+        self, generation: GenerationSnapshot
+    ) -> tuple[tuple[Any, ...], Any]:
+        """Build the C3-S candidates + control from the generation snapshot.
+
+        The T-A IS diagnostics and their ``pqv2_series`` export are not part
+        of the JSON snapshot, so the production wiring must inject
+        ``screen_candidate_builder``.  A missing builder fails closed rather
+        than fabricating an eligible candidate.
+        """
+        if self.screen_candidate_builder is None:
+            raise C3ConfigurationError(
+                "the run requires a screen_candidate_builder to build the C3-S "
+                "candidates (IS diagnostics + pqv2_series export) from the "
+                "generation snapshot; none was injected"
+            )
+        candidates, control = self.screen_candidate_builder(generation)
+        return tuple(candidates), control
+
+    def _selection_writer(self, selection: Any) -> KnowledgeRecord:
+        """Write the TB_SELECTION K-PIT record (write-ahead, before T-B)."""
+        return write_tb_selection_record(self.knowledge_log, selection)
+
+    def _screen_tb_evaluator(self, hypothesis_id: str) -> Any:
+        """Adapt the bound T-B evaluator to the C3-S ``TbDiagnostics``."""
+        if self.tb_evaluator is None:
+            raise C3ConfigurationError(
+                "the run requires a T-B evaluator for the C3-S screen"
+            )
+        result = self.tb_evaluator(hypothesis_id)
+        screen = load_screen_module()
+        if isinstance(result, screen.TbDiagnostics):
+            return result
+        if isinstance(result, TbEvaluation):
+            return _tb_evaluation_to_diagnostics(
+                screen, hypothesis_id, result
+            )
+        raise C3ConfigurationError(
+            "the T-B evaluator returned "
+            f"{type(result).__name__}; expected TbDiagnostics or a "
+            "single-fold TbEvaluation"
+        )
+
+
+def _tb_evaluation_to_diagnostics(
+    screen: Any, hypothesis_id: str, evaluation: TbEvaluation
+) -> Any:
+    """One combined T-B fold -> the C3-S ``TbDiagnostics`` (fail closed).
+
+    The real C3-S screen expects a single diagnostics record spanning the T-B
+    formations; the driver does **not** silently pick one fold of a multi-fold
+    evaluation.
+    """
+    if len(evaluation.folds) != 1:
+        raise C3ConfigurationError(
+            "the screen T-B adapter requires a single combined T-B fold; got "
+            f"{len(evaluation.folds)} folds"
+        )
+    fold = evaluation.folds[0]
+    return screen.TbDiagnostics(
+        hypothesis_id=hypothesis_id,
+        diagnostics=fold.diagnostics,
+        series_export=fold.series,
+    )
+
+
+def write_tb_selection_record(
+    log: KnowledgeLog, selection: Any
+) -> KnowledgeRecord:
+    """Append the TB_SELECTION HUMAN decision (the P6 write-ahead).
+
+    Written **before** any T-B evaluation; the C3-S ``write_tb_selection``
+    caller marks the selection written only after this returns a record.
+    """
+    payload = selection.to_content()
+    payload.setdefault("record_type", "TB_SELECTION")
+    return log.append(
+        kind=RecordKind.HUMAN_DECISION,
+        channel=Channel.HUMAN,
+        payload={
+            "decision_kind": "OTHER",
+            "actor_role": "OPERATOR",
+            "consulted_all_prior": True,
+            "tb_selection": payload,
+        },
+    )
 
 
 def run_campaign3(**kwargs: Any) -> Campaign3RunResult:
