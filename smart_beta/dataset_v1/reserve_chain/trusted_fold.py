@@ -203,7 +203,11 @@ def _fold_grid(
             f"fold {fold.start}..{fold.end} contains no trusted session"
         )
     grid_sessions = sessions[start_idx : end_idx + 1]
-    # The last primitive a new grid row can carry is prev(last_row).
+    # The fold analogue of frozen D7c's ``LAST_SOURCE_DATE``: row ``d`` holds
+    # the primitive of ``prev(d)``, so ``prev(last grid row)`` is the latest
+    # session a primitive may be dated and the latest D-SC query cutoff.  D7c
+    # uses it as a *read*/*query* bound (observations and CA events are read
+    # up to it); it is deliberately **not** a post-load rejection cap.
     source_end = sessions[end_idx - 1] if end_idx > 0 else grid_sessions[0]
     if fold.source == RESERVE:
         floor_idx = max(0, start_idx - lookback_sessions)
@@ -351,6 +355,10 @@ def _load_fold_inputs(
     grid: _FoldGrid,
     reserve_bindings: T.Bindings | None,
 ) -> T._Inputs:
+    # D7c reads D3 up to ``LAST_SOURCE_DATE`` (``prev(last grid row)``); the
+    # fold's ``source_end`` is the same read bound, so the development fold
+    # loads exactly the frozen rows.  The D5 flags below are loaded whole,
+    # exactly as D7c does.
     observations = accessor.read(
         "observations",
         start=CALENDAR_START,
@@ -412,13 +420,19 @@ def _load_fold_inputs(
     )
 
 
-def _post_load_assertions(
-    inputs: T._Inputs, fold: FoldWindow, source_end: date
-) -> None:
-    """Fail closed on any source row outside the fold's declared window.
+def _post_load_assertions(inputs: T._Inputs, fold: FoldWindow) -> None:
+    """The frozen D7c post-load firewall, re-expressed on a fold.
 
-    The development fold additionally mirrors D7c's reserve firewall: every
-    loaded source date must be strictly before ``RESERVE_START``.
+    The frozen ``trusted_inputs._post_load_assertions`` imposes exactly one
+    source-date constraint: on the development fold every loaded source date
+    must be strictly before ``RESERVE_START``.  It deliberately does **not**
+    bound the loaded rows by D7c's ``LAST_SOURCE_DATE``: that constant is a
+    *read* bound, not an assertion.  The D5 day-flag package carries a row for
+    the last development session (2023-06-30) and D7c accepts it; an assertion
+    of ``date <= prev(grid end)`` would be an invented constraint and would
+    reject a real, frozen-valid input.  A reserve fold has no development
+    firewall, so it asserts nothing here (its window is enforced by the
+    accessor filters and the interval).
     """
 
     def _parsed(series: pd.Series) -> pd.Series:
@@ -437,11 +451,6 @@ def _post_load_assertions(
         ):
             raise ReserveFirewallError(
                 f"{what} contains a reserve date on a development fold"
-            )
-        if bool((parsed > pd.Timestamp(source_end)).any()):
-            raise TrustedFoldInputError(
-                f"{what} contains a date after the fold source end "
-                f"{source_end}"
             )
 
 
@@ -796,7 +805,7 @@ def build_trusted_fold(
     inputs = _load_fold_inputs(
         root, fold, bindings, accessor, grid, reserve_bindings
     )
-    _post_load_assertions(inputs, fold, grid.source_end)
+    _post_load_assertions(inputs, fold)
 
     sessions = grid.sessions
     pos = grid.pos

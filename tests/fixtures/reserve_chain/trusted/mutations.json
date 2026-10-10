@@ -94,5 +94,25 @@
       }
     ],
     "test": "tests/test_reserve_chain_trusted.py::test_reserve_without_grant_denied_before_any_open"
+  },
+  {
+    "id": "R7T-M_srcend",
+    "description": "the invented prev(last-grid-session) cap over the loaded source rows is reinstated (rejects a real D5 day flag dated 2023-06-30)",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "def _post_load_assertions(inputs: T._Inputs, fold: FoldWindow) -> None:",
+        "new": "def _post_load_assertions(\n    inputs: T._Inputs, fold: FoldWindow, source_end: date\n) -> None:"
+      },
+      {
+        "old": "        if fold.source != RESERVE and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError(\n                f\"{what} contains a reserve date on a development fold\"\n            )",
+        "new": "        if fold.source != RESERVE and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError(\n                f\"{what} contains a reserve date on a development fold\"\n            )\n        if bool((parsed > pd.Timestamp(source_end)).any()):\n            raise TrustedFoldInputError(\n                f\"{what} contains a date after the fold source end \"\n                f\"{source_end}\"\n            )"
+      },
+      {
+        "old": "    _post_load_assertions(inputs, fold)",
+        "new": "    _post_load_assertions(inputs, fold, grid.source_end)"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_dev_fold_accepts_last_development_session_rows"
   }
 ]

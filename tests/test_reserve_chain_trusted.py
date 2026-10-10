@@ -232,6 +232,70 @@ def test_dev_fold_per_file_bytes_identical(tmp_path: Path) -> None:
     )
 
 
+def test_dev_fold_accepts_last_development_session_rows(
+    tmp_path: Path,
+) -> None:
+    """D7c reads D3 to ``LAST_SOURCE_DATE`` and loads D5 whole.
+
+    The last development session (2023-06-30) is a grid row whose primitive
+    is the 2023-06-29 session, so D7c reads the D3 observations and CA events
+    only up to 2023-06-29 (the one-session lag).  But it loads the D5 flag
+    package with **no** source-end bound, so a day flag dated 2023-06-30 is a
+    valid frozen input (the real development D5 package carries one).  The
+    fold must mirror that exactly instead of inventing a ``prev(grid end)``
+    cap over the loaded rows.
+    """
+    store = FX.SyntheticStore(tmp_path, name="lastsession")
+    store.key("AAA", listed_start=date(2019, 1, 2))
+    store.add_sessions(
+        "AAA", date(2019, 1, 2), date(2023, 6, 29), close=10.0
+    )
+    # D3 observation on the last development session (read-bounded away on
+    # both sides by the one-session lag).
+    last_grid_idx = store.obs("AAA", date(2023, 6, 30), 10.5)
+    # D5 day flags on the last source session and on the last grid session.
+    store.flag("AAA", date(2023, 6, 29), 0, "OHLC_INCONSISTENT")
+    store.flag("AAA", date(2023, 6, 30), last_grid_idx, "OHLC_INCONSISTENT")
+    # CA events on both sessions; only the 2023-06-29 one is inside D7c's
+    # source read window.
+    store.ca("AAA", date(2023, 6, 29), factor=1.1)
+    store.ca("AAA", date(2023, 6, 30), factor=1.1)
+
+    bindings = store.build_development()
+    frozen = T.build_trusted_inputs(
+        store.root, bindings=bindings, calendar=FX.CAL
+    )
+    new = F.build_trusted_fold(
+        store.root, fold=_dev_fold(),
+        bindings=bindings, calendar=FX.CAL,
+    )
+
+    frozen_frames = _read_dev_frames(store.root, frozen)
+    new_frames = F.read_fold_frames(store.root, new)
+    _assert_equal_frames(
+        new_frames[T.INPUT_DAILY_TOTAL_RETURN],
+        frozen_frames[T.INPUT_DAILY_TOTAL_RETURN],
+        _LONG_KEYS,
+    )
+    _assert_equal_frames(
+        new_frames[T.INPUT_TOTAL_RETURN_INDEX],
+        frozen_frames[T.INPUT_TOTAL_RETURN_INDEX],
+        _LONG_KEYS,
+    )
+    _assert_equal_frames(
+        new_frames[T.INPUT_DOLLAR_VOLUME],
+        frozen_frames[T.INPUT_DOLLAR_VOLUME],
+        _LONG_KEYS,
+    )
+    _assert_equal_frames(
+        new_frames["segments"], frozen_frames["segments"], _SEGMENT_KEYS
+    )
+    assert new["mask_counts"] == frozen["mask_counts"]
+    assert sorted(new["files_sha256"].values()) == sorted(
+        frozen["files_sha256"].values()
+    )
+
+
 def test_ti_hash_is_internally_consistent(tmp_path: Path) -> None:
     store = _standard_store(tmp_path)
     bindings = store.build_development()
@@ -617,9 +681,7 @@ def test_dev_fold_post_load_assertion_refuses_reserve_row() -> None:
         policy_timeline={},
     )
     with pytest.raises(F.ReserveFirewallError):
-        F._post_load_assertions(
-            inputs, _dev_fold(), T.LAST_SOURCE_DATE
-        )
+        F._post_load_assertions(inputs, _dev_fold())
 
 
 def test_duplicate_usable_rows_fail_closed(tmp_path: Path) -> None:
@@ -683,6 +745,7 @@ def test_mutation_fixture_contract() -> None:
     assert [m["id"] for m in mutations] == [
         *(f"T-M{i}" for i in range(1, 8)),
         "T7-M_gate",
+        "R7T-M_srcend",
     ]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
