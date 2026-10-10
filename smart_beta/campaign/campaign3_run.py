@@ -1035,13 +1035,25 @@ class TbEvaluation:
         }
 
 
-def _load_export_series() -> Any | None:
-    """Load PQS's ``export_series`` when it has merged; else ``None``."""
+def _load_export_series() -> Any:
+    """Load the required PQS ``pqv2_series.export_series`` (fail closed).
+
+    Erratum P6-E1 makes ``pqv2_series`` a required consumer of the T-B
+    evaluation; a missing module or exporter is a
+    :class:`C3ConfigurationError`, never ``None``.
+    """
     try:
         module = importlib.import_module("smart_beta.dataset_v1.pqv2_series")
     except ImportError:
-        return None
-    return getattr(module, "export_series", None)
+        raise C3ConfigurationError(
+            "pqv2_series is required by P6-E1 and is not importable"
+        ) from None
+    exporter = getattr(module, "export_series", None)
+    if not callable(exporter):
+        raise C3ConfigurationError(
+            "pqv2_series is present but exposes no export_series"
+        )
+    return exporter
 
 
 @dataclass
@@ -1094,13 +1106,7 @@ class TbEvaluator:
     def _exporter(self) -> Callable[..., Any]:
         if self.export_series_fn is not None:
             return self.export_series_fn
-        exporter = _load_export_series()
-        if exporter is None:
-            raise C3ConfigurationError(
-                "pqv2_series.export_series is not available; PQS must merge or "
-                "an exporter must be injected"
-            )
-        return exporter
+        return _load_export_series()
 
     def __call__(self, hypothesis_id: str) -> TbEvaluation:
         if hypothesis_id in self.evaluations:
@@ -1376,7 +1382,13 @@ def _policy_with_generator_prompt_hash(
     import dataclasses as _dataclasses
 
     prompt_hash = _generator_prompt_template_hash(generator)
-    if prompt_hash is None or policy.prompt_template_hash == prompt_hash:
+    if prompt_hash is None:
+        raise C3ConfigurationError(
+            "the injected generator must expose a non-empty "
+            "prompt_template_hash (erratum A2-E2); the policy's v1 literal is "
+            "never used as a fallback"
+        )
+    if policy.prompt_template_hash == prompt_hash:
         return policy
     return _dataclasses.replace(policy, prompt_template_hash=prompt_hash)
 

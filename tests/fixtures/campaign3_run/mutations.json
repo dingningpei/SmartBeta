@@ -70,5 +70,29 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_load_screen_runner_fail_closed_without_c3s"
+ },
+ {
+  "id": "R-M7",
+  "description": "the pqv2_series export loader returns None instead of failing closed (C3-R-R2)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    try:\n        module = importlib.import_module(\"smart_beta.dataset_v1.pqv2_series\")\n    except ImportError:\n        raise C3ConfigurationError(\n            \"pqv2_series is required by P6-E1 and is not importable\"\n        ) from None\n    exporter = getattr(module, \"export_series\", None)\n    if not callable(exporter):\n        raise C3ConfigurationError(\n            \"pqv2_series is present but exposes no export_series\"\n        )\n    return exporter",
+    "new": "    try:\n        module = importlib.import_module(\"smart_beta.dataset_v1.pqv2_series\")\n    except ImportError:\n        return None\n    return getattr(module, \"export_series\", None)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_load_export_series_fail_closed_on_import_error"
+ },
+ {
+  "id": "R-M8",
+  "description": "a generator with no prompt_template_hash is tolerated (C3-R-R2)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    prompt_hash = _generator_prompt_template_hash(generator)\n    if prompt_hash is None:\n        raise C3ConfigurationError(\n            \"the injected generator must expose a non-empty \"\n            \"prompt_template_hash (erratum A2-E2); the policy's v1 literal is \"\n            \"never used as a fallback\"\n        )\n    if policy.prompt_template_hash == prompt_hash:\n        return policy",
+    "new": "    prompt_hash = _generator_prompt_template_hash(generator)\n    if prompt_hash is None or policy.prompt_template_hash == prompt_hash:\n        return policy"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_policy_requires_a_generator_prompt_hash"
  }
 ]

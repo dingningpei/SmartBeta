@@ -96,14 +96,20 @@ def _policy(budget: int = 2) -> Any:
 
 
 def _scripted_generator(budget: int) -> Any:
-    """A stub that rises after ``budget + 1`` calls (the loop is bounded)."""
+    """A stub that rises after ``budget + 1`` calls (the loop is bounded).
+
+    The stub exposes the injected ``prompt_template_hash`` that erratum A2-E2
+    requires every generator to carry.
+    """
 
     def factory(visible: Any, feedback: Any, index: int) -> Any:
         return fx.generation_output(
             fx.candidate(fx.simple_spec_dict(numerator_lag=21 + index))
         )
 
-    return fx.ScriptedGenerator(factory=factory, max_calls=budget + 1)
+    generator = fx.ScriptedGenerator(factory=factory, max_calls=budget + 1)
+    generator.prompt_template_hash = PROMPT_TEMPLATE_HASH
+    return generator
 
 
 @dataclass
@@ -575,6 +581,48 @@ def test_pqs_export_series_is_available():
     assert callable(R._load_export_series())
 
 
+def test_load_export_series_fail_closed_on_import_error(monkeypatch):
+    """Kills mutation R-M7 (the export None is tolerated)."""
+    real_import = R.importlib.import_module
+
+    def _boom(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "smart_beta.dataset_v1.pqv2_series":
+            raise ImportError("simulated missing pqv2_series")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(R.importlib, "import_module", _boom)
+    with pytest.raises(R.C3ConfigurationError):
+        R._load_export_series()
+
+
+def test_load_export_series_fail_closed_on_missing_attribute(monkeypatch):
+    """Kills mutation R-M7 (the export None is tolerated)."""
+    import types
+
+    monkeypatch.setattr(
+        R.importlib,
+        "import_module",
+        lambda name, *a, **k: types.SimpleNamespace()
+        if name == "smart_beta.dataset_v1.pqv2_series"
+        else __import__(name),
+    )
+    with pytest.raises(R.C3ConfigurationError):
+        R._load_export_series()
+
+
+def test_tb_evaluator_exporter_propagates_failure(monkeypatch):
+    """The T-B evaluator has no None-tolerant exporter path (R-M7)."""
+
+    def _raise() -> Any:
+        raise R.C3ConfigurationError("no exporter")
+
+    monkeypatch.setattr(R, "_load_export_series", _raise)
+    evaluator = R.TbEvaluator.__new__(R.TbEvaluator)
+    evaluator.export_series_fn = None
+    with pytest.raises(R.C3ConfigurationError):
+        evaluator._exporter()
+
+
 # ---------------------------------------------------------------------------
 # 8. run() delegates to the C3-S seam and records the stages
 # ---------------------------------------------------------------------------
@@ -729,6 +777,25 @@ def test_policy_prompt_hash_comes_from_the_generator(tmp_path):
     assert runner.policy.prompt_template_hash == generator.prompt_template_hash
 
 
+def test_policy_requires_a_generator_prompt_hash(tmp_path):
+    """Kills mutation R-M8 (a missing generator prompt hash is tolerated)."""
+    bare = fx.ScriptedGenerator(
+        outputs=[fx.generation_output(fx.candidate(fx.simple_spec_dict()))]
+    )
+    assert not hasattr(bare, "prompt_template_hash")
+    with pytest.raises(R.C3ConfigurationError):
+        R.Campaign3Run(
+            bindings=_bindings(),
+            policy=_policy(1),
+            generator=bare,
+            ta_evaluator=fx.StubEvaluator(),
+            knowledge_log=KnowledgeLog(tmp_path / "kpit.jsonl"),
+            run_root=tmp_path / "runs",
+            screen_runner=_ScreenSpy(),
+            screen_candidate_builder=_synthetic_screen_candidates,
+        )
+
+
 def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
     budget = 5
     log = KnowledgeLog(tmp_path / "kpit.jsonl")
@@ -783,7 +850,7 @@ def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
 def test_mutations_fixture_is_wellformed():
     entries = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
     ids = {entry["id"] for entry in entries}
-    assert {"R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6"} <= ids
+    assert {"R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8"} <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
         assert target.is_file(), entry["file"]
