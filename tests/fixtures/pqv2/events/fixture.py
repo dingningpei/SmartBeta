@@ -99,11 +99,16 @@ def write_event_root(
     events: Sequence[EventRow],
     acq_id: str = DEFAULT_ACQ_ID,
     ev_id: str = DEFAULT_EV_ID,
+    package: str = "derived",
 ) -> tuple[str, str]:
-    """Write a synthetic ``derived/edgar-<acq_id>/`` root; return ids."""
+    """Write a synthetic ``<package>/edgar-<acq_id>/`` root; return ids.
+
+    ``package`` is ``"derived"`` for the development event layer (the default)
+    or ``"reserve_sealed"`` for the v2.4 reserve fold's event layer.
+    """
 
     root = Path(root)
-    build_dir = root / "derived" / f"edgar-{acq_id}"
+    build_dir = root / package / f"edgar-{acq_id}"
     build_dir.mkdir(parents=True, exist_ok=True)
     write_identity_map(identities, build_dir / "identity_map.parquet")
     write_events_parquet(build_dir / "events.parquet", events)

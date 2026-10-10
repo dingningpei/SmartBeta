@@ -745,6 +745,83 @@ def test_label_envelope_rejects_bad_record() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P-Q v2.4 fold-parameterized firewall (PQ24-B)
+# ---------------------------------------------------------------------------
+
+
+def test_default_fold_matches_the_v2_3_path() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, unknown = _bridge(world, "S")
+    r_obs = world.view(()).label_R("S", 4, 8)
+    omitted = L.label_envelope(
+        record, transitions, candidates, unknown,
+        t0_value=r_obs, ts_value=r_obs,
+    )
+    explicit = L.label_envelope(
+        record, transitions, candidates, unknown,
+        fold=C.DEVELOPMENT_FOLD, t0_value=r_obs, ts_value=r_obs,
+    )
+    assert omitted == explicit
+    assert C.DEVELOPMENT_FOLD.is_development
+    assert C.DEVELOPMENT_FOLD.end == C.DEVELOPMENT_END
+
+
+def test_reserve_fold_beyond_end_cause() -> None:
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(6,))
+    record = _record(world, "S", 4, 8)
+    transitions, candidates, _ = _bridge(world, "S")
+    flag = C.UnresolvedFlag("S", _D(6), _D(5), C.SourceState.UNKNOWN_RESERVE)
+    reserve = C.Fold("reserve", _D(2), _D(14))
+    envelope = L.label_envelope(
+        record, transitions, candidates, [flag], fold=reserve, t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_FOLD_END_UNKNOWN
+    assert envelope.causes.causes == (C.PQV2_FOLD_END_UNKNOWN,)
+    assert envelope.n_unknown_reserve == 1
+    # The development fold keeps the v2.3 cause for the same flag; the two
+    # fold causes never co-occur.
+    dev = L.label_envelope(
+        record, transitions, candidates, [flag], t0_value=0.01
+    )
+    assert dev.reason == C.PQV2_RESERVE_UNKNOWN
+    assert dev.reason != C.PQV2_FOLD_END_UNKNOWN
+
+
+def test_reserve_fold_endpoint_e_firewall() -> None:
+    reserve = C.Fold("reserve", _D(2), _D(9))
+    record = {
+        "formation_date": _D(4),
+        "endpoint": _D(9),
+        "label_state": "COMPLETE",
+        "observed_segment_end": _D(9),
+        "terminal_affected": False,
+        "t0_value": 0.01,
+        "ts_value": 0.01,
+    }
+    envelope = L.label_envelope(record, (), (), None, fold=reserve)
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_FOLD_END_UNKNOWN
+    # No envelope is computed under the fold-end firewall.
+    assert envelope.lo != envelope.lo and envelope.hi != envelope.hi
+
+
+def test_reserve_fold_misdated_window_crossing_label() -> None:
+    # e* = _D(8) != E = _D(14): only a reaching reserve-state flag fires (the
+    # source loader marks a +5 window crossing E as UNKNOWN_RESERVE).
+    world = _world(n=12, f=4, h=4, closes=_JUMP, flags=(9,))
+    record = _record(world, "S", 4, 8)
+    flag = C.UnresolvedFlag("S", _D(9), _D(8), C.SourceState.UNKNOWN_RESERVE)
+    reserve = C.Fold("reserve", _D(2), _D(14))
+    envelope = L.label_envelope(
+        record, (), (), [flag], fold=reserve, t0_value=0.01
+    )
+    assert envelope.status == C.UNKNOWN_RESERVE
+    assert envelope.reason == C.PQV2_FOLD_END_UNKNOWN
+
+
+# ---------------------------------------------------------------------------
 # Mutation fixture contract
 # ---------------------------------------------------------------------------
 
@@ -781,6 +858,9 @@ def test_mutation_fixture_contract() -> None:
         "B21-M1",
         "B21-M2",
         "B21-M3",
+        "B24-M1",
+        "B24-M2",
+        "B24-M3",
     }
     allowed_files = {
         "smart_beta/dataset_v1/pqv2_sources.py",

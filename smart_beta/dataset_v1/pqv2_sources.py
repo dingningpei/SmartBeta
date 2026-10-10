@@ -38,11 +38,14 @@ from smart_beta.dataset_v1 import quarantine as _pq
 from smart_beta.dataset_v1 import trusted_inputs as _d7c
 from smart_beta.dataset_v1.pqv2_core import (
     DEVELOPMENT_END,
+    DEVELOPMENT_FOLD,
+    Fold,
     MISDATED_ACTION_TYPES,
     MISDATED_WINDOW,
     MisdatedCandidate,
     PQv2BindingError,
     PQv2InputError,
+    RESERVE_START,
     SourceSet,
     SourceState,
     UncertainTransition,
@@ -248,13 +251,15 @@ def _verify_d7a(resolver: Any, bindings: Any) -> None:
             )
 
 
-def _load_d7a_daily(root: Path | str, bindings: Any) -> pd.DataFrame:
+def _load_d7a_daily(
+    root: Path | str, bindings: Any, fold: Fold = DEVELOPMENT_FOLD
+) -> pd.DataFrame:
     resolver = _d7b._Resolver(root, bindings)
     _verify_d7a(resolver, bindings)
     return resolver.read_parquet(
         f"derived/returns/{bindings.d7a.artifact_id}/daily_returns.parquet",
         columns=list(_DAILY_COLUMNS),
-        filters=[("date", "<=", pd.Timestamp(DEVELOPMENT_END))],
+        filters=[("date", "<=", pd.Timestamp(fold.end))],
     )
 
 
@@ -263,33 +268,44 @@ def _load_d7a_daily(root: Path | str, bindings: Any) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_bindings(root: Path | str, d7a_bindings: Any) -> tuple[Any, pd.DataFrame]:
+def _resolve_bindings(
+    root: Path | str, d7a_bindings: Any, fold: Fold = DEVELOPMENT_FOLD
+) -> tuple[Any, pd.DataFrame]:
     """Return ``(returns_bindings, daily_returns_frame)`` for the loader.
 
     ``d7a_bindings`` may be a :class:`SourceBindings` (both explicit), a
     :class:`returns.Bindings` (D3/D4; the D7A cross-check uses the frozen
     default D7A bindings), or a :class:`delisting_bridge.Bindings` (D7A; the
-    D3/D4 bindings are the frozen :func:`returns.default_bindings`).
+    D3/D4 bindings are the frozen :func:`returns.default_bindings`).  ``fold``
+    bounds the D7A cross-check rows at the fold's end ``E``.
     """
 
     if isinstance(d7a_bindings, SourceBindings):
-        return d7a_bindings.ca, _load_d7a_daily(root, d7a_bindings.d7a)
+        return d7a_bindings.ca, _load_d7a_daily(root, d7a_bindings.d7a, fold)
     if isinstance(d7a_bindings, _d7a.Bindings):
-        return d7a_bindings, _load_d7a_daily(root, _d7b.DEFAULT_BINDINGS)
+        return d7a_bindings, _load_d7a_daily(root, _d7b.DEFAULT_BINDINGS, fold)
     if isinstance(d7a_bindings, _d7b.Bindings):
-        return _d7a.default_bindings(), _load_d7a_daily(root, d7a_bindings)
+        return _d7a.default_bindings(), _load_d7a_daily(root, d7a_bindings, fold)
     raise PQv2InputError(
         "d7a_bindings must be a SourceBindings, returns.Bindings or "
         "delisting_bridge.Bindings"
     )
 
 
-def _daily_lookup(ti_inputs: Any) -> tuple[pd.DataFrame, dict[date, Any]]:
+def _daily_lookup(
+    ti_inputs: Any, fold: Fold = DEVELOPMENT_FOLD
+) -> tuple[pd.DataFrame, dict[date, Any]]:
     """Return the D7c daily frame and a ``row_date -> index label`` map.
 
     The wide frame is kept as-is (no O(rows x columns) materialisation); only
     the row index is normalised to calendar dates, so a per-flag lookup is
-    O(1).
+    O(1).  Rows beyond the declared fold's end ``E`` are never admitted
+    (firewall §2).  A reserve fold's D7c frame is *stitched* (R7-T): rows dated
+    before ``RESERVE_START`` come from the development sources and rows dated
+    at/after it from the reserve sources, so each flag is classified by the
+    source of its own date.  Under the default development fold ``E`` is
+    ``DEVELOPMENT_END`` and no reserve row is admitted, so the default path is
+    byte-identical to v2.3.
     """
 
     trusted = ti_inputs
@@ -305,10 +321,23 @@ def _daily_lookup(ti_inputs: Any) -> tuple[pd.DataFrame, dict[date, Any]]:
             "the daily_total_return TrustedInput must expose a DataFrame"
         )
     positions: dict[date, Any] = {}
+    positions: dict[date, Any] = {}
+    # Per-flag date-based source (firewall §2.3): a row dated before
+    # RESERVE_START is a development source row and a row at/after it is a
+    # reserve source row.  The combined map is the stitched input; rows past
+    # the fold end E are never admitted, so the development fold admits no
+    # reserve row and stays byte-identical to v2.3.
+    development: dict[date, Any] = {}
+    reserve: dict[date, Any] = {}
     for label in values.index:
         parsed = _as_date(label)
-        if parsed is not None:
-            positions[parsed] = label
+        if parsed is None or parsed > fold.end:
+            continue
+        if parsed < RESERVE_START:
+            development[parsed] = label
+        else:
+            reserve[parsed] = label
+    positions = {**development, **reserve}
     return values, positions
 
 
@@ -322,7 +351,9 @@ def _classify_m(
     and the key is a column), finite and gives ``m_s = 1 + value > 0``.
     Otherwise returns ``(SourceState.UNKNOWN_SOURCE, None)``.  It never
     substitutes a D7a return, another D7c session, a fill, interpolation or
-    ``λ = 1``, and it reads no reserve-dated row.
+    ``λ = 1``.  The lookup itself already admits only rows at or before the
+    fold end ``E``, so under the development fold no reserve-dated row is ever
+    read.
     """
 
     values, positions = lookup
@@ -354,7 +385,9 @@ class _IdentityIndex:
     intervals: Mapping[str, tuple[tuple[date | None, date | None], ...]]
 
 
-def _identity_index(identity: pd.DataFrame) -> _IdentityIndex:
+def _identity_index(
+    identity: pd.DataFrame, fold: Fold = DEVELOPMENT_FOLD
+) -> _IdentityIndex:
     ticker_by_key: dict[str, str] = {}
     intervals: dict[str, list[tuple[date | None, date | None]]] = {}
     for row in identity.itertuples(index=False):
@@ -368,9 +401,9 @@ def _identity_index(identity: pd.DataFrame) -> _IdentityIndex:
             ticker_by_key[key] = ticker
         start = _as_date(row.listed_start)
         end = _as_date(row.listed_end)
-        if start is not None and start > DEVELOPMENT_END:
+        if start is not None and start > fold.end:
             continue
-        clipped_end = DEVELOPMENT_END if end is None else min(end, DEVELOPMENT_END)
+        clipped_end = fold.end if end is None else min(end, fold.end)
         intervals.setdefault(key, []).append((start, clipped_end))
     ordered = {
         key: tuple(
@@ -397,19 +430,20 @@ def _event_index(
     ca_events: pd.DataFrame,
     sessions: Sequence[date],
     index: _IdentityIndex,
+    fold: Fold = DEVELOPMENT_FOLD,
 ) -> dict[str, dict[date, tuple[tuple[str, bool, float], ...]]]:
     """Per security key: session -> the *selected* ``(action, candidate, factor)``.
 
     Selected means: non-superseded, ``knowledge_date == effective_date``, a
-    positive finite factor, inside the key's D4 interval and no later than
-    ``DEVELOPMENT_END``.  ``candidate`` is true only for the M§7 action types.
-    A reserve-dated row or a non-trusted effective session fails closed.
+    positive finite factor, inside the key's D4 interval and no later than the
+    declared fold's end ``E``.  ``candidate`` is true only for the M§7 action
+    types.  A row past ``E`` or a non-trusted effective session fails closed.
 
     D4 reuses tickers across distinct security keys (D7a selects a key's
-    ticker's events inside that key's ``[listed_start, min(listed_end,
-    DEVELOPMENT_END)]`` interval), so a validated event is appended to every
-    key carrying its ticker whose interval contains the event's effective
-    date; overlapping intervals deliberately share the event.
+    ticker's events inside that key's ``[listed_start, min(listed_end, E)]``
+    interval), so a validated event is appended to every key carrying its
+    ticker whose interval contains the event's effective date; overlapping
+    intervals deliberately share the event.
     """
 
     trusted = set(sessions)
@@ -428,9 +462,10 @@ def _event_index(
         knowledge = _as_date(record["knowledge_date"])
         if effective is None or knowledge is None:
             continue
-        if effective > DEVELOPMENT_END or knowledge > DEVELOPMENT_END:
+        if effective > fold.end or knowledge > fold.end:
             raise PQv2InputError(
-                f"corporate action for {ticker!r} is dated after DEVELOPMENT_END"
+                f"corporate action for {ticker!r} is dated after the fold end "
+                f"{fold.end}"
             )
         if effective not in trusted:
             raise PQv2InputError(
@@ -466,7 +501,9 @@ def _event_index(
     }
 
 
-def _daily_count_index(daily: pd.DataFrame) -> dict[tuple[str, date], int]:
+def _daily_count_index(
+    daily: pd.DataFrame, fold: Fold = DEVELOPMENT_FOLD
+) -> dict[tuple[str, date], int]:
     out: dict[tuple[str, date], int] = {}
     for row in daily.itertuples(index=False):
         key = _as_str(row.security_key)
@@ -474,9 +511,10 @@ def _daily_count_index(daily: pd.DataFrame) -> dict[tuple[str, date], int]:
         count = row.ca_event_count
         if key is None or session is None or count is None:
             continue
-        if session > DEVELOPMENT_END:
+        if session > fold.end:
             raise PQv2InputError(
-                f"D7a daily_returns holds a session {session} after DEVELOPMENT_END"
+                f"D7a daily_returns holds a session {session} after the fold "
+                f"end {fold.end}"
             )
         out[(key, session)] = int(count)
     return out
@@ -494,12 +532,13 @@ def load_source_set(
     d7a_bindings: Any,
     ti_inputs: Any,
     sessions: Sequence[date],
+    fold: Fold = DEVELOPMENT_FOLD,
 ) -> SourceSet:
     """Build the deterministic P-Q v2.1 :class:`SourceSet` (M§8A.1).
 
     * flags come from ``overlay.flags`` only;
     * each flag gets exactly one M§8A.1 source state, in order: UNKNOWN_RESERVE
-      (next(s) beyond/undefined at ``DEVELOPMENT_END``, or the ``+5`` window
+      (next(s) beyond/undefined at the fold end ``E``, or the ``+5`` window
       crossing it), else UNKNOWN_SOURCE (the exact D7c row at next(s) is
       absent/NaN/±inf or ``1 + value <= 0``), else RESOLVED;
     * only RESOLVED flags appear in ``transitions_by_key``; unresolved flags are
@@ -507,26 +546,34 @@ def load_source_set(
     * MISDATED candidates are recorded split/dividend events of the same D4
       security, inside its D4 interval, at a trusted session ``d != s`` within
       ``MISDATED_WINDOW``, with the combined same-day factor, and are
-      enumerated for RESOLVED and both UNKNOWN states (``d`` never past
-      ``DEVELOPMENT_END``);
+      enumerated for RESOLVED and both UNKNOWN states (``d`` never past ``E``);
     * there is no global abort because a flag is unresolved, and no substitution
       (D7a, another D7c session, fill, interpolation, zero or ``λ = 1``).
+
+    ``fold`` declares the evaluation fold (P-Q v2.4 plan §1): every temporal
+    boundary uses its end ``E``.  The default is the development fold, so the
+    default path is byte-identical to v2.3.  Under a reserve fold the D7c frame
+    is stitched (R7-T): a flag dated before ``RESERVE_START`` is classified by
+    the development source and a flag dated at/after it by the reserve source,
+    so the fold-end cause is emitted downstream as ``PQV2_FOLD_END_UNKNOWN``.
     """
 
+    if not isinstance(fold, Fold):
+        raise PQv2InputError("fold must be a Fold")
     parsed_sessions = [_as_date(session) for session in sessions]
     if any(session is None for session in parsed_sessions):
         raise PQv2InputError("sessions must be a sequence of calendar dates")
     session_list = sorted(session for session in parsed_sessions if session is not None)
     position = {session: index for index, session in enumerate(session_list)}
-    dev_end_position = bisect_right(session_list, DEVELOPMENT_END) - 1
+    fold_end_position = bisect_right(session_list, fold.end) - 1
 
-    ca_bindings, daily = _resolve_bindings(root, d7a_bindings)
+    ca_bindings, daily = _resolve_bindings(root, d7a_bindings, fold)
     ca_events = load_ca_events(root, ca_bindings)
     identity = load_identity_assignment(root, ca_bindings)
-    lookup = _daily_lookup(ti_inputs)
-    index = _identity_index(identity)
-    events = _event_index(ca_events, session_list, index)
-    daily_count = _daily_count_index(daily)
+    lookup = _daily_lookup(ti_inputs, fold)
+    index = _identity_index(identity, fold)
+    events = _event_index(ca_events, session_list, index, fold)
+    daily_count = _daily_count_index(daily, fold)
 
     flags = overlay.flags
     required = {
@@ -567,12 +614,13 @@ def load_source_set(
         flag_next = _as_date(row["next_session"])
         beyond = _as_bool(row["next_beyond_development"])
 
-        # M§8A.1 rule 1: reserve firewall, decided without reading any row.
+        # M§8A.1 rule 1: fold-end firewall, decided without reading any row.
+        # The development fold's E is DEVELOPMENT_END (byte-identical to v2.3).
         reserve = (
             beyond
             or next_s is None
-            or next_s > DEVELOPMENT_END
-            or flag_position + MISDATED_WINDOW > dev_end_position
+            or next_s > fold.end
+            or flag_position + MISDATED_WINDOW > fold_end_position
         )
         if reserve:
             state = SourceState.UNKNOWN_RESERVE
@@ -602,13 +650,13 @@ def load_source_set(
             )
 
         # M§7/M§8A.2: candidates are recorded events only, so enumerate them
-        # for RESOLVED and both UNKNOWN states (never past DEVELOPMENT_END) so
+        # for RESOLVED and both UNKNOWN states (never past the fold end E) so
         # downstream can compute pair-effect reach.
         key_events = events.get(key)
         if not key_events:
             continue
         for d in sorted(key_events):
-            if d == s or d > DEVELOPMENT_END:
+            if d == s or d > fold.end:
                 continue
             d_position = position.get(d)
             if d_position is None:

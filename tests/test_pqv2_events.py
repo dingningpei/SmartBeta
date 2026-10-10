@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_events as E
 from smart_beta.spec.engine import EvidenceClass
 from smart_beta.spec.requirements import RevisionPolicy
@@ -210,6 +211,105 @@ def test_reserve_rows_refused(tmp_path: Path, fx) -> None:
     (_, acq, ev_id) = _write(tmp_path, fx, identities=identities, events=events)
     with pytest.raises(E.EventFirewallError):
         E.load_event_layer(tmp_path, acq_id=acq, ev_id=ev_id)
+
+
+def _write_package(
+    tmp_path: Path, fx, *, identities, events, package: str, ev_id="e" * 64
+):
+    acq = "a" * 16
+    return fx.write_event_root(
+        tmp_path,
+        identities=identities,
+        events=events,
+        acq_id=acq,
+        ev_id=ev_id,
+        package=package,
+    ), acq, ev_id
+
+
+def test_reserve_fold_reads_reserve_events(tmp_path: Path, fx) -> None:
+    # A reserve fold opens ``reserve_sealed/edgar-<acq_id>/`` and admits the
+    # reserve rows with K(e) <= E (firewall §2.2).
+    session = date(2023, 7, 10)
+    identities = [fx.make_identity("R", interval_end=date(2023, 7, 31))]
+    events = [fx.make_event("R", k_session=session, acceptance_et=_et(session, 10, 0))]
+    (_, acq, ev_id) = _write_package(
+        tmp_path,
+        fx,
+        identities=identities,
+        events=events,
+        package="reserve_sealed",
+    )
+    fold = C.Fold("reserve", date(2023, 7, 3), date(2023, 7, 31))
+    layer = E.load_event_layer(tmp_path, acq_id=acq, ev_id=ev_id, fold=fold)
+    assert layer.keys == ("R",)
+    assert len(layer.events_by_key["R"]) == 1
+    assert layer.events_by_key["R"][0].k_session == session
+
+
+def test_reserve_fold_event_at_e_admissible(tmp_path: Path, fx) -> None:
+    end = date(2023, 7, 31)
+    identities = [fx.make_identity("R", interval_end=end)]
+    events = [fx.make_event("R", k_session=end, acceptance_et=_et(end, 10, 0))]
+    (_, acq, ev_id) = _write_package(
+        tmp_path,
+        fx,
+        identities=identities,
+        events=events,
+        package="reserve_sealed",
+    )
+    fold = C.Fold("reserve", date(2023, 7, 3), end)
+    layer = E.load_event_layer(tmp_path, acq_id=acq, ev_id=ev_id, fold=fold)
+    assert layer.events_by_key["R"][0].k_session == end
+
+
+def test_reserve_fold_event_beyond_e_refused(tmp_path: Path, fx) -> None:
+    end = date(2023, 7, 31)
+    beyond = date(2023, 8, 1)
+    identities = [fx.make_identity("R", interval_end=beyond)]
+    events = [fx.make_event("R", k_session=beyond, acceptance_et=_et(beyond, 10, 0))]
+    (_, acq, ev_id) = _write_package(
+        tmp_path,
+        fx,
+        identities=identities,
+        events=events,
+        package="reserve_sealed",
+    )
+    fold = C.Fold("reserve", date(2023, 7, 3), end)
+    with pytest.raises(E.EventFirewallError):
+        E.load_event_layer(tmp_path, acq_id=acq, ev_id=ev_id, fold=fold)
+
+
+def test_default_fold_reads_development_layer_not_reserve(
+    tmp_path: Path, fx
+) -> None:
+    # Under the default fold the loader reads ``derived/edgar-<acq_id>/``; the
+    # reserve package is never opened even when it carries events.
+    session = date(2023, 7, 10)
+    identities = [fx.make_identity("R", interval_end=date(2023, 7, 31))]
+    (_, acq, ev_id) = _write_package(
+        tmp_path,
+        fx,
+        identities=identities,
+        events=(),
+        package="derived",
+    )
+    _write_package(
+        tmp_path,
+        fx,
+        identities=identities,
+        events=[
+            fx.make_event(
+                "R", k_session=session, acceptance_et=_et(session, 10, 0)
+            )
+        ],
+        package="reserve_sealed",
+    )
+    layer = E.load_event_layer(
+        tmp_path, acq_id=acq, ev_id=ev_id, fold=C.DEVELOPMENT_FOLD
+    )
+    assert layer.keys == ("R",)
+    assert layer.events_by_key.get("R", ()) == ()
 
 
 def test_unknown_key_in_event_panel(tmp_path: Path, fx) -> None:
@@ -634,6 +734,7 @@ def test_mutation_fixture_contract() -> None:
         "B23-M4",
         "B23-M5",
         "B23-M6",
+        "B24-M4",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_events.py").read_text(
         encoding="utf-8"

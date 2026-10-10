@@ -68,8 +68,8 @@
     "file": "smart_beta/dataset_v1/pqv2_sources.py",
     "edits": [
       {
-        "old": "            or next_s > DEVELOPMENT_END\n            or flag_position + MISDATED_WINDOW > dev_end_position",
-        "new": "            or next_s > DEVELOPMENT_END"
+        "old": "            or next_s > fold.end\n            or flag_position + MISDATED_WINDOW > fold_end_position",
+        "new": "            or next_s > fold.end"
       }
     ],
     "test": "tests/test_pqv2_sources.py::test_reserve_firewall_marks_unknown"
@@ -80,8 +80,8 @@
     "file": "smart_beta/dataset_v1/pqv2_labels.py",
     "edits": [
       {
-        "old": "    if e_star == DEVELOPMENT_END:",
-        "new": "    if False:  # V2-M07: development-end firewall removed"
+        "old": "    if e_star == fold.end:",
+        "new": "    if False:  # V2-M07: fold-end firewall removed"
       }
     ],
     "test": "tests/test_pqv2_labels.py::test_reserve_unknown_firewall"
@@ -313,5 +313,41 @@
       }
     ],
     "test": "tests/test_pqv2_labels.py::test_source_plus_reserve_keeps_both_causes_with_reserve_primary"
+  },
+  {
+    "id": "B24-M1",
+    "description": "E is fixed at DEVELOPMENT_END in the reserve fold (the fold end is ignored)",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "            or next_s > fold.end\n            or flag_position + MISDATED_WINDOW > fold_end_position",
+        "new": "            or next_s > DEVELOPMENT_END\n            or flag_position + MISDATED_WINDOW > bisect_right(session_list, DEVELOPMENT_END) - 1"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reserve_fold_next_within_fold_resolves"
+  },
+  {
+    "id": "B24-M2",
+    "description": "a reserve-dated flag is classified from the development sources only",
+    "file": "smart_beta/dataset_v1/pqv2_sources.py",
+    "edits": [
+      {
+        "old": "    positions = {**development, **reserve}",
+        "new": "    positions = dict(development)  # B24-M2: reserve rows dropped"
+      }
+    ],
+    "test": "tests/test_pqv2_sources.py::test_reserve_fold_stitched_source_classification"
+  },
+  {
+    "id": "B24-M3",
+    "description": "the beyond-E cause is mislabelled RESERVE instead of FOLD_END",
+    "file": "smart_beta/dataset_v1/pqv2_labels.py",
+    "edits": [
+      {
+        "old": "    return NotAssessedReason.FOLD_END_UNKNOWN",
+        "new": "    return NotAssessedReason.RESERVE_UNKNOWN"
+      }
+    ],
+    "test": "tests/test_pqv2_labels.py::test_reserve_fold_beyond_end_cause"
   }
 ]
