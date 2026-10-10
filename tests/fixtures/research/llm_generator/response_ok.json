@@ -1,0 +1,14 @@
+{
+  "content": [
+    {
+      "text": "{\"candidates\":[{\"economic_rationale\":\"Momentum persists over medium horizons.\",\"factor_spec\":{\"description\":\"Fixture medium-horizon momentum: lagged TRI ratio (21/252).\",\"expression\":{\"left\":{\"op\":\"lag\",\"operand\":{\"op\":\"field\",\"role\":\"tri\"},\"periods\":21},\"op\":\"div\",\"right\":{\"op\":\"lag\",\"operand\":{\"op\":\"field\",\"role\":\"tri\"},\"periods\":252}},\"frequency\":\"daily\",\"hypothesis\":\"fixture-momentum\",\"id\":\"c3_fixture_mom_252_21\",\"inputs\":[{\"alias\":\"tri\",\"requirement\":{\"frequency\":\"daily\",\"lookback\":0,\"observation_period\":\"instant\",\"require_knowledge_date\":true,\"require_positive_vintage_identity\":false,\"revision_policy\":\"point_in_time\",\"semantic_id\":\"total_return_index\",\"units\":\"ratio\"}}],\"missing_policy\":\"propagate\",\"sign\":1},\"research_question\":\"Does medium-horizon momentum predict the cross-section?\"}],\"schema_version\":\"campaign3-candidates-v1\"}",
+      "type": "text"
+    }
+  ],
+  "model": "claude-opus-5-5",
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 1234,
+    "output_tokens": 567
+  }
+}
