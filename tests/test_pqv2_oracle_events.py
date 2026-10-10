@@ -459,6 +459,11 @@ def test_mutation_fixture_contract() -> None:
         "G23-M2",
         "G23-M3",
         "G23-M4",
+        "G24-M1",
+        "G24-M2",
+        "G24-M3",
+        "G24-M4",
+        "G24-M5",
     ]
     this_module = sys.modules[__name__]
     for mutation in mutations:
@@ -468,6 +473,7 @@ def test_mutation_fixture_contract() -> None:
         assert module_name in (
             "tests/test_pqv2_oracle_grammar.py",
             "tests/test_pqv2_oracle_events.py",
+            "tests/test_pqv2_oracle_fold.py",
         ), mutation["id"]
         if module_name == "tests/test_pqv2_oracle_events.py":
             assert hasattr(this_module, test_name), mutation["id"]

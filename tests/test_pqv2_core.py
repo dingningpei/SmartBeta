@@ -42,6 +42,7 @@ BASE_METHODOLOGY_REL = Path(C.AUTHORITY_V2_2.base_methodology_relative)
 V2_METHODOLOGY_REL = Path(C.AUTHORITY_V2.methodology_relative)
 V22_METHODOLOGY_REL = Path(C.AUTHORITY_V2_2.methodology_relative)
 V23_METHODOLOGY_REL = Path(C.AUTHORITY_V2_3.methodology_relative)
+V24_METHODOLOGY_REL = Path(C.AUTHORITY_V2_4.methodology_relative)
 CREDENTIAL_SENTINEL = "pqv2-core-credential-sentinel-9f31"
 
 _CREDENTIAL_KEYS = (
@@ -114,6 +115,34 @@ _EXPECTED_V23_CE_LINE = (
     '"event_window":"K_and_K_plus_1",'
     '"other":"NOT_ASSESSED_UNLESS_SEPARATELY_FROZEN","version":"pq-v2.3-ce-3"}'
 )
+_EXPECTED_V24_ED_LINE = (
+    '{"rules":["tri_log_linear_prefix_cancellation","lag_shift",'
+    '"rolling_window_union_numerical","arithmetic_conservative_union",'
+    '"cross_sectional_whole_row","label_candidate_e_[f,next(e)]",'
+    '"dtr_{prev,s,next}","dv_{prev,s}","misdated_recorded_pm5",'
+    '"reserve_unknown_not_assessed","source_unresolved_unknown_not_assessed",'
+    '"add_sub_support_union","event_anchored_tri_window",'
+    '"event_primitive_price_independent","event_identity_unmapped_not_assessed",'
+    '"event_identity_contradicted_not_assessed","event_reserve_not_assessed",'
+    '"event_time_unavailable_not_assessed",'
+    '"event_source_excluded_not_assessed",'
+    '"event_timing_dual_scenario_k0_k1_preclose_15m",'
+    '"fold_parameterized_temporal_firewall"],"version":"pq-v2.4-ed-5"}'
+)
+_EXPECTED_V24_CE_LINE = (
+    '{"classes":{"simple_exact":"GRAMMAR_SIMPLE_G_v1",'
+    '"std_x_rank_sandwich":"GRAMMAR_STD_X_RANK_G_v1",'
+    '"event_simple":"GRAMMAR_EVENT_G_v1"},'
+    '"bounds":{"lookback_max":504,"window_min":2,"window_max":504},'
+    '"denominators":["tri_ratio","rolling_mean_dv",'
+    '"rolling_std_ret_assumption_A_STD"],'
+    '"event_data":{"acq_id":'
+    '"f0d0ee1b4f5875b1d8ad970e041ebe73d8278cc283477378af4bb1bf9fa04f54",'
+    '"ev_id":'
+    '"ff5e83ec253f007493bfc7341fd4dcc90606ee932855efe3313686d1afabcca3"},'
+    '"event_window":"K_and_K_plus_1",'
+    '"other":"NOT_ASSESSED_UNLESS_SEPARATELY_FROZEN","version":"pq-v2.4-ce-4"}'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +187,8 @@ def _copy_authority_tree(tmp_path: Path) -> Path:
         C.AUTHORITY_V2_2.base_methodology_relative,
         C.AUTHORITY_V2_3.methodology_relative,
         C.AUTHORITY_V2_3.base_methodology_relative,
+        C.AUTHORITY_V2_4.methodology_relative,
+        C.AUTHORITY_V2_4.base_methodology_relative,
     }
     for relative in relatives:
         doc = root / relative
@@ -283,6 +314,7 @@ def test_v22_authority_constants() -> None:
         C.AUTHORITY_V2_1,
         C.AUTHORITY_V2_2,
         C.AUTHORITY_V2_3,
+        C.AUTHORITY_V2_4,
     )
     assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
     assert C.CS_ID == C.AUTHORITY_V2_1.cs_id
@@ -361,6 +393,7 @@ def test_v23_authority_constants() -> None:
         C.AUTHORITY_V2_1,
         C.AUTHORITY_V2_2,
         C.AUTHORITY_V2_3,
+        C.AUTHORITY_V2_4,
     )
     # v2.3 is admitted but not current; the module constants follow v2.1.
     assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
@@ -432,6 +465,116 @@ def test_v23_authority_chain_verifies_v22_and_v21(tmp_path: Path) -> None:
     )
     with pytest.raises(C.PQv2BindingError):
         C.verify_authority(root, authority=C.AUTHORITY_V2_3)
+
+
+def test_v24_authority_constants() -> None:
+    assert C.AUTHORITY_V2_4.version == "P-Q v2.4"
+    assert C.AUTHORITY_V2_4.methodology_relative == (
+        "docs/discovery_dataset_v1_2_pq_v2_4_fold_firewall.md"
+    )
+    assert C.AUTHORITY_V2_4.methodology_sha256 == (
+        "695973b9f1c7fcbc4979527a7b20ee0150fc5831da34722df5a7a37416aebed0"
+    )
+    assert C.AUTHORITY_V2_4.cs_id == C.AUTHORITY_V2_1.cs_id
+    assert C.AUTHORITY_V2_4.ed_id == (
+        "f8370828ae292f9e5bfc0a5a4e7054ba79c33fe88c1646793ad0f1d0dcc88d93"
+    )
+    assert C.AUTHORITY_V2_4.ce_id == (
+        "c40d8724ff6b6ee7862a07e39eb008da0e667a3826599e3850dff4e4993fa4c2"
+    )
+    assert C.AUTHORITY_V2_4.base_methodology_relative == (
+        C.AUTHORITY_V2_3.methodology_relative
+    )
+    assert C.AUTHORITY_V2_4.base_methodology_sha256 == (
+        C.AUTHORITY_V2_3.methodology_sha256
+    )
+    assert C.ADMITTED_AUTHORITIES == (
+        C.AUTHORITY_V2_1,
+        C.AUTHORITY_V2_2,
+        C.AUTHORITY_V2_3,
+        C.AUTHORITY_V2_4,
+    )
+    # v2.4 is admitted but not current; the module constants follow v2.1.
+    assert C.CURRENT_AUTHORITY is C.AUTHORITY_V2_1
+    assert C.METHODOLOGY_SHA256 == C.AUTHORITY_V2_1.methodology_sha256
+    assert C.CS_ID == C.AUTHORITY_V2_1.cs_id
+    assert C.ED_ID == C.AUTHORITY_V2_1.ed_id
+    assert C.CE_ID == C.AUTHORITY_V2_1.ce_id
+
+
+def test_v24_canonical_line_recomputation() -> None:
+    document = (REPO_ROOT / V24_METHODOLOGY_REL).read_text(encoding="utf-8")
+    ed_line = _document_block_after(document, "ED-ID v2.4")
+    ce_line = _document_block_after(document, "CE-ID v2.4")
+    assert ed_line == _EXPECTED_V24_ED_LINE
+    assert ce_line == _EXPECTED_V24_CE_LINE
+    assert hashlib.sha256(ed_line.encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_4.ed_id
+    )
+    assert hashlib.sha256(ce_line.encode("utf-8")).hexdigest() == (
+        C.AUTHORITY_V2_4.ce_id
+    )
+
+    lines = C.identity_lines(REPO_ROOT, authority=C.AUTHORITY_V2_4)
+    assert lines["ED"] == _EXPECTED_V24_ED_LINE
+    assert lines["CE"] == _EXPECTED_V24_CE_LINE
+    assert lines["CS"] == C.identity_lines(REPO_ROOT, authority=C.AUTHORITY_V2_1)[
+        "CS"
+    ]
+    hashes = C.recompute_identity_hashes(REPO_ROOT, authority=C.AUTHORITY_V2_4)
+    assert hashes["methodology"] == C.AUTHORITY_V2_4.methodology_sha256
+    assert hashes["CS"] == C.AUTHORITY_V2_4.cs_id
+    assert hashes["ED"] == C.AUTHORITY_V2_4.ed_id
+    assert hashes["CE"] == C.AUTHORITY_V2_4.ce_id
+    assert C.verify_authority(REPO_ROOT, authority=C.AUTHORITY_V2_4) is None
+
+
+def test_v24_authority_chain_verifies_v23_v22_and_v21(tmp_path: Path) -> None:
+    root = _copy_authority_tree(tmp_path)
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_4) is None
+
+    # Tampering the v2.4 document is caught directly.
+    v24_doc = root / V24_METHODOLOGY_REL
+    v24_text = v24_doc.read_text(encoding="utf-8")
+    v24_doc.write_text(
+        "# tampered v2.4 title\n" + v24_text.split("\n", 1)[1], encoding="utf-8"
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root, authority=C.AUTHORITY_V2_4)
+
+    # Restore it; tampering the v2.3 base is caught by the base hash.
+    v24_doc.write_text(v24_text, encoding="utf-8")
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_4) is None
+    v23_doc = root / V23_METHODOLOGY_REL
+    v23_text = v23_doc.read_text(encoding="utf-8")
+    v23_doc.write_text(
+        "# tampered v2.3 title\n" + v23_text.split("\n", 1)[1], encoding="utf-8"
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root, authority=C.AUTHORITY_V2_4)
+
+    # Restore it; tampering the v2.2 grand-base is *only* caught because the
+    # v2.4 check re-verifies the whole v2.3 authority (the chain).
+    v23_doc.write_text(v23_text, encoding="utf-8")
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_4) is None
+    v22_doc = root / V22_METHODOLOGY_REL
+    v22_text = v22_doc.read_text(encoding="utf-8")
+    v22_doc.write_text(
+        "# tampered v2.2 title\n" + v22_text.split("\n", 1)[1], encoding="utf-8"
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root, authority=C.AUTHORITY_V2_4)
+
+    # Restore it; tampering the v2.1 great-grand-base is caught by the chain.
+    v22_doc.write_text(v22_text, encoding="utf-8")
+    assert C.verify_authority(root, authority=C.AUTHORITY_V2_4) is None
+    v21_doc = root / BASE_METHODOLOGY_REL
+    v21_text = v21_doc.read_text(encoding="utf-8")
+    v21_doc.write_text(
+        "# tampered v2.1 title\n" + v21_text.split("\n", 1)[1], encoding="utf-8"
+    )
+    with pytest.raises(C.PQv2BindingError):
+        C.verify_authority(root, authority=C.AUTHORITY_V2_4)
 
 
 def test_verify_authority_rejects_tampered_amendment(tmp_path: Path) -> None:
@@ -726,6 +869,7 @@ def test_m1b_event_causes_serialize_exactly() -> None:
 def test_m1b_cause_precedence_full_order() -> None:
     expected = (
         C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_FOLD_END_UNKNOWN,
         C.PQV2_EVENT_RESERVE,
         C.PQV2_SOURCE_UNRESOLVED,
         C.PQV2_EVENT_IDENTITY_CONTRADICTED,
@@ -740,12 +884,99 @@ def test_m1b_cause_precedence_full_order() -> None:
     # Every adjacent pair respects the frozen order under `primary`.
     for higher, lower in zip(expected, expected[1:]):
         assert C.CauseSet.of(lower, higher).primary == higher
-    # The M1b causes are not price-source UNKNOWN causes.
+    # The price-source UNKNOWN causes are the reserve/fold-end pair plus the
+    # source-unresolved cause; the M1b event causes are a separate family.
     assert C.UNKNOWN_CAUSES == (
         C.PQV2_RESERVE_UNKNOWN,
+        C.PQV2_FOLD_END_UNKNOWN,
         C.PQV2_SOURCE_UNRESOLVED,
     )
     assert not C.must_short_circuit(C.CauseSet.of(C.PQV2_EVENT_RESERVE))
+
+
+def test_fold_contract_literal() -> None:
+    assert C.DEVELOPMENT_FOLD == C.Fold("development", None, date(2023, 6, 30))
+    assert C.DEVELOPMENT_FOLD.name == "development"
+    assert C.DEVELOPMENT_FOLD.start is None
+    assert C.DEVELOPMENT_FOLD.end == C.DEVELOPMENT_END
+    assert C.DEVELOPMENT_FOLD.end == date(2023, 6, 30)
+    assert C.DEVELOPMENT_FOLD.is_development
+
+    # The reserve fold is constructed elsewhere (P7) and is any valid Fold.
+    reserve = C.Fold("reserve", date(2023, 7, 3), date(2024, 3, 29))
+    assert reserve.start == C.RESERVE_START
+    assert reserve.end == date(2024, 3, 29)
+    assert not reserve.is_development
+    assert C.Fold("anything", None, date(2020, 1, 1)).is_development is False
+
+    # Frozen and hashable.
+    assert dataclasses.is_dataclass(C.DEVELOPMENT_FOLD)
+    assert hash(C.DEVELOPMENT_FOLD) == hash(
+        C.Fold("development", None, date(2023, 6, 30))
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        C.DEVELOPMENT_FOLD.end = date(2024, 1, 1)  # type: ignore[misc]
+
+
+def test_fold_rejects_invalid() -> None:
+    with pytest.raises(C.PQv2InputError):
+        C.Fold("", None, date(2023, 6, 30))
+    with pytest.raises(C.PQv2InputError):
+        C.Fold(123, None, date(2023, 6, 30))  # type: ignore[arg-type]
+    with pytest.raises(C.PQv2InputError):
+        C.Fold("reserve", date(2023, 7, 3), None)  # type: ignore[arg-type]
+    with pytest.raises(C.PQv2InputError):
+        C.Fold("reserve", "2023-07-03", date(2023, 7, 3))  # type: ignore[arg-type]
+    with pytest.raises(C.PQv2InputError):
+        C.Fold("reserve", date(2023, 7, 3), "2024-03-29")  # type: ignore[arg-type]
+    with pytest.raises(C.PQv2InputError):
+        C.Fold("reserve", date(2024, 1, 1), date(2023, 7, 3))
+
+
+def test_fold_end_cause_serializes_and_ranks() -> None:
+    assert C.NotAssessedReason.FOLD_END_UNKNOWN == "PQV2_FOLD_END_UNKNOWN"
+    assert C.PQV2_FOLD_END_UNKNOWN == "PQV2_FOLD_END_UNKNOWN"
+    assert C.PQV2_FOLD_END_UNKNOWN in C.NotAssessedReason.ALL
+    assert C.PQV2_FOLD_END_UNKNOWN in C.PERIOD_CAUSE_PRECEDENCE
+    assert C.PQV2_FOLD_END_UNKNOWN in C.UNKNOWN_CAUSES
+
+    # It sits immediately after PQV2_RESERVE_UNKNOWN in the CauseSet order and
+    # at the same rank (plan §1): it outranks every other cause below it.
+    precedence = C.PERIOD_CAUSE_PRECEDENCE
+    assert precedence.index(C.PQV2_FOLD_END_UNKNOWN) == (
+        precedence.index(C.PQV2_RESERVE_UNKNOWN) + 1
+    )
+    assert C.CauseSet.of(C.PQV2_FOLD_END_UNKNOWN).primary == (
+        C.PQV2_FOLD_END_UNKNOWN
+    )
+    assert C.CauseSet.of(
+        C.PQV2_FOLD_END_UNKNOWN, C.PQV2_SOURCE_UNRESOLVED
+    ).primary == C.PQV2_FOLD_END_UNKNOWN
+
+    cause_set = C.CauseSet.of(C.PQV2_FOLD_END_UNKNOWN)
+    assert cause_set.has_unknown
+    assert C.must_short_circuit(cause_set)
+    assert C.label_status_for_causes(cause_set) == C.LabelStatus.UNKNOWN_RESERVE
+    assert C.NotAssessed.from_causes(cause_set).reason == (
+        C.PQV2_FOLD_END_UNKNOWN
+    )
+
+
+def test_fold_end_cause_never_emitted_by_development_sources() -> None:
+    # Dev runs never emit PQV2_FOLD_END_UNKNOWN: the development fold's end is
+    # DEVELOPMENT_END, and the dev source-state mapping only yields the two
+    # price-source causes that predate v2.4 (plan §1).
+    assert C.DEVELOPMENT_FOLD.end == C.DEVELOPMENT_END
+    emitted = {
+        C.cause_for_source_state(state) for state in C.SourceState.UNKNOWN
+    }
+    assert C.PQV2_RESERVE_UNKNOWN in emitted
+    assert C.PQV2_SOURCE_UNRESOLVED in emitted
+    assert C.PQV2_FOLD_END_UNKNOWN not in emitted
+    assert C.SourceState.UNKNOWN == (
+        C.SourceState.UNKNOWN_SOURCE,
+        C.SourceState.UNKNOWN_RESERVE,
+    )
 
 
 def test_causeset_primary_event_identity_contradicted_over_unmapped() -> None:
@@ -897,13 +1128,19 @@ def test_require_current_authority_binds_v21_and_rejects_stale() -> None:
         )
 
 
-def test_require_admitted_authority_selects_v21_v22_and_v23() -> None:
+def test_require_admitted_authority_selects_v21_through_v24() -> None:
     assert C.ADMITTED_AUTHORITIES == (
         C.AUTHORITY_V2_1,
         C.AUTHORITY_V2_2,
         C.AUTHORITY_V2_3,
+        C.AUTHORITY_V2_4,
     )
-    for authority in (C.AUTHORITY_V2_1, C.AUTHORITY_V2_2, C.AUTHORITY_V2_3):
+    for authority in (
+        C.AUTHORITY_V2_1,
+        C.AUTHORITY_V2_2,
+        C.AUTHORITY_V2_3,
+        C.AUTHORITY_V2_4,
+    ):
         assert (
             C.require_admitted_authority(
                 authority.methodology_sha256,
@@ -929,6 +1166,12 @@ def test_require_admitted_authority_selects_v21_v22_and_v23() -> None:
             C.AUTHORITY_V2_3.methodology_sha256,
             C.AUTHORITY_V2_3.ed_id,
             C.AUTHORITY_V2_1.ce_id,
+        )
+    with pytest.raises(C.PQv2BindingError):
+        C.require_admitted_authority(
+            C.AUTHORITY_V2_4.methodology_sha256,
+            C.AUTHORITY_V2_4.ed_id,
+            C.AUTHORITY_V2_3.ce_id,
         )
 
 
@@ -1280,6 +1523,14 @@ def test_mutation_fixture_contract() -> None:
         "A23-M1",
         "A23-M2",
         "A23-M3",
+        "A24-M1",
+        "A24-M2",
+        "A24-M3",
+        "A24-M4",
+        "A24-M5",
+        "A24-M6",
+        "A24-M7",
+        "A24-M8",
     ]
     source = (REPO_ROOT / "smart_beta/dataset_v1/pqv2_core.py").read_text(
         encoding="utf-8"
