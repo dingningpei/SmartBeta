@@ -18,8 +18,22 @@ import**:
   table -- no price is ever hard-coded or invented);
 * :func:`~smart_beta.research.llm_generator.render_prompt` and
   :data:`~smart_beta.research.llm_generator.SYSTEM_PROMPT` (the frozen,
-  provider-neutral prompt rendering; the prompt template file and its SHA-256
-  are unchanged).
+  provider-neutral prompt **rendering**).
+
+Erratum A2-E2 (FROZEN 2026-10-10, this task C3-P)
+--------------------------------------------------
+
+The generator now renders the new prompt template
+``smart_beta/research/prompts/campaign3_v2.txt`` (exposed here as
+:data:`PROMPT_TEMPLATE_V2_PATH`) through
+``render_prompt(..., template=<v2 text>)``. v2 is the v1 template with exactly
+(a) the ``intended_family_id`` line removed from the OUTPUT FORMAT and one
+sentence stating that the governed family is assigned by the program, and (b)
+a per-role ``observation_period``/``units`` table. The module-level
+:data:`PROMPT_TEMPLATE_V2_HASH` (and the
+:attr:`Campaign3DeepSeekGenerator.prompt_template_hash` property) is
+SHA-256(v2 bytes). C3-G, its v1 template, the grammar, the feedback rendering,
+the history token and the firewall are unchanged.
 
 **C3-G is not modified.**
 
@@ -59,9 +73,11 @@ Every test injects a fake SDK-shaped client; no network call is ever made.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from smart_beta.research.generator import RawArtifact
@@ -72,7 +88,6 @@ from smart_beta.research.history import (
 from smart_beta.research.llm_generator import (
     GenerationOutput,
     LlmGeneratorError,
-    PROMPT_TEMPLATE_HASH,
     PriceTable,
     SYSTEM_PROMPT,
     render_prompt,
@@ -88,6 +103,10 @@ __all__ = [
     "API_KEY_ENV",
     "GENERATOR_IDENTITY",
     "SYSTEM_PROMPT",
+    "PROMPT_TEMPLATE_V2_PATH",
+    "PROMPT_TEMPLATE_V2_HASH",
+    "load_prompt_template_v2",
+    "prompt_template_v2_hash",
     "FINISH_REASON_STOP",
     "FINISH_REASON_LENGTH",
     "DeepSeekLlmGeneratorError",
@@ -124,6 +143,27 @@ BASE_URL = "https://api.deepseek.com"
 #: The credential environment variable, read only when the real client is
 #: constructed.
 API_KEY_ENV = "DEEPSEEK_API_KEY"
+
+#: The erratum-A2-E2 prompt template (this task C3-P owns it). It replaces the
+#: C3-G v1 template for the Campaign-3 generator only; C3-G and v1 are
+#: unchanged.
+PROMPT_TEMPLATE_V2_PATH = (
+    Path(__file__).resolve().parent / "prompts" / "campaign3_v2.txt"
+)
+
+
+def load_prompt_template_v2() -> str:
+    """Read the frozen v2 prompt template from disk (UTF-8)."""
+    return PROMPT_TEMPLATE_V2_PATH.read_text(encoding="utf-8")
+
+
+def prompt_template_v2_hash() -> str:
+    """The deterministic SHA-256 of the frozen v2 template **bytes**."""
+    return hashlib.sha256(PROMPT_TEMPLATE_V2_PATH.read_bytes()).hexdigest()
+
+
+#: The frozen v2 prompt-template hash recorded in the Campaign-3 policy/event.
+PROMPT_TEMPLATE_V2_HASH = prompt_template_v2_hash()
 
 #: The frozen generator identity used by the Campaign-3 executor.
 GENERATOR_IDENTITY = "deepseek:deepseek-v4-flash"
@@ -384,8 +424,12 @@ class Campaign3DeepSeekGenerator:
 
     @property
     def prompt_template_hash(self) -> str:
-        """The unchanged C3-G prompt-template SHA-256 (reused by import)."""
-        return PROMPT_TEMPLATE_HASH
+        """The erratum-A2-E2 prompt-template SHA-256 (the v2 template).
+
+        The Campaign-3 policy's ``prompt_template_hash`` is this value; the
+        C3-G v1 hash is deliberately not reported by this adapter.
+        """
+        return PROMPT_TEMPLATE_V2_HASH
 
     @property
     def last_call(self) -> DeepSeekCallRecord | None:
@@ -425,8 +469,10 @@ class Campaign3DeepSeekGenerator:
         visible_history: GeneratorVisibleResearchHistory,
         feedback: ResearchFeedback,
     ) -> GenerationOutput:
-        """Render the prompt, make exactly one SDK call and account the usage."""
-        prompt = render_prompt(visible_history, feedback)
+        """Render the v2 prompt, make exactly one SDK call and account usage."""
+        prompt = render_prompt(
+            visible_history, feedback, template=load_prompt_template_v2()
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},

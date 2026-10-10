@@ -106,5 +106,41 @@
    }
   ],
   "test": "tests/test_campaign3_generation.py::test_policy_literals_frozen"
+ },
+ {
+  "id": "P-M1",
+  "description": "the DeepSeek adapter still renders the C3-G v1 prompt template instead of v2 (the model would again fill intended_family_id and per-role units)",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "        prompt = render_prompt(\n            visible_history, feedback, template=load_prompt_template_v2()\n        )",
+    "new": "        prompt = render_prompt(visible_history, feedback)"
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_adapter_renders_template_v2"
+ },
+ {
+  "id": "P-M2",
+  "description": "a role's units are wrong in the v2 template (ret: ratio instead of the required fraction)",
+  "file": "smart_beta/research/prompts/campaign3_v2.txt",
+  "edits": [
+   {
+    "old": "ret                     daily_total_return           PERIOD              fraction  Daily total return",
+    "new": "ret                     daily_total_return           PERIOD              ratio     Daily total return"
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_role_table_states_units_and_periods"
+ },
+ {
+  "id": "P-M3",
+  "description": "the DeepSeek adapter reports the C3-G v1 prompt-template hash instead of the v2 hash",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "        return PROMPT_TEMPLATE_V2_HASH",
+    "new": "        from smart_beta.research.llm_generator import (\n            PROMPT_TEMPLATE_HASH as _V1,\n        )\n\n        return _V1"
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_prompt_template_hash_is_the_v2_hash"
  }
 ]
