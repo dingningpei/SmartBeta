@@ -6,10 +6,11 @@ D8-D12 (plus D11 / E1) and the frozen P4 ranking design (D6, D9).  This module
 owns the P6 selection tier only:
 
 * **D9 -- IS ranking.**  For every ASSESSED + CERTIFIED candidate, take the
-  per-period **L-envelope** net long-short series from its persisted IS
-  diagnostics, for every ``{T0, TS} x {K0, K1}`` scenario, multiply it by the
-  candidate's declared ``FactorSpec.sign``, and dispatch it through the
-  admitted ``EWC_T23_ONE_SIDED`` procedure with
+  per-period **L-envelope** series from its verified
+  :mod:`smart_beta.dataset_v1.pqv2_series` export (the envelope restricted to
+  B's finite-period index), for every ``{T0, TS} x {K0, K1}`` scenario,
+  multiply it by the candidate's declared ``FactorSpec.sign``, and dispatch it
+  through the admitted ``EWC_T23_ONE_SIDED`` procedure with
   :func:`smart_beta.science.inference.run_inference`.  The rank statistic is
   the **minimum** t over the four scenarios.  Any INVALID or NOT_ASSESSED
   scenario makes the candidate ineligible.  Ties are broken by the frozen
@@ -21,26 +22,32 @@ owns the P6 selection tier only:
 * **T-B evaluation.**  An **injected** evaluator is driven for exactly those
   six hypotheses; any other hypothesis id is refused (the T-B firewall), and
   the returned diagnostics must name the requested hypothesis.
-* **D8 floor.**  The one-sided EWC p-value must be ``<= 0.05`` for **both** B
-  and the L envelope under **all four** scenarios; the threshold is
-  **unadjusted** (never Holm).
+* **D8 floor.**  The one-sided EWC p-value must be ``<= 0.05`` for **both** the
+  observed declaration-metric B series and the L envelope under **all four**
+  scenarios; the threshold is **unadjusted** (never Holm).
 * **D10 forwarding.**  The floor passer with the largest minimum-scenario L
   EWC t is forwarded; the control (D11) is **never** forwardable.  If none
   passes, the decision is ``NO_RESERVE_USE``.
-* **D12 break-even.**  ``10 bps * gross / (gross - net)`` per T-B result,
-  reported non-gating and labelled ``ASSUMED``.  The gross and net means are
-  supplied by the T-B evaluator (the P-Q ``_ScenarioB`` owns both series but
-  the persisted diagnostics exposes only one basis); if they are not supplied,
-  :func:`break_even_cost_bps` refuses to invent them and the run stops with the
-  available fields named.
+* **D12 break-even.**  ``10 bps * gross / (gross - net)`` per T-B result, from
+  the export's observed gross/net per-period series; reported non-gating and
+  labelled ``ASSUMED``.  If those series are not available, the run stops with
+  the available fields named.
+
+**Erratum P6-E1 (item 2).**  Every per-period series is consumed from the
+verified ``pqv2_series`` export records -- the B series is the observed
+**net** (declaration-metric) series and the L series is the envelope restricted
+to B's finite-period index.  ``cell.period_values`` is **never** read (it is
+the composed envelope array for every cell, including ``B-*``); the
+consumer-side export binding check is fail-closed and the primary metric is
+asserted to be NET (``TURNOVER_COST_ADJUSTED``).
 
 The report (JSON + Markdown) carries every candidate's IS rank row, the
 DESCRIPTIVE, NOT CLAIMS T-B table, the control's pipeline verdict, the
 forwarding decision and the frozen P5 section 2 power table verbatim.  There
 is no T-C computation anywhere in this module.
 
-**Reuse.**  The per-period series and inference pattern, the admitted-procedure
-reference and the required-cell policy are imported read-only from
+**Reuse.**  The admitted-procedure reference, the required-cell policy and the
+inference member contract are imported read-only from
 :mod:`smart_beta.dataset_v1.reserve_chain.confirm` and
 :mod:`smart_beta.science.inference`; the procedure registry and admission
 records are supplied by the caller.  No data path is opened, no network is
@@ -56,18 +63,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from smart_beta.dataset_v1.pqv2_series import (
+    PQv2SeriesExport,
+    PQv2SeriesRecord,
+)
 from smart_beta.dataset_v1.reserve_chain.access import (
     ADMITTED_PROCEDURE_CONTRACT_HASH,
     ADMITTED_PROCEDURE_ID,
     ADMITTED_PROCEDURE_VERSION,
 )
 from smart_beta.dataset_v1.reserve_chain.confirm import (
-    _as_series,
-    _dispatch_cell,
+    _member_contract,
     required_cell_names,
 )
+from smart_beta.evaluation.spec import Series
 from smart_beta.science.contracts import Direction, content_hash
 from smart_beta.science.inference import (
+    InferenceRequest,
     InferenceResult,
     InferenceStatus,
     run_inference,
@@ -85,6 +97,7 @@ __all__ = [
     "POSITIVE_CONTROL_SIGN",
     "RANK_FAMILY",
     "FLOOR_FAMILIES",
+    "NET_METRIC_BASIS",
     "P5_POWER_TABLE_MARKDOWN",
     "TB_CLAIM_LABEL",
     "ADMITTED_PROCEDURE_REF",
@@ -92,6 +105,8 @@ __all__ = [
     "ScreenError",
     "ScreenConfigurationError",
     "TbFirewallError",
+    "SeriesExportError",
+    "SeriesRecordUnavailable",
     "BreakEvenUnavailable",
     # value objects
     "ScreeningCandidate",
@@ -99,7 +114,6 @@ __all__ = [
     "RankRow",
     "RankingTable",
     "TbSelection",
-    "GrossNet",
     "TbDiagnostics",
     "FloorScenario",
     "TbHypothesisResult",
@@ -147,6 +161,10 @@ RANK_FAMILY: str = "L"
 #: D8: the floor requires B **and** the L envelope.
 FLOOR_FAMILIES: tuple[str, ...] = ("B", "L")
 
+#: E1: the campaign's primary metric is NET (the turnover-cost-adjusted
+#: long-short return), so the exported B series is the net series.
+NET_METRIC_BASIS: str = "TURNOVER_COST_ADJUSTED"
+
 #: P5 section 2's power table, reproduced verbatim in every report.
 P5_POWER_TABLE_MARKDOWN: str = (
     "| Stage | α | SR for 50% power | SR for 80% power | "
@@ -186,8 +204,16 @@ class TbFirewallError(ScreenError):
     """A hypothesis other than the five selected plus the control touched T-B."""
 
 
+class SeriesExportError(ScreenError):
+    """The ``pqv2_series`` export is missing, mismatched or unbound."""
+
+
+class SeriesRecordUnavailable(SeriesExportError):
+    """One required export record is missing or not assessed (ineligible)."""
+
+
 class BreakEvenUnavailable(ScreenError):
-    """The D12 gross/net means are not available from the T-B diagnostics."""
+    """The D12 gross/net series are not available from the T-B export."""
 
 
 # ---------------------------------------------------------------------------
@@ -199,16 +225,20 @@ class BreakEvenUnavailable(ScreenError):
 class ScreeningCandidate:
     """One IS candidate handed to the ranking.
 
-    ``diagnostics`` is the persisted P-Q IS diagnostics record.  Eligibility is
-    derived from it: a candidate is eligible iff it is ASSESSED
-    (``not_assessed is None``) **and** CERTIFIED (``certified_class`` is set).
-    The control candidate carries ``diagnostics=None``; it never ranks.
+    ``diagnostics`` is the persisted P-Q IS diagnostics record (used only for
+    eligibility, the primary-metric assertion and the cell/export binding);
+    ``series_export`` is its verified :mod:`pqv2_series` export, and **all**
+    per-period B/L series are consumed from the export records, never from
+    ``cell.period_values``.  Eligibility is ASSESSED (``not_assessed is None``)
+    **and** CERTIFIED (``certified_class`` is set).  The control candidate
+    carries ``diagnostics=None``/``series_export=None``; it never ranks.
     """
 
     hypothesis_id: str
     canonical_key: str
     sign: int
     diagnostics: Any = None
+    series_export: PQv2SeriesExport | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.hypothesis_id, str) or not self.hypothesis_id:
@@ -228,7 +258,12 @@ class ScreeningCandidate:
 
     @property
     def eligible(self) -> bool:
-        return self.diagnostics is not None and self.assessed and self.certified
+        return (
+            self.diagnostics is not None
+            and self.series_export is not None
+            and self.assessed
+            and self.certified
+        )
 
 
 @dataclass(frozen=True)
@@ -320,32 +355,20 @@ class TbSelection:
 
 
 @dataclass(frozen=True)
-class GrossNet:
-    """The T-B gross and net per-period long-short means for one scenario."""
-
-    gross_mean: float
-    net_mean: float
-
-    def __post_init__(self) -> None:
-        for name in ("gross_mean", "net_mean"):
-            value = getattr(self, name)
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                raise ScreenConfigurationError(f"{name} must be a number")
-
-
-@dataclass(frozen=True)
 class TbDiagnostics:
     """The injected T-B evaluation of exactly one hypothesis.
 
-    ``diagnostics`` carries the B/L cells for the OOS + DEVELOPMENT_SEALED
-    folds (36 formations).  ``gross_net`` maps a scenario label (``T0-K0`` ...)
-    to the gross and net means the D12 break-even needs; if it is ``None`` the
-    break-even is unavailable and the run stops.
+    ``diagnostics`` carries the P-Q cells for the OOS + DEVELOPMENT_SEALED
+    folds (36 formations); ``series_export`` is its verified
+    :mod:`pqv2_series` export.  Every per-period B/L/gross/net series is read
+    from the export records, never from ``cell.period_values``.  If the export
+    is ``None`` (or lacks assessed B records) the D12 break-even is
+    unavailable and the run stops.
     """
 
     hypothesis_id: str
     diagnostics: Any
-    gross_net: Mapping[str, GrossNet] | None = None
+    series_export: PQv2SeriesExport | None = None
 
 
 @dataclass(frozen=True)
@@ -488,17 +511,6 @@ def _orientation_factor(family: str, sign: int) -> int:
     return 1
 
 
-def _orient(cell: Any, factor: int) -> Any:
-    """Return ``cell`` with its per-period L series multiplied by ``factor``."""
-    if factor == 1:
-        return cell
-    series = _as_series(cell)
-    values = tuple(
-        None if value is None else float(value) * factor for value in series.values
-    )
-    return dataclasses.replace(cell, period_values=values)
-
-
 def _diagnostics_hash(diagnostics: Any) -> str:
     value = getattr(diagnostics, "diagnostics_hash", None)
     if value is None:
@@ -507,10 +519,102 @@ def _diagnostics_hash(diagnostics: Any) -> str:
     return str(value)
 
 
-def _dispatch(
-    cell: Any,
+def _declaration_hash(diagnostics: Any) -> str:
+    return str(getattr(diagnostics, "declaration_hash", ""))
+
+
+def _bind_export(
+    diagnostics: Any, export: PQv2SeriesExport | None
+) -> PQv2SeriesExport:
+    """The consumer-side ``pqv2_series`` binding/export check (fail closed).
+
+    The export must be present, must have been produced from exactly this
+    diagnostics record, and the diagnostics' primary metric must be NET
+    (``TURNOVER_COST_ADJUSTED``) so the exported B series is the net series the
+    D8 floor consumes.  A missing/mismatched export is a hard stop: the screen
+    never falls back to ``cell.period_values``.
+    """
+    if export is None:
+        raise SeriesExportError("no pqv2_series export is bound to this evaluation")
+    diagnostics_hash = _diagnostics_hash(diagnostics)
+    if export.diagnostics_hash != diagnostics_hash:
+        raise SeriesExportError(
+            f"the pqv2_series export is bound to {export.diagnostics_hash!r}, "
+            f"not to the diagnostics {diagnostics_hash!r}"
+        )
+    metric = str(getattr(diagnostics, "metric_basis", "") or "")
+    if metric != NET_METRIC_BASIS:
+        raise ScreenConfigurationError(
+            f"the primary metric must be NET ({NET_METRIC_BASIS!r}), "
+            f"got {metric!r}"
+        )
+    return export
+
+
+def _checked_record(
+    diagnostics: Any, export: PQv2SeriesExport | None, cell_name: str
+) -> PQv2SeriesRecord:
+    """The bound, assessed export record for ``cell_name`` (or fail closed)."""
+    bound = _bind_export(diagnostics, export)
+    record = bound.get(cell_name)
+    if record is None:
+        raise SeriesRecordUnavailable(
+            f"the pqv2_series export has no record for {cell_name!r}"
+        )
+    if record.declaration_hash != _declaration_hash(diagnostics):
+        raise SeriesRecordUnavailable(
+            f"the pqv2_series record {cell_name!r} names declaration "
+            f"{record.declaration_hash!r}, not {_declaration_hash(diagnostics)!r}"
+        )
+    if not record.assessed:
+        raise SeriesRecordUnavailable(
+            f"the pqv2_series record {cell_name!r} is not assessed"
+        )
+    return record
+
+
+def _b_series(
+    diagnostics: Any, export: PQv2SeriesExport | None, cell_name: str
+) -> tuple[tuple[Any, ...], tuple[float, ...]]:
+    """The observed declaration-metric (NET) B series from the export record."""
+    record = _checked_record(diagnostics, export, cell_name)
+    return record.periods, record.b_series
+
+
+def _l_series(
+    diagnostics: Any, export: PQv2SeriesExport | None, cell_name: str
+) -> tuple[tuple[Any, ...], tuple[float, ...]]:
+    """The L envelope restricted to B's finite index, from the export record."""
+    record = _checked_record(diagnostics, export, cell_name)
+    return record.periods, record.l_series
+
+
+def _rank_series(
+    diagnostics: Any, export: PQv2SeriesExport | None, cell_name: str
+) -> tuple[tuple[Any, ...], tuple[float, ...]]:
+    """The D9 ranking series: the L envelope (never the B series)."""
+    if RANK_FAMILY == "B":
+        return _b_series(diagnostics, export, cell_name)
+    return _l_series(diagnostics, export, cell_name)
+
+
+def _inference_series(
+    name: str,
+    periods: Sequence[Any],
+    values: Sequence[float],
+    sign: int,
+) -> Series:
+    """One oriented export series as a Phase-10 :class:`Series`."""
+    return Series(
+        name=name,
+        index=tuple(periods),
+        values=tuple(float(value) * int(sign) for value in values),
+    )
+
+
+def _dispatch_series(
+    series: Series,
     *,
-    factor: int,
     procedure_ref: Mapping[str, str],
     bound_alpha: float,
     registry: Any,
@@ -518,16 +622,17 @@ def _dispatch(
     inference_runner: Callable[..., InferenceResult],
     series_record_hash: str,
 ) -> InferenceResult:
-    return _dispatch_cell(
-        _orient(cell, factor),
-        procedure_ref=dict(procedure_ref),
-        direction=Direction.POSITIVE,
-        bound_alpha=float(bound_alpha),
-        registry=registry,
-        admission_records=admission_records,
-        inference_runner=inference_runner,
+    request = InferenceRequest(
+        member=_member_contract(
+            procedure_ref=dict(procedure_ref),
+            direction=Direction.POSITIVE,
+            bound_alpha=float(bound_alpha),
+        ),
+        series=series,
         series_record_hash=series_record_hash,
+        expected_fold_index=tuple(series.index),
     )
+    return inference_runner(request, registry, admission_records)
 
 
 # ---------------------------------------------------------------------------
@@ -550,24 +655,27 @@ def _rank_candidate(
     inference_runner: Callable[..., InferenceResult],
 ) -> RankRow:
     diagnostics = candidate.diagnostics
-    cache: dict[tuple[str, int], InferenceResult] = {}
+    export = candidate.series_export
+    cache: dict[str, InferenceResult] = {}
     scenarios: list[ScenarioInference] = []
-    if diagnostics is not None:
-        series_record_hash = _diagnostics_hash(diagnostics)
+    if diagnostics is not None and export is not None:
+        series_record_hash = export.export_hash
         for scenario, cell_name in _scenario_cells(diagnostics, RANK_FAMILY):
-            cell = diagnostics.cell(cell_name)
-            if cell is None:
+            try:
+                periods, values = _rank_series(diagnostics, export, cell_name)
+            except SeriesRecordUnavailable:
                 scenarios.append(
                     ScenarioInference(scenario, cell_name, None, None, None, False)
                 )
                 continue
             factor = _orientation_factor(RANK_FAMILY, candidate.sign)
-            key = (cell_name, factor)
-            result = cache.get(key)
+            result = cache.get(cell_name)
             if result is None:
-                result = _dispatch(
-                    cell,
-                    factor=factor,
+                series = _inference_series(
+                    f"campaign3_screen:{cell_name}", periods, values, factor
+                )
+                result = _dispatch_series(
+                    series,
                     procedure_ref=procedure_ref,
                     bound_alpha=bound_alpha,
                     registry=registry,
@@ -575,7 +683,7 @@ def _rank_candidate(
                     inference_runner=inference_runner,
                     series_record_hash=series_record_hash,
                 )
-                cache[key] = result
+                cache[cell_name] = result
             valid = (
                 result.status is InferenceStatus.VALID
                 and result.statistic is not None
@@ -760,6 +868,7 @@ def break_even_cost_bps(
 
 def _floor_scenarios(
     diagnostics: Any,
+    export: PQv2SeriesExport | None,
     sign: int,
     *,
     procedure_ref: Mapping[str, str],
@@ -771,23 +880,29 @@ def _floor_scenarios(
     scenarios: list[FloorScenario] = []
     if diagnostics is None:
         return ()
-    series_record_hash = _diagnostics_hash(diagnostics)
-    cache: dict[tuple[str, str, int], InferenceResult] = {}
+    series_record_hash = export.export_hash if export is not None else ""
+    cache: dict[tuple[str, int], InferenceResult] = {}
     for family in FLOOR_FAMILIES:
         factor = _orientation_factor(family, sign)
         for scenario, cell_name in _scenario_cells(diagnostics, family):
-            cell = diagnostics.cell(cell_name)
-            if cell is None:
+            try:
+                if family == "B":
+                    periods, values = _b_series(diagnostics, export, cell_name)
+                else:
+                    periods, values = _l_series(diagnostics, export, cell_name)
+            except SeriesRecordUnavailable:
                 scenarios.append(
                     FloorScenario(cell_name, family, scenario, None, None, None, False)
                 )
                 continue
-            key = (family, cell_name, factor)
+            key = (cell_name, factor)
             result = cache.get(key)
             if result is None:
-                result = _dispatch(
-                    cell,
-                    factor=factor,
+                series = _inference_series(
+                    f"campaign3_screen:{cell_name}", periods, values, factor
+                )
+                result = _dispatch_series(
+                    series,
                     procedure_ref=procedure_ref,
                     bound_alpha=alpha,
                     registry=registry,
@@ -815,17 +930,28 @@ def _floor_scenarios(
 def _break_even(
     tb: TbDiagnostics,
 ) -> tuple[dict[str, float | None], float | None]:
-    if tb.gross_net is None:
-        available = _available_fields(tb.diagnostics)
-        raise BreakEvenUnavailable(
-            "the D12 gross/net means are not available from the T-B "
-            f"diagnostics for {tb.hypothesis_id!r}; available fields: "
-            f"{', '.join(available) if available else '(none)'}"
-        )
+    diagnostics = tb.diagnostics
+    export = _bind_export(diagnostics, tb.series_export)
     by_scenario: dict[str, float | None] = {}
-    for scenario, gross_net in tb.gross_net.items():
+    for scenario, cell_name in _scenario_cells(diagnostics, "B"):
+        record = export.get(cell_name)
+        if (
+            record is None
+            or not record.assessed
+            or not record.gross_series
+            or not record.net_series
+        ):
+            available = _available_fields(record)
+            raise BreakEvenUnavailable(
+                "the D12 gross/net series are not available from the T-B export "
+                f"for {tb.hypothesis_id!r} ({cell_name!r}); available fields: "
+                f"{', '.join(available) if available else '(none)'}"
+            )
+        gross_values = tuple(float(value) for value in record.gross_series)
+        net_values = tuple(float(value) for value in record.net_series)
         by_scenario[str(scenario)] = break_even_cost_bps(
-            gross_mean=gross_net.gross_mean, net_mean=gross_net.net_mean
+            gross_mean=sum(gross_values) / len(gross_values),
+            net_mean=sum(net_values) / len(net_values),
         )
     finite = [value for value in by_scenario.values() if value is not None]
     return by_scenario, (min(finite) if finite else None)
@@ -883,6 +1009,7 @@ def evaluate_tb(
             )
         scenarios = _floor_scenarios(
             tb.diagnostics,
+            tb.series_export,
             sign_by_id[hypothesis_id],
             procedure_ref=ref,
             alpha=alpha,

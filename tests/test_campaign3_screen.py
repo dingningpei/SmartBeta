@@ -1,15 +1,23 @@
-"""C3-S -- IS ranking, TB_SELECTION write-ahead, T-B floor, forwarding tests.
+"""C3-S-R1 -- IS ranking, TB_SELECTION write-ahead, T-B floor, forwarding.
 
-The whole suite is synthetic and disposable: in-memory P-Q diagnostics, a stub
-T-B evaluator, a recording TB_SELECTION writer and the admitted
-``EWC_T23_ONE_SIDED`` procedure.  An autouse guard refuses any
-``data_store`` / ``reserve_sealed`` path and any socket, and a credential
-sentinel proves no credential value leaks into the report.
+The whole suite is synthetic and disposable: in-memory P-Q diagnostics with a
+matching verified ``pqv2_series`` export, a stub T-B evaluator, a recording
+TB_SELECTION writer and the admitted ``EWC_T23_ONE_SIDED`` procedure.  An
+autouse guard refuses any ``data_store`` / ``reserve_sealed`` path and any
+socket, and a credential sentinel proves no credential value leaks into the
+report.
+
+The R1 cases prove that the D9 ranking, the D8 floor and the D10 min-L-t read
+the **export** records (B = observed net series; L = B-finite-restricted
+envelope), never ``cell.period_values`` (mutations S-M10/S-M11), that the
+consumer-side export binding check is fail-closed (S-M12), and that the primary
+metric is asserted to be NET.
 """
 
 from __future__ import annotations
 
 import builtins
+import dataclasses
 import importlib.util
 import json
 import pathlib
@@ -23,9 +31,9 @@ import pytest
 from smart_beta.campaign import campaign3_screen as SCREEN
 from smart_beta.campaign.campaign3_screen import (
     BreakEvenUnavailable,
-    GrossNet,
     RankingTable,
     ScreeningCandidate,
+    SeriesExportError,
     TbFirewallError,
     TbSelection,
     TbHypothesisResult,
@@ -120,10 +128,6 @@ def _rank(candidates):
     return rank_candidates(candidates, registry=_registry(), admission_records=_admission())
 
 
-def _values(b, l, event_scenarios=()):
-    return S._uniform_values(b=b, l=l, event_scenarios=event_scenarios)
-
-
 # ---------------------------------------------------------------------------
 # D9 ranking
 # ---------------------------------------------------------------------------
@@ -131,13 +135,7 @@ def _values(b, l, event_scenarios=()):
 
 def test_ranking_top_k_and_order() -> None:
     candidates = [
-        S.candidate(
-            f"H{i}",
-            values=_values(
-                b=S.series(0.05, n=S.N_TB),
-                l=S.series(0.05 - 0.004 * i, n=S.N_TB),
-            ),
-        )
+        S.candidate(f"H{i}", b=S.STRONG_POS, l=S.series(0.05 - 0.004 * i))
         for i in range(7)
     ]
     table = _rank(candidates)
@@ -148,14 +146,8 @@ def test_ranking_top_k_and_order() -> None:
 
 
 def test_ranking_uses_l_envelope_not_b() -> None:
-    a = S.candidate(
-        "H_A",
-        values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.002, n=S.N_TB)),
-    )
-    b = S.candidate(
-        "H_B",
-        values=_values(b=S.series(0.002, n=S.N_TB), l=S.series(0.04, n=S.N_TB)),
-    )
+    a = S.candidate("H_A", b=S.STRONG_POS, l=S.WEAK_POS)
+    b = S.candidate("H_B", b=S.WEAK_POS, l=S.series(0.04))
     table = _rank([a, b])
     assert table.selected[0] == "H_B"
 
@@ -163,32 +155,20 @@ def test_ranking_uses_l_envelope_not_b() -> None:
 def test_ranking_uses_minimum_not_maximum() -> None:
     a = S.candidate(
         "H_A",
-        values={
-            "B-T0": S.series(0.05, n=S.N_TB),
-            "B-TS": S.series(0.05, n=S.N_TB),
-            "L-T0": S.series(0.05, n=S.N_TB),
-            "L-TS": S.series(-0.05, n=S.N_TB),
-        },
+        b=S.STRONG_POS,
+        l_by_cell={"L-T0": S.series(0.05), "L-TS": S.series(-0.05)},
     )
     b = S.candidate(
         "H_B",
-        values={
-            "B-T0": S.series(0.05, n=S.N_TB),
-            "B-TS": S.series(0.05, n=S.N_TB),
-            "L-T0": S.series(0.02, n=S.N_TB),
-            "L-TS": S.series(0.02, n=S.N_TB),
-        },
+        b=S.STRONG_POS,
+        l_by_cell={"L-T0": S.series(0.02), "L-TS": S.series(0.02)},
     )
     table = _rank([a, b])
     assert table.selected[0] == "H_B"
 
 
 def test_ranking_applies_declared_sign() -> None:
-    candidate = S.candidate(
-        "H_NEG",
-        sign=-1,
-        values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(-0.05, n=S.N_TB)),
-    )
+    candidate = S.candidate("H_NEG", sign=-1, b=S.STRONG_POS, l=S.STRONG_NEG)
     table = _rank([candidate])
     row = table.rows[0]
     assert row.eligible
@@ -199,15 +179,13 @@ def test_ranking_event_four_scenarios() -> None:
     candidate = S.candidate(
         "H_EVENT",
         event_scenarios=("K0", "K1"),
-        values={
-            "B-T0-K0": S.series(0.05, n=S.N_TB),
-            "B-TS-K0": S.series(0.05, n=S.N_TB),
-            "B-T0-K1": S.series(0.05, n=S.N_TB),
-            "B-TS-K1": S.series(0.05, n=S.N_TB),
-            "L-T0-K0": S.series(0.05, n=S.N_TB),
-            "L-TS-K0": S.series(0.04, n=S.N_TB),
-            "L-T0-K1": S.series(0.03, n=S.N_TB),
-            "L-TS-K1": S.series(0.02, n=S.N_TB),
+        b=S.STRONG_POS,
+        l=S.series(0.05),
+        l_by_cell={
+            "L-T0-K0": S.series(0.05),
+            "L-TS-K0": S.series(0.04),
+            "L-T0-K1": S.series(0.03),
+            "L-TS-K1": S.series(0.02),
         },
     )
     table = _rank([candidate])
@@ -223,10 +201,7 @@ def test_ranking_event_four_scenarios() -> None:
 
 
 def test_ranking_non_event_k0_equals_k1() -> None:
-    candidate = S.candidate(
-        "H_SIMPLE",
-        values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.03, n=S.N_TB)),
-    )
+    candidate = S.candidate("H_SIMPLE", b=S.STRONG_POS, l=S.series(0.03))
     table = _rank([candidate])
     row = table.rows[0]
     assert len(row.scenarios) == 4
@@ -237,43 +212,21 @@ def test_ranking_non_event_k0_equals_k1() -> None:
 
 
 def test_ranking_ties_broken_by_canonical_key() -> None:
-    values = _values(b=S.series(0.05, n=S.N_TB), l=S.series(0.03, n=S.N_TB))
-    b = S.candidate("H_B", canonical_key="bbb", values=values)
-    a = S.candidate("H_A", canonical_key="aaa", values=values)
+    b = S.candidate("H_B", canonical_key="bbb", b=S.STRONG_POS, l=S.series(0.03))
+    a = S.candidate("H_A", canonical_key="aaa", b=S.STRONG_POS, l=S.series(0.03))
     table = _rank([b, a])
     assert table.selected == ("H_A", "H_B")
 
 
 def test_ranking_excludes_invalid_and_not_assessed() -> None:
-    good = S.candidate(
-        "H_GOOD", values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.03, n=S.N_TB))
-    )
-    missing = ScreeningCandidate(
-        "H_MISSING",
-        "H_MISSING",
-        1,
-        S.make_diagnostics(
-            hypothesis_id="H_MISSING",
-            values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.03, n=S.N_TB)),
-        ),
-    )
-    # Remove every L cell so the scenario is missing.
-    missing = ScreeningCandidate(
-        "H_MISSING",
-        "H_MISSING",
-        1,
-        _without_cells(missing.diagnostics, ("L-T0", "L-TS")),
-    )
-    not_assessed = ScreeningCandidate(
+    good = S.candidate("H_GOOD", b=S.STRONG_POS, l=S.series(0.03))
+    missing = _candidate_without_l_record("H_MISSING")
+    not_assessed = S.candidate(
         "H_NA",
-        "H_NA",
-        1,
-        S.make_diagnostics(
-            hypothesis_id="H_NA",
-            values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.03, n=S.N_TB)),
-            certified=False,
-            not_assessed="PQV2_NOT_ASSESSED",
-        ),
+        b=S.STRONG_POS,
+        l=S.series(0.03),
+        certified=False,
+        not_assessed="PQV2_NOT_ASSESSED",
     )
     table = _rank([good, missing, not_assessed])
     by_id = {row.hypothesis_id: row for row in table.rows}
@@ -283,9 +236,87 @@ def test_ranking_excludes_invalid_and_not_assessed() -> None:
     assert table.selected == ("H_GOOD",)
 
 
-def _without_cells(diagnostics, cells):
-    kept = tuple(cell for cell in diagnostics.cells if cell.cell not in cells)
-    return diagnostics.__class__(**{**diagnostics.__dict__, "cells": kept})
+def _candidate_without_l_record(hypothesis_id: str) -> ScreeningCandidate:
+    candidate = S.candidate(hypothesis_id, b=S.STRONG_POS, l=S.series(0.03))
+    records = tuple(
+        record for record in candidate.series_export.records if record.estimand != "L"
+    )
+    export = dataclasses.replace(candidate.series_export, records=records)
+    return dataclasses.replace(candidate, series_export=export)
+
+
+# ---------------------------------------------------------------------------
+# R1: the export is the source of the series (S-M10 / S-M11 / S-M12)
+# ---------------------------------------------------------------------------
+
+
+def _evaluate(tb_map, *, sign_by_id, control="event_ear_k_kp1"):
+    tb_map = dict(tb_map)
+    if control not in tb_map:
+        tb_map[control] = S.make_tb(control, b=S.STRONG_POS, l=S.STRONG_POS)
+    sign_by_id = dict(sign_by_id)
+    sign_by_id.setdefault(control, 1)
+    selection = _selection(*[hid for hid in tb_map if hid != control], control=control)
+    write_tb_selection(S.RecordingSelectionWriter(), selection)
+    evaluator = S.StubTbEvaluator(results=tb_map)
+    return evaluate_tb(
+        selection=selection,
+        sign_by_id=sign_by_id,
+        control_id=control,
+        tb_evaluator=evaluator,
+        registry=_registry(),
+        admission_records=_admission(),
+    )
+
+
+def test_b_series_read_from_export_not_cell() -> None:
+    # The export B record is positive (pass); the cell's period_values are
+    # negative (a poisoned full-envelope array).  The floor must follow the
+    # export.
+    tb = S.make_tb(
+        "H0",
+        b=S.STRONG_POS,
+        l=S.STRONG_POS,
+        b_cell_values={"B-T0": S.STRONG_NEG, "B-TS": S.STRONG_NEG},
+    )
+    results = _evaluate({"H0": tb}, sign_by_id={"H0": 1})
+    assert results[0].floor_pass is True
+    b_scenarios = [item for item in results[0].scenarios if item.family == "B"]
+    assert all(item.passed for item in b_scenarios)
+
+
+def test_l_series_restricted_to_b_finite_index() -> None:
+    # The export L record is the restricted 30-period positive series; the
+    # cell holds 36 periods whose last 6 are strongly negative.  The floor
+    # must follow the restricted export record.
+    poisoned = S.STRONG_POS[:30] + S.series(-0.5, n=6)
+    tb = S.make_tb(
+        "H0",
+        b=S.STRONG_POS,
+        l=S.STRONG_POS,
+        export_n=30,
+        l_cell_values={"L-T0": poisoned, "L-TS": poisoned},
+    )
+    results = _evaluate({"H0": tb}, sign_by_id={"H0": 1})
+    assert results[0].floor_pass is True
+    l_scenarios = [item for item in results[0].scenarios if item.family == "L"]
+    assert all(item.passed for item in l_scenarios)
+
+
+def test_export_binding_check_fail_closed() -> None:
+    candidate = S.candidate("H0", b=S.STRONG_POS, l=S.series(0.03))
+    foreign = dataclasses.replace(
+        candidate.series_export, diagnostics_hash="0" * 64
+    )
+    bad = dataclasses.replace(candidate, series_export=foreign)
+    with pytest.raises(SeriesExportError):
+        _rank([bad])
+
+
+def test_primary_metric_must_be_net() -> None:
+    gross = S.candidate("H0", b=S.STRONG_POS, l=S.series(0.03), metric_basis="LONG_SHORT")
+    with pytest.raises(SCREEN.ScreenConfigurationError):
+        _rank([gross])
 
 
 # ---------------------------------------------------------------------------
@@ -301,11 +332,8 @@ def _selection(*ids, control="event_ear_k_kp1"):
     )
 
 
-def _tb_results(ids, *, pass_all=True):
-    return {
-        hid: S.make_tb(hid, b=S.STRONG_POS, l=S.STRONG_POS)
-        for hid in ids
-    }
+def _tb_results(ids):
+    return {hid: S.make_tb(hid, b=S.STRONG_POS, l=S.STRONG_POS) for hid in ids}
 
 
 def test_tb_selection_written_before_evaluation() -> None:
@@ -337,9 +365,7 @@ def test_tb_selection_written_before_evaluation() -> None:
 
 def test_tb_evaluation_requires_selection_write() -> None:
     ids = ("H0",)
-    evaluator = S.StubTbEvaluator(
-        results=_tb_results(ids + ("event_ear_k_kp1",))
-    )
+    evaluator = S.StubTbEvaluator(results=_tb_results(ids + ("event_ear_k_kp1",)))
     selection = _selection(*ids)
     assert not selection.written
     with pytest.raises(TbFirewallError):
@@ -354,16 +380,14 @@ def test_tb_evaluation_requires_selection_write() -> None:
     assert evaluator.calls == []
 
 
-def test_tb_selection_writer_failure_blocks_evaluation(tmp_path: Path) -> None:
+def test_tb_selection_writer_failure_blocks_evaluation() -> None:
     ids = ("H0", "H1", "H2", "H3", "H4")
     events: list[tuple] = []
     writer = S.RecordingSelectionWriter(events=events, fail=True)
-    control = S.candidate("event_ear_k_kp1", values=_values(
-        b=S.STRONG_POS, l=S.STRONG_POS
-    ))
+    control = S.candidate("event_ear_k_kp1", b=S.STRONG_POS, l=S.STRONG_POS)
     evaluator = S.StubTbEvaluator(results=_tb_results(ids + ("event_ear_k_kp1",)))
     candidates = [
-        S.candidate(hid, values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.05 - 0.004 * i, n=S.N_TB)))
+        S.candidate(hid, b=S.STRONG_POS, l=S.series(0.05 - 0.004 * i))
         for i, hid in enumerate(ids)
     ]
     with pytest.raises(RuntimeError):
@@ -407,7 +431,7 @@ def test_tb_firewall_rejects_mismatched_diagnostics() -> None:
     wrong = SCREEN.TbDiagnostics(
         hypothesis_id="H_OTHER",
         diagnostics=S.make_diagnostics(hypothesis_id="H_OTHER"),
-        gross_net={"T0": GrossNet(0.05, 0.04)},
+        series_export=S.make_tb("H_OTHER").series_export,
     )
     evaluator = S.StubTbEvaluator(results={"H0": wrong, "event_ear_k_kp1": wrong})
     selection = _selection(*ids)
@@ -428,31 +452,10 @@ def test_tb_firewall_rejects_mismatched_diagnostics() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _evaluate(tb_map, *, sign_by_id, control="event_ear_k_kp1"):
-    tb_map = dict(tb_map)
-    if control not in tb_map:
-        tb_map[control] = S.make_tb(control, b=S.STRONG_POS, l=S.STRONG_POS)
-    sign_by_id = dict(sign_by_id)
-    sign_by_id.setdefault(control, 1)
-    ids = tuple(tb_map)
-    selection = _selection(*[hid for hid in ids if hid != control], control=control)
-    write_tb_selection(S.RecordingSelectionWriter(), selection)
-    evaluator = S.StubTbEvaluator(results=tb_map)
-    return evaluate_tb(
-        selection=selection,
-        sign_by_id=sign_by_id,
-        control_id=control,
-        tb_evaluator=evaluator,
-        registry=_registry(),
-        admission_records=_admission(),
-    )
-
-
 def test_floor_requires_b_and_l_all_scenarios() -> None:
     tb = S.make_tb("H0", b=S.STRONG_POS, l=S.STRONG_NEG)
     results = _evaluate({"H0": tb}, sign_by_id={"H0": 1})
     assert results[0].floor_pass is False
-    # B alone passes; the L failure is what sinks the floor.
     b_scenarios = [item for item in results[0].scenarios if item.family == "B"]
     l_scenarios = [item for item in results[0].scenarios if item.family == "L"]
     assert all(item.passed for item in b_scenarios)
@@ -465,29 +468,10 @@ def test_floor_event_requires_all_four_scenarios() -> None:
         event_scenarios=("K0", "K1"),
         b=S.STRONG_POS,
         l=S.STRONG_POS,
+        l_by_cell={"L-TS-K1": S.STRONG_NEG},
     )
-    # One K1 scenario fails.
-    tb = _replace_tb_cell(tb, "L-TS-K1", S.STRONG_NEG)
     results = _evaluate({"H_EVENT": tb}, sign_by_id={"H_EVENT": 1})
     assert results[0].floor_pass is False
-
-
-def _replace_tb_cell(tb, cell, values):
-    diagnostics = tb.diagnostics
-    cells = tuple(
-        (
-            item.__class__(**{**item.__dict__, "period_values": tuple(float(v) for v in values)})
-            if item.cell == cell
-            else item
-        )
-        for item in diagnostics.cells
-    )
-    new_diag = diagnostics.__class__(**{**diagnostics.__dict__, "cells": cells})
-    return SCREEN.TbDiagnostics(
-        hypothesis_id=tb.hypothesis_id,
-        diagnostics=new_diag,
-        gross_net=tb.gross_net,
-    )
 
 
 def test_floor_is_unadjusted_not_holm() -> None:
@@ -568,22 +552,27 @@ def test_break_even_is_not_a_gate() -> None:
 
 
 def test_break_even_unavailable_names_available_fields() -> None:
-    tb = S.make_tb("H0", with_break_even=False)
-    selection = _selection("H0")
-    write_tb_selection(S.RecordingSelectionWriter(), selection)
-    evaluator = S.StubTbEvaluator(results={"H0": tb})
-    with pytest.raises(BreakEvenUnavailable) as excinfo:
-        evaluate_tb(
-            selection=selection,
-            sign_by_id={"H0": 1},
-            control_id="event_ear_k_kp1",
-            tb_evaluator=evaluator,
-            registry=_registry(),
-            admission_records=_admission(),
+    tb = S.make_tb("H0", b=S.STRONG_POS, l=S.STRONG_POS)
+    records = tuple(
+        dataclasses.replace(
+            record,
+            status="NOT_ASSESSED",
+            reason="NO_SERIES",
+            gross_series=(),
+            net_series=(),
         )
+        if record.estimand == "B"
+        else record
+        for record in tb.series_export.records
+    )
+    tb = dataclasses.replace(
+        tb, series_export=dataclasses.replace(tb.series_export, records=records)
+    )
+    with pytest.raises(BreakEvenUnavailable) as excinfo:
+        _evaluate({"H0": tb}, sign_by_id={"H0": 1})
     message = str(excinfo.value)
     assert "available fields" in message
-    assert "certified_hypothesis" in message
+    assert "gross_series" in message
 
 
 # ---------------------------------------------------------------------------
@@ -594,28 +583,21 @@ def test_break_even_unavailable_names_available_fields() -> None:
 def _run_end_to_end(tmp_path: Path):
     ids = ("H0", "H1", "H2", "H3", "H4")
     candidates = [
-        S.candidate(
-            hid,
-            values=_values(
-                b=S.series(0.05, n=S.N_TB),
-                l=S.series(0.05 - 0.004 * i, n=S.N_TB),
-            ),
-        )
+        S.candidate(hid, b=S.STRONG_POS, l=S.series(0.05 - 0.004 * i))
         for i, hid in enumerate(ids)
     ]
     candidates.append(
-        S.candidate("H5", values=_values(b=S.series(-0.05, n=S.N_TB), l=S.series(-0.05, n=S.N_TB)))
+        S.candidate("H5", b=S.STRONG_NEG, l=S.STRONG_NEG)
     )
     control = S.candidate(
-        "event_ear_k_kp1",
-        values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.05, n=S.N_TB)),
+        "event_ear_k_kp1", b=S.STRONG_POS, l=S.STRONG_POS
     )
     tb_map = {
-        hid: S.make_tb(hid, b=S.STRONG_POS, l=S.series(0.05 - 0.002 * i, n=S.N_TB))
+        hid: S.make_tb(hid, b=S.STRONG_POS, l=S.series(0.05 - 0.002 * i))
         for i, hid in enumerate(ids)
     }
     tb_map["event_ear_k_kp1"] = S.make_tb(
-        "event_ear_k_kp1", b=S.STRONG_POS, l=S.series(0.06, n=S.N_TB)
+        "event_ear_k_kp1", b=S.STRONG_POS, l=S.series(0.06)
     )
     evaluator = S.StubTbEvaluator(results=tb_map)
     writer = S.RecordingSelectionWriter()
@@ -644,7 +626,6 @@ def test_run_screen_end_to_end(tmp_path: Path) -> None:
     ]
     assert report.selection.written is True
     assert report.selection.record_hash is not None
-    # H0 has the largest T-B min L t among floor passers.
     assert report.forwarding.decision == "FORWARD"
     assert report.forwarding.hypothesis_id == "H0"
     assert report.control_verdict == "PIPELINE_OK"
@@ -653,16 +634,10 @@ def test_run_screen_end_to_end(tmp_path: Path) -> None:
 def test_run_screen_no_reserve_use(tmp_path: Path) -> None:
     ids = ("H0", "H1", "H2", "H3", "H4")
     candidates = [
-        S.candidate(
-            hid,
-            values=_values(b=S.series(0.05, n=S.N_TB), l=S.series(0.05 - 0.004 * i, n=S.N_TB)),
-        )
+        S.candidate(hid, b=S.STRONG_POS, l=S.series(0.05 - 0.004 * i))
         for i, hid in enumerate(ids)
     ]
-    control = S.candidate(
-        "event_ear_k_kp1",
-        values=_values(b=S.STRONG_POS, l=S.STRONG_POS),
-    )
+    control = S.candidate("event_ear_k_kp1", b=S.STRONG_POS, l=S.STRONG_POS)
     tb_map = {
         hid: S.make_tb(hid, b=S.STRONG_NEG, l=S.STRONG_NEG) for hid in ids
     }
@@ -713,7 +688,7 @@ def test_credential_sentinel_never_leaks(tmp_path: Path) -> None:
 
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
-    assert [m["id"] for m in mutations] == [f"S-M{i}" for i in range(1, 10)]
+    assert [m["id"] for m in mutations] == [f"S-M{i}" for i in range(1, 13)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/campaign/campaign3_screen.py"
