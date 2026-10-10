@@ -139,7 +139,7 @@ class _SpyBoundary(GeneratorBoundary):
 
 def test_policy_literals_frozen():
     policy = _policy()
-    assert policy.generator_identity == "anthropic:claude-opus-5-5"
+    assert policy.generator_identity == "deepseek:deepseek-v4-flash"
     assert policy.seed == 20261012
     assert policy.max_proposal_budget == 100
     assert policy.feedback_channels == (FeedbackChannel.IS_METRICS,)

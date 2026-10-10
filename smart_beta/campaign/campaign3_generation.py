@@ -117,7 +117,7 @@ __all__ = [
 ]
 
 #: Frozen generator identity (spec section 4).
-CAMPAIGN3_GENERATOR_IDENTITY = "anthropic:claude-opus-5-5"
+CAMPAIGN3_GENERATOR_IDENTITY = "deepseek:deepseek-v4-flash"
 
 #: The predeclared research-program / family identity (frozen). The family id
 #: is a deterministic SHA-256 of the program label; it is computed, never
