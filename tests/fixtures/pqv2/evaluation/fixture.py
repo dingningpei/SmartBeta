@@ -171,7 +171,13 @@ class Member:
 class SyntheticStore:
     """A synthetic D7A + D3/D4 dataset root with injected bindings."""
 
-    def __init__(self, tmp_path: Path, *, name: str = "root") -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        name: str = "root",
+        reserve_sessions: Sequence[date] = (),
+    ) -> None:
         self.root = tmp_path / name
         self.root.mkdir(parents=True, exist_ok=True)
         self.members: list[Member] = []
@@ -179,6 +185,11 @@ class SyntheticStore:
         self.crosses_reserve: dict[date, bool] = {}
         self.flags: list[dict[str, Any]] = []
         self.ca_events: list[dict[str, Any]] = []
+        #: Optional reserve-dated D7c rows appended to the synthetic daily
+        #: frame, so a reserve-fold evaluation sees a *stitched* input (dev
+        #: rows before 2023-07-03, reserve rows at/after it).  Empty for the
+        #: default development-fold fixtures.
+        self.reserve_sessions: tuple[date, ...] = tuple(reserve_sessions)
         #: Optional per-(key, session) D7c ``daily_total_return`` overrides used
         #: to drive the M§8A.1 UNKNOWN_SOURCE classification without touching
         #: the TRI/volume inputs the factor panel is evaluated from.
@@ -582,18 +593,26 @@ class SyntheticStore:
         )
 
     def wide_inputs(self) -> dict[str, pd.DataFrame]:
-        index = pd.DatetimeIndex(pd.to_datetime(SESSIONS))
+        sessions = list(SESSIONS)
+        for session in self.reserve_sessions:
+            if session not in sessions:
+                sessions.append(session)
+        sessions = sorted(sessions)
+        index = pd.DatetimeIndex(pd.to_datetime(sessions))
         daily = pd.DataFrame(
             0.0, index=index, columns=list(KEYS), dtype="float64"
         )
         for key in KEYS:
             for session in SESSIONS:
                 daily.at[pd.Timestamp(session), key] = self._daily_rate(key, session)
+            for session in self.reserve_sessions:
+                # A reserve source row: the stitched frame's reserve segment.
+                daily.at[pd.Timestamp(session), key] = 0.05
         tri = (1.0 + daily).cumprod()
         dv = pd.DataFrame(1.0, index=index, columns=list(KEYS), dtype="float64")
         for key in KEYS:
             dv[key] = 1000.0 * (1.0 + 0.01 * ("ABCDEF".index(key) + 1)) * (
-                1.0 + 0.0002 * np.arange(len(SESSIONS))
+                1.0 + 0.0002 * np.arange(len(index))
             )
         return {"daily_total_return": daily, "total_return_index": tri, "dollar_volume": dv}
 
