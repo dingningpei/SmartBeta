@@ -127,3 +127,37 @@ confirmatory claim.
 **The §2 power table is recomputed for the frozen design:** the joint probability for a
 true SR of 1.0 is about 0.25 (T-B floor at α = 0.05 × T-C at α = 0.05), and about 0.04 at
 SR = 0.5. Both are upper bounds.
+
+## Erratum P5-E1 (2026-10-10; user-approved: "按候选计，恰好 100 个")
+
+**Evidence** (the D13 live DeepSeek dry run after A2-E1; stub evaluator; disposable
+K-PIT copy; allowlist network guard; the planner saw no real-data result):
+- 3 calls ran, all with `finish_reason = stop` and 0 failed calls;
+- **21 candidates** came back (the prompt's output schema `campaign3-candidates-v1`
+  carries a `candidates` **list**, about 7 per call);
+- all 21 were certified (8 SIMPLE, 3 STD_X_RANK, 10 EVENT_SIMPLE), with 0 duplicates;
+- 39,945 tokens were used;
+- the prompt tokens grew by about 5.7k per call, because of the history.
+
+**What was wrong:** the §1 "fact" that one GenerationEvent = at most one FactorSpec was
+**false**. The planner misread the prompt's "a single JSON object"; that object holds a
+list. The executor counted events, so N = 100 would have meant about 700 candidates.
+
+**Correction (binding; it supersedes §1's budget-unit row and P4 D1's counting):**
+
+1. **The budget unit is the candidate.** N = 100 counts every **candidate entry** that
+   normalization yields: admitted, NOT_CERTIFIED, duplicate or non-novel, and invalid. An
+   artifact that yields **zero** candidate entries (unparseable) counts as **1**.
+2. **Exactly 100:**
+   - before each call, the executor stops if the used count is ≥ 100;
+   - if a call's entries would push the count past 100, only the first (100 − used)
+     entries **in response order** are processed;
+   - the remaining entries are recorded as `BUDGET_TRUNCATED` (the raw artifact stays
+     persisted; they are not registered, certified, frozen or evaluated);
+   - the manifest records `n_used` (= candidates counted), `n_calls`,
+     `n_budget_truncated`.
+3. **The stop reason** is PROPOSAL_BUDGET_EXHAUSTED when the count reaches 100. The
+   token and cost hard stops (4,000,000 tokens; USD 150 when a price table is supplied)
+   are unchanged.
+4. **Expected scale** (planner estimate, not binding): about 15 calls and about 0.7M
+   tokens.
