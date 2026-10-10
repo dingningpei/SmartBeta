@@ -54,3 +54,38 @@
 
 The Claude adapter (C3-G) remains merged and tested but is unused by Campaign-3. A
 provider switch after this freeze would be a new amendment.
+
+## Erratum A2-E1 (2026-10-10; user-approved: "低强度推理" + "批准")
+
+**Evidence** (the D13 live dry run, N = 3 planned, stub evaluator, disposable K-PIT copy,
+allowlist network guard):
+- the first call returned `finish_reason = length` with completion_tokens 8000, **all of
+  them reasoning** (`reasoning_tokens = 8000`), and no content;
+- `response.model` = `deepseek-flash` (the alias was confirmed);
+- the executor stopped with GENERATOR_FAILURE after 1 call;
+- the manifest showed `tokens_used = 0` and `n_used = 0`, although about 9,600 tokens were
+  spent;
+- the network log shows only `api.deepseek.com`; no key appeared in any output; the
+  production K-PIT was unchanged.
+
+**Corrections:**
+
+1. **Thinking mode** (DeepSeek docs: on by default, effort `high`; `max_tokens` empirically
+   includes reasoning):
+   - the request passes **`reasoning_effort="low"`**, as a named parameter of
+     `chat.completions.create` (verified present in the openai SDK 3.19.2);
+   - **`max_tokens = 32000`**;
+   - the `reasoning_effort` value is recorded in the settings and the call record.
+2. **The token budget:** `DEFAULT_MAX_LLM_TOKEN_BUDGET` goes from 2,000,000 to
+   **4,000,000** (a hard stop).
+3. **Failed-call accounting (a defect):** the tokens of a failed generator call (when the
+   provider returned usage, for example a `length` truncation) **must be added** to
+   `tokens_used` and checked against the token hard stop. The manifest must record
+   `failed_calls` (count) and `failed_call_tokens`. An API error without usage adds 0
+   and is recorded as such.
+4. **Wording correction (the planner's error):** §1 said that a `length` result is "a
+   recorded failure that is counted in N and never retried". This is inconsistent with
+   the frozen P4 stopping policy. **Corrected:** a `length` result is a typed generator
+   failure; under the P4 / Phase-9 stopping policy the run **stops**
+   (GENERATOR_FAILURE → RUN_INCOMPLETE). It is never retried, and no candidate is
+   created.
