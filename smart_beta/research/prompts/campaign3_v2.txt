@@ -1,0 +1,145 @@
+CAMPAIGN-3 GENERATOR PROMPT — v1 (FROZEN)
+
+You are the Campaign-3 research generator. Produce candidate factor
+specifications (FactorSpecs) that obey the frozen P-Q v2.3 grammars below.
+Output ONLY a single JSON object matching the OUTPUT FORMAT section. Do not
+write prose outside the JSON. Never request, infer or use any validation,
+out-of-sample, sealed or reserve information: the only evidence you are given
+is the in-sample (IS) feedback rendered at the end of this prompt.
+
+====================================================================
+1. ALLOWED SEMANTIC INPUT ROLES (use only these)
+====================================================================
+
+Role alias              Bound semantic_id            observation_period  units     Meaning
+----------------------  ---------------------------  ------------------  --------  ---------------------------
+tri                     total_return_index           INSTANT             ratio     Total-return index (ratio)
+ret                     daily_total_return           PERIOD              fraction  Daily total return
+dv                      dollar_volume                PERIOD              currency  Raw close x raw volume
+event_ear_k_kp1         event_ear_k_kp1              PERIOD              fraction  Two-session announcement return
+event_days_since_ea     event_days_since_ea          INSTANT             count     Sessions since latest observed event
+event_recent_ea_w<W>    event_recent_ea_w<W>         INSTANT             count     1 if days_since_ea <= W else 0
+
+Every role you reference MUST be declared in the FactorSpec `inputs` array.
+`event_recent_ea_w<W>` takes an integer window W with 2 <= W <= 504; write the
+concrete window into both the role alias and the semantic_id (for example
+`event_recent_ea_w20`).
+
+====================================================================
+2. ALLOWED OPERATORS
+====================================================================
+
+Arithmetic:  add, sub, mul, div
+Temporal:    lag            (non-negative integer periods)
+Rolling:     rolling_mean, rolling_std   (integer window, 2 <= w <= 504)
+Cross-sectional: rank, standardize
+
+No other operator, and no provider/vendor-specific field, may appear.
+
+====================================================================
+3. CERTIFIED GRAMMARS (P-Q v2.3)
+====================================================================
+
+BOUNDS (apply to every grammar):
+  - maximum dependency lookback <= 504 sessions;
+  - every lag(k) has k >= 0;
+  - every rolling window w satisfies 2 <= w <= 504;
+  - a TRI ratio is lag(tri,a) / lag(tri,b) with 0 <= a < b <= 504 (a = 0 is
+    the current tri field);
+  - negation is expressed inside the expression (sign is always +1);
+  - constant literals are finite and non-zero where they multiply or divide.
+
+SIMPLE_G (own-cell; no cross-sectional node anywhere):
+  A SIMPLE_G expression is built from TRI ratios, rolling statistics of `ret`
+  or `dv`, lag and the arithmetic operators add/sub/mul/div.
+  PERMITTED DIVISORS only:
+    - a TRI ratio (strictly positive);
+    - rolling_mean(dv, w);
+    - rolling_std(ret, w) with w >= 2.
+  Any other divisor (for example rolling_mean(ret) or a sum) is NOT certified.
+  Excluded entirely: rolling_sum/min/max, and rolling over tri or dv other
+  than the dv-mean forms.
+
+STD_X_RANK_G (exactly this shape, nothing may wrap or combine it):
+  standardize( lag(tri,a) / lag(tri,b) ) * rank( rolling_mean(dv,w1) / rolling_mean(dv,w2) )
+  with 0 <= a < b <= 504 and 2 <= w1 < w2 <= 504.
+  The standardized term must be a PURE TRI ratio (never a ratio minus a
+  constant).
+
+EVENT_G (own-cell; own cell; at least one event primitive; no cross-sectional node):
+  X := P | c*X | X +/- c | X * X | X + X | X - X | X / D
+  P := any event primitive (event_ear_k_kp1, event_days_since_ea,
+       event_recent_ea_w<W>) OR any SIMPLE_G term
+  D := the SIMPLE_G denominator set above.
+  Rules: at least one event primitive; event primitives are NEVER divisors;
+  no lag of an event primitive; event primitives may not appear inside
+  standardize or rank; no event-anchored rolling windows; no multiple-event
+  aggregates.
+
+====================================================================
+4. OUTPUT FORMAT
+====================================================================
+
+Return one JSON object with exactly this shape:
+
+{
+  "schema_version": "campaign3-candidates-v1",
+  "candidates": [
+    {
+      "factor_spec": {
+        "id": "<lower_snake_case_identifier>",
+        "description": "<one-line description>",
+        "hypothesis": "<short hypothesis label>",
+        "expression": <expression AST>,
+        "inputs": [
+          {
+            "alias": "tri",
+            "requirement": {
+              "semantic_id": "total_return_index",
+              "frequency": "daily",
+              "observation_period": "instant",
+              "lookback": 0,
+              "revision_policy": "point_in_time",
+              "require_knowledge_date": true,
+              "require_positive_vintage_identity": false,
+              "units": "ratio"
+            }
+          }
+        ],
+        "frequency": "daily",
+        "missing_policy": "propagate",
+        "sign": 1
+      },
+      "research_question": "<what economic question this factor answers>",
+      "economic_rationale": "<why it should predict the cross-section>"
+    }
+  ]
+}
+
+The governed family is assigned by the program; do not emit or invent any family identifier field.
+
+The expression AST uses these canonical node forms:
+  field:          {"op": "field", "role": "<role alias>"}
+  literal:        {"op": "const", "value": <finite number>}
+  arithmetic:     {"op": "add"|"sub"|"mul"|"div", "left": <node>, "right": <node>}
+  lag:            {"op": "lag", "operand": <node>, "periods": <int >= 0>}
+  rolling:        {"op": "rolling", "fn": "mean"|"std", "operand": <node>, "window": <int>}
+  cross-section:  {"op": "cross_section", "fn": "rank"|"standardize", "operand": <node>}
+
+Do NOT include `version` or `data_requirements`: those are derived from the
+content and must not be invented. Emit as many candidates as you judge useful;
+each candidate is counted against the budget whether or not it is admitted.
+
+====================================================================
+5. VISIBLE HISTORY (firewalled; proposals only)
+====================================================================
+
+<<<VISIBLE_HISTORY>>>
+
+====================================================================
+6. IN-SAMPLE (IS) FEEDBACK (T-A only; no other fold is ever shown)
+====================================================================
+
+<<<IS_FEEDBACK>>>
+
+Return only the JSON object.

@@ -19,14 +19,19 @@ real client is constructed, and every test injects a fake SDK-shaped client.
 from __future__ import annotations
 
 import dataclasses
+import difflib
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 import pytest
 
+from smart_beta.campaign import campaign3_generation as G
+from smart_beta.campaign.campaign3_eval import TaEvaluation
 from smart_beta.evaluation.spec import MetricValue
 from smart_beta.research.generator import (
+    CandidateRejectionReason,
     RawArtifactError,
     RawArtifactSecretError,
 )
@@ -58,9 +63,14 @@ from smart_beta.research.llm_generator_deepseek import (
     MAX_TOKENS,
     MODEL_ID,
     PROVIDER,
+    PROMPT_TEMPLATE_V2_HASH,
+    PROMPT_TEMPLATE_V2_PATH,
     REASONING_EFFORT,
+    load_prompt_template_v2,
+    prompt_template_v2_hash,
 )
 from smart_beta.research.loop import GeneratorFailureError
+from smart_beta.science.knowledge import KnowledgeLog, RecordKind
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = (
@@ -230,6 +240,70 @@ def _history_with_proposal() -> GeneratorVisibleResearchHistory:
 
 
 # ---------------------------------------------------------------------------
+# Erratum A2-E2: the v2 prompt template
+# ---------------------------------------------------------------------------
+
+#: Each role's required (observation_period, units) per erratum A2-E2.
+_ROLE_REQUIREMENTS: dict[str, tuple[str, str]] = {
+    "tri": ("INSTANT", "ratio"),
+    "ret": ("PERIOD", "fraction"),
+    "dv": ("PERIOD", "currency"),
+    "event_ear_k_kp1": ("PERIOD", "fraction"),
+    "event_days_since_ea": ("INSTANT", "count"),
+    "event_recent_ea_w<W>": ("INSTANT", "count"),
+}
+
+#: The exact v1->v2 removed/added line sets the erratum permits (change (a):
+#: drop the intended_family_id line and add the family sentence; change (b):
+#: the per-role observation_period/units table; plus the OUTPUT FORMAT
+#: example made consistent with the ``tri`` role it now uses).
+_EXPECTED_DIFF_REMOVED: tuple[str, ...] = (
+    "Role alias              Bound semantic_id            Meaning",
+    "----------------------  ---------------------------  ---------------------------",
+    "tri                     total_return_index           Total-return index (ratio)",
+    "ret                     daily_total_return           Daily total return",
+    "dv                      dollar_volume                Raw close x raw volume",
+    "event_ear_k_kp1         event_ear_k_kp1              Two-session announcement return",
+    "event_days_since_ea     event_days_since_ea          Sessions since latest observed event",
+    "event_recent_ea_w<W>    event_recent_ea_w<W>         1 if days_since_ea <= W else 0",
+    '            "alias": "<role alias>",',
+    '              "semantic_id": "<bound semantic_id>",',
+    '      "economic_rationale": "<why it should predict the cross-section>",',
+    '      "intended_family_id": "<optional governed family id>"',
+)
+
+_EXPECTED_DIFF_ADDED: tuple[str, ...] = (
+    "Role alias              Bound semantic_id            observation_period  units     Meaning",
+    "----------------------  ---------------------------  ------------------  --------  ---------------------------",
+    "tri                     total_return_index           INSTANT             ratio     Total-return index (ratio)",
+    "ret                     daily_total_return           PERIOD              fraction  Daily total return",
+    "dv                      dollar_volume                PERIOD              currency  Raw close x raw volume",
+    "event_ear_k_kp1         event_ear_k_kp1              PERIOD              fraction  Two-session announcement return",
+    "event_days_since_ea     event_days_since_ea          INSTANT             count     Sessions since latest observed event",
+    "event_recent_ea_w<W>    event_recent_ea_w<W>         INSTANT             count     1 if days_since_ea <= W else 0",
+    '            "alias": "tri",',
+    '              "semantic_id": "total_return_index",',
+    '      "economic_rationale": "<why it should predict the cross-section>"',
+    "",
+    "The governed family is assigned by the program; do not emit or invent any family identifier field.",
+)
+
+
+def _role_table_rows(text: str) -> dict[str, str]:
+    """Map each role row's first token to its line, scoped to the v2 table."""
+    lines = text.splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith("Role alias")
+    )
+    rows: dict[str, str] = {}
+    for line in lines[start + 2 :]:
+        if not line.strip():
+            break
+        rows[line.split()[0]] = line
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # frozen literals
 # ---------------------------------------------------------------------------
 
@@ -286,13 +360,15 @@ def test_request_shape_is_exactly_the_frozen_one():
         assert forbidden not in kwargs
 
 
-def test_user_message_is_the_c3g_rendered_prompt():
+def test_user_message_is_the_v2_rendered_prompt():
     visible = _history_with_proposal()
     feedback = _is_feedback(value=0.125)
     client = _FakeClient(response=_response("{}"))
     Campaign3DeepSeekGenerator(client=client)(visible, feedback)
     user_content = client.calls[0]["messages"][1]["content"]
-    assert user_content == render_prompt(visible, feedback)
+    assert user_content == render_prompt(
+        visible, feedback, template=load_prompt_template_v2()
+    )
     assert "net_long_short_mean" in user_content
     assert "0.125" in user_content
     assert SHA_A in user_content
@@ -301,12 +377,97 @@ def test_user_message_is_the_c3g_rendered_prompt():
     assert "oos-fold-1" not in user_content
 
 
-def test_prompt_template_hash_is_the_unchanged_c3g_hash():
+def test_prompt_template_hash_is_the_v2_hash():
     generator = Campaign3DeepSeekGenerator(client=_FakeClient(response=_response("{}")))
-    assert PROMPT_TEMPLATE_PATH.is_file()
+    assert PROMPT_TEMPLATE_V2_PATH.is_file()
+    assert PROMPT_TEMPLATE_V2_PATH.name == "campaign3_v2.txt"
+    assert isinstance(PROMPT_TEMPLATE_V2_HASH, str)
+    assert len(PROMPT_TEMPLATE_V2_HASH) == 64
+    assert set(PROMPT_TEMPLATE_V2_HASH) <= set("0123456789abcdef")
+    assert generator.prompt_template_hash == PROMPT_TEMPLATE_V2_HASH
+    # the v1 (C3-G) hash is deliberately not reported by this adapter
     assert isinstance(PROMPT_TEMPLATE_HASH, str) and len(PROMPT_TEMPLATE_HASH) == 64
-    assert generator.prompt_template_hash == PROMPT_TEMPLATE_HASH
+    assert generator.prompt_template_hash != PROMPT_TEMPLATE_HASH
     assert generator.model_id == MODEL_ID
+
+
+def test_v2_prompt_template_hash_is_stable():
+    expected = hashlib.sha256(PROMPT_TEMPLATE_V2_PATH.read_bytes()).hexdigest()
+    assert prompt_template_v2_hash() == expected
+    assert PROMPT_TEMPLATE_V2_HASH == expected
+    assert prompt_template_v2_hash() == prompt_template_v2_hash()
+    assert load_prompt_template_v2() == PROMPT_TEMPLATE_V2_PATH.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_v2_diff_contains_only_the_permitted_changes():
+    v1 = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8").splitlines()
+    v2 = PROMPT_TEMPLATE_V2_PATH.read_text(encoding="utf-8").splitlines()
+    diff = list(
+        difflib.unified_diff(
+            v1, v2, "campaign3_v1.txt", "campaign3_v2.txt", n=0
+        )
+    )
+    removed = sorted(
+        line[1:]
+        for line in diff
+        if line.startswith("-") and not line.startswith("--- ")
+    )
+    added = sorted(
+        line[1:]
+        for line in diff
+        if line.startswith("+") and not line.startswith("+++ ")
+    )
+    assert removed == sorted(_EXPECTED_DIFF_REMOVED)
+    assert added == sorted(_EXPECTED_DIFF_ADDED)
+
+
+def test_role_table_states_units_and_periods():
+    rows = _role_table_rows(load_prompt_template_v2())
+    assert set(rows) == set(_ROLE_REQUIREMENTS)
+    for role, (period, units) in _ROLE_REQUIREMENTS.items():
+        assert period in rows[role], role
+        assert units in rows[role], role
+
+
+def test_adapter_renders_template_v2():
+    visible = _empty_history()
+    feedback = _is_feedback()
+    client = _FakeClient(response=_response("{}"))
+    Campaign3DeepSeekGenerator(client=client)(visible, feedback)
+    user_content = client.calls[0]["messages"][1]["content"]
+    assert user_content == render_prompt(
+        visible, feedback, template=load_prompt_template_v2()
+    )
+    # the v1 render (the default template) must not be what the adapter sends
+    assert user_content != render_prompt(visible, feedback)
+
+
+def test_rendered_v2_prompt_has_no_intended_family_id():
+    # The v2 TEMPLATE must not request the field. The history-token renderer
+    # (C3-G) is unchanged by erratum A2-E2, so this check uses no prior
+    # proposals; a history entry still renders only the governed proposal
+    # identities it always did.
+    text = render_prompt(
+        _empty_history(), _is_feedback(), template=load_prompt_template_v2()
+    )
+    assert "intended_family_id" not in text
+    assert (
+        "The governed family is assigned by the program; do not emit or invent "
+        "any family identifier field." in text
+    )
+    # the C3-G v1 template still carries the field (it is not modified)
+    v1_text = render_prompt(_empty_history(), _is_feedback())
+    assert "intended_family_id" in v1_text
+
+
+def test_output_format_example_matches_the_role_it_uses():
+    text = load_prompt_template_v2()
+    assert '"alias": "tri",' in text
+    assert '"semantic_id": "total_return_index",' in text
+    assert '"observation_period": "instant",' in text
+    assert '"units": "ratio"' in text
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +713,151 @@ def test_invalid_history_and_feedback_types_are_refused():
 
 
 # ---------------------------------------------------------------------------
-# mutation fixture contract (planner applies D3-M1..D3-M6)
+# Erratum A2-E2 end-to-end: v2 response through the C3-X executor
+# ---------------------------------------------------------------------------
+
+
+def _v2_ok_spec_dict() -> dict:
+    """A P-Q v2.3-certifiable SIMPLE_G ``lag(tri,21)/lag(tri,252)`` spec.
+
+    It obeys the v2 role table (``tri`` is INSTANT/ratio) and carries no
+    ``intended_family_id``, so the program-declared family binds.
+    """
+    return {
+        "id": "c3_v2_probe_21_252",
+        "description": "v2-conformant synthetic tri-ratio probe",
+        "hypothesis": "C3-V2-PROBE",
+        "expression": {
+            "op": "div",
+            "left": {
+                "op": "lag",
+                "operand": {"op": "field", "role": "tri"},
+                "periods": 21,
+            },
+            "right": {
+                "op": "lag",
+                "operand": {"op": "field", "role": "tri"},
+                "periods": 252,
+            },
+        },
+        "inputs": [
+            {
+                "alias": "tri",
+                "requirement": {
+                    "semantic_id": "total_return_index",
+                    "frequency": "daily",
+                    "observation_period": "instant",
+                    "lookback": 0,
+                    "revision_policy": "point_in_time",
+                    "require_knowledge_date": True,
+                    "require_positive_vintage_identity": False,
+                    "units": "ratio",
+                },
+            }
+        ],
+        "frequency": "daily",
+        "missing_policy": "propagate",
+        "sign": 1,
+    }
+
+
+def _v2_response_content(*, intended_family_id: str | None = None) -> str:
+    candidate: dict = {
+        "factor_spec": _v2_ok_spec_dict(),
+        "research_question": "Does the v2 synthetic probe predict returns?",
+        "economic_rationale": "A synthetic, non-empirical v2 fixture rationale.",
+    }
+    if intended_family_id is not None:
+        candidate["intended_family_id"] = intended_family_id
+    return json.dumps(
+        {"schema_version": "campaign3-candidates-v1", "candidates": [candidate]},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _stub_ta_evaluator(proposal):
+    return TaEvaluation(
+        proposal_id=proposal.proposal_id,
+        factor_spec_hash=proposal.proposed_factor_spec_hash,
+        declaration_hash="d" * 64,
+        is_fold_key="is",
+        diagnostics_hash="e" * 64,
+        assessed=True,
+        not_assessed_reason=None,
+        metrics=(MetricValue(name="is_assessable", value=1.0, n_obs=1),),
+    )
+
+
+def _bounded(generator, *, max_calls: int = 3):
+    """Wrap a generator callable so a non-terminating executor fails fast."""
+    state = {"n": 0}
+
+    def call(visible, feedback):
+        state["n"] += 1
+        assert state["n"] <= max_calls, (
+            "the executor did not stop at the proposal budget"
+        )
+        return generator(visible, feedback)
+
+    return call
+
+
+def _run_v2_response(tmp_path, content: str):
+    """Feed a v2-conformant generator response through the C3-X executor.
+
+    A disposable K-PIT (``tmp_path``) is used; no production K-PIT and no
+    ``data_store`` is touched. The loop is bounded by a 1-entry budget and a
+    hard generator-call cap.
+    """
+    client = _FakeClient(response=_response(content))
+    generator = Campaign3DeepSeekGenerator(client=client)
+    policy = G.build_campaign3_policy(
+        prompt_template_hash=generator.prompt_template_hash,
+        max_proposal_budget=1,
+    )
+    log = KnowledgeLog(tmp_path / "campaign3_v2_kpit.jsonl")
+    executor = G.Campaign3Executor(
+        policy=policy,
+        generator=_bounded(generator),
+        evaluator=_stub_ta_evaluator,
+        kpit=G.KnowledgeLogKpitWriter(log),
+    )
+    result = executor.run()
+    return executor, result, log
+
+
+def test_v2_conformant_response_is_admitted_end_to_end(tmp_path):
+    executor, result, log = _run_v2_response(tmp_path, _v2_response_content())
+    assert result.manifest.n_used == 1
+    assert result.manifest.n_certified == 1
+    assert result.manifest.n_evaluated == 1
+    assert len(result.registry) == 1
+    proposal = executor.registry.get(result.manifest.proposal_ids[0])
+    assert proposal is not None
+    assert proposal.proposal.intended_family_id == executor.policy.family_id
+    # the disposable K-PIT recorded the GENERATOR write-ahead pair
+    kinds = [record.kind for record in log.read()]
+    assert kinds == [RecordKind.GENERATOR_INPUT, RecordKind.HYPOTHESIS_FREEZE]
+
+
+def test_intended_family_id_bearing_response_is_family_escape(tmp_path):
+    executor, result, _ = _run_v2_response(
+        tmp_path, _v2_response_content(intended_family_id="invented-family")
+    )
+    assert result.manifest.n_used == 1
+    assert result.manifest.n_certified == 0
+    assert result.manifest.n_evaluated == 0
+    assert len(result.registry) == 0
+    (event,) = executor.events
+    outcome = executor.boundary.outcome_for(event.event_id)
+    assert outcome is not None
+    reasons = {candidate.reason for candidate in outcome.candidates}
+    assert CandidateRejectionReason.FAMILY_ESCAPE in reasons
+
+
+# ---------------------------------------------------------------------------
+# mutation fixture contract (planner applies D3-M1..D3-M9 and P-M1..P-M3)
 # ---------------------------------------------------------------------------
 
 
@@ -560,7 +865,7 @@ def test_mutation_fixture_contract():
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
     assert [mutation["id"] for mutation in mutations] == [
         f"D3-M{i}" for i in range(1, 10)
-    ]
+    ] + ["P-M1", "P-M2", "P-M3"]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["description"], mutation["id"]
@@ -585,3 +890,7 @@ def test_mutation_fixture_contract():
     assert by_id["D3-M7"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
     assert by_id["D3-M8"]["file"] == "smart_beta/campaign/campaign3_generation.py"
     assert by_id["D3-M9"]["file"] == "smart_beta/campaign/campaign3_generation.py"
+    # erratum A2-E2 mutations: P-M1/P-M3 target the adapter, P-M2 the template
+    assert by_id["P-M1"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
+    assert by_id["P-M2"]["file"] == "smart_beta/research/prompts/campaign3_v2.txt"
+    assert by_id["P-M3"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
