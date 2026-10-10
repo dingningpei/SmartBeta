@@ -1,0 +1,54 @@
+[
+ {
+  "id": "L-M1",
+  "description": "preflight writes to the production K-PIT",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    _run.verify_kpit_terminal(copy_path, _run.pin_kpit_terminal(copy_path))\n    _probe_copy(copy_path)",
+    "new": "    _run.verify_kpit_terminal(copy_path, _run.pin_kpit_terminal(copy_path))\n    _probe_copy(source)  # mutation L-M1: the production K-PIT is written"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_preflight_uses_the_kpit_copy_only"
+ },
+ {
+  "id": "L-M2",
+  "description": "preflight prints a statistic",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        \"periods\": periods,\n    }\n    assert_statistic_free(summary)",
+    "new": "        \"periods\": periods,\n        \"mean\": 0.5,  # mutation L-M2: a statistic is emitted\n    }\n    assert_statistic_free(summary)"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_preflight_prints_no_statistic"
+ },
+ {
+  "id": "L-M3",
+  "description": "production runs without a preflight marker",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    if not path.is_file():\n        raise PreflightRequired(\n            f\"no preflight marker at {path}; run --preflight first\"\n        )\n    return json.loads(path.read_text(encoding=\"utf-8\"))",
+    "new": "    if not path.is_file():\n        return {}\n    return json.loads(path.read_text(encoding=\"utf-8\"))"
+   },
+   {
+    "old": "    if marker.get(\"status\") != PREFLIGHT_STATUS_OK:\n        raise PreflightRequired(\n            f\"the preflight marker status is {marker.get('status')!r}\"\n        )\n    if marker.get(\"master_sha\") != str(master_sha):\n        raise PreflightRequired(\n            \"the preflight marker master SHA does not match the current master \"\n            f\"({marker.get('master_sha')!r} != {master_sha!r})\"\n        )\n    if marker.get(\"bindings_hash\") != assembly.bindings.content_hash:\n        raise PreflightRequired(\n            \"the preflight marker bindings hash does not match the assembled \"\n            \"bindings\"\n        )\n    return marker",
+    "new": "    return marker  # mutation L-M3: the preflight marker is not required"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_production_requires_a_matching_preflight_marker"
+ },
+ {
+  "id": "L-M4",
+  "description": "the T-B folds include the reserve",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    return is_folds[0], oos_folds[0], holdout",
+    "new": "    import datetime as _dt  # mutation L-M4: the reserve window joins T-B\n    return is_folds[0], oos_folds[0], Fold(\n        FoldRole.HOLDOUT, _dt.date(2023, 7, 31), _dt.date(2026, 7, 31)\n    )"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_tb_folds_are_the_frozen_oos_and_sealed"
+ }
+]
