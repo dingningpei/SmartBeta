@@ -1,0 +1,86 @@
+[
+  {
+    "id": "T-M1",
+    "description": "the one-session bridge lag is dropped (zero lag)",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "            source_session = T._primitive_session(row_date, sessions, pos)",
+        "new": "            source_session = row_date"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_fold_bridges_dev_and_reserve"
+  },
+  {
+    "id": "T-M2",
+    "description": "the reserve lookback is taken from the fold start (wrong fold)",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "        floor_idx = max(0, start_idx - lookback_sessions)",
+        "new": "        floor_idx = start_idx"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_lookback_carries_dev_history"
+  },
+  {
+    "id": "T-M3",
+    "description": "the reserve package is swapped for the development package",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "        right = self._reserve.read(",
+        "new": "        right = self._development.read("
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_fold_bridges_dev_and_reserve"
+  },
+  {
+    "id": "T-M4",
+    "description": "the reserve accessor gate is bypassed",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "        if reserve_accessor is None:\n            raise TrustedFoldInputError(\n                \"a reserve fold requires a reserve_accessor\"\n            )",
+        "new": "        if False:\n            raise TrustedFoldInputError(\n                \"a reserve fold requires a reserve_accessor\"\n            )"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_fold_requires_bindings_and_accessor"
+  },
+  {
+    "id": "T-M5",
+    "description": "the corporate-action boundary is fixed at the development cross-section",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "            min(upper, grid.source_end),",
+        "new": "            min(upper, T.LAST_SOURCE_DATE),"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_corporate_action_applied_within_fold"
+  },
+  {
+    "id": "T-M6",
+    "description": "the development fold no longer refuses a smuggled reserve row",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "        if not fold.is_reserve and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError(",
+        "new": "        if False and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError("
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_dev_fold_post_load_assertion_refuses_reserve_row"
+  },
+  {
+    "id": "T-M7",
+    "description": "the source window is off by one session (fold end, not prev)",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "    source_end = sessions[end_idx - 1] if end_idx > 0 else grid_sessions[0]",
+        "new": "    source_end = sessions[end_idx]"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_dev_fold_reproduces_frozen_tables_and_fields"
+  }
+]
