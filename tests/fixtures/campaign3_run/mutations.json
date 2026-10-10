@@ -106,5 +106,41 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_no_kpit_record_contains_the_v1_2_dataset_id_literal"
+ },
+ {
+  "id": "R-M10",
+  "description": "the control lookup matches any HUMAN HYPOTHESIS_FREEZE (not just the Campaign-3 schema)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    if payload.get(\"schema\") != CONTROL_RECORD_SCHEMA:\n        return False",
+    "new": "    # mutation R-M10: control lookup matches any HUMAN HYPOTHESIS_FREEZE"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_production_prefix_control_lookup_is_schema_scoped"
+ },
+ {
+  "id": "R-M11",
+  "description": "the campaign lookup ignores the payload schema",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        and campaign.get(\"schema\") == CAMPAIGN_RECORD_SCHEMA",
+    "new": "        # mutation R-M11: campaign lookup ignores schema"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_prior_campaign_precommitment_is_not_mistaken_for_campaign3"
+ },
+ {
+  "id": "R-M12",
+  "description": "the TB_SELECTION lookup ignores the payload schema",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        and selection.get(\"schema\") == TB_SELECTION_SCHEMA",
+    "new": "        # mutation R-M12: TB_SELECTION lookup ignores schema"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_tb_selection_write_is_idempotent_and_schema_scoped"
  }
 ]

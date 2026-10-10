@@ -41,6 +41,13 @@ _PQ2H = _REPO_ROOT / "tests" / "fixtures" / "pqv2" / "evaluation" / "fixture.py"
 _MUTATIONS = (
     _REPO_ROOT / "tests" / "fixtures" / "campaign3_run" / "mutations.json"
 )
+_PRODUCTION_PREFIX = (
+    _REPO_ROOT
+    / "tests"
+    / "fixtures"
+    / "campaign3_run"
+    / "production_prefix.py"
+)
 _TESTS = _REPO_ROOT / "tests" / "test_campaign3_run.py"
 
 PROMPT_TEMPLATE_HASH = "a" * 64
@@ -63,6 +70,7 @@ def _load_module(name: str, path: Path):
 
 fx = _load_module("c3_run_synthetic", _C3_SYNTHETIC)
 scr = _load_module("c3_run_screen_synthetic", _SCREEN_SYNTHETIC)
+prefixfx = _load_module("c3_run_production_prefix", _PRODUCTION_PREFIX)
 
 
 def _load_pq2h():
@@ -194,6 +202,29 @@ def _control_records(log: KnowledgeLog) -> list[Any]:
 
 def _generator_records(log: KnowledgeLog) -> list[Any]:
     return [record for record in log.read() if record.channel is Channel.GENERATOR]
+
+
+def _c3_campaign_records(log: KnowledgeLog) -> list[Any]:
+    """Campaign-3 CAMPAIGN records, scoped by payload schema."""
+    return [
+        record
+        for record in log.read()
+        if record.kind is RecordKind.HUMAN_DECISION
+        and isinstance(record.payload.get("campaign_precommitment"), Mapping)
+        and record.payload["campaign_precommitment"].get("schema")
+        == R.CAMPAIGN_RECORD_SCHEMA
+    ]
+
+
+def _c3_control_records(log: KnowledgeLog) -> list[Any]:
+    """Campaign-3 HUMAN control freezes, scoped by payload schema."""
+    return [
+        record
+        for record in log.read()
+        if record.kind is RecordKind.HYPOTHESIS_FREEZE
+        and record.channel is Channel.HUMAN
+        and record.payload.get("schema") == R.CONTROL_RECORD_SCHEMA
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -796,11 +827,11 @@ def test_policy_requires_a_generator_prompt_hash(tmp_path):
         )
 
 
-def _real_c3s_run(
-    tmp_path: Path, *, budget: int = 5
-) -> tuple[R.Campaign3RunResult, KnowledgeLog]:
-    log = KnowledgeLog(tmp_path / "kpit.jsonl")
-    runner = R.Campaign3Run(
+def _real_c3s_runner(
+    log: KnowledgeLog, tmp_path: Path, *, budget: int = 5
+) -> R.Campaign3Run:
+    """The real C3-S end-to-end runner on a caller-supplied log."""
+    return R.Campaign3Run(
         bindings=_bindings(),
         policy=_policy(budget),
         generator=_scripted_generator(budget),
@@ -813,6 +844,17 @@ def _real_c3s_run(
         registry=scr.registry(),
         admission_records=[scr.admission_record()],
     )
+
+
+def _real_c3s_run(
+    tmp_path: Path,
+    *,
+    budget: int = 5,
+    log: KnowledgeLog | None = None,
+) -> tuple[R.Campaign3RunResult, KnowledgeLog]:
+    if log is None:
+        log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    runner = _real_c3s_runner(log, tmp_path, budget=budget)
     runner.launch_terminal = R.pin_kpit_terminal(log.path)
     return runner.run(), log
 
@@ -874,6 +916,129 @@ def test_no_kpit_record_contains_the_v1_2_dataset_id_literal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 9b. production-shaped K-PIT prefix (C3-R-R3): schema-scoped lookups
+# ---------------------------------------------------------------------------
+
+
+def _seed_prefix(
+    tmp_path: Path, *, include_prior_campaign: bool = True
+) -> tuple[KnowledgeLog, dict[str, Any]]:
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    prefix = prefixfx.seed_production_prefix(
+        log, include_prior_campaign=include_prior_campaign
+    )
+    return log, prefix
+
+
+def test_production_prefix_control_lookup_is_schema_scoped(tmp_path):
+    """Kills mutation R-M10 (control lookup matches any HUMAN HYPOTHESIS_FREEZE).
+
+    The production K-PIT already holds seven Campaign-1 HUMAN
+    ``HYPOTHESIS_FREEZE`` records whose payload names only ``factor_spec_hash``
+    and ``hypothesis_id``.  A first-match control lookup would treat the first
+    of them as the Campaign-3 control and fail with ``C3GovernanceConflict``;
+    the schema-scoped lookup must ignore them and the run must succeed.
+    """
+    log, prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
+    assert len(prefix["freezes"]) == 7
+    prior_hashes = {record.record_hash for record in prefix["freezes"]}
+
+    runner = _real_c3s_runner(log, tmp_path, budget=5)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    first = runner.run()
+    calls = len(runner.generator.calls)
+    assert calls == 5
+
+    assert len(_c3_campaign_records(log)) == 1
+    controls = _c3_control_records(log)
+    assert len(controls) == 1
+    assert controls[0].payload["hypothesis_id"] == R.CONTROL_HYPOTHESIS_ID
+    assert controls[0].payload["campaign_record_hash"] == (
+        _c3_campaign_records(log)[0].record_hash
+    )
+    # The seven Campaign-1 freezes are untouched.
+    assert prior_hashes <= {record.record_hash for record in log.read()}
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+    # A resume reconciles without writing a second CAMPAIGN/control or
+    # re-calling the generator.
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    second = runner.run()
+    assert len(runner.generator.calls) == calls
+    assert len(_c3_campaign_records(log)) == 1
+    assert len(_c3_control_records(log)) == 1
+    assert second.manifest["n_used"] == first.manifest["n_used"]
+
+
+def test_prior_campaign_precommitment_is_not_mistaken_for_campaign3(tmp_path):
+    """Kills mutation R-M11 (campaign lookup ignores schema).
+
+    A prior campaign's HUMAN decision carries a ``campaign_precommitment``
+    mapping under a different schema; the over-broad first-match lookup would
+    return it and raise ``C3GovernanceConflict``.  The schema-scoped lookup
+    must ignore it and write exactly one Campaign-3 CAMPAIGN record.
+    """
+    log, prefix = _seed_prefix(tmp_path, include_prior_campaign=True)
+    assert prefix["prior_campaign"] is not None
+    assert prefix["prior_campaign"].payload["campaign_precommitment"]["schema"] == (
+        prefixfx.PRIOR_CAMPAIGN_SCHEMA
+    )
+
+    result, log = _real_c3s_run(tmp_path, log=log)
+    assert result.screen_report is not None
+    campaigns = _c3_campaign_records(log)
+    assert len(campaigns) == 1
+    assert campaigns[0].payload["campaign_precommitment"]["schema"] == (
+        R.CAMPAIGN_RECORD_SCHEMA
+    )
+    # The prior campaign decision is still present and untouched.
+    assert any(
+        record.record_hash == prefix["prior_campaign"].record_hash
+        for record in log.read()
+    )
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+
+def test_tb_selection_write_is_idempotent_and_schema_scoped(tmp_path):
+    """Kills mutation R-M12 (TB_SELECTION lookup ignores schema)."""
+    screen = R.load_screen_module()
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    # A prior campaign's tb_selection record (different schema) must not be
+    # mistaken for the Campaign-3 write-ahead.
+    log.append(
+        kind=RecordKind.HUMAN_DECISION,
+        channel=Channel.HUMAN,
+        payload={
+            "decision_kind": "OTHER",
+            "actor_role": "OPERATOR",
+            "consulted_all_prior": True,
+            "tb_selection": {
+                "schema": "campaign2-tb-selection-v0",
+                "selected_ids": ["old"],
+            },
+        },
+    )
+    selection = screen.TbSelection(
+        selected_ids=("h1", "h2"),
+        control_id=R.CONTROL_HYPOTHESIS_ID,
+        ranking_table_hash="r" * 64,
+    )
+    first = R.write_tb_selection_record(log, selection)
+    again = R.write_tb_selection_record(log, selection)
+    assert again.record_hash == first.record_hash
+    c3 = [
+        record
+        for record in log.read()
+        if isinstance(record.payload.get("tb_selection"), Mapping)
+        and record.payload["tb_selection"].get("schema")
+        == R.TB_SELECTION_SCHEMA
+    ]
+    assert len(c3) == 1
+
+
+# ---------------------------------------------------------------------------
 # 10. mutation fixture integrity
 # ---------------------------------------------------------------------------
 
@@ -882,7 +1047,8 @@ def test_mutations_fixture_is_wellformed():
     entries = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
     ids = {entry["id"] for entry in entries}
     assert {
-        "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8", "R-M9"
+        "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8",
+        "R-M9", "R-M10", "R-M11", "R-M12",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]

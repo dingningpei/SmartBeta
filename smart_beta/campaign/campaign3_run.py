@@ -251,6 +251,7 @@ CONTROL_SIGN = 1
 CAMPAIGN_RECORD_TYPE = "CAMPAIGN_PRECOMMITMENT"
 CAMPAIGN_RECORD_SCHEMA = "campaign3-p6-precommitment-v1"
 CONTROL_RECORD_SCHEMA = "campaign3-p6-control-freeze-v1"
+TB_SELECTION_SCHEMA = "campaign3-tb-selection-v1"
 
 # ---------------------------------------------------------------------------
 # errors
@@ -511,6 +512,60 @@ def _decision_kind(payload: Mapping[str, Any] | None) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _is_campaign3_campaign_record(record: KnowledgeRecord) -> bool:
+    """True only for this run's CAMPAIGN precommitment HUMAN decision.
+
+    The production K-PIT already holds Campaign-1/2 HUMAN_DECISION records; a
+    prior ``campaign_precommitment`` mapping must never be mistaken for
+    Campaign-3's.  The Campaign-3 record is identified by its payload schema
+    alone (the C3-R-R3 repair of an over-broad first-match lookup).
+    """
+    if record.kind is not RecordKind.HUMAN_DECISION:
+        return False
+    campaign = record.payload.get("campaign_precommitment")
+    return (
+        isinstance(campaign, Mapping)
+        and campaign.get("schema") == CAMPAIGN_RECORD_SCHEMA
+    )
+
+
+def _is_campaign3_control_record(
+    record: KnowledgeRecord,
+    campaign_record: KnowledgeRecord | None = None,
+) -> bool:
+    """True only for this run's HUMAN-channel control ``HYPOTHESIS_FREEZE``.
+
+    The production K-PIT already holds seven Campaign-1 HUMAN
+    ``HYPOTHESIS_FREEZE`` records whose payload is ``factor_spec_hash`` +
+    ``hypothesis_id`` only; the Campaign-3 control is identified by its payload
+    schema, and (when present) by the binding to the Campaign-3 CAMPAIGN
+    record hash.
+    """
+    if record.kind is not RecordKind.HYPOTHESIS_FREEZE:
+        return False
+    if record.channel is not Channel.HUMAN:
+        return False
+    payload = record.payload
+    if payload.get("schema") != CONTROL_RECORD_SCHEMA:
+        return False
+    if campaign_record is not None:
+        bound = payload.get("campaign_record_hash")
+        if bound is not None and bound != campaign_record.record_hash:
+            return False
+    return True
+
+
+def _is_campaign3_tb_selection_record(record: KnowledgeRecord) -> bool:
+    """True only for this run's TB_SELECTION HUMAN decision."""
+    if record.kind is not RecordKind.HUMAN_DECISION:
+        return False
+    selection = record.payload.get("tb_selection")
+    return (
+        isinstance(selection, Mapping)
+        and selection.get("schema") == TB_SELECTION_SCHEMA
+    )
+
+
 def verify_kpit_ordering(
     log_path: Path | str,
     *,
@@ -537,25 +592,21 @@ def verify_kpit_ordering(
                 terminal.head_hash,
             )
     campaign = [
-        record
-        for record in records
-        if record.kind is RecordKind.HUMAN_DECISION
-        and isinstance(record.payload.get("campaign_precommitment"), Mapping)
-    ]
-    control = [
-        record
-        for record in records
-        if record.kind is RecordKind.HYPOTHESIS_FREEZE
-        and record.channel is Channel.HUMAN
+        record for record in records if _is_campaign3_campaign_record(record)
     ]
     generator = [
         record for record in records if record.channel is Channel.GENERATOR
     ]
     if len(campaign) != 1:
         return KpitPreflight(False, "CAMPAIGN precommitment must appear exactly once")
+    campaign_record = campaign[0]
+    control = [
+        record
+        for record in records
+        if _is_campaign3_control_record(record, campaign_record)
+    ]
     if len(control) != 1:
         return KpitPreflight(False, "the control freeze must appear exactly once")
-    campaign_record = campaign[0]
     control_record = control[0]
     if control_record.seq <= campaign_record.seq:
         return KpitPreflight(False, "the control freeze precedes the CAMPAIGN record")
@@ -694,9 +745,7 @@ def campaign_precommitment_content(
 
 def _existing_campaign_record(log: KnowledgeLog) -> KnowledgeRecord | None:
     for record in log.read():
-        if record.kind is not RecordKind.HUMAN_DECISION:
-            continue
-        if isinstance(record.payload.get("campaign_precommitment"), Mapping):
+        if _is_campaign3_campaign_record(record):
             return record
     return None
 
@@ -731,11 +780,21 @@ def write_campaign_precommitment(
     )
 
 
-def _existing_control_record(log: KnowledgeLog) -> KnowledgeRecord | None:
+def _existing_control_record(
+    log: KnowledgeLog,
+    campaign_record: KnowledgeRecord | None = None,
+) -> KnowledgeRecord | None:
     for record in log.read():
-        if record.kind is RecordKind.HYPOTHESIS_FREEZE and record.channel is (
-            Channel.HUMAN
-        ):
+        if _is_campaign3_control_record(record, campaign_record):
+            return record
+    return None
+
+
+def _existing_tb_selection_record(
+    log: KnowledgeLog,
+) -> KnowledgeRecord | None:
+    for record in log.read():
+        if _is_campaign3_tb_selection_record(record):
             return record
     return None
 
@@ -747,9 +806,11 @@ def write_control_freeze(
     control: ControlHypothesis = CONTROL,
 ) -> KnowledgeRecord:
     """Append the HUMAN-channel control ``HYPOTHESIS_FREEZE`` (idempotent)."""
-    existing = _existing_control_record(log)
+    existing = _existing_control_record(log, campaign_record)
     if existing is not None:
         if existing.payload.get("hypothesis_id") != control.hypothesis_id:
+            raise C3GovernanceConflict("an existing control freeze differs")
+        if existing.payload.get("factor_spec_hash") != control_factor_hash(control):
             raise C3GovernanceConflict("an existing control freeze differs")
         return existing
     return log.append(
@@ -762,6 +823,7 @@ def write_control_freeze(
             "sign": int(control.sign),
             "control": True,
             "schema": CONTROL_RECORD_SCHEMA,
+            "campaign_record_hash": campaign_record.record_hash,
         },
         refs={"influenced_by": (campaign_record.record_hash,)},
     )
@@ -1720,15 +1782,27 @@ def write_tb_selection_record(
     """
     payload = selection.to_content()
     payload.setdefault("record_type", "TB_SELECTION")
+    decision_payload = {
+        "decision_kind": "OTHER",
+        "actor_role": "OPERATOR",
+        "consulted_all_prior": True,
+        "tb_selection": payload,
+    }
+    # Scope the idempotency lookup to the Campaign-3 TB_SELECTION schema: a
+    # prior campaign's ``tb_selection`` record must never be mistaken for this
+    # run's write-ahead.  A partial resume re-uses the record it already wrote
+    # rather than appending a duplicate.
+    existing = _existing_tb_selection_record(log)
+    if existing is not None:
+        if _jsonable(dict(existing.payload)) != _jsonable(decision_payload):
+            raise C3GovernanceConflict(
+                "an existing TB_SELECTION record has different content"
+            )
+        return existing
     return log.append(
         kind=RecordKind.HUMAN_DECISION,
         channel=Channel.HUMAN,
-        payload={
-            "decision_kind": "OTHER",
-            "actor_role": "OPERATOR",
-            "consulted_all_prior": True,
-            "tb_selection": payload,
-        },
+        payload=decision_payload,
     )
 
 
