@@ -1,0 +1,74 @@
+[
+ {
+  "id": "R7R-M1",
+  "description": "terminal listing status hard-coded to the development boundary instead of fold.end",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "            if listed_end <= fold_end:",
+    "new": "            if listed_end <= DEVELOPMENT_END:"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_reserve_member_terminal_evidence_uses_fold_end"
+ },
+ {
+  "id": "R7R-M2",
+  "description": "label purge boundary off by one at fold.end (endpoint == C purged)",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "        if e > fold_end:",
+    "new": "        if e >= fold_end:"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_reserve_purge_and_crossing_at_fold_end"
+ },
+ {
+  "id": "R7R-M3",
+  "description": "the horizon table ignores the fold hmax and hard-codes HMAX",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "        for h in range(1, hmax + 1):\n            endpoint = sessions[pos[f] + h]",
+    "new": "        for h in range(1, HMAX + 1):\n            endpoint = sessions[pos[f] + h]"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_reserve_hmax_21_limits_horizons_and_labels"
+ },
+ {
+  "id": "R7R-M4",
+  "description": "POST_TERMINAL daily status hard-coded to the development boundary",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "        if key.listed_end <= fold_end and s > key.listed_end:",
+    "new": "        if key.listed_end <= DEVELOPMENT_END and s > key.listed_end:"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_reserve_post_terminal_daily_status"
+ },
+ {
+  "id": "R7R-M5",
+  "description": "the AccessGrant gate defence is removed from build_returns_fold",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):\n        # Defense in depth: R7-U's FoldWindow already refuses this at\n        # construction.  Re-check here so a forged grantless reserve fold is\n        # denied before any path is opened.\n        raise ReserveAccessDenied(\n            \"a reserve returns-fold derivation requires an AccessGrant; \"\n            \"refusing before any path is opened\"\n        )",
+    "new": "    if False:  # mutation R7R-M5: gate defence removed\n        pass"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_grantless_forged_reserve_fold_denied_before_open"
+ },
+ {
+  "id": "R7R-M6",
+  "description": "horizons.crosses_reserve off by one at fold.end (endpoint == C crosses)",
+  "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
+  "edits": [
+   {
+    "old": "            records.append([f, h, endpoint, endpoint > fold_end])",
+    "new": "            records.append([f, h, endpoint, endpoint >= fold_end])"
+   }
+  ],
+  "test": "tests/test_reserve_chain_returns.py::test_reserve_purge_and_crossing_at_fold_end"
+ }
+]
