@@ -94,5 +94,17 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_policy_requires_a_generator_prompt_hash"
+ },
+ {
+  "id": "R-M9",
+  "description": "the dataset_id literal is written into the CAMPAIGN K-PIT payload",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        \"bindings\": bindings.to_kpit_content(),",
+    "new": "        \"bindings\": bindings.to_content(),"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_no_kpit_record_contains_the_v1_2_dataset_id_literal"
  }
 ]

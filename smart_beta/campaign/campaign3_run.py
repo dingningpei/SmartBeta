@@ -309,6 +309,21 @@ class Campaign3Bindings:
             "partition_id": self.partition_id,
         }
 
+    def to_kpit_content(self) -> dict[str, Any]:
+        """The K-PIT-safe bindings view: identity hashes/ids, no ``dataset_id``.
+
+        Governance note ``docs/campaign3_kpit_dataset_reference_note.md``:
+        the literal ``discovery_dataset_v1_2`` must never appear in a
+        Campaign-3 K-PIT record (it would permanently break the pinned
+        ``quarantine.verify_dataset_v1_2_identity`` scan).  The dataset is
+        bound by its identity hash; ``verify_bindings`` still checks the
+        ``dataset_id`` locally.
+        """
+        content = self.to_content()
+        content.pop("dataset_id", None)
+        content["dataset_id_reference"] = "identity_hash_only"
+        return content
+
     @property
     def content_hash(self) -> str:
         return content_hash(self.to_content())
@@ -655,7 +670,7 @@ def campaign_precommitment_content(
         "record_type": CAMPAIGN_RECORD_TYPE,
         "precommitment_sha256": precommitment_sha256,
         "a2_sha256": a2_sha256,
-        "bindings": bindings.to_content(),
+        "bindings": bindings.to_kpit_content(),
         "bindings_hash": bindings.content_hash,
         "control": control.to_content(),
         "control_factor_hash": control_factor_hash(control),

@@ -796,8 +796,9 @@ def test_policy_requires_a_generator_prompt_hash(tmp_path):
         )
 
 
-def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
-    budget = 5
+def _real_c3s_run(
+    tmp_path: Path, *, budget: int = 5
+) -> tuple[R.Campaign3RunResult, KnowledgeLog]:
     log = KnowledgeLog(tmp_path / "kpit.jsonl")
     runner = R.Campaign3Run(
         bindings=_bindings(),
@@ -813,7 +814,11 @@ def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
         admission_records=[scr.admission_record()],
     )
     runner.launch_terminal = R.pin_kpit_terminal(log.path)
-    result = runner.run()
+    return runner.run(), log
+
+
+def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
+    result, log = _real_c3s_run(tmp_path)
 
     assert result.stop_reason == G.Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED.value
     report = dict(result.screen_report or {})
@@ -842,6 +847,32 @@ def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
     assert (screen_dir / "campaign3_screen_report.md").is_file()
 
 
+def test_no_kpit_record_contains_the_v1_2_dataset_id_literal(tmp_path):
+    """Kills mutation R-M9 (the dataset_id literal written to K-PIT).
+
+    ``quarantine.verify_dataset_v1_2_identity`` fails if any K-PIT record's
+    canonical JSON contains ``quarantine.DATASET_ID``; the CAMPAIGN payload
+    therefore references Dataset v1.2 by identity hash only.
+    """
+    from smart_beta.dataset_v1 import quarantine as _quarantine
+
+    _, log = _real_c3s_run(tmp_path)
+    records = log.read()
+    assert records
+    for record in records:
+        assert _quarantine.DATASET_ID not in _canonical(
+            record.to_dict()
+        ), f"record {record.kind.value} leaks the v1.2 literal"
+    # The CAMPAIGN payload still binds the exact identity hash.
+    campaign = _campaign_records(log)[0]
+    bindings_view = campaign.payload["campaign_precommitment"]["bindings"]
+    assert bindings_view["dataset_identity_hash"] == (
+        R.EXPECTED_DATASET_IDENTITY_HASH
+    )
+    assert bindings_view["dataset_id_reference"] == "identity_hash_only"
+    assert "dataset_id" not in bindings_view
+
+
 # ---------------------------------------------------------------------------
 # 10. mutation fixture integrity
 # ---------------------------------------------------------------------------
@@ -850,7 +881,9 @@ def test_run_screen_end_to_end_through_the_real_c3s(tmp_path):
 def test_mutations_fixture_is_wellformed():
     entries = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
     ids = {entry["id"] for entry in entries}
-    assert {"R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8"} <= ids
+    assert {
+        "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8", "R-M9"
+    } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
         assert target.is_file(), entry["file"]
