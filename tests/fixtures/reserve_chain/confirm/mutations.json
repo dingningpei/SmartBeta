@@ -1,0 +1,134 @@
+[
+ {
+  "id": "R7X-M1",
+  "description": "the admitted-procedure identity check in AccessGrant.from_kpit is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/access.py",
+  "edits": [
+   {
+    "old": "            procedure_id != ADMITTED_PROCEDURE_ID",
+    "new": "            False  # mutation R7X-M1: admitted-procedure identity not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_access_grant_denies_wrong_procedure"
+ },
+ {
+  "id": "R7X-M2",
+  "description": "the exact reserve_chain module source-hash check is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/access.py",
+  "edits": [
+   {
+    "old": "        if declared_modules != current_modules:",
+    "new": "        if False:  # mutation R7X-M2: module source hashes not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_access_grant_denies_module_mismatch"
+ },
+ {
+  "id": "R7X-M3",
+  "description": "the single-use ledger check in AccessGrant.from_kpit is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/access.py",
+  "edits": [
+   {
+    "old": "        if consumption_record_hash(records, hypothesis_id) is not None:",
+    "new": "        if False:  # mutation R7X-M3: single-use ledger not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_single_use_ledger"
+ },
+ {
+  "id": "R7X-M4",
+  "description": "confirmation ignores the P-Q L envelope and accepts B only",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    \"\"\"The frozen decision: confirmation requires the P-Q L envelope too.\"\"\"\n    return True",
+    "new": "    \"\"\"The frozen decision: confirmation requires the P-Q L envelope too.\"\"\"\n    return False  # mutation R7X-M4: L envelope ignored (B-only)"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_requires_l_envelope"
+ },
+ {
+  "id": "R7X-M5",
+  "description": "a non-admitted (INVALID) dispatch is accepted as passing",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "def _cell_passed(result: InferenceResult, bound_alpha: float) -> bool:\n    \"\"\"The one-sided EWC gate: a VALID dispatch significant at ``bound_alpha``.\"\"\"\n    if result.status is not InferenceStatus.VALID:\n        return False\n    if result.p_one_sided is None:\n        return False\n    return bool(float(result.p_one_sided) <= float(bound_alpha))",
+    "new": "def _cell_passed(result: InferenceResult, bound_alpha: float) -> bool:\n    \"\"\"The one-sided EWC gate: a VALID dispatch significant at ``bound_alpha``.\"\"\"\n    return True  # mutation R7X-M5: any dispatch accepted, admitted or not"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_rejects_non_admitted_procedure"
+ },
+ {
+  "id": "R7X-M6",
+  "description": "the one-hypothesis guard is bypassed so another hypothesis is computed",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    if certified != hypothesis_id:",
+    "new": "    if False:  # mutation R7X-M6: a second hypothesis may be computed"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_refuses_second_hypothesis"
+ },
+ {
+  "id": "R7X-M7",
+  "description": "the reserve fold-window check in AccessGrant.from_kpit is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/access.py",
+  "edits": [
+   {
+    "old": "        if fold_start != _RESERVE_START:",
+    "new": "        if False:  # mutation R7X-M7: reserve fold window not enforced"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_access_grant_denies_wrong_fold_start"
+ },
+ {
+  "id": "R7X-M8",
+  "description": "the K-PIT record-kind check in AccessGrant.from_kpit is bypassed",
+  "file": "smart_beta/dataset_v1/reserve_chain/access.py",
+  "edits": [
+   {
+    "old": "        if _record_kind(record) != RecordKind.ACCESS.value:\n            raise ReserveAccessDenied(\n                \"the access record is not a K-PIT ACCESS record\"\n            )",
+    "new": "        if False:  # mutation R7X-M8: record kind not enforced\n            raise ReserveAccessDenied(\n                \"the access record is not a K-PIT ACCESS record\"\n            )"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_access_grant_denies_non_access_record"
+ },
+ {
+  "id": "R7X-M9",
+  "description": "the write-ahead single-use consumption append is removed",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    consumed = log.append(\n        kind=RecordKind.ACCESS,\n        channel=Channel.SYSTEM,\n        program_id=program_id,\n        payload=build_consumption_payload(\n            artifact_record_hash=grant.artifact_record_hash,\n            hypothesis_id=hypothesis_id,\n        ),\n    )\n    consumed_record_hash = consumed.record_hash",
+    "new": "    # mutation R7X-M9: write-ahead consumption append removed\n    consumed_record_hash = \"0\" * 64"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_write_ahead_consumption_survives_derive_failure"
+ },
+ {
+  "id": "R7X-M10",
+  "description": "a development-fold diagnostics is accepted by the reserve confirmation",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    diag_fold = getattr(diagnostics, \"fold\", None)\n    if diag_fold is not None and getattr(diag_fold, \"is_development\", False):",
+    "new": "    diag_fold = getattr(diagnostics, \"fold\", None)\n    if False:  # mutation R7X-M10: development fold not refused"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_refuses_development_fold"
+ },
+ {
+  "id": "R7X-M11",
+  "description": "a not-assessed reserve diagnostics is accepted by the confirmation",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    if getattr(diagnostics, \"not_assessed\", None) is not None:",
+    "new": "    if False:  # mutation R7X-M11: not-assessed diagnostics accepted"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_refuses_not_assessed"
+ }
+]
