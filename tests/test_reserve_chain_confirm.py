@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from smart_beta.dataset_v1 import pqv2_core as C
+from smart_beta.dataset_v1.pqv2_series import SeriesBindingError
 from smart_beta.dataset_v1.reserve_chain import (
     AccessGrant,
     FoldWindow,
@@ -37,6 +38,7 @@ from smart_beta.dataset_v1.reserve_chain.confirm import (
     ConfirmationRefused,
     ConfirmationStore,
     ReserveDerivation,
+    ReservePQv2Result,
     derive_reserve_fold_inputs,
     pqv2_reserve_builder,
     required_cell_names,
@@ -130,7 +132,10 @@ def _log_with_access(tmp_path, **kwargs):
     return log, artifact, access
 
 
-def _run(log, access_hash, *, diagnostics, **overrides):
+def _run(log, access_hash, *, diagnostics, export=None, **overrides):
+    if export is None:
+        export = S.series_export(diagnostics)
+    evaluation = ReservePQv2Result(diagnostics=diagnostics, series=export)
     return run_confirmation(
         log=log,
         access_record_hash=access_hash,
@@ -141,7 +146,7 @@ def _run(log, access_hash, *, diagnostics, **overrides):
         admission_records=overrides.pop("admission_records", [S.admission_record()]),
         derive_inputs=overrides.pop("derive_inputs", lambda fold: {"ok": True}),
         build_diagnostics=overrides.pop(
-            "build_diagnostics", lambda fold, inputs: diagnostics
+            "build_diagnostics", lambda fold, inputs: evaluation
         ),
         store=overrides.pop("store", None),
         inference_runner=overrides.pop("inference_runner", run_inference),
@@ -288,6 +293,105 @@ def test_run_confirmation_all_event_combinations(tmp_path: Path) -> None:
         event_scenarios=("K0", "K1"), values={"B-TS-K1": S.NEGATIVE}
     )
     assert _run(log2, access2.record_hash, diagnostics=diag2).confirmation is False
+
+
+# ---------------------------------------------------------------------------
+# 2b. inference reads the pqv2_series export, never cell.period_values (P6-E1)
+# ---------------------------------------------------------------------------
+
+
+def test_b_and_l_dispatch_the_exported_series(tmp_path: Path) -> None:
+    """B and L are dispatched on the exported series, not the envelope.
+
+    The synthetic case has B's finite-period index strictly shorter than the
+    envelope (an inadmissible first formation) and an observed B series that
+    differs from the restricted envelope.  The test captures the actual
+    ``InferenceRequest`` series: B must carry ``b_series`` and L ``l_series``
+    over B's finite-period index -- never ``cell.period_values``.
+    """
+    log, _artifact, access = _log_with_access(tmp_path)
+    diag, export = S.nan_b_case()
+    requests: list = []
+
+    def _spy(request, registry, admission_records):
+        requests.append(request)
+        return run_inference(request, registry, admission_records)
+
+    result = _run(
+        log,
+        access.record_hash,
+        diagnostics=diag,
+        export=export,
+        inference_runner=_spy,
+    )
+    names = list(required_cell_names(diag))
+    by_name = dict(zip(names, requests))
+    assert len(requests) == len(names)
+
+    for name in ("B-T0", "B-TS"):
+        record = export[name]
+        cell = diag.cell(name)
+        assert cell is not None
+        # The export is the strict B finite index, the envelope is longer.
+        assert len(record.b_series) < len(cell.period_values)
+        assert tuple(record.b_series) != tuple(cell.period_values)
+        assert tuple(by_name[name].series.index) == tuple(record.periods)
+        assert tuple(by_name[name].series.values) == tuple(record.b_series)
+
+    for name in ("L-T0", "L-TS"):
+        record = export[name]
+        cell = diag.cell(name)
+        assert cell is not None
+        assert len(record.l_series) < len(cell.period_values)
+        assert tuple(record.l_series) != tuple(cell.period_values)
+        assert tuple(by_name[name].series.index) == tuple(record.periods)
+        assert tuple(by_name[name].series.values) == tuple(record.l_series)
+
+    # B and L really are different series in this case.
+    assert export["B-T0"].b_series != export["B-T0"].l_series
+    passed = {item.cell: item.passed for item in result.cells}
+    assert passed == {"B-T0": True, "B-TS": True, "L-T0": False, "L-TS": False}
+    assert result.confirmation is False
+
+
+def test_confirmation_refuses_an_unbound_exported_series(tmp_path: Path) -> None:
+    """A series that does not reproduce its cell fails the binding gate (P6-E1)."""
+    log, _artifact, access = _log_with_access(tmp_path)
+    diag, export = S.nan_b_case()
+    records = []
+    for record in export.records:
+        if record.cell == "B-T0":
+            record = dataclasses.replace(
+                record, b_series=tuple(value + 1.0 for value in record.b_series)
+            )
+        records.append(record)
+    tampered = dataclasses.replace(export, records=tuple(records))
+    with pytest.raises(SeriesBindingError):
+        _run(log, access.record_hash, diagnostics=diag, export=tampered)
+
+
+def test_confirmation_refuses_an_export_of_another_diagnostics(
+    tmp_path: Path,
+) -> None:
+    """The export must be bound to exactly the diagnostics being assessed."""
+    log, _artifact, access = _log_with_access(tmp_path)
+    diag = S.diagnostics()
+    export = dataclasses.replace(S.series_export(diag), diagnostics_hash="0" * 64)
+    with pytest.raises(SeriesBindingError):
+        _run(log, access.record_hash, diagnostics=diag, export=export)
+
+
+def test_confirmation_needs_the_export(tmp_path: Path) -> None:
+    """A bare diagnostics (no pqv2_series export) is refused, not inferred on."""
+    log, _artifact, access = _log_with_access(tmp_path)
+    diag = S.diagnostics()
+    with pytest.raises(ConfirmationRefused):
+        _run(
+            log,
+            access.record_hash,
+            diagnostics=diag,
+            build_diagnostics=lambda fold, inputs: diag,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -472,8 +576,9 @@ def test_required_cell_names() -> None:
 
 
 def test_pqv2_reserve_builder_converts_the_fold(monkeypatch, tmp_path: Path) -> None:
-    """The real P-Q builder receives the converted reserve Fold exactly once."""
+    """The real P-Q build and its series export receive the converted fold."""
     from smart_beta.dataset_v1 import pqv2_evaluation as E
+    from smart_beta.dataset_v1 import pqv2_series as PS
 
     seen: dict[str, object] = {}
 
@@ -492,7 +597,25 @@ def test_pqv2_reserve_builder_converts_the_fold(monkeypatch, tmp_path: Path) -> 
         seen["fold"] = fold
         return "diagnostics"
 
+    def _fake_export(
+        root,
+        declaration,
+        factor_spec,
+        factor_panel,
+        partition,
+        *,
+        diagnostics,
+        overlay,
+        inputs,
+        fold,
+        **kwargs,
+    ):
+        seen["export_fold"] = fold
+        seen["export_diagnostics"] = diagnostics
+        return "series"
+
     monkeypatch.setattr(E, "build_pqv2_diagnostics", _fake)
+    monkeypatch.setattr(PS, "export_series", _fake_export)
     build = pqv2_reserve_builder(
         root=tmp_path,
         declaration="declaration",
@@ -504,8 +627,15 @@ def test_pqv2_reserve_builder_converts_the_fold(monkeypatch, tmp_path: Path) -> 
     )
     grant = S.verified_grant(hypothesis_id=_HYP)
     fold = FoldWindow.reserve(S.RESERVE_END, grant=grant)
-    assert build(fold, None) == "diagnostics"
+    result = build(fold, None)
+    assert isinstance(result, ReservePQv2Result)
+    assert result.diagnostics == "diagnostics"
+    assert result.series == "series"
     assert seen["fold"] == C.Fold("reserve", S.RESERVE_START, S.RESERVE_END)
+    assert seen["export_fold"] == C.Fold(
+        "reserve", S.RESERVE_START, S.RESERVE_END
+    )
+    assert seen["export_diagnostics"] == "diagnostics"
 
 
 def test_derive_reserve_fold_inputs_wires_the_builders(monkeypatch, tmp_path: Path) -> None:
@@ -581,6 +711,12 @@ def test_mutation_fixture_contract() -> None:
         for mutation in mutations
         if mutation["id"] in {"R7X-M_forge_stub", "R7X-M_forge_access"}
     ] == ["R7X-M_forge_stub", "R7X-M_forge_access"]
+    assert {
+        mutation["id"]
+        for mutation in mutations
+        if mutation["id"]
+        in {"R7X-M_bseries", "R7X-M_lindex", "R7X-M_bind"}
+    } == {"R7X-M_bseries", "R7X-M_lindex", "R7X-M_bind"}
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"].startswith("smart_beta/"), mutation["id"]
