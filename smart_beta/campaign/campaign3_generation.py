@@ -27,7 +27,10 @@ order, with P-Q v2.3 as the evaluation authority::
 * write-ahead ``GenerationEvent`` before normalization;
 * registration and K-PIT freeze before any evaluation;
 * no hidden retry (a crash after persist -> reconcile, no extra candidate);
-* the budget counts **every** event (NOT_CERTIFIED and duplicates included);
+* the budget counts **every candidate entry** normalization yields (admitted,
+  NOT_CERTIFIED, duplicate/non-novel and invalid all count); a zero-entry
+  artifact counts as 1, and the surplus of the budget-closing call is
+  recorded as ``BUDGET_TRUNCATED`` in response order (erratum P5-E1);
 * the generator-visible history contains **only** T-A (IS) evidence;
 * NOT_CERTIFIED / invalid output -> recorded rejection, never silently
   resampled.
@@ -54,10 +57,12 @@ from smart_beta.campaign.campaign3_eval import TaEvaluation, certify_candidate, 
 from smart_beta.dataset_v1 import pqv2_events as _events
 from smart_beta.experiment.registry import canonical_json
 from smart_beta.research.generator import (
+    CandidateOutcome,
     CandidateRejectionReason,
     GenerationEvent,
     GeneratorBoundary,
     HoldoutFirewallError,
+    NormalizationOutcome,
     RawArtifact,
 )
 from smart_beta.research.history import (
@@ -104,6 +109,7 @@ __all__ = [
     "Campaign3GeneratorFailure",
     # value objects
     "GenerationOutput",
+    "BudgetTruncatedCandidate",
     "Campaign3StopReason",
     "Campaign3RunManifest",
     "Campaign3RunResult",
@@ -455,8 +461,67 @@ def _derive_id(domain: str, *parts: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# budget plan (erratum P5-E1: the budget unit is the candidate)
+# ---------------------------------------------------------------------------
+
+
+def _assert_response_order(entries: Sequence[Any]) -> None:
+    """Verify that normalized candidates preserve raw response order.
+
+    Erratum P5-E1 truncates the surplus of the budget-closing call in
+    **response order**. ``NormalizationOutcome`` already enforces contiguous
+    ``raw_index`` values; this is the explicit fail-closed check the erratum
+    requires (a violation is STOP-and-report, never a silent reordering).
+    """
+    for expected, candidate in enumerate(entries):
+        if candidate.raw_index != expected:
+            raise Campaign3ConfigurationError(
+                "normalized candidates do not preserve response order: position "
+                f"{expected} carries raw_index {candidate.raw_index}"
+            )
+
+
+def _split_response_order(
+    entries: Sequence[Any], allowed_count: int
+) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    """Split response-ordered candidate entries into (processed, surplus)."""
+    return tuple(entries[:allowed_count]), tuple(entries[allowed_count:])
+
+
+@dataclass(frozen=True)
+class _EventBudgetPlan:
+    """The once-only budget charge for one persisted generation event."""
+
+    allowed: tuple[Any, ...]
+    counted: int
+
+
+# ---------------------------------------------------------------------------
 # manifest / result
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BudgetTruncatedCandidate:
+    """One candidate entry omitted because the proposal budget was reached.
+
+    Erratum P5-E1: the entry is **not** registered, certified, frozen or
+    evaluated; its raw artifact stays persisted on the owning
+    ``GenerationEvent``.
+    """
+
+    event_id: str
+    raw_index: int
+    factor_spec_hash: str | None = None
+    disposition: str = "BUDGET_TRUNCATED"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "raw_index": self.raw_index,
+            "factor_spec_hash": self.factor_spec_hash,
+            "disposition": self.disposition,
+        }
 
 
 @dataclass(frozen=True)
@@ -464,6 +529,8 @@ class Campaign3RunManifest:
     """The frozen C3-X run manifest (spec section 4 "Outputs")."""
 
     n_used: int
+    n_calls: int
+    n_budget_truncated: int
     n_proposals: int
     n_certified: int
     n_not_certified: int
@@ -478,6 +545,7 @@ class Campaign3RunManifest:
     proposal_ids: tuple[str, ...]
     kpit_record_hashes: tuple[str, ...]
     diagnostics_hashes: tuple[str, ...]
+    budget_truncated: tuple[BudgetTruncatedCandidate, ...]
     registry_snapshot_hash: str
     history_hash: str
     policy_hash: str
@@ -485,6 +553,8 @@ class Campaign3RunManifest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "n_used": self.n_used,
+            "n_calls": self.n_calls,
+            "n_budget_truncated": self.n_budget_truncated,
             "n_proposals": self.n_proposals,
             "n_certified": self.n_certified,
             "n_not_certified": self.n_not_certified,
@@ -499,6 +569,7 @@ class Campaign3RunManifest:
             "proposal_ids": list(self.proposal_ids),
             "kpit_record_hashes": list(self.kpit_record_hashes),
             "diagnostics_hashes": list(self.diagnostics_hashes),
+            "budget_truncated": [item.to_dict() for item in self.budget_truncated],
             "registry_snapshot_hash": self.registry_snapshot_hash,
             "history_hash": self.history_hash,
             "policy_hash": self.policy_hash,
@@ -559,6 +630,14 @@ class Campaign3Executor:
     _generator_calls: int = 0
     _failed_calls: int = 0
     _failed_call_tokens: int = 0
+    _used: int = 0
+    _truncated: int = 0
+    _event_plans: dict[str, _EventBudgetPlan] = field(
+        default_factory=dict, repr=False
+    )
+    _truncated_candidates: list[BudgetTruncatedCandidate] = field(
+        default_factory=list, repr=False
+    )
     _stop_reason: Campaign3StopReason | None = None
 
     def __post_init__(self) -> None:
@@ -708,15 +787,57 @@ class Campaign3Executor:
                 )
             except HoldoutFirewallError as exc:  # pragma: no cover - structural
                 raise Campaign3FirewallError(str(exc)) from exc
+        allowed = self._plan_for_event(event, outcome)
         self._hook("after_normalize_before_register")
-        for candidate in outcome.candidates:
+        for candidate in allowed:
             if candidate.reason in (
                 CandidateRejectionReason.EXACT_SYNTACTIC_DUPLICATE,
                 CandidateRejectionReason.NON_NOVEL,
             ):
                 self._duplicate_proposals.add(event.event_id)
-        for candidate in outcome.admitted_candidates:
-            self._process_candidate(event, candidate.proposal)
+        for candidate in allowed:
+            if candidate.admitted:
+                self._process_candidate(event, candidate.proposal)
+
+    def _plan_for_event(
+        self, event: GenerationEvent, outcome: NormalizationOutcome
+    ) -> tuple[CandidateOutcome, ...]:
+        """Charge one event's candidate entries against the budget exactly once.
+
+        Erratum P5-E1: the proposal budget counts candidate **entries**, not
+        events. The entries are processed in response order; when they would
+        push the count past the budget, only the first ``budget - used`` are
+        returned and the surplus is recorded as ``BUDGET_TRUNCATED``. A
+        zero-entry artifact (malformed or an empty candidate list) counts as 1.
+        The plan is cached by ``event_id`` so a reconcile after a crash between
+        entries never double counts.
+        """
+        cached = self._event_plans.get(event.event_id)
+        if cached is not None:
+            return cached.allowed
+        entries = outcome.candidates
+        _assert_response_order(entries)
+        if entries:
+            remaining = self.policy.max_proposal_budget - self._used
+            allowed_count = min(len(entries), max(remaining, 0))
+        else:
+            allowed_count = 0
+        allowed, surplus = _split_response_order(entries, allowed_count)
+        counted = len(allowed) if entries else 1
+        self._used += counted
+        self._truncated += len(surplus)
+        for candidate in surplus:
+            self._truncated_candidates.append(
+                BudgetTruncatedCandidate(
+                    event_id=event.event_id,
+                    raw_index=candidate.raw_index,
+                    factor_spec_hash=candidate.factor_spec_hash,
+                )
+            )
+        self._event_plans[event.event_id] = _EventBudgetPlan(
+            allowed=allowed, counted=counted
+        )
+        return allowed
 
     def _process_candidate(self, event: GenerationEvent, proposal: Any) -> None:
         proposal_id = proposal.proposal_id
@@ -847,7 +968,7 @@ class Campaign3Executor:
 
     # -- run -------------------------------------------------------------
     def _budget_stop(self) -> Campaign3StopReason | None:
-        if len(self._events) >= self.policy.max_proposal_budget:
+        if self._used >= self.policy.max_proposal_budget:
             return Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED
         if self._tokens_used >= self.policy.max_llm_token_budget:
             return Campaign3StopReason.LLM_TOKEN_BUDGET_EXHAUSTED
@@ -885,7 +1006,9 @@ class Campaign3Executor:
         if self.kpit is not None:
             kpit_hashes = self.kpit.record_hashes()
         return Campaign3RunManifest(
-            n_used=len(self._events),
+            n_used=self._used,
+            n_calls=self._generator_calls,
+            n_budget_truncated=self._truncated,
             n_proposals=len(self.registry),
             n_certified=sum(
                 1 for item in self._certified.values() if is_certified(item)
@@ -904,6 +1027,7 @@ class Campaign3Executor:
             proposal_ids=tuple(entry.proposal_id for entry in self.registry.entries),
             kpit_record_hashes=kpit_hashes,
             diagnostics_hashes=diagnostics_hashes,
+            budget_truncated=tuple(self._truncated_candidates),
             registry_snapshot_hash=self.registry.snapshot().snapshot_hash,
             history_hash=self._full_history().history_hash,
             policy_hash=self.policy.content_hash,
