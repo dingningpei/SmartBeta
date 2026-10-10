@@ -1,0 +1,110 @@
+[
+ {
+  "id": "R-M1",
+  "description": "the first generator call happens before the CAMPAIGN record",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        generation = self._generation_snapshot(journal)\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_campaign_record_precedes_first_generator_call"
+ },
+ {
+  "id": "R-M2",
+  "description": "the control is frozen after generation",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        generation = self._generation_snapshot(journal)\n        control_record = self._write_control_record(campaign_record)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_control_freeze_precedes_first_generator_call"
+ },
+ {
+  "id": "R-M3",
+  "description": "the preflight terminal is not checked",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        if self.launch_terminal is not None:\n            verify_kpit_terminal(self.knowledge_log.path, self.launch_terminal)",
+    "new": "        if False:  # mutation R-M3: the pinned terminal is not checked\n            verify_kpit_terminal(self.knowledge_log.path, self.launch_terminal)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_preflight_terminal_mismatch_stops"
+ },
+ {
+  "id": "R-M4",
+  "description": "a binding hash mismatch is accepted",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    if actual != expected:",
+    "new": "    if False:  # mutation R-M4: a binding hash mismatch is accepted"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_binding_hash_mismatch_is_rejected"
+ },
+ {
+  "id": "R-M5",
+  "description": "the T-A/T-B primary metric basis is reverted to GROSS",
+  "file": "smart_beta/campaign/campaign3_eval.py",
+  "edits": [
+   {
+    "old": "TA_METRIC_BASIS = \"turnover_cost_adjusted\"",
+    "new": "TA_METRIC_BASIS = \"GROSS\""
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_declarations_use_net_metric"
+ },
+ {
+  "id": "R-M6",
+  "description": "the implicit stub screen-runner fallback is restored (C3-R-R1)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    try:\n        module = importlib.import_module(\"smart_beta.campaign.campaign3_screen\")\n    except ImportError:\n        raise C3ConfigurationError(\n            \"campaign3_screen is not merged; the C3-S selection tier is \"\n            \"required and no implicit stub is accepted\"\n        ) from None",
+    "new": "    try:\n        module = importlib.import_module(\"smart_beta.campaign.campaign3_screen\")\n    except ImportError:\n        return stub_screen_runner"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_load_screen_runner_fail_closed_without_c3s"
+ },
+ {
+  "id": "R-M7",
+  "description": "the pqv2_series export loader returns None instead of failing closed (C3-R-R2)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    try:\n        module = importlib.import_module(\"smart_beta.dataset_v1.pqv2_series\")\n    except ImportError:\n        raise C3ConfigurationError(\n            \"pqv2_series is required by P6-E1 and is not importable\"\n        ) from None\n    exporter = getattr(module, \"export_series\", None)\n    if not callable(exporter):\n        raise C3ConfigurationError(\n            \"pqv2_series is present but exposes no export_series\"\n        )\n    return exporter",
+    "new": "    try:\n        module = importlib.import_module(\"smart_beta.dataset_v1.pqv2_series\")\n    except ImportError:\n        return None\n    return getattr(module, \"export_series\", None)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_load_export_series_fail_closed_on_import_error"
+ },
+ {
+  "id": "R-M8",
+  "description": "a generator with no prompt_template_hash is tolerated (C3-R-R2)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    prompt_hash = _generator_prompt_template_hash(generator)\n    if prompt_hash is None:\n        raise C3ConfigurationError(\n            \"the injected generator must expose a non-empty \"\n            \"prompt_template_hash (erratum A2-E2); the policy's v1 literal is \"\n            \"never used as a fallback\"\n        )\n    if policy.prompt_template_hash == prompt_hash:\n        return policy",
+    "new": "    prompt_hash = _generator_prompt_template_hash(generator)\n    if prompt_hash is None or policy.prompt_template_hash == prompt_hash:\n        return policy"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_policy_requires_a_generator_prompt_hash"
+ },
+ {
+  "id": "R-M9",
+  "description": "the dataset_id literal is written into the CAMPAIGN K-PIT payload",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        \"bindings\": bindings.to_kpit_content(),",
+    "new": "        \"bindings\": bindings.to_content(),"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_no_kpit_record_contains_the_v1_2_dataset_id_literal"
+ }
+]
