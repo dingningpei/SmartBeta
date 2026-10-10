@@ -89,3 +89,45 @@ allowlist network guard):
    failure; under the P4 / Phase-9 stopping policy the run **stops**
    (GENERATOR_FAILURE → RUN_INCOMPLETE). It is never retried, and no candidate is
    created.
+
+## Erratum A2-E2 (2026-10-10; user-approved: "批准") — prompt template v2
+
+**Evidence** (the N = 10 DeepSeek dry run at `bd23322`, plus an offline replay):
+- 2 calls returned 14 entries; exact-N truncation was correct (10 counted, 4
+  BUDGET_TRUNCATED);
+- **all 10 counted entries were rejected**:
+  - 12 of the 14 were `FAMILY_ESCAPE`: the model filled the prompt's optional
+    `intended_family_id` with invented names, while the policy binds the family by
+    PROGRAM_DECLARED;
+  - 2 were `INVALID_FACTOR_SPEC`: `units: "indicator"`, because the prompt gives no
+    per-role units.
+- Replaying the earlier run2 responses through the same code still admits 21/21, so this
+  is **not a code regression**.
+
+**Correction:**
+
+1. A **new** template file `smart_beta/research/prompts/campaign3_v2.txt` = v1 with exactly
+   two changes:
+   - (a) the `intended_family_id` line is removed from the OUTPUT FORMAT, plus one
+     sentence stating that the family is assigned by the program and that the field must
+     be omitted;
+   - (b) the role table states each role's required `observation_period` and `units`,
+     taken from the code's capabilities:
+
+     | Role | observation_period | units |
+     |---|---|---|
+     | `tri` | INSTANT | ratio |
+     | `ret` | PERIOD | fraction |
+     | `dv` | PERIOD | currency |
+     | `event_ear_k_kp1` | PERIOD | fraction |
+     | `event_days_since_ea` | INSTANT | count |
+     | `event_recent_ea_w<W>` | INSTANT | count |
+
+     Sources: `trusted_inputs.py:1338-1370`, `pqv2_events.py:812-826`.
+
+   The grammar, the feedback rendering, the history token and the firewall are
+   unchanged.
+2. `llm_generator_deepseek.py` renders with v2 (`render_prompt(…, template=v2_text)`) and
+   reports `prompt_template_hash` = SHA-256(v2 bytes). C3-G and v1 are unchanged.
+3. The Campaign-3 policy's `prompt_template_hash` is the DeepSeek generator's (v2) hash.
+4. Re-run the N = 10 dry run after the merge.
