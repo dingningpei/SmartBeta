@@ -83,12 +83,16 @@ AUTHORITY = _core.AUTHORITY_V2_3
 EVENT_SCENARIOS: tuple[str, ...] = tuple(_evaluation.EVENT_SCENARIOS)
 
 #: T-A search universe / evaluation literals (spec section 4). The TOP_1000
-#: cost review is a P5 item; P4 fixes them here.
+#: cost review is a P5 item; P4 fixes them here.  Erratum (planner, binding):
+#: the primary metric is the **NET** ``turnover_cost_adjusted`` metric (P4 §4
+#: "the B and L net long-short mean"; P5 D12 10 bps **net** gating), exactly
+#: as :data:`campaign2.PRIMARY_METRIC`.  The exported name is kept for the
+#: merged C3-E consumers; it holds the metric key, not the basis.
 TA_UNIVERSE = "TOP_1000"
 TA_N_GROUPS = 5
 TA_HORIZON = 21
 TA_COST_BPS = 10.0
-TA_METRIC_BASIS = "GROSS"
+TA_METRIC_BASIS = "turnover_cost_adjusted"
 
 
 class Campaign3EvaluationError(Exception):

@@ -1,0 +1,62 @@
+[
+ {
+  "id": "R-M1",
+  "description": "the first generator call happens before the CAMPAIGN record",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        generation = self._generation_snapshot(journal)\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_campaign_record_precedes_first_generator_call"
+ },
+ {
+  "id": "R-M2",
+  "description": "the control is frozen after generation",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        generation = self._generation_snapshot(journal)\n        control_record = self._write_control_record(campaign_record)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_control_freeze_precedes_first_generator_call"
+ },
+ {
+  "id": "R-M3",
+  "description": "the preflight terminal is not checked",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        if self.launch_terminal is not None:\n            verify_kpit_terminal(self.knowledge_log.path, self.launch_terminal)",
+    "new": "        if False:  # mutation R-M3: the pinned terminal is not checked\n            verify_kpit_terminal(self.knowledge_log.path, self.launch_terminal)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_preflight_terminal_mismatch_stops"
+ },
+ {
+  "id": "R-M4",
+  "description": "a binding hash mismatch is accepted",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    if actual != expected:",
+    "new": "    if False:  # mutation R-M4: a binding hash mismatch is accepted"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_binding_hash_mismatch_is_rejected"
+ },
+ {
+  "id": "R-M5",
+  "description": "the T-A/T-B primary metric basis is reverted to GROSS",
+  "file": "smart_beta/campaign/campaign3_eval.py",
+  "edits": [
+   {
+    "old": "TA_METRIC_BASIS = \"turnover_cost_adjusted\"",
+    "new": "TA_METRIC_BASIS = \"GROSS\""
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_declarations_use_net_metric"
+ }
+]
