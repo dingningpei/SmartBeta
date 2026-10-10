@@ -154,5 +154,41 @@
    }
   ],
   "test": "tests/test_reserve_chain_confirm.py::test_hand_built_access_grant_denied"
+ },
+ {
+  "id": "R7X-M_bseries",
+  "description": "the B inference series is read from the envelope cell.period_values instead of the pqv2_series export",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "        values = tuple(record.b_series)",
+    "new": "        values = tuple(cell.period_values)  # mutation R7X-M_bseries: B read from the envelope"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_b_and_l_dispatch_the_exported_series"
+ },
+ {
+  "id": "R7X-M_lindex",
+  "description": "the L inference series is not restricted to B's finite-period index (the full envelope is used)",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "        values = tuple(record.l_series)",
+    "new": "        values = tuple(cell.period_values)  # mutation R7X-M_lindex: L not restricted to B's index"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_b_and_l_dispatch_the_exported_series"
+ },
+ {
+  "id": "R7X-M_bind",
+  "description": "the pqv2_series export binding check is skipped in the confirmation executor",
+  "file": "smart_beta/dataset_v1/reserve_chain/confirm.py",
+  "edits": [
+   {
+    "old": "    if (\n        result.value != cell.value\n        or result.t_stat != cell.t_stat\n        or int(result.n_obs) != int(cell.n_obs)\n    ):",
+    "new": "    if False:  # mutation R7X-M_bind: export binding check skipped"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_confirmation_refuses_an_unbound_exported_series"
  }
 ]

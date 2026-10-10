@@ -20,10 +20,13 @@ The executor runs the design's pipeline **once**, for exactly one hypothesis:
    bindings/accessors; tests inject a synthetic derivation).
 4. **P-Q v2.4.** An injected ``build_diagnostics`` callable runs
    ``build_pqv2_diagnostics`` on the reserve ``Fold`` for the one hypothesis.
-5. **Inference.** Each required B/L x T0/TS (x K0/K1) cell's per-period net
-   long-short series is dispatched through ``science.inference.run_inference``
-   with the admitted procedure.  There is no substitute procedure and no
-   averaging across combinations.
+5. **Inference.** Each required B/L x T0/TS (x K0/K1) cell's per-period
+   series is read from the ``pqv2_series`` export (the observed D7b B series
+   and the envelope restricted to B's finite-period index) and dispatched
+   through ``science.inference.run_inference`` with the admitted procedure.
+   The diagnostics' ``period_values`` (the composed envelope for every cell,
+   P6-E1) are never read for inference.  There is no substitute procedure and
+   no averaging across combinations.
 6. **Assessment.** The per-cell inference results and the confirmation verdict
    are persisted (write-ahead state + assessment) if a store is supplied.
 
@@ -79,6 +82,7 @@ __all__ = [
     "ConfirmationStore",
     "ReserveDerivation",
     "ReserveFoldInputs",
+    "ReservePQv2Result",
     "derive_reserve_fold_inputs",
     "pqv2_reserve_builder",
     "to_pqv2_fold",
@@ -263,6 +267,20 @@ class ReserveFoldInputs:
     returns: Any
 
 
+@dataclass(frozen=True)
+class ReservePQv2Result:
+    """One reserve fold's P-Q v2.4 ``diagnostics`` and its ``series`` export.
+
+    ``series`` is the :func:`smart_beta.dataset_v1.pqv2_series.export_series`
+    output for exactly ``diagnostics``.  The confirmation dispatches the B/L
+    inference on the export's observed/restricted per-period series and never
+    on ``cell.period_values`` (the composed envelope; P6-E1).
+    """
+
+    diagnostics: Any
+    series: Any
+
+
 def to_pqv2_fold(fold: FoldWindow) -> Any:
     """Convert the P7 :class:`FoldWindow` to the P-Q ``Fold`` value.
 
@@ -291,14 +309,20 @@ def pqv2_reserve_builder(
 
     This is the only place the executor touches the frozen P-Q evaluation:
     the returned callable converts the reserve :class:`FoldWindow` with
-    :func:`to_pqv2_fold` and calls ``build_pqv2_diagnostics`` exactly once.
+    :func:`to_pqv2_fold`, calls ``build_pqv2_diagnostics`` exactly once, and
+    then passes the **same** build arguments plus that diagnostics to
+    :func:`pqv2_series.export_series` (P6-E1).  Both steps therefore run on
+    the same reserve fold and the export's exact binding check proves the
+    returned B/L series are the ones P-Q assessed.
     """
+    from smart_beta.dataset_v1 import pqv2_series
     from smart_beta.dataset_v1.pqv2_evaluation import build_pqv2_diagnostics
 
     extras = dict(pq_kwargs or {})
 
-    def _build(fold: FoldWindow, _derived: Any) -> Any:
-        return build_pqv2_diagnostics(
+    def _build(fold: FoldWindow, _derived: Any) -> ReservePQv2Result:
+        pq_fold = to_pqv2_fold(fold)
+        diagnostics = build_pqv2_diagnostics(
             root,
             declaration,
             factor_spec,
@@ -306,9 +330,22 @@ def pqv2_reserve_builder(
             partition,
             overlay=overlay,
             inputs=inputs,
-            fold=to_pqv2_fold(fold),
+            fold=pq_fold,
             **extras,
         )
+        series = pqv2_series.export_series(
+            root,
+            declaration,
+            factor_spec,
+            factor_panel,
+            partition,
+            diagnostics=diagnostics,
+            overlay=overlay,
+            inputs=inputs,
+            fold=pq_fold,
+            **extras,
+        )
+        return ReservePQv2Result(diagnostics=diagnostics, series=series)
 
     return _build
 
@@ -370,11 +407,52 @@ def derive_reserve_fold_inputs(
 # ---------------------------------------------------------------------------
 
 
-def _as_series(cell: Any) -> Series:
+def _verify_export_binding(cell: Any, series: Sequence[float]) -> None:
+    """Prove an exported B/L series reproduces its P-Q cell exactly (P6-E1).
+
+    The series is the ``pqv2_series`` export's ``b_series`` / ``l_series``,
+    never ``cell.period_values`` (the composed envelope).  Re-applying P-Q's
+    own estimator identity to it must reproduce the cell's ``value``,
+    ``t_stat`` and ``n_obs`` exactly; any mismatch fails closed.
+    """
+    import numpy as np
+
+    from smart_beta.dataset_v1.pqv2_series import SeriesBindingError
+    from smart_beta.evaluation import metrics as _metrics
+
+    result = _metrics.long_short_mean_tstat(
+        np.asarray(tuple(float(value) for value in series), dtype="float64")
+    )
+    if (
+        result.value != cell.value
+        or result.t_stat != cell.t_stat
+        or int(result.n_obs) != int(cell.n_obs)
+    ):
+        raise SeriesBindingError(
+            f"exported series does not reproduce cell {cell.cell!r}: "
+            f"value {result.value!r} != cell value {cell.value!r}, "
+            f"t_stat {result.t_stat!r} != {cell.t_stat!r}, "
+            f"n_obs {int(result.n_obs)} != {int(cell.n_obs)}"
+        )
+
+
+def _record_series(record: Any, cell: Any) -> Series:
+    """The exported B or L series of one required cell, bound to the cell.
+
+    Both B and L use the export's ``periods`` index (B's finite-period index),
+    exactly as P-Q's ``_estimate_l`` restricted the envelope; the B series is
+    the observed D7b series and the L series is the restricted envelope.  The
+    cell's ``period_values`` are never read for inference.
+    """
+    if record.estimand == "B":
+        values = tuple(record.b_series)
+    else:
+        values = tuple(record.l_series)
+    _verify_export_binding(cell, values)
     return Series(
         name=f"reserve_confirm:{cell.cell}",
-        index=tuple(cell.period_identities),
-        values=tuple(cell.period_values),
+        index=tuple(record.periods),
+        values=tuple(float(value) for value in values),
     )
 
 
@@ -392,7 +470,7 @@ def _member_contract(
 
 
 def _dispatch_cell(
-    cell: Any,
+    series: Series,
     *,
     procedure_ref: Mapping[str, str],
     direction: Direction,
@@ -408,9 +486,9 @@ def _dispatch_cell(
             direction=direction,
             bound_alpha=bound_alpha,
         ),
-        series=_as_series(cell),
+        series=series,
         series_record_hash=series_record_hash,
-        expected_fold_index=tuple(cell.period_identities),
+        expected_fold_index=tuple(series.index),
     )
     return inference_runner(request, registry, admission_records)
 
@@ -460,6 +538,19 @@ def _diagnostics_hash(diagnostics: Any) -> str:
     return str(value)
 
 
+def _require_export_matches(export: Any, diagnostics: Any) -> None:
+    """The export must be the per-period series of exactly these diagnostics."""
+    from smart_beta.dataset_v1.pqv2_series import SeriesBindingError
+
+    diagnostics_hash = _diagnostics_hash(diagnostics)
+    if getattr(export, "diagnostics_hash", None) != diagnostics_hash:
+        raise SeriesBindingError(
+            "the pqv2_series export is not bound to the supplied diagnostics: "
+            f"{getattr(export, 'diagnostics_hash', None)!r} != "
+            f"{diagnostics_hash!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # the executor
 # ---------------------------------------------------------------------------
@@ -484,8 +575,12 @@ def run_confirmation(
 
     ``log`` is the K-PIT ledger (a disposable one in tests).  ``derive_inputs``
     and ``build_diagnostics`` are the injected reserve-derivation and P-Q v2.4
-    steps; ``registry``/``admission_records`` are the admitted procedure's
-    gates.  The function fails closed with :class:`ConfirmationRefused` or
+    steps; ``build_diagnostics`` must return a :class:`ReservePQv2Result`
+    carrying both the diagnostics and its ``pqv2_series`` export (the real
+    builder is :func:`pqv2_reserve_builder`, which passes the export the same
+    build arguments it used for ``build_pqv2_diagnostics``).  ``registry`` /
+    ``admission_records`` are the admitted procedure's gates.  The function
+    fails closed with :class:`ConfirmationRefused` or
     :class:`ReserveAccessDenied`.
     """
     if not isinstance(hypothesis_id, str) or not hypothesis_id:
@@ -536,13 +631,24 @@ def run_confirmation(
             body=state,
         )
 
-    # 3. Derive the reserve fold inputs, then 4. P-Q v2.4 diagnostics.
+    # 3. Derive the reserve fold inputs, then 4. the P-Q v2.4 evaluation:
+    #    build_pqv2_diagnostics and its exact pqv2_series export, both from the
+    #    same build arguments on the same reserve fold (P6-E1).
     inputs = derive_inputs(fold)
-    diagnostics = build_diagnostics(fold, inputs)
+    evaluation = build_diagnostics(fold, inputs)
+    diagnostics = getattr(evaluation, "diagnostics", None)
+    export = getattr(evaluation, "series", None)
+    if diagnostics is None or export is None:
+        raise ConfirmationRefused(
+            "the reserve evaluation must supply both the P-Q diagnostics and "
+            "its pqv2_series export (P6-E1); a diagnostics alone cannot bind "
+            "the B/L series"
+        )
 
     # 5. Exactly the authorized hypothesis; never a second one.
     _authorized_hypothesis(diagnostics, hypothesis_id)
     _require_assessed_reserve_fold(diagnostics)
+    _require_export_matches(export, diagnostics)
 
     procedure_ref = {
         "procedure_id": ADMITTED_PROCEDURE_ID,
@@ -557,8 +663,12 @@ def run_confirmation(
         if cell is None:
             cell_assessments.append(CellInference(name, None, None))
             continue
+        record = export.cell(name)
+        if record is None or not record.assessed:
+            cell_assessments.append(CellInference(name, None, None))
+            continue
         result = _dispatch_cell(
-            cell,
+            _record_series(record, cell),
             procedure_ref=procedure_ref,
             direction=direction,
             bound_alpha=float(bound_alpha),

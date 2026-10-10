@@ -13,8 +13,11 @@ from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from typing import Any
 
+import numpy as np
+
 from smart_beta.dataset_v1 import pqv2_core as C
 from smart_beta.dataset_v1 import pqv2_evaluation as E
+from smart_beta.dataset_v1 import pqv2_series as PS
 from smart_beta.dataset_v1.reserve_chain.access import (
     ADMITTED_PROCEDURE_CONTRACT_HASH,
     ADMITTED_PROCEDURE_ID,
@@ -24,6 +27,7 @@ from smart_beta.dataset_v1.reserve_chain.access import (
     build_access_payload,
     reserve_chain_module_sha256s,
 )
+from smart_beta.evaluation import metrics as M
 from smart_beta.science.contracts import RecordKind
 from smart_beta.science.inference import InferenceProcedureRegistry
 from smart_beta.science.knowledge import (
@@ -226,47 +230,55 @@ def admission_record(contract=None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _cell(name: str, values: Sequence[float], index: Sequence[date]) -> E.PQv2Cell:
+def _cell(
+    name: str,
+    *,
+    envelope: Sequence[float],
+    index: Sequence[date],
+    value_series: Sequence[float],
+) -> E.PQv2Cell:
+    """One synthetic cell: the full envelope plus the series it is assessed on.
+
+    ``period_values`` is the composed envelope (exactly what the P6-E1 defect
+    read for every cell); ``value``/``t_stat``/``n_obs`` are P-Q's estimator
+    identity applied to the assessed series (the observed B series, or the
+    restricted envelope for the L cell).
+    """
+
     parts = name.split("-")
     scenario = parts[1]
-    number = float(sum(values) / len(values))
+    result = M.long_short_mean_tstat(
+        np.asarray(tuple(float(value) for value in value_series), dtype="float64")
+    )
     return E.PQv2Cell(
         cell=name,
         scenario=scenario,
         estimand="MEAN_NET_LONG_SHORT",
-        value=number,
-        t_stat=2.0,
-        n_obs=len(values),
+        value=result.value,
+        t_stat=result.t_stat,
+        n_obs=int(result.n_obs),
         status=None,
         reason=None,
-        n_index=len(values),
+        n_index=len(index),
         support=0,
         estimator=E.ESTIMATOR_IDENTITY,
         period_identities=tuple(index),
-        period_statuses=("OK",) * len(values),
-        period_values=tuple(float(value) for value in values),
-        period_reasons=(None,) * len(values),
+        period_statuses=("OK",) * len(index),
+        period_values=tuple(float(value) for value in envelope),
+        period_reasons=(None,) * len(index),
         declaration_hash="d" * 64,
     )
 
 
-def diagnostics(
+def _diagnostics_from_cells(
+    cells: Sequence[E.PQv2Cell],
     *,
-    hypothesis_id: str = "H-CONFIRM",
-    values: Mapping[str, Sequence[float]] | None = None,
+    index: Sequence[date],
+    b_index: Sequence[date],
     event_scenarios: Sequence[str] = (),
+    hypothesis_id: str = "H-CONFIRM",
     certified_hypothesis: str | None = None,
 ) -> E.PQv2Diagnostics:
-    """Build synthetic P-Q v2.4 diagnostics with B/L x T0/TS (x K0/K1) cells."""
-    values = dict(values or {})
-    index = sessions()
-    cells: list[E.PQv2Cell] = []
-    scenarios = tuple(event_scenarios) or (None,)
-    for scenario in scenarios:
-        for base in ("B-T0", "B-TS", "L-T0", "L-TS"):
-            name = base if scenario is None else f"{base}-{scenario}"
-            seq = values.get(name, values.get(base, POSITIVE))
-            cells.append(_cell(name, seq, index))
     return E.PQv2Diagnostics(
         not_assessed=None,
         declaration_hash="d" * 64,
@@ -293,13 +305,13 @@ def diagnostics(
         assignment_rule="RANK",
         relaxations=(),
         factor_panel_sha256="6" * 64,
-        index=index,
+        index=tuple(index),
         cells=tuple(cells),
         periods=(),
-        b_periods_t0=index,
-        b_periods_ts=index,
-        l_periods_t0=index,
-        l_periods_ts=index,
+        b_periods_t0=tuple(b_index),
+        b_periods_ts=tuple(b_index),
+        l_periods_t0=tuple(b_index),
+        l_periods_ts=tuple(b_index),
         estimator_identity=E.ESTIMATOR_IDENTITY,
         cost_bps=0.0,
         cost_rate=0.0,
@@ -313,3 +325,149 @@ def diagnostics(
         event_scenarios=tuple(event_scenarios),
         fold=C.Fold("reserve", RESERVE_START, RESERVE_END),
     )
+
+
+def diagnostics(
+    *,
+    hypothesis_id: str = "H-CONFIRM",
+    values: Mapping[str, Sequence[float]] | None = None,
+    event_scenarios: Sequence[str] = (),
+    certified_hypothesis: str | None = None,
+) -> E.PQv2Diagnostics:
+    """Build synthetic P-Q v2.4 diagnostics with B/L x T0/TS (x K0/K1) cells."""
+    values = dict(values or {})
+    index = sessions()
+    cells: list[E.PQv2Cell] = []
+    scenarios = tuple(event_scenarios) or (None,)
+    for scenario in scenarios:
+        for base in ("B-T0", "B-TS", "L-T0", "L-TS"):
+            name = base if scenario is None else f"{base}-{scenario}"
+            envelope = values.get(name, values.get(base, POSITIVE))
+            cells.append(
+                _cell(
+                    name,
+                    envelope=envelope,
+                    index=index,
+                    value_series=envelope,
+                )
+            )
+    return _diagnostics_from_cells(
+        cells,
+        index=index,
+        b_index=index,
+        event_scenarios=tuple(event_scenarios),
+        hypothesis_id=hypothesis_id,
+        certified_hypothesis=certified_hypothesis,
+    )
+
+
+def series_export(
+    diagnostics: E.PQv2Diagnostics,
+    *,
+    b_series: Mapping[str, Sequence[float]] | None = None,
+) -> PS.PQv2SeriesExport:
+    """The ``pqv2_series`` export matching ``diagnostics``.
+
+    Every cell's envelope is ``period_values``; the export's ``l_series`` is
+    that envelope restricted to B's finite index, and its ``b_series`` is the
+    observed B series (the same restricted envelope unless overridden).
+    """
+
+    overrides = dict(b_series or {})
+    records: list[PS.PQv2SeriesRecord] = []
+    for cell in diagnostics.cells:
+        periods = (
+            diagnostics.b_periods_t0
+            if cell.scenario == "T0"
+            else diagnostics.b_periods_ts
+        )
+        by_period = dict(zip(cell.period_identities, cell.period_values))
+        l_values = tuple(float(by_period[period]) for period in periods)
+        b_values = tuple(
+            float(value) for value in overrides.get(cell.cell, l_values)
+        )
+        records.append(
+            PS.PQv2SeriesRecord(
+                cell=cell.cell,
+                estimand=("B" if cell.cell.startswith("B") else "L"),
+                scenario=cell.scenario,
+                event_scenario=cell.event_scenario,
+                periods=tuple(periods),
+                b_series=b_values,
+                l_series=l_values,
+                gross_series=l_values,
+                net_series=l_values,
+                status=cell.status,
+                reason=cell.reason,
+                declaration_hash=diagnostics.declaration_hash,
+            )
+        )
+    return PS.PQv2SeriesExport(
+        declaration_hash=diagnostics.declaration_hash,
+        diagnostics_hash=diagnostics.diagnostics_hash,
+        estimator=E.ESTIMATOR_IDENTITY,
+        records=tuple(records),
+    )
+
+
+def nan_b_case(
+    *,
+    hypothesis_id: str = "H-CONFIRM",
+) -> tuple[E.PQv2Diagnostics, PS.PQv2SeriesExport]:
+    """A case where B's observed series is a strict sub-index of the envelope.
+
+    The first period's D7b group is inadmissible, so B's finite index is
+    ``index[1:]`` while every cell's ``period_values`` is the full envelope.
+    The observed B series differs from the restricted envelope, so B and L are
+    dispatched on different series (the exact P6-E1 distinction).
+    """
+
+    index = sessions()
+    b_index = index[1:]
+    envelope = tuple(NEGATIVE)
+    by_period = dict(zip(index, envelope))
+    l_values = tuple(by_period[period] for period in b_index)
+    observed = tuple(0.03 + 0.004 * ((i % 3) - 1) for i in range(len(b_index)))
+
+    cells: list[E.PQv2Cell] = []
+    records: list[PS.PQv2SeriesRecord] = []
+    for scenario in ("T0", "TS"):
+        for base in ("B", "L"):
+            name = f"{base}-{scenario}"
+            cells.append(
+                _cell(
+                    name,
+                    envelope=envelope,
+                    index=index,
+                    value_series=observed if base == "B" else l_values,
+                )
+            )
+            records.append(
+                PS.PQv2SeriesRecord(
+                    cell=name,
+                    estimand=base,
+                    scenario=scenario,
+                    event_scenario=None,
+                    periods=b_index,
+                    b_series=observed,
+                    l_series=l_values,
+                    gross_series=l_values,
+                    net_series=l_values,
+                    status=None,
+                    reason=None,
+                    declaration_hash="d" * 64,
+                )
+            )
+    diag = _diagnostics_from_cells(
+        cells,
+        index=index,
+        b_index=b_index,
+        hypothesis_id=hypothesis_id,
+    )
+    export = PS.PQv2SeriesExport(
+        declaration_hash=diag.declaration_hash,
+        diagnostics_hash=diag.diagnostics_hash,
+        estimator=E.ESTIMATOR_IDENTITY,
+        records=tuple(records),
+    )
+    return diag, export
