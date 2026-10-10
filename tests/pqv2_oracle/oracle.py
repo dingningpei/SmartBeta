@@ -139,6 +139,44 @@ STATUS_UNKNOWN = "UNKNOWN"
 
 _EXPR_FORMS = ("ratio", "neg_short", "volscaled", "std_x_rank")
 
+#: P-Q v2.4 fold-end firewall causes (firewall doc §2).  The development fold
+#: keeps the v2.3 ``PQV2_RESERVE_UNKNOWN``; the reserve fold uses the new
+#: ``PQV2_FOLD_END_UNKNOWN``.  The two never co-occur, so a cell carries at
+#: most one of them.
+FOLD_CAUSE_RESERVE = "PQV2_RESERVE_UNKNOWN"
+FOLD_CAUSE_FOLD_END = "PQV2_FOLD_END_UNKNOWN"
+
+
+@dataclass(frozen=True)
+class Fold:
+    """A declared evaluation fold (P-Q v2.4, firewall doc §2).
+
+    ``start``/``end`` are synthetic trusted sessions (the oracle uses integer
+    sessions as dates).  The development fold's end is the firewall at the
+    development end; a reserve fold's end is the data cutoff ``C``.  The
+    oracle's default development fold carries no explicit synthetic session
+    firewall, so the default path is exactly the v2.3 path.
+    """
+
+    name: str
+    start: int | None = None
+    end: int | None = None
+
+    @property
+    def is_reserve(self) -> bool:
+        return self.name == "reserve"
+
+    @property
+    def unknown_cause(self) -> str:
+        """The period cause of a beyond-fold-end flag/label (firewall §2)."""
+        return FOLD_CAUSE_FOLD_END if self.is_reserve else FOLD_CAUSE_RESERVE
+
+
+#: The oracle's default development fold.  It carries no explicit synthetic
+#: session firewall, so the default oracle path is byte-identical to v2.3; an
+#: explicit development fold end is constructed with :class:`Fold` directly.
+DEVELOPMENT_FOLD = Fold("development", None, None)
+
 
 # ---------------------------------------------------------------------------
 # primitive numeric kernels (own implementations; cross-checked in self-test)
@@ -366,6 +404,7 @@ class World:
         sign: int = 1,
         development_end: int | None = None,
         reserve_start: int | None = None,
+        fold: "Fold | None" = None,
         interior_points: int = 1,
         misdated: bool = True,
         single_misdating: bool = False,
@@ -388,6 +427,7 @@ class World:
         self.sign = int(sign)
         self.development_end = development_end
         self.reserve_start = reserve_start
+        self.fold = fold
         self.interior_points = int(interior_points)
         self.misdated = bool(misdated)
         self.single_misdating = bool(single_misdating)
@@ -417,6 +457,51 @@ class World:
 
     def formation_end(self, formation: int) -> int:
         return self.sessions[self._pos[formation] + self.h]
+
+    # -- fold firewall (P-Q v2.4, firewall §2) --------------------------------
+    def fold_end_position(self) -> int | None:
+        """The row position of the declared fold's end, else ``None``."""
+        if self.fold is None or self.fold.end is None:
+            return None
+        return self._pos[int(self.fold.end)]
+
+    def fold_unknown_cause(self) -> str | None:
+        """The declared fold's period cause for a beyond-end flag/label.
+
+        ``None`` when no fold is declared (the v2.3 path).
+        """
+        if self.fold is None:
+            return None
+        return self.fold.unknown_cause
+
+    def _fold_end_label_unknown(self, key: str, f: int, e2: int) -> bool:
+        """The P-Q v2.4 fold-end firewall on a COMPLETE label (firewall §2).
+
+        True when the observed endpoint is the fold end E, or a reaching flag
+        has ``next(s) > E``, or its ``+5`` MISDATED window crosses E.
+        """
+        end = self.fold_end_position()
+        if end is None:
+            return False
+        if e2 == self.sessions[end]:
+            return True
+        last = self.next_session(e2)
+        for s in self._flag_sessions(key):
+            if not (f <= s and (last is None or s <= last)):
+                continue
+            nxt = self.next_session(s)
+            if nxt is None or nxt > self.sessions[end]:
+                return True
+            if self._pos[s] + MISDATED_WINDOW > end:
+                return True
+        return False
+
+    def fold_label_cause(self, key: str, f: int, e2: int) -> str | None:
+        """The fold-end cause of one label cell, or ``None`` when not bounded."""
+        if not self._fold_end_label_unknown(key, f, e2):
+            return None
+        assert self.fold is not None
+        return self.fold.unknown_cause
 
     # -- event calendar (P-Q v2.3 / M1b) --------------------------------------
     def effective_k(self, event: EventDatum, scenario: str) -> int | None:
@@ -491,8 +576,15 @@ class World:
         if event is not None:
             pk = self.pos_of(self.effective_k(event, scenario))
             if (
-                self.reserve_start is not None
+                self.fold is None
+                and self.reserve_start is not None
                 and self.sessions[pk] >= self.reserve_start
+            ):
+                causes.add(EVENT_CAUSE_RESERVE)
+            if (
+                self.fold is not None
+                and self.fold.end is not None
+                and self.sessions[pk] > int(self.fold.end)
             ):
                 causes.add(EVENT_CAUSE_RESERVE)
         for candidate in self._calendar(key):
@@ -654,6 +746,9 @@ class World:
                     self.development_end
                 ]:
                     return STATUS_UNKNOWN, e2
+        # P-Q v2.4 fold-end firewall (firewall §2): the declared fold's end E.
+        if self._fold_end_label_unknown(key, f, e2):
+            return STATUS_UNKNOWN, e2
         return STATUS_COMPLETE, e2
 
     def _flag_sessions(self, key: str) -> tuple[int, ...]:
@@ -1107,6 +1202,7 @@ def _union_world(
     single_misdating: bool = False,
     development_end: int | None = None,
     reserve_start: int | None = None,
+    fold: "Fold | None" = None,
     sign: int = 1,
     universes: Mapping[int, Sequence[str]] | None = None,
     event_calendars: Mapping[str, Sequence[EventDatum]] | None = None,
@@ -1127,6 +1223,7 @@ def _union_world(
         sign=sign,
         development_end=development_end,
         reserve_start=reserve_start,
+        fold=fold,
         interior_points=interior_points,
         misdated=misdated,
         single_misdating=single_misdating,

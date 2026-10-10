@@ -453,10 +453,16 @@ def test_mutation_fixture_contract() -> None:
         "G23-M2",
         "G23-M3",
         "G23-M4",
+        "G24-M1",
+        "G24-M2",
+        "G24-M3",
+        "G24-M4",
+        "G24-M5",
     ]
     allowed_modules = {
         "tests/test_pqv2_oracle_grammar.py",
         "tests/test_pqv2_oracle_events.py",
+        "tests/test_pqv2_oracle_fold.py",
     }
     for mutation in mutations:
         source = (REPO_ROOT / mutation["file"]).read_text(encoding="utf-8")
