@@ -32,14 +32,19 @@ tests inject synthetic packages.  This module never reads a ``reserve_sealed``
 path itself; the reserve accessor is supplied by the caller (R7-X from an
 ``AccessGrant``).
 
-Interface note (planner reconciliation): the frozen P7 implementation spec
-(§2) fixes the contract ``FoldWindow(start, end, source)``.  The
-``reserve_chain/fold.py`` module that was expected to own it had not been
-merged when this task was implemented, so a *minimal local* ``FoldWindow`` is
-defined here (no ``reserve_chain/__init__.py`` is created; R7-U owns that).
-``build_trusted_fold`` duck-types the fold (it only reads ``.start``,
-``.end`` and ``.source``), so the planner can reconcile R7-U's
-``FoldWindow`` with this one without changing the builder call sites.
+Reconciliation: :class:`FoldWindow`, :class:`AccessGrant` and
+:class:`ReserveAccessDenied` are imported from the R7-U-owned
+``reserve_chain/fold.py`` (reconciled at merge commit ``3fc6531``).  A reserve
+fold cannot be constructed at all without an ``AccessGrant``, and
+:func:`build_trusted_fold` re-checks the grant first (defense in depth) so a
+forged grantless reserve fold is refused with :class:`ReserveAccessDenied`
+*before any path is opened*.
+
+D7c grid vs D6 schedule: the frozen D7c grid starts at ``CALENDAR_START``
+(2015-01-02), one schedule year before the D6 formation schedule start; the
+development fold used here therefore spans ``CALENDAR_START..DEVELOPMENT_END``
+(:func:`development_fold`), so the full development equivalence with the frozen
+``ti-aa23fabd3db4e595`` holds.
 """
 
 from __future__ import annotations
@@ -65,6 +70,13 @@ from smart_beta.dataset_v1.classification import (
     load_policy_timeline,
     policy_state_at,
 )
+from smart_beta.dataset_v1.reserve_chain.fold import (
+    DEVELOPMENT,
+    RESERVE,
+    AccessGrant,
+    FoldWindow,
+    ReserveAccessDenied,
+)
 from smart_beta.dataset_v1.reserve_firewall import (
     DevelopmentAccessor,
     ReserveFirewallError,
@@ -75,10 +87,16 @@ from smart_beta.vendors.tiingo.calendar_source import build_nyse_calendar
 __all__ = [
     "SOURCE_DEVELOPMENT",
     "SOURCE_RESERVE",
+    "DEVELOPMENT",
+    "RESERVE",
     "RESERVE_START",
+    "CALENDAR_START",
+    "DEVELOPMENT_END",
     "LOOKBACK_SESSIONS",
     "FoldWindow",
-    "FoldWindowError",
+    "AccessGrant",
+    "ReserveAccessDenied",
+    "development_fold",
     "TrustedFoldError",
     "TrustedFoldInputError",
     "TrustedFoldConsistencyError",
@@ -93,8 +111,9 @@ __all__ = [
 # Frozen constants (imported read-only from the pinned D7c module)
 # ---------------------------------------------------------------------------
 
-SOURCE_DEVELOPMENT = "development"
-SOURCE_RESERVE = "reserve"
+#: Source aliases (R7-U's ``fold.py`` owns the canonical values).
+SOURCE_DEVELOPMENT = DEVELOPMENT
+SOURCE_RESERVE = RESERVE
 
 #: The sealed reserve boundary (contract §§11.2, 12).
 RESERVE_START = T.RESERVE_START
@@ -120,10 +139,6 @@ class TrustedFoldError(Exception):
     """Base class for every reserve-chain trusted-input error."""
 
 
-class FoldWindowError(TrustedFoldError, ValueError):
-    """A ``FoldWindow`` is malformed."""
-
-
 class TrustedFoldInputError(TrustedFoldError, ValueError):
     """A required fold input is missing, unreadable or malformed."""
 
@@ -137,55 +152,25 @@ class TrustedFoldConsistencyError(TrustedFoldError):
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class FoldWindow:
-    """The declared data window a fold-generic build runs over.
+def development_fold() -> FoldWindow:
+    """The D7c development fold: ``CALENDAR_START..DEVELOPMENT_END``.
 
-    ``source`` selects the D3/D5/v1.3 packages (``development`` or
-    ``reserve``).  For a reserve fold, every *input row* dated before
-    ``RESERVE_START`` still comes from the development packages and the grid
-    starts at ``start`` (the frozen reserve start).  This is the minimal local
-    interface; the planner reconciles it with ``reserve_chain/fold.py``.
+    This is deliberately *not* ``FoldWindow.development()``: D6 formations
+    start at the 2016 schedule start, while the frozen D7c grid starts at the
+    2015 calendar start, and the frozen development equivalence covers the
+    full grid.
     """
+    return FoldWindow(CALENDAR_START, DEVELOPMENT_END, DEVELOPMENT)
 
-    start: date
-    end: date
-    source: str = SOURCE_DEVELOPMENT
 
-    def __post_init__(self) -> None:
-        if self.source not in (SOURCE_DEVELOPMENT, SOURCE_RESERVE):
-            raise FoldWindowError(
-                f"source must be {SOURCE_DEVELOPMENT!r} or "
-                f"{SOURCE_RESERVE!r}, got {self.source!r}"
-            )
-        if self.start > self.end:
-            raise FoldWindowError(
-                f"fold start {self.start} is after end {self.end}"
-            )
-        if self.source == SOURCE_RESERVE and self.start < RESERVE_START:
-            raise FoldWindowError(
-                f"a reserve fold must start at or after {RESERVE_START}, "
-                f"got {self.start}"
-            )
-
-    @property
-    def is_reserve(self) -> bool:
-        return self.source == SOURCE_RESERVE
-
-    @classmethod
-    def development(cls) -> "FoldWindow":
-        return cls(CALENDAR_START, DEVELOPMENT_END, SOURCE_DEVELOPMENT)
-
-    @classmethod
-    def reserve(cls, end: date, start: date = RESERVE_START) -> "FoldWindow":
-        return cls(start, end, SOURCE_RESERVE)
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "start": self.start.isoformat(),
-            "end": self.end.isoformat(),
-            "source": self.source,
-        }
+def _fold_payload(fold: FoldWindow) -> dict[str, str]:
+    """A JSON-safe summary of the fold recorded in the artifact manifest."""
+    return {
+        "start": fold.start.isoformat(),
+        "end": fold.end.isoformat(),
+        "source": fold.source,
+        "partition": fold.partition,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +204,7 @@ def _fold_grid(
     grid_sessions = sessions[start_idx : end_idx + 1]
     # The last primitive a new grid row can carry is prev(last_row).
     source_end = sessions[end_idx - 1] if end_idx > 0 else grid_sessions[0]
-    if fold.is_reserve:
+    if fold.source == RESERVE:
         floor_idx = max(0, start_idx - lookback_sessions)
     else:
         floor_idx = 0
@@ -377,7 +362,7 @@ def _load_fold_inputs(
         end=grid.source_end,
         columns=list(_CA_EVENT_COLUMNS),
     )
-    if fold.is_reserve:
+    if fold.source == RESERVE:
         if reserve_bindings is None:
             raise TrustedFoldInputError(
                 "a reserve fold requires reserve_bindings"
@@ -446,7 +431,7 @@ def _post_load_assertions(
     )
     for series, what in checks:
         parsed = _parsed(series)
-        if not fold.is_reserve and bool(
+        if fold.source != RESERVE and bool(
             (parsed >= pd.Timestamp(RESERVE_START)).any()
         ):
             raise ReserveFirewallError(
@@ -642,7 +627,7 @@ def _compute_fold_ti_id(
     payload = {
         "bindings": T._bindings_payload(bindings),
         "trusted_fold_sha256": code_sha,
-        "fold": fold.to_dict(),
+        "fold": _fold_payload(fold),
     }
     return "ti-" + T._sha256_hex(
         T.canonical_json(payload).encode("utf-8")
@@ -753,10 +738,18 @@ def build_trusted_fold(
     """
     if not isinstance(fold, FoldWindow):
         raise TrustedFoldInputError("fold must be a FoldWindow")
+    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):
+        # Defense in depth: R7-U's FoldWindow already refuses this at
+        # construction.  Re-check here so a forged grantless reserve fold is
+        # denied before any path is opened.
+        raise ReserveAccessDenied(
+            "a reserve trusted-input derivation requires an AccessGrant; "
+            "refusing before any path is opened"
+        )
     bindings = bindings if bindings is not None else T.DEFAULT_BINDINGS
     if not isinstance(bindings, T.Bindings):
         raise TrustedFoldInputError("bindings must be a Bindings value")
-    if fold.is_reserve and reserve_bindings is not None:
+    if fold.source == RESERVE and reserve_bindings is not None:
         if not isinstance(reserve_bindings, T.Bindings):
             raise TrustedFoldInputError(
                 "reserve_bindings must be a Bindings value"
@@ -779,7 +772,7 @@ def build_trusted_fold(
 
     for stage in bindings.stages():
         T._verify_stage(T.Resolver(root, bindings), stage)
-    if fold.is_reserve:
+    if fold.source == RESERVE:
         if reserve_bindings is None:
             raise TrustedFoldInputError(
                 "a reserve fold requires reserve_bindings"
@@ -791,7 +784,7 @@ def build_trusted_fold(
         accessor = DevelopmentAccessor(
             root, bindings=T._accessor_bindings(bindings)
         )
-    if fold.is_reserve:
+    if fold.source == RESERVE:
         if reserve_accessor is None:
             raise TrustedFoldInputError(
                 "a reserve fold requires a reserve_accessor"
@@ -836,7 +829,7 @@ def build_trusted_fold(
         interval = [
             s for s in sessions if key.listed_start <= s <= upper
         ]
-        if fold.is_reserve:
+        if fold.source == RESERVE:
             interval = [s for s in interval if s >= interval_floor]
         if not interval:
             continue
@@ -962,7 +955,7 @@ def build_trusted_fold(
         "schema": T.SCHEMA,
         "ti_id": ti_id,
         "ti_code_sha256": code_sha,
-        "fold": fold.to_dict(),
+        "fold": _fold_payload(fold),
         "fold_source_end": grid.source_end.isoformat(),
         "bindings": T._bindings_payload(bindings),
         "documents": dict(documents),
@@ -1028,17 +1021,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--start", default=None, help="fold start YYYY-MM-DD")
     parser.add_argument("--end", required=True, help="fold end YYYY-MM-DD")
     args = parser.parse_args(argv)
-    start = (
-        date.fromisoformat(args.start)
-        if args.start
-        else (RESERVE_START if args.source == SOURCE_RESERVE else CALENDAR_START)
-    )
-    fold = FoldWindow(start, date.fromisoformat(args.end), args.source)
-    if fold.is_reserve:
+    if args.source == SOURCE_RESERVE:
         raise SystemExit(
             "a reserve fold requires an AccessGrant (R7-X) and a reserve "
             "accessor; it is not runnable from this CLI"
         )
+    start = (
+        date.fromisoformat(args.start) if args.start else CALENDAR_START
+    )
+    fold = FoldWindow(start, date.fromisoformat(args.end), DEVELOPMENT)
     content = build_trusted_fold(args.root, fold=fold)
     print(content["ti_id"])
     print(content["ti_hash"])

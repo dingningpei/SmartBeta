@@ -65,7 +65,7 @@
     "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
     "edits": [
       {
-        "old": "        if not fold.is_reserve and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError(",
+        "old": "        if fold.source != RESERVE and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError(",
         "new": "        if False and bool(\n            (parsed >= pd.Timestamp(RESERVE_START)).any()\n        ):\n            raise ReserveFirewallError("
       }
     ],
@@ -82,5 +82,17 @@
       }
     ],
     "test": "tests/test_reserve_chain_trusted.py::test_dev_fold_reproduces_frozen_tables_and_fields"
+  },
+  {
+    "id": "T7-M_gate",
+    "description": "the reserve AccessGrant gate is bypassed in build_trusted_fold",
+    "file": "smart_beta/dataset_v1/reserve_chain/trusted_fold.py",
+    "edits": [
+      {
+        "old": "    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):",
+        "new": "    if fold.source == RESERVE and False:"
+      }
+    ],
+    "test": "tests/test_reserve_chain_trusted.py::test_reserve_without_grant_denied_before_any_open"
   }
 ]

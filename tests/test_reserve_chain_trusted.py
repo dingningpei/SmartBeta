@@ -126,6 +126,23 @@ def _select(frame: pd.DataFrame, d: date, key: str) -> pd.DataFrame:
     return frame[(dates == d) & (frame["security_key"] == key)]
 
 
+def _dev_fold():
+    return F.development_fold()
+
+
+def _grant(end: date = date(2023, 12, 29)):
+    return F.AccessGrant(
+        hypothesis_id="H-R7T-TEST",
+        procedure_id="EWC_T23_ONE_SIDED",
+        fold_start=F.RESERVE_START,
+        fold_end=end,
+    )
+
+
+def _reserve_fold(end: date = date(2023, 7, 14)):
+    return F.FoldWindow.reserve(end, grant=_grant(end))
+
+
 # ===========================================================================
 # 1. Development equivalence (amendment A1)
 # ===========================================================================
@@ -139,7 +156,7 @@ def test_dev_fold_reproduces_frozen_tables_and_fields(tmp_path: Path) -> None:
         store.root, bindings=bindings, calendar=FX.CAL
     )
     new = F.build_trusted_fold(
-        store.root, fold=F.FoldWindow.development(),
+        store.root, fold=_dev_fold(),
         bindings=bindings, calendar=FX.CAL,
     )
 
@@ -173,11 +190,7 @@ def test_dev_fold_reproduces_frozen_tables_and_fields(tmp_path: Path) -> None:
     assert new["grid"]["first_row"] == frozen["grid"]["first_row"]
     assert new["grid"]["last_row"] == frozen["grid"]["last_row"]
     assert new["capabilities"] == frozen["capabilities"]
-    assert new["fold"] == {
-        "start": F.CALENDAR_START.isoformat(),
-        "end": F.DEVELOPMENT_END.isoformat(),
-        "source": F.SOURCE_DEVELOPMENT,
-    }
+    assert new["fold"] == F._fold_payload(_dev_fold())
 
 
 def test_dev_fold_per_file_bytes_identical(tmp_path: Path) -> None:
@@ -187,7 +200,7 @@ def test_dev_fold_per_file_bytes_identical(tmp_path: Path) -> None:
         store.root, bindings=bindings, calendar=FX.CAL
     )
     new = F.build_trusted_fold(
-        store.root, fold=F.FoldWindow.development(),
+        store.root, fold=_dev_fold(),
         bindings=bindings, calendar=FX.CAL,
     )
     frozen_dir = _artifact_dir(store.root, frozen)
@@ -208,7 +221,7 @@ def test_ti_hash_is_internally_consistent(tmp_path: Path) -> None:
     store = _standard_store(tmp_path)
     bindings = store.build_development()
     new = F.build_trusted_fold(
-        store.root, fold=F.FoldWindow.development(),
+        store.root, fold=_dev_fold(),
         bindings=bindings, calendar=FX.CAL,
     )
     directory = _artifact_dir(store.root, new)
@@ -228,28 +241,36 @@ def test_ti_hash_is_internally_consistent(tmp_path: Path) -> None:
 
 
 def test_fold_window_validation() -> None:
-    with pytest.raises(F.FoldWindowError):
+    with pytest.raises(ValueError):
         F.FoldWindow(date(2023, 1, 2), date(2023, 1, 1))
-    with pytest.raises(F.FoldWindowError):
+    with pytest.raises(ValueError):
         F.FoldWindow(date(2020, 1, 2), date(2023, 1, 1), "other")
-    with pytest.raises(F.FoldWindowError):
-        F.FoldWindow(date(2023, 7, 2), date(2023, 12, 29), F.SOURCE_RESERVE)
-    dev = F.FoldWindow.development()
-    assert dev.is_reserve is False
-    res = F.FoldWindow.reserve(date(2023, 9, 29))
-    assert res.is_reserve is True
+    # A reserve FoldWindow is refused at construction without a grant.
+    with pytest.raises(F.ReserveAccessDenied):
+        F.FoldWindow(date(2023, 7, 2), date(2023, 12, 29), F.RESERVE)
+    with pytest.raises(F.ReserveAccessDenied):
+        F.FoldWindow.reserve(date(2023, 12, 29), grant=None)
+    dev = _dev_fold()
+    assert dev.source == F.DEVELOPMENT
+    res = _reserve_fold(date(2023, 9, 29))
+    assert res.source == F.RESERVE
+    assert res.grant is not None
     assert res.start == F.RESERVE_START
+    # The fold owns the D-SC cutoff: dev inherits the frozen firewall date,
+    # reserve may query up to its end.
+    assert dev.dsc_max_cutoff == T.LAST_SOURCE_DATE
+    assert res.dsc_max_cutoff == date(2023, 9, 29)
 
 
 def test_fold_grid_geometry() -> None:
-    dev = F._fold_grid(FX.CAL, F.FoldWindow.development())
+    dev = F._fold_grid(FX.CAL, _dev_fold())
     assert dev.grid_sessions[0] == F.CALENDAR_START
     assert dev.grid_sessions[-1] == F.DEVELOPMENT_END
     assert dev.source_end == T.LAST_SOURCE_DATE
     assert dev.interval_floor == FX.SESSIONS[0]
 
     res = F._fold_grid(
-        FX.CAL, F.FoldWindow.reserve(date(2023, 9, 29))
+        FX.CAL, _reserve_fold(date(2023, 9, 29))
     )
     assert res.grid_sessions[0] == F.RESERVE_START
     assert res.grid_sessions[-1] == date(2023, 9, 29)
@@ -284,7 +305,7 @@ def test_dev_row_holds_prev_session_primitive(tmp_path: Path) -> None:
     store.obs("AAA", date(2020, 1, 7), 13.31)
     bindings = store.build_development()
     new = F.build_trusted_fold(
-        store.root, fold=F.FoldWindow.development(),
+        store.root, fold=_dev_fold(),
         bindings=bindings, calendar=FX.CAL,
     )
     frames = F.read_fold_frames(store.root, new)
@@ -298,7 +319,7 @@ def test_reserve_fold_bridges_dev_and_reserve(tmp_path: Path) -> None:
     store = _standard_store(tmp_path)
     dev_bindings = store.build_development()
     res_bindings = store.build_reserve()
-    fold = F.FoldWindow.reserve(date(2023, 7, 14))
+    fold = _reserve_fold(date(2023, 7, 14))
     new = F.build_trusted_fold(
         store.root,
         fold=fold,
@@ -342,7 +363,7 @@ def test_reserve_lookback_carries_dev_history(tmp_path: Path) -> None:
     res_bindings = store.build_reserve()
     new = F.build_trusted_fold(
         store.root,
-        fold=F.FoldWindow.reserve(date(2023, 7, 14)),
+        fold=_reserve_fold(date(2023, 7, 14)),
         bindings=dev_bindings,
         calendar=FX.CAL,
         reserve_bindings=res_bindings,
@@ -374,7 +395,7 @@ def test_reserve_corporate_action_applied_within_fold(tmp_path: Path) -> None:
     res_bindings = store.build_reserve()
     new = F.build_trusted_fold(
         store.root,
-        fold=F.FoldWindow.reserve(date(2023, 7, 14)),
+        fold=_reserve_fold(date(2023, 7, 14)),
         bindings=dev_bindings,
         calendar=FX.CAL,
         reserve_bindings=res_bindings,
@@ -442,7 +463,7 @@ def test_stitched_accessor_splits_and_concatenates(tmp_path: Path) -> None:
 def test_reserve_fold_requires_bindings_and_accessor(tmp_path: Path) -> None:
     store = _standard_store(tmp_path)
     dev_bindings = store.build_development()
-    fold = F.FoldWindow.reserve(date(2023, 7, 14))
+    fold = _reserve_fold(date(2023, 7, 14))
     with pytest.raises(F.TrustedFoldInputError):
         F.build_trusted_fold(
             store.root, fold=fold, bindings=dev_bindings, calendar=FX.CAL
@@ -464,6 +485,58 @@ def test_reserve_fold_requires_bindings_and_accessor(tmp_path: Path) -> None:
             accessor=dev_accessor,
             reserve_bindings=res_bindings,
         )
+
+
+def _forged_grantless_reserve_fold(end: date):
+    """A reserve ``FoldWindow`` crafted past R7-U's construction gate."""
+    fold = object.__new__(F.FoldWindow)
+    object.__setattr__(fold, "start", F.RESERVE_START)
+    object.__setattr__(fold, "end", end)
+    object.__setattr__(fold, "source", F.RESERVE)
+    object.__setattr__(fold, "grant", None)
+    return fold
+
+
+def test_reserve_without_grant_denied_before_any_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _standard_store(tmp_path)
+    dev_bindings = store.build_development()
+    res_bindings = store.build_reserve()
+    reserve_accessor = store.reserve_accessor()
+
+    # A file-open audit records every read path.
+    opened: list[str] = []
+    real_read_bytes = Path.read_bytes
+    real_read_parquet = pd.read_parquet
+
+    def spy_read_bytes(self):
+        opened.append(str(self))
+        return real_read_bytes(self)
+
+    def spy_read_parquet(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", spy_read_bytes)
+    monkeypatch.setattr(pd, "read_parquet", spy_read_parquet)
+
+    fold = _forged_grantless_reserve_fold(date(2023, 7, 14))
+    with pytest.raises(F.ReserveAccessDenied):
+        F.build_trusted_fold(
+            store.root,
+            fold=fold,
+            bindings=dev_bindings,
+            calendar=FX.CAL,
+            reserve_bindings=res_bindings,
+            reserve_accessor=reserve_accessor,
+        )
+    # Refused before any path is opened: no document, no stage manifest and
+    # no reserve path.
+    assert opened == []
+    # The normal constructor gate also refuses (R7-U's FoldWindow).
+    with pytest.raises(F.ReserveAccessDenied):
+        F.FoldWindow.reserve(date(2023, 7, 14), grant=None)
 
 
 def test_dev_fold_post_load_assertion_refuses_reserve_row() -> None:
@@ -530,7 +603,7 @@ def test_dev_fold_post_load_assertion_refuses_reserve_row() -> None:
     )
     with pytest.raises(F.ReserveFirewallError):
         F._post_load_assertions(
-            inputs, F.FoldWindow.development(), T.LAST_SOURCE_DATE
+            inputs, _dev_fold(), T.LAST_SOURCE_DATE
         )
 
 
@@ -543,7 +616,7 @@ def test_duplicate_usable_rows_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(F.TrustedFoldConsistencyError):
         F.build_trusted_fold(
             store.root,
-            fold=F.FoldWindow.development(),
+            fold=_dev_fold(),
             bindings=bindings,
             calendar=FX.CAL,
         )
@@ -592,7 +665,10 @@ def test_module_makes_no_network_or_credential_import() -> None:
 
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
-    assert [m["id"] for m in mutations] == [f"T-M{i}" for i in range(1, 8)]
+    assert [m["id"] for m in mutations] == [
+        *(f"T-M{i}" for i in range(1, 8)),
+        "T7-M_gate",
+    ]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == (
