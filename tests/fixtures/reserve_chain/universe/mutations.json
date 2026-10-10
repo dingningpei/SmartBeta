@@ -29,7 +29,7 @@
   "file": "smart_beta/dataset_v1/reserve_chain/fold.py",
   "edits": [
    {
-    "old": "        if self.source == RESERVE and not isinstance(self.grant, AccessGrant):\n            raise ReserveAccessDenied(\n                \"a reserve FoldWindow requires an AccessGrant; refusing before \"\n                \"any path is opened\"\n            )",
+    "old": "        if self.source == RESERVE and not _is_verified_access_grant(self.grant):\n            raise ReserveAccessDenied(\n                \"a reserve FoldWindow requires an AccessGrant verified against \"\n                \"a K-PIT ACCESS record (access.AccessGrant.from_kpit); refusing \"\n                \"before any path is opened\"\n            )",
     "new": "        if False:  # mutation R7U-M3: reserve gate bypassed\n            raise ReserveAccessDenied(\"gate bypassed\")"
    }
   ],

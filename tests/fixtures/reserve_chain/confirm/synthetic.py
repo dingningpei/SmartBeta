@@ -26,7 +26,11 @@ from smart_beta.dataset_v1.reserve_chain.access import (
 )
 from smart_beta.science.contracts import RecordKind
 from smart_beta.science.inference import InferenceProcedureRegistry
-from smart_beta.science.knowledge import KnowledgeLog
+from smart_beta.science.knowledge import (
+    GENESIS_PREV_HASH,
+    KnowledgeLog,
+    KnowledgeRecord,
+)
 from smart_beta.science.procedures.ewc_t23_one_sided import (
     build_contract,
     build_procedure,
@@ -70,6 +74,51 @@ def make_log(tmp_path, name: str = "kpit.jsonl") -> KnowledgeLog:
     return KnowledgeLog(
         tmp_path / name, clock=lambda: "2026-10-09T00:00:00Z"
     )
+
+
+def verified_grant(
+    *,
+    hypothesis_id: str = "H-CONFIRM",
+    fold_start: date = RESERVE_START,
+    fold_end: date = RESERVE_END,
+    modules: Mapping[str, str] | None = None,
+):
+    """Mint a real, K-PIT-verified grant from in-memory records.
+
+    R7-U/R7-T/R7-R tests use this to obtain a grant that the reserve gate
+    accepts; a hand-built grant is refused (R7-X-R1).  No file is written.
+    """
+    artifact = KnowledgeRecord.build(
+        seq=0,
+        prev_hash=GENESIS_PREV_HASH,
+        kind=RecordKind.ARTIFACT,
+        payload={
+            "packaging_hash": "a" * 64,
+            "sealed": True,
+            "available_from": fold_start.isoformat(),
+            "source_label": "reserve",
+        },
+        footprint=_footprint(),
+        recorded_at="2026-10-09T00:00:00Z",
+    )
+    access = KnowledgeRecord.build(
+        seq=1,
+        prev_hash=artifact.record_hash,
+        kind=RecordKind.ACCESS,
+        payload=build_access_payload(
+            artifact_record_hash=artifact.record_hash,
+            hypothesis_id=hypothesis_id,
+            fold_start=fold_start,
+            fold_end=fold_end,
+            module_sha256s=(
+                modules if modules is not None else reserve_chain_module_sha256s()
+            ),
+        ),
+        recorded_at="2026-10-09T00:00:00Z",
+    )
+    from smart_beta.dataset_v1.reserve_chain.access import AccessGrant
+
+    return AccessGrant.from_kpit((artifact, access), access.record_hash)
 
 
 def append_artifact(log: KnowledgeLog, *, packaging: str = "a"):

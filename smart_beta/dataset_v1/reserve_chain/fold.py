@@ -51,15 +51,43 @@ class ReserveAccessDenied(RuntimeError):
     """A reserve fold was requested without a valid :class:`AccessGrant`."""
 
 
+#: Module-private verification token.  Only ``access.AccessGrant.from_kpit``
+#: (after it has read and verified a K-PIT ``ACCESS`` record) stamps it.  A
+#: hand-built :class:`AccessGrant` never carries it, so direct construction can
+#: never authorize a reserve fold.  The attribute is set with
+#: ``object.__setattr__`` so the frozen dataclass stays frozen.
+_VERIFIED_ATTR = "_reserve_access_verified"
+_VERIFIED_TOKEN = object()
+
+
+def _stamp_verified_access_grant(grant: object) -> None:
+    """Stamp ``grant`` with the private token (R7-X ``from_kpit`` only)."""
+    object.__setattr__(grant, _VERIFIED_ATTR, _VERIFIED_TOKEN)
+
+
+def _is_verified_access_grant(grant: object) -> bool:
+    """Whether ``grant`` came from a verified K-PIT ``ACCESS`` read.
+
+    This is the *only* authorization predicate: a hand-built
+    :class:`AccessGrant` (or a hand-built :class:`access.AccessGrant`) is an
+    instance of the class but carries no token, so it is refused.
+    """
+    if not isinstance(grant, AccessGrant):
+        return False
+    return getattr(grant, _VERIFIED_ATTR, None) is _VERIFIED_TOKEN
+
+
 @dataclass(frozen=True)
 class AccessGrant:
-    """Stub for the K-PIT ``ACCESS`` grant.
+    """Unverified grant envelope; **direct construction never authorizes**.
 
-    Task R7-X replaces this with a grant read from a K-PIT ``ACCESS`` record
-    that names the hypothesis, the admitted procedure, the exact
-    ``reserve_chain`` module SHA-256s and the fold window.  R7-U only needs the
-    object's presence: a reserve :class:`FoldWindow` is refused unless an
-    ``AccessGrant`` instance is supplied.
+    Task R7-X supplies the concrete :class:`access.AccessGrant` subclass whose
+    :meth:`access.AccessGrant.from_kpit` reads a K-PIT ``ACCESS`` record that
+    names the hypothesis, the admitted procedure, the exact ``reserve_chain``
+    module SHA-256s and the fold window.  Only that verified path stamps the
+    module-private token :data:`_VERIFIED_TOKEN` that
+    :func:`_is_verified_access_grant` checks; a hand-built envelope (or a
+    hand-built ``access.AccessGrant``) is refused by every reserve gate.
     """
 
     hypothesis_id: str = ""
@@ -97,10 +125,11 @@ class FoldWindow:
             raise ValueError(
                 f"fold start {self.start} is after end {self.end}"
             )
-        if self.source == RESERVE and not isinstance(self.grant, AccessGrant):
+        if self.source == RESERVE and not _is_verified_access_grant(self.grant):
             raise ReserveAccessDenied(
-                "a reserve FoldWindow requires an AccessGrant; refusing before "
-                "any path is opened"
+                "a reserve FoldWindow requires an AccessGrant verified against "
+                "a K-PIT ACCESS record (access.AccessGrant.from_kpit); refusing "
+                "before any path is opened"
             )
 
     # -- constructors ----------------------------------------------------

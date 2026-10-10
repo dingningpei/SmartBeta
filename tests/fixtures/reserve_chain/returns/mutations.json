@@ -53,7 +53,7 @@
   "file": "smart_beta/dataset_v1/reserve_chain/returns_fold.py",
   "edits": [
    {
-    "old": "    if fold.source == RESERVE and not isinstance(fold.grant, AccessGrant):\n        # Defense in depth: R7-U's FoldWindow already refuses this at\n        # construction.  Re-check here so a forged grantless reserve fold is\n        # denied before any path is opened.\n        raise ReserveAccessDenied(\n            \"a reserve returns-fold derivation requires an AccessGrant; \"\n            \"refusing before any path is opened\"\n        )",
+    "old": "    if fold.source == RESERVE and not _is_verified_access_grant(fold.grant):\n        # Defense in depth: R7-U's FoldWindow already refuses this at\n        # construction.  Re-check here so a forged grantless reserve fold is\n        # denied before any path is opened.\n        raise ReserveAccessDenied(\n            \"a reserve returns-fold derivation requires a K-PIT-verified \"\n            \"AccessGrant (access.AccessGrant.from_kpit); refusing before any \"\n            \"path is opened\"\n        )",
     "new": "    if False:  # mutation R7R-M5: gate defence removed\n        pass"
    }
   ],

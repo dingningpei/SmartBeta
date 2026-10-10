@@ -35,6 +35,7 @@ from smart_beta.dataset_v1.reserve_chain.fold import (
     AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
+    _is_verified_access_grant,
 )
 
 __all__ = [
@@ -543,9 +544,10 @@ def run_universe_fold(
     if not isinstance(bindings, U.Bindings):
         raise U.UniverseInputError("bindings must be a Bindings value")
     if fold.source == RESERVE:
-        if not isinstance(fold.grant, AccessGrant):
+        if not _is_verified_access_grant(fold.grant):
             raise ReserveAccessDenied(
-                "a reserve universe derivation requires an AccessGrant"
+                "a reserve universe derivation requires a K-PIT-verified "
+                "AccessGrant (access.AccessGrant.from_kpit)"
             )
         if not isinstance(lookback_bindings, U.Bindings):
             raise U.UniverseInputError(

@@ -6,9 +6,10 @@ memory, and the admitted ``EWC_T23_ONE_SIDED`` procedure.  An autouse guard
 refuses any ``data_store`` / ``reserve_sealed`` path and any socket.
 
 The tests prove the four frozen gate conditions (hypothesis, admitted
-procedure, exact ``reserve_chain`` module hashes, reserve fold window), the
-K-PIT single-use ledger, and the confirmation verdict requiring **both** B and
-the P-Q L envelope under all T0/TS x K0/K1 combinations.
+procedure, exact ``reserve_chain`` module hashes, reserve fold window), that a
+hand-built grant (``fold.AccessGrant`` or ``access.AccessGrant``) can never
+authorize, the K-PIT single-use ledger, and the confirmation verdict requiring
+**both** B and the P-Q L envelope under all T0/TS x K0/K1 combinations.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import json
 import pathlib
 import socket
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,7 @@ from smart_beta.dataset_v1.reserve_chain import (
     FoldWindow,
     ReserveAccessDenied,
 )
+from smart_beta.dataset_v1.reserve_chain import fold as FOLD
 from smart_beta.dataset_v1.reserve_chain.confirm import (
     ConfirmationRefused,
     ConfirmationStore,
@@ -340,6 +343,65 @@ def test_run_confirmation_single_use(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 3b. direct construction of a grant can never authorize (R7-X-R1)
+# ---------------------------------------------------------------------------
+
+
+def test_hand_built_stub_grant_denied() -> None:
+    """A hand-built ``fold.AccessGrant`` cannot authorize (M_forge_stub)."""
+    grant = FOLD.AccessGrant(hypothesis_id="x", procedure_id="x")
+    with pytest.raises(ReserveAccessDenied):
+        FOLD.FoldWindow.reserve(date(2026, 8, 31), grant=grant)
+
+
+def test_hand_built_access_grant_denied() -> None:
+    """A hand-built ``access.AccessGrant`` cannot authorize (M_forge_access)."""
+    grant = AccessGrant(hypothesis_id="x", procedure_id="x")
+    with pytest.raises(ReserveAccessDenied):
+        FoldWindow.reserve(date(2026, 8, 31), grant=grant)
+
+
+def test_from_kpit_grant_is_accepted(tmp_path: Path) -> None:
+    """The verified K-PIT grant is the only one the gate accepts."""
+    log, _artifact, access = _log_with_access(tmp_path)
+    grant = AccessGrant.from_kpit(log, access.record_hash)
+    fold = FoldWindow.reserve(date(2026, 8, 31), grant=grant)
+    assert fold.source == "reserve"
+    assert fold.start == S.RESERVE_START
+    assert fold.grant is grant
+
+
+def _forged_reserve_fold_with_hand_built_grant() -> FoldWindow:
+    """A memory-forged reserve fold carrying a hand-built grant."""
+    fold = FoldWindow.development()
+    object.__setattr__(fold, "source", "reserve")
+    object.__setattr__(
+        fold, "grant", AccessGrant(hypothesis_id="x", procedure_id="x")
+    )
+    return fold
+
+
+def test_builders_refuse_forged_hand_built_grant() -> None:
+    """The R7-T/R7-R defence-in-depth gates also reject an unverified grant."""
+    from smart_beta.dataset_v1.reserve_chain import returns_fold as RF
+    from smart_beta.dataset_v1.reserve_chain import trusted_fold as TF
+
+    forged = _forged_reserve_fold_with_hand_built_grant()
+    with pytest.raises(ReserveAccessDenied):
+        TF.build_trusted_fold(".", fold=forged)
+    with pytest.raises(ReserveAccessDenied):
+        RF.build_returns_fold(
+            observations=None,
+            ca_events=None,
+            identity=None,
+            day_flags=None,
+            universe=None,
+            fold=forged,
+            calendar=None,
+        )
+
+
+# ---------------------------------------------------------------------------
 # 4. reserve fold wiring and write-ahead persistence
 # ---------------------------------------------------------------------------
 
@@ -392,13 +454,8 @@ def test_confirmation_store_roundtrip(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_to_pqv2_fold() -> None:
-    grant = AccessGrant(
-        hypothesis_id=_HYP,
-        procedure_id="EWC_T23_ONE_SIDED",
-        fold_start=S.RESERVE_START,
-        fold_end=S.RESERVE_END,
-    )
+def test_to_pqv2_fold(tmp_path: Path) -> None:
+    grant = S.verified_grant(hypothesis_id=_HYP)
     reserve = FoldWindow.reserve(S.RESERVE_END, grant=grant)
     converted = to_pqv2_fold(reserve)
     assert converted == C.Fold("reserve", S.RESERVE_START, S.RESERVE_END)
@@ -445,12 +502,7 @@ def test_pqv2_reserve_builder_converts_the_fold(monkeypatch, tmp_path: Path) -> 
         overlay="overlay",
         inputs={},
     )
-    grant = AccessGrant(
-        hypothesis_id=_HYP,
-        procedure_id="EWC_T23_ONE_SIDED",
-        fold_start=S.RESERVE_START,
-        fold_end=S.RESERVE_END,
-    )
+    grant = S.verified_grant(hypothesis_id=_HYP)
     fold = FoldWindow.reserve(S.RESERVE_END, grant=grant)
     assert build(fold, None) == "diagnostics"
     assert seen["fold"] == C.Fold("reserve", S.RESERVE_START, S.RESERVE_END)
@@ -486,12 +538,7 @@ def test_derive_reserve_fold_inputs_wires_the_builders(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(RF, "build_returns_fold", _returns)
     monkeypatch.setattr(pd, "read_parquet", lambda path: "UNIVERSE_FRAME")
 
-    grant = AccessGrant(
-        hypothesis_id=_HYP,
-        procedure_id="EWC_T23_ONE_SIDED",
-        fold_start=S.RESERVE_START,
-        fold_end=S.RESERVE_END,
-    )
+    grant = S.verified_grant(hypothesis_id=_HYP)
     fold = FoldWindow.reserve(S.RESERVE_END, grant=grant)
     derivation = ReserveDerivation(
         root=tmp_path,
@@ -527,9 +574,13 @@ def test_development_fold_is_not_the_reserve_fold() -> None:
 
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
-    assert [mutation["id"] for mutation in mutations] == [
-        f"R7X-M{i}" for i in range(1, len(mutations) + 1)
-    ]
+    numeric = [mutation["id"] for mutation in mutations if mutation["id"].startswith("R7X-M") and mutation["id"][5:].isdigit()]
+    assert numeric == [f"R7X-M{i}" for i in range(1, len(numeric) + 1)]
+    assert [
+        mutation["id"]
+        for mutation in mutations
+        if mutation["id"] in {"R7X-M_forge_stub", "R7X-M_forge_access"}
+    ] == ["R7X-M_forge_stub", "R7X-M_forge_access"]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"].startswith("smart_beta/"), mutation["id"]

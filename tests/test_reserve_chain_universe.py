@@ -28,7 +28,6 @@ from smart_beta.dataset_v1 import universe as U
 from smart_beta.dataset_v1.reserve_chain import universe_fold as UF
 from smart_beta.dataset_v1.reserve_chain.fold import (
     DEVELOPMENT,
-    AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
 )
@@ -56,6 +55,30 @@ def _load_synthetic():
 
 
 SYN = _load_synthetic()
+
+_GRANTS_PATH = (
+    _REPO_ROOT / "tests" / "fixtures" / "reserve_chain" / "confirm" / "synthetic.py"
+)
+
+
+def _load_grants():
+    name = "r7x_confirm_synthetic"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _GRANTS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+_GRANTS = _load_grants()
+
+
+def _reserve_grant(end: date, hypothesis_id: str = "H-R7U"):
+    """A K-PIT-verified grant (a hand-built one is refused since R7-X-R1)."""
+    return _GRANTS.verified_grant(hypothesis_id=hypothesis_id, fold_end=end)
 
 
 # ---------------------------------------------------------------------------
@@ -238,14 +261,44 @@ def test_reserve_fold_requires_access_grant(tmp_path: Path) -> None:
             source="reserve",
             grant=None,
         )
-    # A grant makes it constructible.
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    # A K-PIT-verified grant makes it constructible.
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     assert fold.source == "reserve"
+
+
+def test_forged_hand_built_grant_refused_by_universe_builder(
+    tmp_path: Path,
+) -> None:
+    """A forged fold with a hand-built grant is refused by R7-U's gate too."""
+    from smart_beta.dataset_v1.reserve_chain.access import (
+        AccessGrant as AccessGrantImpl,
+    )
+
+    store, built, _sk, _start = _reserve_store(tmp_path)
+    forged = FoldWindow.development()
+    object.__setattr__(forged, "source", "reserve")
+    object.__setattr__(
+        forged,
+        "grant",
+        AccessGrantImpl(hypothesis_id="x", procedure_id="x"),
+    )
+    with pytest.raises(ReserveAccessDenied):
+        UF.run_universe_fold(
+            store.root,
+            fold=forged,
+            bindings=built["reserve"],
+            lookback_bindings=built["lookback"],
+            calendar=SYN.CALENDAR,
+        )
 
 
 def test_reserve_requires_lookback_bindings(tmp_path: Path) -> None:
     store, built, _sk, _start = _reserve_store(tmp_path)
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     with pytest.raises(U.UniverseInputError):
         UF.run_universe_fold(
             store.root,
@@ -272,7 +325,9 @@ def test_reserve_requires_lookback_bindings(tmp_path: Path) -> None:
 
 def test_reserve_fold_lookback_stitching(tmp_path: Path) -> None:
     store, built, sk, start = _reserve_store(tmp_path)
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     content = UF.run_universe_fold(
         store.root,
         fold=fold,
@@ -308,7 +363,9 @@ def test_reserve_fold_lookback_stitching(tmp_path: Path) -> None:
 
 def test_reserve_fold_rejects_lookback_in_reserve_package(tmp_path: Path) -> None:
     store, built, _sk, _start = _reserve_store(tmp_path, inject_pre_start=True)
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     with pytest.raises(UF.FoldConsistencyError):
         UF.run_universe_fold(
             store.root,
@@ -322,7 +379,9 @@ def test_reserve_fold_rejects_lookback_in_reserve_package(tmp_path: Path) -> Non
 def test_reserve_fold_rejects_post_end_row(tmp_path: Path) -> None:
     post = date(2023, 8, 1)
     store, built, _sk, _start = _reserve_store(tmp_path, post_end_row=post)
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     with pytest.raises(U.ReserveFirewallError):
         UF.run_universe_fold(
             store.root,
@@ -338,7 +397,7 @@ def test_run_reserve_universe_convenience(tmp_path: Path) -> None:
     content = UF.run_reserve_universe(
         store.root,
         end=SYN.RESERVE_FORMATION,
-        grant=AccessGrant(hypothesis_id="H-R7U"),
+        grant=_reserve_grant(SYN.RESERVE_FORMATION, "H-R7U"),
         bindings=built["reserve"],
         lookback_bindings=built["lookback"],
         calendar=SYN.CALENDAR,
@@ -354,7 +413,9 @@ def test_run_reserve_universe_convenience(tmp_path: Path) -> None:
 
 def test_fold_resolver_window_and_allowlist(tmp_path: Path) -> None:
     store, built, _sk, _start = _reserve_store(tmp_path)
-    fold = FoldWindow.reserve(SYN.RESERVE_FORMATION, grant=AccessGrant())
+    fold = FoldWindow.reserve(
+        SYN.RESERVE_FORMATION, grant=_reserve_grant(SYN.RESERVE_FORMATION)
+    )
     resolver = UF.FoldResolver(store.root, built["reserve"], fold)
     reserve_rel = built["reserve"].d3.files[0].relative_path
     assert resolver.resolve(reserve_rel) == store.root / reserve_rel

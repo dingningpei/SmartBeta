@@ -38,6 +38,7 @@ from smart_beta.dataset_v1 import universe as _universe
 from smart_beta.dataset_v1.reserve_chain.fold import (
     AccessGrant as _StubAccessGrant,
     ReserveAccessDenied,
+    _stamp_verified_access_grant,
 )
 from smart_beta.science.contracts import RecordKind
 
@@ -417,7 +418,7 @@ class AccessGrant(_StubAccessGrant):
                 "consumed (K-PIT is the ledger)"
             )
 
-        return cls(
+        grant = cls(
             hypothesis_id=hypothesis_id,
             procedure_id=procedure_id,
             fold_start=fold_start,
@@ -431,3 +432,7 @@ class AccessGrant(_StubAccessGrant):
                 where="ACCESS artifact_record_hash",
             ),
         )
+        # Only this verified path stamps the token the reserve gates require;
+        # a hand-built grant never carries it.
+        _stamp_verified_access_grant(grant)
+        return grant

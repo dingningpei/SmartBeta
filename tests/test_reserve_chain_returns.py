@@ -22,6 +22,7 @@ the equivalence see identical inputs.  No test reads ``data_store``,
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import socket
 import sys
@@ -35,7 +36,6 @@ from smart_beta.dataset_v1 import returns as R
 from smart_beta.dataset_v1.reserve_chain import returns_fold as RF
 from smart_beta.dataset_v1.reserve_chain.fold import (
     RESERVE,
-    AccessGrant,
     FoldWindow,
     ReserveAccessDenied,
 )
@@ -44,6 +44,24 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MUTATIONS_PATH = (
     _REPO_ROOT / "tests" / "fixtures" / "reserve_chain" / "returns" / "mutations.json"
 )
+_GRANTS_PATH = (
+    _REPO_ROOT / "tests" / "fixtures" / "reserve_chain" / "confirm" / "synthetic.py"
+)
+
+
+def _load_grants():
+    name = "r7x_confirm_synthetic"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _GRANTS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+_GRANTS = _load_grants()
 
 # The canonical D7a synthetic store.  Imported read-only so the equivalence run
 # is between two derivations of the *same* synthetic inputs.
@@ -64,12 +82,7 @@ RES_F1 = S[POS[_RESERVE_START] + 5]
 #: Fold end ``C``: exactly 21 trusted sessions after the reserve formation, so
 #: the h = 21 endpoint equals ``C`` and h = 22 crosses it.
 RES_C = S[POS[RES_F1] + 21]
-RES_GRANT = AccessGrant(
-    hypothesis_id="H-R7R-TEST",
-    procedure_id="EWC_T23_ONE_SIDED",
-    fold_start=_RESERVE_START,
-    fold_end=RES_C,
-)
+RES_GRANT = _GRANTS.verified_grant(hypothesis_id="H-R7R-TEST", fold_end=RES_C)
 RESERVE_FOLD = FoldWindow.reserve(RES_C, grant=RES_GRANT)
 
 #: canonical key columns per frozen output table (spec §1 sort).

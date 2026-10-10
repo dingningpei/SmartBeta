@@ -130,5 +130,29 @@
    }
   ],
   "test": "tests/test_reserve_chain_confirm.py::test_run_confirmation_refuses_not_assessed"
+ },
+ {
+  "id": "R7X-M_forge_stub",
+  "description": "a hand-built fold.AccessGrant stub authorizes a reserve fold again",
+  "file": "smart_beta/dataset_v1/reserve_chain/fold.py",
+  "edits": [
+   {
+    "old": "    if not isinstance(grant, AccessGrant):\n        return False\n    return getattr(grant, _VERIFIED_ATTR, None) is _VERIFIED_TOKEN",
+    "new": "    return isinstance(grant, AccessGrant)  # mutation R7X-M_forge_stub: token not required"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_hand_built_stub_grant_denied"
+ },
+ {
+  "id": "R7X-M_forge_access",
+  "description": "a hand-built access.AccessGrant authorizes a reserve fold without the K-PIT token",
+  "file": "smart_beta/dataset_v1/reserve_chain/fold.py",
+  "edits": [
+   {
+    "old": "    return getattr(grant, _VERIFIED_ATTR, None) is _VERIFIED_TOKEN",
+    "new": "    return type(grant).__module__ == \"smart_beta.dataset_v1.reserve_chain.access\"  # mutation R7X-M_forge_access: access.AccessGrant accepted without token"
+   }
+  ],
+  "test": "tests/test_reserve_chain_confirm.py::test_hand_built_access_grant_denied"
  }
 ]
