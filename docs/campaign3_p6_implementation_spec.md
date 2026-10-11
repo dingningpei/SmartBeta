@@ -153,3 +153,61 @@ nothing assembles the production dependencies from real data:
    - L-M2: preflight prints a statistic;
    - L-M3: production without a marker;
    - L-M4: the T-B folds include the reserve.
+
+## Erratum P6-E3 (APPROVED 2026-10-10, user: "修复后做第 2 次尝试") — attempt 1 RUN_INCOMPLETE; fixes before attempt 2
+
+**Attempt 1** (master `85ed5f4`; started 16:51, stopped 17:21):
+- **How it stopped:** `PQv2InvariantError` in `_realize_std_x_rank`. For the first
+  STD_X_RANK candidate, the launcher's panel cell did not equal P-Q's realization:
+  `TIINGO:A:1999-11-18 @ 2016-01-29: 196.72 != 207.84`.
+- **K-PIT seq 11–15 were appended** and are permanent:
+  - seq 11: CAMPAIGN `523763100f9d3d0d0539c58016c4708b41729571fddc207a5ae9f1614af641e8`;
+  - seq 12: the control freeze;
+  - seq 13: GENERATOR_INPUT;
+  - seq 14–15: two GENERATOR HYPOTHESIS_FREEZE records.
+- **What was checked after the stop:**
+  - the v1.2 identity check still passes, and no record holds the literal;
+  - 0 reserve opens;
+  - 1 DeepSeek call;
+  - one T-A diagnostics file was persisted. Nobody has read it, and it is never
+    forwarded.
+- **Cause 1 (a planner spec defect, from P6-E2):**
+  - the panel builder reused the Campaign-1 `panel_of`, which only ever served
+    SIMPLE expressions;
+  - for cross-sectional operators, its cross-section differs from P-Q's
+    `_alias_frames(spec, inputs, overlay)` realization;
+  - the preflight covered only EVENT_SIMPLE.
+- **Cause 2 (an implementation gap, P6 §1 C3-R "write-ahead … resume"):**
+  - generation events and raw artifacts were held **in memory**. The raw response of
+    call 1 is lost, so attempt 1 cannot be resumed faithfully. Re-calling the
+    generator would be a hidden retry.
+- **Disposition:** attempt 1 = **RUN_INCOMPLETE**. Its candidates never enter ranking,
+  T-B or T-C. The final report discloses it.
+
+**Fixes (Pi; disjoint files):**
+
+1. **C3-L-R1** (`campaign3_launch.py` + its tests):
+   - the panel builder computes the factor panel from **exactly the frames P-Q
+     realizes against** (`pqv2_evaluation._alias_frames(spec, inputs, overlay)`,
+     read-only import) with the Phase-6 spec evaluator (no new math);
+   - a parity test proves `build_pqv2_diagnostics` raises no invariant error for
+     SIMPLE, STD_X_RANK and EVENT_SIMPLE on synthetic data;
+   - the preflight evaluates **three fixed planner-specified FactorSpecs**:
+     - the positive control (EVENT_SIMPLE);
+     - SIMPLE = 20-session TRI momentum `tri/lag(tri,20) − 1`;
+     - STD_X_RANK = `standardize(rolling_mean(ret,20)) × rank(rolling_mean(dv,60))`.
+     The preflight output stays statistic-free.
+2. **C3-R-R4** (`campaign3_run.py`, `campaign3_generation.py` + their tests):
+   - **write-ahead to disk**: every GenerationEvent and raw artifact, plus the
+     candidate dispositions, are persisted in the run directory before
+     normalization or evaluation;
+   - a crash at any point resumes from disk with **no** generator re-call for a
+     persisted event and **no** double counting;
+   - the **CAMPAIGN supersession**: attempt 2 writes a new CAMPAIGN record carrying
+     `supersedes_record_hash = 5237631…` and the attempt-1 disposition
+     (RUN_INCOMPLETE plus the cause). The record lookups select the CAMPAIGN record
+     that no later record supersedes. The control freeze and TB_SELECTION bind to
+     that record; the attempt-1 control/GENERATOR records are ignored for attempt 2.
+3. **Then:** the planner re-runs the K-PIT copy simulation (now including the
+   supersession) and the 3-spec preflight; only then does attempt 2 run, under the
+   standing authorization.
