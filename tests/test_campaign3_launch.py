@@ -1,8 +1,9 @@
 """C3-L Campaign-3 production launcher / preflight tests (synthetic only).
 
 Authority: the frozen ``docs/campaign3_p6_implementation_spec.md`` (task C3-L,
-Erratum P6-E2, Erratum P6-E3 plus its 2026-10-10 correction, and Erratum
-P6-E4) and section 2 mutations L-M1..L-M8, on top of the frozen
+Erratum P6-E2, Erratum P6-E3 plus its 2026-10-10 correction, Erratum P6-E4,
+and Erratum P6-E5 item 3) and section 2 mutations L-M1..L-M9, on top of the
+frozen
 ``docs/campaign3_p5_precommitment.md`` (+E1) and the K-PIT dataset reference
 note.
 
@@ -541,7 +542,123 @@ def test_pool_tb_folds_concatenates_in_fold_order():
 
 
 # ---------------------------------------------------------------------------
-# 7. mutation fixture integrity
+# 7. cold-resume screen rebuild (P6-E5 C3-L-R3; mutation L-M9)
+# ---------------------------------------------------------------------------
+
+
+class _Snapshot:
+    """The minimal ``GenerationSnapshot`` surface the builder reads."""
+
+    def __init__(self, candidates: Any, diagnostics_dir: str = "") -> None:
+        self.candidates = tuple(candidates)
+        self.diagnostics_dir = diagnostics_dir
+
+
+def _candidate_record(case: Any, digest: Any, *, spec: Any = None, sign: int = 1):
+    from smart_beta.spec.factor_spec import factor_spec_hash
+
+    chosen = case.spec if spec is None else spec
+    spec_hash = factor_spec_hash(chosen)
+    return {
+        "hypothesis_id": "h" * 64,
+        "proposal_id": "p" * 64,
+        "factor_spec_hash": spec_hash,
+        "canonical_key": spec_hash,
+        "sign": sign,
+        "diagnostics_hash": str(digest),
+    }
+
+
+def test_cold_resume_rebuilds_the_same_candidates_and_exports(tmp_path):
+    """A cache-cold resume yields the warm path's candidates/exports."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, diagnostics, provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+
+    # Warm: the generation-time in-process cache.
+    assembly.ta_cache[str(digest)] = {
+        "diagnostics": diagnostics,
+        "provenance": provenance,
+    }
+    warm_candidates, warm_control = assembly.screen_candidate_builder(snapshot)
+    assert warm_control.hypothesis_id == R.CONTROL_HYPOTHESIS_ID
+
+    # Cold: no cache; load the persisted diagnostics + provenance and rebuild
+    # the export with the same panel/declaration builders.
+    assembly.ta_cache.clear()
+    cold_candidates, cold_control = assembly.screen_candidate_builder(snapshot)
+
+    assert len(warm_candidates) == len(cold_candidates) == 1
+    assert cold_control.hypothesis_id == warm_control.hypothesis_id
+    assert cold_candidates[0].hypothesis_id == warm_candidates[0].hypothesis_id
+    assert cold_candidates[0].canonical_key == warm_candidates[0].canonical_key
+    assert cold_candidates[0].sign == warm_candidates[0].sign
+    assert (
+        cold_candidates[0].diagnostics.diagnostics_hash
+        == warm_candidates[0].diagnostics.diagnostics_hash
+        == str(digest)
+    )
+    assert (
+        cold_candidates[0].series_export.records
+        == warm_candidates[0].series_export.records
+    )
+    assert (
+        cold_candidates[0].series_export.diagnostics_hash
+        == warm_candidates[0].series_export.diagnostics_hash
+        == str(digest)
+    )
+    # The persisted diagnostics artifact + provenance sidecar were reused, not
+    # rewritten (write-once).
+    artifact = Path(assembly.diagnostics_dir) / f"{digest}.json"
+    sidecar = Path(assembly.diagnostics_dir) / f"{digest}.provenance.json"
+    assert artifact.is_file() and sidecar.is_file()
+
+
+def test_cold_resume_missing_diagnostics_is_launch_error(tmp_path):
+    """A missing persisted diagnostics artifact fails closed."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "simple")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    assembly.ta_cache.clear()
+    (Path(assembly.diagnostics_dir) / f"{digest}.json").unlink()
+    with pytest.raises(L.LaunchError):
+        assembly.screen_candidate_builder(snapshot)
+
+
+def test_cold_resume_missing_provenance_is_launch_error(tmp_path):
+    """A missing persisted provenance sidecar fails closed."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "simple")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    assembly.ta_cache.clear()
+    (Path(assembly.diagnostics_dir) / f"{digest}.provenance.json").unlink()
+    with pytest.raises(L.LaunchError):
+        assembly.screen_candidate_builder(snapshot)
+
+
+def test_cold_resume_rebuilt_hash_mismatch_is_launch_error(tmp_path):
+    """Kills mutation L-M9 (the cold path skips the rebuilt-hash check).
+
+    The persisted artifact is valid for one spec, but the provenance names a
+    different spec; the deterministic rebuild produces a different
+    diagnostics hash and the builder refuses it.
+    """
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    sidecar = Path(assembly.diagnostics_dir) / f"{digest}.provenance.json"
+    sidecar.unlink()
+    wrong_spec = L.simple_factor_spec()
+    L.persist_ta_provenance(
+        assembly.diagnostics_dir, str(digest), wrong_spec, assembly.is_fold
+    )
+    snapshot = _Snapshot((_candidate_record(case, digest, spec=wrong_spec),))
+    assembly.ta_cache.clear()
+    with pytest.raises(L.LaunchError):
+        assembly.screen_candidate_builder(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# 8. mutation fixture integrity
 # ---------------------------------------------------------------------------
 
 
@@ -557,6 +674,7 @@ def test_mutations_fixture_is_wellformed():
         "L-M6",
         "L-M7",
         "L-M8",
+        "L-M9",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]

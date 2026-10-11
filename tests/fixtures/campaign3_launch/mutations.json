@@ -98,5 +98,17 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_preflight_failed_probe_writes_no_marker"
+ },
+ {
+  "id": "L-M9",
+  "description": "the cold-resume screen skips the rebuilt-diagnostics hash check",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        if rebuilt != digest:\n            raise LaunchError(\n                \"the rebuilt T-A IS diagnostics for snapshot candidate \"",
+    "new": "        if False and rebuilt != digest:  # mutation L-M9: the hash check is skipped\n            raise LaunchError(\n                \"the rebuilt T-A IS diagnostics for snapshot candidate \""
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilt_hash_mismatch_is_launch_error"
  }
 ]
