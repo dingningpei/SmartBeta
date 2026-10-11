@@ -272,3 +272,62 @@ verified by the planner with `certify_candidate`):**
      the attempt-3 supersession;
    - **the battery preflight**;
    - attempt 3, under the standing authorization.
+
+## Erratum P6-E5 (APPROVED 2026-10-11, user: "只对传输错误做有限重试" + "全新开始") — attempt 3 RUN_INCOMPLETE; per-attempt state; transport retry; attempt 4
+
+**Attempt 3** (master `9628098`; 2026-10-11, 04:29–07:26):
+- **K-PIT seq 23–45 were appended:**
+  - seq 23: CAMPAIGN `bc061d8419bcccf492b52348dae663e02386b77b16925fdeb2e2b040e1737b4b`, superseding `eb058bfe…`;
+  - the control freeze;
+  - 19 GENERATOR freezes;
+  - 2 GENERATOR_INPUT.
+- **Generation stopped early:** `stop_reason = generator_failure` with `n_used = 26`,
+  `n_calls = 4` and `failed_calls = 1`. `failed_call_tokens = 0` means a
+  transport-level failure, with no response.
+- **Three implementation defects were exposed:**
+  1. **The run directory was shared across attempts.** `attempt_id` does not bind the
+     active CAMPAIGN record, so attempt 3 reloaded attempt 2's on-disk generation state
+     (3 diagnostics written at 00:38–00:48 by the pre-PQ-EV code).
+  2. **The run continued after an early stop.** After the non-budget generation stop,
+     `run()` went on to ranking, contrary to P5's RUN_INCOMPLETE.
+  3. **The screen candidate builder read the in-memory cache only.** It raised
+     `LaunchError: no cached T-A IS diagnostics` for an attempt-2 candidate.
+- **What did not happen:** no TB_SELECTION record was written, and no T-B or T-C file
+  exists. DEVELOPMENT_SEALED is still unused; 0 reserve opens. The planner viewed no IS
+  statistic.
+- **Disposition:** **RUN_INCOMPLETE** (contaminated). Its candidates never enter T-B or
+  T-C.
+
+**Fixes (Pi; disjoint files):**
+
+1. **C3-R-R6** (`campaign3_run.py` + tests):
+   - `attempt_id` binds the active CAMPAIGN record hash, giving a fresh run directory per
+     attempt;
+   - persisted state carries that hash, and any state bound to another CAMPAIGN record is
+     **refused** (never loaded);
+   - any generation stop other than PROPOSAL_BUDGET_EXHAUSTED ends the run as
+     RUN_INCOMPLETE, with no ranking, TB_SELECTION or T-B;
+   - the manifest records each failed call's exception type and message (secret-scanned);
+   - `ATTEMPT3_CAMPAIGN_RECORD_HASH = bc061d8419bcccf492b52348dae663e02386b77b16925fdeb2e2b040e1737b4b` and `ATTEMPT3_SUPERSEDED_DISPOSITION` are
+     added.
+2. **C3-D-R2** (`llm_generator_deepseek.py` + tests; this amends P4 A2 / Phase-9 "no
+   hidden retry" for transport errors only):
+   - transport failures with **no response** — `APIConnectionError`, `APITimeoutError`,
+     `InternalServerError` (5xx), `RateLimitError` (429) — are retried **at most 3 times**,
+     with backoff of 10 s, 30 s and 90 s;
+   - every retry is recorded in the call record (type, attempt index, wait);
+   - any failure **with** a response (a `length` truncation, a non-retryable 4xx, a
+     malformed body) is never retried;
+   - the retry budget being exhausted gives a typed failure (the run stops, P4);
+   - no generator content is ever observed before a retry, so there is no selection on
+     output.
+3. **C3-L-R3** (`campaign3_launch.py` + tests): the screen candidate builder loads the
+   persisted T-A diagnostics from the run directory when they are not cached, and rebuilds
+   the `pqv2_series` export deterministically (resume-safe); it is fail-closed if a file
+   is missing.
+4. **Then:**
+   - the K-PIT copy simulation (supersession of attempt 3, a fresh run directory, a
+     foreign-state refusal check);
+   - the 10-probe preflight;
+   - the full suite;
+   - **attempt 4 from scratch** (N = 100), under the standing authorization.
