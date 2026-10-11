@@ -186,7 +186,7 @@ def test_observed_values_reads_the_bridge_row(oracle) -> None:
     offsets = (-5, -4, -3, -2, -1)
 
     observed = E._observed_values(
-        "A", None, frame, session_at_offset, offsets
+        "A", None, None, frame, session_at_offset, offsets
     )
 
     expected = {
@@ -213,11 +213,17 @@ def test_m_obs_is_the_realized_formation_row() -> None:
     formation_pos = {session: index - 3 for index, session in enumerate(sessions)}
     session_at_offset = {offset: session for session, offset in formation_pos.items()}
     m_row = pd.Series({"A": 12.5, "B": math.nan})
-    observed = E._observed_values("A", m_row, frame, session_at_offset, (-1,))
+    v_row = pd.Series({"A": 3.5, "B": math.nan})
+    observed = E._observed_values(
+        "A", m_row, v_row, frame, session_at_offset, (-1,)
+    )
     assert observed.M_obs == 12.5
-    assert E._observed_values(
-        "B", m_row, frame, session_at_offset, (-1,)
-    ).M_obs is None
+    assert observed.V_obs == 3.5
+    missing = E._observed_values(
+        "B", m_row, v_row, frame, session_at_offset, (-1,)
+    )
+    assert missing.M_obs is None
+    assert missing.V_obs is None
 
 
 # ---------------------------------------------------------------------------
@@ -242,9 +248,10 @@ def _clean_boxes(case):
             offset: session for session, offset in formation_pos.items()
         }
         offsets = E._dv_offsets(windows, formation_pos)
+        v_row = v_wide.loc[pd.Timestamp(formation)]
         for key in case.fx.KEYS:
             observed = E._observed_values(
-                key, None, case.input_frame, session_at_offset, offsets
+                key, None, v_row, case.input_frame, session_at_offset, offsets
             )
             uncertainty = D.input_uncertainty(
                 D.STD_X_RANK,
@@ -272,11 +279,10 @@ def test_clean_v_box_equals_realization_and_oracle(tmp_path: Path, align, oracle
         f_index = case.fx.SESSIONS.index(formation)
         for key in case.fx.KEYS:
             lo, hi = boxes[(formation, key)]
-            # The clean box is a degenerate point (==), not merely a container.
+            # The clean box is a degenerate point (==), not merely a container,
+            # and it is bit-for-bit the realized V (the certified requirement).
             assert lo == hi
-            assert lo == pytest.approx(
-                realized[(formation, key)], rel=_REL, abs=_ABS
-            )
+            assert lo == realized[(formation, key)]
             reference = oracle.v_ratio(
                 list(case.raw[key]), f_index, 2, 6
             )
@@ -301,9 +307,15 @@ def test_suspect_v_interval_contains_realization(tmp_path: Path, align, oracle) 
         offset: session for session, offset in formation_pos.items()
     }
     offsets = E._dv_offsets(windows, formation_pos)
+    overlay = case.store.overlay(pq_id="pqsx", pq_hash="pqsx")
+    frames = E._alias_frames(case.spec, case.inputs, overlay)
+    v_wide = E._evaluate_subexpression(
+        case.spec, windows.v_operand, frames, suffix="v"
+    )
     key = "A"
+    v_row = v_wide.loc[pd.Timestamp(formation)]
     observed = E._observed_values(
-        key, None, case.input_frame, session_at_offset, offsets
+        key, None, v_row, case.input_frame, session_at_offset, offsets
     )
     # A close-branch transition whose s and prev(s) both fall in the dv cells.
     s = session_at_offset[-2]
@@ -333,8 +345,12 @@ def test_suspect_v_interval_contains_realization(tmp_path: Path, align, oracle) 
     kappas = {-2: (rel.lo, rel.hi), -3: (rel.inv().lo, rel.inv().hi)}
     brute = oracle.suspect_v_interval(observed.dv, short, long, kappas)
     assert brute is not None
-    assert interval.lo == pytest.approx(brute[0], rel=_REL, abs=_ABS)
-    assert interval.hi == pytest.approx(brute[1], rel=_REL, abs=_ABS)
+    # Widening only pushes an endpoint out to V_obs, so the widened interval is
+    # exactly the brute-force box hulled with V_obs.
+    expected_lo = min(brute[0], reference)
+    expected_hi = max(brute[1], reference)
+    assert interval.lo == pytest.approx(expected_lo, rel=_REL, abs=_ABS)
+    assert interval.hi == pytest.approx(expected_hi, rel=_REL, abs=_ABS)
 
 
 # ---------------------------------------------------------------------------
@@ -375,29 +391,30 @@ def test_v_interval_admits_zero_short_window_and_excludes_zero_long() -> None:
         -2: 0.0,
         -1: 0.0,
     }
-    interval = D._v_interval(
+    interval, widened = D._v_interval(
         windows, 0, (), D.ObservedValues(M_obs=1.0, dv=short_zero)
     )
     assert isinstance(interval, C.NonNegativeInterval)
     assert (interval.lo, interval.hi) == (0.0, 0.0)
+    assert widened is False
 
     # A suspect short cell keeps V = 0 as the lower endpoint and stays >= 0.
     rel = C.s2_relative(1.0)
     transition = C.UncertainTransition("A", -1, -2, 0, 1.0, rel)
-    suspect = D._v_interval(
+    suspect, suspect_widened = D._v_interval(
         windows, 0, (transition,), D.ObservedValues(M_obs=1.0, dv=short_zero)
     )
     assert suspect is not None
     assert suspect.lo == 0.0
     assert 0.0 <= suspect.lo <= suspect.hi
+    assert suspect_widened is False
 
     long_zero = {offset: 0.0 for offset in short_zero}
-    assert (
-        D._v_interval(
-            windows, 0, (), D.ObservedValues(M_obs=1.0, dv=long_zero)
-        )
-        is None
+    absent, absent_widened = D._v_interval(
+        windows, 0, (), D.ObservedValues(M_obs=1.0, dv=long_zero)
     )
+    assert absent is None
+    assert absent_widened is False
 
 
 def test_zero_dv_short_window_boxes_and_ranking(tmp_path: Path, align, oracle) -> None:
@@ -431,6 +448,108 @@ def test_zero_dv_short_window_boxes_and_ranking(tmp_path: Path, align, oracle) -
         ]
         assert len(cell) == 1
         assert math.isfinite(float(cell.iloc[0]["value"]))
+
+
+# ---------------------------------------------------------------------------
+# Clean V box == realized V_obs bit-for-bit (not the dv-sum reconstruction)
+# ---------------------------------------------------------------------------
+
+
+def test_clean_box_uses_v_obs_not_the_dv_sum_reconstruction(align) -> None:
+    """A clean key's V box is the realized V_obs bit-for-bit, not the dv sum.
+
+    ``long_only_zero_frame`` makes the dv-sum reconstruction exactly
+    ``n_long / n_short`` while the pandas rolling-mean realization rounds it to
+    a different last ulp; the certified clean box must be the realization.
+    """
+
+    w1, w2, f = 2, 6, 20
+    frame, v_obs = align.long_only_zero_frame(w1=w1, w2=w2, f=f)
+    sessions = [pd.Timestamp(stamp).date() for stamp in frame.index]
+    formation = sessions[f]
+    formation_pos = {session: index - f for index, session in enumerate(sessions)}
+    session_at_offset = {
+        offset: session for session, offset in formation_pos.items()
+    }
+    windows = D.Windows(
+        numerical_dv_short=((-1 - w1, -1),),
+        numerical_dv_long=((-1 - w2, -1),),
+    )
+    offsets = tuple(sorted(set(range(-w1, 0)) | set(range(-w2, 0))))
+    observed = E._observed_values(
+        "Z", None, pd.Series({"Z": v_obs}), frame, session_at_offset, offsets
+    )
+    assert observed.V_obs == v_obs
+    interval, widened = D._v_interval(windows, formation_pos, (), observed)
+    assert widened is False
+    assert interval is not None
+    # Bit-for-bit the realization, not the dv-sum reconstruction.
+    assert interval.lo == interval.hi == v_obs
+    short = tuple(range(-w1, 0))
+    long_only = tuple(range(-w2, -w1))
+    short_sum = 0.0
+    for offset in sorted(short):
+        short_sum += observed.dv[offset]
+    long_sum = short_sum
+    for offset in sorted(long_only):
+        long_sum += observed.dv[offset]
+    naive = (w2 / w1) * short_sum / long_sum
+    assert naive != v_obs  # the reconstruction trap is real in this fixture
+    assert interval.lo != naive
+
+
+def test_uncertain_v_interval_widens_one_ulp_to_include_v_obs() -> None:
+    """An uncertain box that misses V_obs by one ulp is widened and recorded."""
+
+    windows = D.Windows(
+        numerical_dv_short=((-3, -1),),
+        numerical_dv_long=((-7, -1),),
+    )
+    dv = {-6: 5.0, -5: 4.0, -4: 3.0, -3: 2.0, -2: 3.0, -1: 4.0}
+    rel = C.s2_relative(1.0)
+    transition = C.UncertainTransition("A", -1, -2, 0, 1.0, rel)
+    base, base_widened = D._v_interval(
+        windows, 0, (transition,), D.ObservedValues(M_obs=1.0, dv=dv)
+    )
+    assert base is not None
+    assert base_widened is False
+    assert base.lo > 0.0
+
+    # One ulp above the reconstructed maximum.
+    v_high = math.nextafter(base.hi, math.inf)
+    interval, widened = D._v_interval(
+        windows,
+        0,
+        (transition,),
+        D.ObservedValues(M_obs=1.0, V_obs=v_high, dv=dv),
+    )
+    assert widened is True
+    assert interval.lo == base.lo
+    assert interval.hi == v_high
+
+    # One ulp below the reconstructed minimum.
+    v_low = math.nextafter(base.lo, -math.inf)
+    interval_low, widened_low = D._v_interval(
+        windows,
+        0,
+        (transition,),
+        D.ObservedValues(M_obs=1.0, V_obs=v_low, dv=dv),
+    )
+    assert widened_low is True
+    assert interval_low.lo == v_low
+    assert interval_low.hi == base.hi
+
+    # The widening is recorded per key on the uncertainty result.
+    source = C.SourceSet(transitions_by_key={"A": (transition,)})
+    result = D.input_uncertainty(
+        D.STD_X_RANK,
+        windows,
+        source,
+        0,
+        ("A",),
+        {"A": D.ObservedValues(M_obs=1.0, V_obs=v_high, dv=dv)},
+    )
+    assert result.V_widened["A"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +614,7 @@ def _sandwich_scenario(seed: int, *, n: int = 20, groups: int = 5, length: int =
     def observed_for(key: str, mode: str) -> D.ObservedValues:
         if mode == "production":
             return E._observed_values(
-                key, None, frame, session_at_offset, offsets
+                key, None, None, frame, session_at_offset, offsets
             )
         # mode == "double_lag": the PQ-SX defect (read the raw session).
         dv = {}
@@ -632,7 +751,7 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
     payload = json.loads(MUTATIONS.read_text(encoding="utf-8"))
     ids = [entry["id"] for entry in payload]
     assert ids[0] == "CONTROL"
-    assert {"SX-M1", "SX-M2", "SX-M3"} <= set(ids)
+    assert {"SX-M1", "SX-M2", "SX-M3", "SX-M4"} <= set(ids)
     allowed_files = {
         "smart_beta/dataset_v1/pqv2_evaluation.py",
         "smart_beta/dataset_v1/pqv2_dependency.py",

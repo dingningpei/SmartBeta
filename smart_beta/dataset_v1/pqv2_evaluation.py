@@ -942,14 +942,15 @@ def _dv_offsets(
 def _observed_values(
     key: str,
     m_row: pd.Series | None,
+    v_row: pd.Series | None,
     dv_frame: pd.DataFrame | None,
     session_at_offset: Mapping[int, date],
     offsets: Sequence[int],
 ) -> _dependency.ObservedValues:
-    """Observed M and dv values for one key at one formation.
+    """Observed M, V and dv values for one key at one formation.
 
-    ``M_obs`` is the realized momentum sub-expression at the formation row,
-    which already carries the D7c bridge lag.  ``dv`` maps a formation-relative
+    ``M_obs`` / ``V_obs`` are the realized M/V sub-expressions at the formation
+    row, which already carry the D7c bridge lag.  ``dv`` maps a formation-relative
     dependency offset to the **observation** of that offset's session.  The
     dependency offsets are session-relative (offset ``u`` denotes session
     ``f + u``), while the D7c frames follow the §11 bridge convention: **row
@@ -966,6 +967,11 @@ def _observed_values(
         value = m_row[key]
         if _is_finite(value):
             m_obs = float(value)
+    v_obs = None
+    if v_row is not None and key in v_row.index:
+        value = v_row[key]
+        if _is_finite(value):
+            v_obs = float(value)
     dv: dict[int, float] = {}
     if dv_frame is not None and key in dv_frame.columns:
         for offset in offsets:
@@ -982,7 +988,7 @@ def _observed_values(
             value = dv_frame.at[stamp, key]
             if _is_finite(value):
                 dv[offset] = float(value)
-    return _dependency.ObservedValues(M_obs=m_obs, dv=dv)
+    return _dependency.ObservedValues(M_obs=m_obs, dv=dv, V_obs=v_obs)
 
 
 def _labels_for_formation(
@@ -1112,7 +1118,7 @@ def _assignment_for_formation(
     offsets = _dv_offsets(windows, formation_pos)
     observed = {
         key: _observed_values(
-            key, m_row, dv_frame, session_at_offset, offsets
+            key, m_row, v_row, dv_frame, session_at_offset, offsets
         )
         for key in sorted(cross_keys)
     }

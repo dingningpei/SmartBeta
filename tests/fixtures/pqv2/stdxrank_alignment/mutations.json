@@ -17,12 +17,12 @@
         "new": "            row_session = session_at_offset.get(offset)"
       }
     ],
-    "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_v_box_equals_realization_and_oracle",
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_observed_values_reads_the_bridge_row",
     "expected": "killed"
   },
   {
     "id": "SX-M2",
-    "description": "the alignment is off by one the other way: _observed_values reads row f+u+2, so the V box uses dv through f instead of f-1",
+    "description": "the alignment is off by one the other way: _observed_values reads row f+u+2, so the observed dv (and hence the uncertain V reconstruction) uses the wrong sessions",
     "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
     "edits": [
       {
@@ -30,20 +30,33 @@
         "new": "            row_session = session_at_offset.get(offset + 2)"
       }
     ],
-    "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_v_box_equals_realization_and_oracle",
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_observed_values_reads_the_bridge_row",
     "expected": "killed"
   },
   {
     "id": "SX-M3",
-    "description": "positivity is re-imposed on V: _v_interval returns a strict PositiveInterval, so a zero-dv short-window key (V = 0) raises instead of being ranked",
+    "description": "positivity is re-imposed on V: _v_interval returns a strict PositiveInterval, so an uncertain zero-dv short-window reconstruction (V = 0) raises instead of being ranked",
     "file": "smart_beta/dataset_v1/pqv2_dependency.py",
     "edits": [
       {
-        "old": "    return _core.NonNegativeInterval(v_min, v_max)",
-        "new": "    return _core.PositiveInterval(v_min, v_max)"
+        "old": "    return _core.NonNegativeInterval(v_min, v_max), widened",
+        "new": "    return _core.PositiveInterval(v_min, v_max), widened"
       }
     ],
-    "test": "tests/test_pqv2_stdxrank_alignment.py::test_zero_dv_short_window_boxes_and_ranking",
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_v_interval_admits_zero_short_window_and_excludes_zero_long",
+    "expected": "killed"
+  },
+  {
+    "id": "SX-M4",
+    "description": "the clean V box is reconstructed from the dv sums instead of using the realized V_obs, so a dv-sum/pandas rounding difference makes a clean box disagree with the realization",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    if not cells and v_obs is not None and math.isfinite(v_obs):\n        return _core.NonNegativeInterval(v_obs, v_obs), False",
+        "new": "    if False:  # SX-M4 clean V box always reconstructed\n        return _core.NonNegativeInterval(v_obs, v_obs), False"
+      }
+    ],
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_box_uses_v_obs_not_the_dv_sum_reconstruction",
     "expected": "killed"
   }
 ]

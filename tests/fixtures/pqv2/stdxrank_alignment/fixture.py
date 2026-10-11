@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -87,6 +88,38 @@ def bridge_frame(raw: pd.DataFrame) -> pd.DataFrame:
     frame = raw.shift(1)
     frame.iloc[0] = raw.iloc[0]
     return frame
+
+
+def long_only_zero_frame(
+    *,
+    w1: int = 2,
+    w2: int = 6,
+    f: int = 20,
+    seed: int = 7,
+    scale: float = 1e12,
+) -> tuple[pd.DataFrame, float]:
+    """A prev(d) ``Z`` frame whose long-only dv cells are exactly zero.
+
+    The short window is the only non-zero part of the long window, so the
+    analytic ``V`` is exactly ``n_long / n_short``.  The pandas rolling-mean
+    realization rounds that division to a (possibly) different last ulp than
+    the exact dv-sum reconstruction -- the PQ-SX clean-box trap.  Returns the
+    bridge frame and the realized ``V``.
+    """
+
+    rng = np.random.default_rng(seed)
+    length = f + 1
+    raw = np.abs(rng.normal(0.0, 1.0, length)) * 1000.0 + 1.0
+    raw[f - w2 : f - w1] = 0.0
+    raw[f - w1 : f] = np.abs(rng.normal(0.0, 1.0, w1)) * scale + 1.0
+    sessions = [date(2020, 1, 1) + timedelta(days=index) for index in range(length)]
+    series = pd.Series(raw, index=pd.to_datetime(sessions))
+    bridge = series.shift(1)
+    bridge.iloc[0] = raw[0]
+    v_obs = float(
+        bridge.rolling(w1).mean().iloc[f] / bridge.rolling(w2).mean().iloc[f]
+    )
+    return bridge.to_frame(name="Z"), v_obs
 
 
 def zero_short_window_indices(
