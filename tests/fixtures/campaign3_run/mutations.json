@@ -190,5 +190,29 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_supersession_of_a_non_existent_record_is_refused"
+ },
+ {
+  "id": "R-M17",
+  "description": "attempt 3 supersedes attempt 1 instead of the active attempt 2 (P6-E4)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        active = _active_campaign_record(self.knowledge_log)\n        if active is None:\n            return None, None\n        stored = _campaign_payload(active.payload)",
+    "new": "        if _campaign3_campaign_by_hash(\n            self.knowledge_log, ATTEMPT1_CAMPAIGN_RECORD_HASH\n        ) is not None:\n            # mutation R-M17: supersede the immutable first attempt\n            return (\n                ATTEMPT1_CAMPAIGN_RECORD_HASH,\n                self.superseded_disposition\n                or _superseded_disposition_for(ATTEMPT1_CAMPAIGN_RECORD_HASH),\n            )\n        active = _active_campaign_record(self.knowledge_log)\n        if active is None:\n            return None, None\n        stored = _campaign_payload(active.payload)"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_attempt3_supersedes_the_active_attempt2_and_chain_resolves"
+ },
+ {
+  "id": "R-M18",
+  "description": "an ambiguous supersession chain is accepted (P6-E4)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    if len(active) != 1:\n        raise C3GovernanceConflict(\n            f\"expected exactly one active CAMPAIGN record, found {len(active)}\"\n        )\n    return active[0]",
+    "new": "    # mutation R-M18: an ambiguous chain is accepted\n    return active[0]"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_ambiguous_supersession_chain_is_refused"
  }
 ]

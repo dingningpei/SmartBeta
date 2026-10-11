@@ -31,8 +31,13 @@ write-ahead, resumable run:
   ``supersedes_record_hash`` names the exact prior CAMPAIGN record it replaces;
   the *active* CAMPAIGN record is the Campaign-3-schema record no later record
   supersedes, and the control / GENERATOR / TB_SELECTION records are scoped to
-  it.  :data:`ATTEMPT1_CAMPAIGN_RECORD_HASH` is the frozen production attempt-1
-  record that attempt 2 supersedes.
+  it.  **P6-E4 generalization:** the production default supersedes whatever
+  record is active (resolving the supersession chain to exactly one record;
+  an ambiguous chain is refused), using the matching frozen disposition
+  constant.  :data:`ATTEMPT1_CAMPAIGN_RECORD_HASH` and
+  :data:`ATTEMPT2_CAMPAIGN_RECORD_HASH` are the frozen production records for
+  attempts 1 and 2; an active record with no frozen disposition is refused
+  unless the caller supplies an explicit ``superseded_disposition``.
 * **Write-ahead run directory (e/f).** Each stage is atomically persisted
   under ``data_store/campaign3/<attempt_id>/``; the C3-X executor additionally
   journals every ``GenerationEvent`` (raw artifact), normalization outcome and
@@ -116,6 +121,8 @@ __all__ = [
     "TB_SELECTION_SCHEMA",
     "ATTEMPT1_CAMPAIGN_RECORD_HASH",
     "ATTEMPT1_SUPERSEDED_DISPOSITION",
+    "ATTEMPT2_CAMPAIGN_RECORD_HASH",
+    "ATTEMPT2_SUPERSEDED_DISPOSITION",
     # errors
     "Campaign3RunError",
     "C3BindingError",
@@ -282,6 +289,25 @@ ATTEMPT1_SUPERSEDED_DISPOSITION: Mapping[str, Any] = {
         "PQv2InvariantError in _realize_std_x_rank on the first STD_X_RANK "
         "candidate (panel parity); generation events and raw artifacts were "
         "held in memory at 85ed5f4, so attempt 1 cannot be resumed faithfully."
+    ),
+}
+
+#: The production attempt-2 CAMPAIGN record (P6-E4).  Attempt 2 stopped with a
+#: ``GridMismatchError`` on the first mixed EVENT_SIMPLE candidate; attempt 3
+#: supersedes this exact record.
+ATTEMPT2_CAMPAIGN_RECORD_HASH = (
+    "eb058bfee1e1cb29b9380f31195003277b4b1b61aeb2d607ba1ec1147b2331d3"
+)
+
+#: The attempt-2 disposition carried by the superseding CAMPAIGN payload.
+ATTEMPT2_SUPERSEDED_DISPOSITION: Mapping[str, Any] = {
+    "attempt": 2,
+    "status": "RUN_INCOMPLETE",
+    "cause": (
+        "GridMismatchError on the first mixed EVENT_SIMPLE candidate (P-Q "
+        "event inputs not on the D7c grid, erratum PQ-EV); pqv2_events.py is "
+        "hash-bound by the attempt-2 CAMPAIGN record, so attempt 2 cannot be "
+        "resumed"
     ),
 }
 
@@ -612,6 +638,31 @@ def _campaign3_campaign_by_hash(
         ):
             return record
     return None
+
+
+def _superseded_disposition_for(
+    record_hash: str,
+) -> Mapping[str, Any] | None:
+    """The frozen supersession disposition for a known attempt record (or None).
+
+    The comparison reads the module globals at call time so a test can
+    monkeypatch the frozen production hashes to disposable fixture hashes
+    (the same pattern the attempt-1 auto-detection test uses).
+    """
+    if record_hash == ATTEMPT1_CAMPAIGN_RECORD_HASH:
+        return ATTEMPT1_SUPERSEDED_DISPOSITION
+    if record_hash == ATTEMPT2_CAMPAIGN_RECORD_HASH:
+        return ATTEMPT2_SUPERSEDED_DISPOSITION
+    return None
+
+
+def _without_supersession(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The payload with ``supersedes_record_hash``/``superseded_disposition``
+    removed, JSON-normalized for equality comparison."""
+    body = dict(payload)
+    body.pop("supersedes_record_hash", None)
+    body.pop("superseded_disposition", None)
+    return _jsonable(body)
 
 
 def _is_campaign3_control_record(
@@ -1645,10 +1696,13 @@ class Campaign3Run:
     attempt_id: str | None = None
     launch_terminal: KnowledgeSnapshot | None = None
     inclusion_provider: Callable[..., Sequence[str]] | None = None
-    #: P6-E3 supersession: the exact active CAMPAIGN record this attempt
-    #: replaces.  ``None`` auto-detects the frozen production attempt-1 record
-    #: when it is present in the K-PIT (a fresh K-PIT keeps the attempt-1
-    #: payload shape and writes an ordinary first CAMPAIGN record).
+    #: P6-E3/P6-E4 supersession: the exact CAMPAIGN record this attempt
+    #: replaces.  ``None`` auto-detects the single **active** Campaign-3
+    #: CAMPAIGN record (the record no later record supersedes) and supersedes
+    #: it with the matching frozen disposition constant; a fresh K-PIT keeps
+    #: the attempt-1 payload shape and writes an ordinary first CAMPAIGN
+    #: record.  An ambiguous chain fails closed.  ``superseded_disposition``
+    #: overrides the frozen constant for an unrecognized active record.
     supersedes_record_hash: str | None = None
     superseded_disposition: Mapping[str, Any] | None = None
     #: The active CAMPAIGN record written (or reused) by this run.  Set by
@@ -1680,21 +1734,8 @@ class Campaign3Run:
         )
 
     # -- precommitment ---------------------------------------------------
-    def _resolve_supersedes(self) -> str | None:
-        """The CAMPAIGN record this attempt supersedes, if any.
-
-        An explicit ``supersedes_record_hash`` wins.  Otherwise the frozen
-        production attempt-1 record is superseded **only when it is actually
-        present** in the K-PIT, so a fresh log still writes a first attempt.
-        """
-        target = self.supersedes_record_hash
-        if target is None and _campaign3_campaign_by_hash(
-            self.knowledge_log, ATTEMPT1_CAMPAIGN_RECORD_HASH
-        ) is not None:
-            target = ATTEMPT1_CAMPAIGN_RECORD_HASH
-        return target
-
-    def _campaign_payload(self) -> dict[str, Any]:
+    def _identity_payload(self) -> dict[str, Any]:
+        """The CAMPAIGN payload content independent of every supersession."""
         precommitment_sha = verify_precommitment(self.precommitment_path)
         a2_sha = _sha256_file(self.a2_path)
         code = campaign3_code_hashes(self.repo_root)
@@ -1704,9 +1745,70 @@ class Campaign3Run:
             a2_sha256=a2_sha,
             code_sha256=code,
             control=self.control,
-            supersedes_record_hash=self._resolve_supersedes(),
-            superseded_disposition=self.superseded_disposition,
         )
+
+    def _resolve_supersession(
+        self, identity: Mapping[str, Any]
+    ) -> tuple[str | None, Mapping[str, Any] | None]:
+        """The active CAMPAIGN record this attempt supersedes, and its
+        disposition.
+
+        An explicit ``supersedes_record_hash`` wins; its disposition is the
+        explicit ``superseded_disposition`` when given, else the matching
+        frozen constant for a recognized attempt (attempt 1 / attempt 2).
+
+        Otherwise the single **active** Campaign-3 CAMPAIGN record is
+        superseded with its matching frozen disposition constant.  A fresh
+        K-PIT (no active record) writes an ordinary first attempt.  If the
+        active record is *this attempt's own* previously written record
+        (``identity`` matches once the supersession fields are removed), its
+        existing supersession decision is reused so a resume is idempotent
+        rather than chaining a new supersession.  An active record with no
+        frozen disposition is refused unless the caller supplied one.
+        ``_active_campaign_record`` already fails closed on an ambiguous
+        chain (more than one active record).
+        """
+        if self.supersedes_record_hash is not None:
+            target = self.supersedes_record_hash
+            disposition = self.superseded_disposition
+            if disposition is None:
+                disposition = _superseded_disposition_for(target)
+            return target, disposition
+        active = _active_campaign_record(self.knowledge_log)
+        if active is None:
+            return None, None
+        stored = _campaign_payload(active.payload)
+        if _without_supersession(stored) == _without_supersession(identity):
+            # This attempt already wrote the active record: reuse its
+            # supersession decision instead of superseding itself.
+            return (
+                stored.get("supersedes_record_hash"),
+                stored.get("superseded_disposition"),
+            )
+        target = active.record_hash
+        disposition = self.superseded_disposition
+        if disposition is None:
+            disposition = _superseded_disposition_for(target)
+        if disposition is None:
+            raise C3GovernanceConflict(
+                f"the active CAMPAIGN record {target!r} has no frozen "
+                "superseded disposition; an explicit superseded_disposition "
+                "is required to supersede it"
+            )
+        return target, disposition
+
+    def _campaign_payload(self) -> dict[str, Any]:
+        identity = self._identity_payload()
+        target, disposition = self._resolve_supersession(identity)
+        if target is None:
+            return identity
+        identity["supersedes_record_hash"] = target
+        identity["superseded_disposition"] = dict(
+            disposition
+            if disposition is not None
+            else ATTEMPT1_SUPERSEDED_DISPOSITION
+        )
+        return identity
 
     def _write_campaign_record(self) -> KnowledgeRecord:
         record = write_campaign_precommitment(
