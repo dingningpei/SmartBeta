@@ -48,9 +48,12 @@ module never opens ``data_store`` and never writes the production K-PIT.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+import json
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from smart_beta.campaign.campaign3_eval import TaEvaluation, certify_candidate, is_certified
@@ -60,6 +63,7 @@ from smart_beta.research.generator import (
     CandidateOutcome,
     CandidateRejectionReason,
     GenerationEvent,
+    GenerationEventRegistry,
     GeneratorBoundary,
     HoldoutFirewallError,
     NormalizationOutcome,
@@ -89,6 +93,7 @@ from smart_beta.research.policy import (
     StopReason,
 )
 from smart_beta.research.proposal import ProposalRegistry
+from smart_beta.science.knowledge import Channel, RecordKind
 
 __all__ = [
     # literals
@@ -118,6 +123,8 @@ __all__ = [
     # kpit
     "KpitWriter",
     "KnowledgeLogKpitWriter",
+    # write-ahead journal
+    "GenerationJournal",
     # executor
     "Campaign3Executor",
 ]
@@ -395,6 +402,13 @@ class KnowledgeLogKpitWriter:
     Confined to the GENERATOR channel: ``GENERATOR_INPUT`` then
     ``HYPOTHESIS_FREEZE``. The log may be a disposable test log or the (real,
     separately authorized) production log; this class never chooses.
+
+    **Idempotent + campaign-scoped (P6-E3 C3-R-R4).** A resumed run must never
+    append a second ``GENERATOR_INPUT`` or ``HYPOTHESIS_FREEZE`` for the same
+    persisted event/proposal, and attempt-1 records must not be mistaken for
+    the active attempt.  Each lookup is therefore keyed by the record's own
+    payload identity and scoped to records appended **after** the active
+    Campaign-3 ``CAMPAIGN`` record (``campaign_record``).
     """
 
     def __init__(
@@ -403,18 +417,42 @@ class KnowledgeLogKpitWriter:
         *,
         program_id: str | None = None,
         calendar: Any = None,
+        campaign_record: Any = None,
     ) -> None:
         self._log = log
         self._program_id = program_id
         self._calendar = calendar
+        self._campaign_record = campaign_record
 
     @property
     def log(self) -> Any:
         return self._log
 
+    def _campaign_seq(self) -> int:
+        record = self._campaign_record
+        if record is None:
+            return -1
+        return int(getattr(record, "seq", -1))
+
+    def _existing_record(self, predicate: Callable[[Any], bool]) -> Any | None:
+        floor = self._campaign_seq()
+        for record in self._log.read():
+            if int(getattr(record, "seq", -1)) <= floor:
+                continue
+            if predicate(record):
+                return record
+        return None
+
     def generation_input(
         self, event: GenerationEvent, *, included: Sequence[str] = ()
     ) -> str:
+        existing = self._existing_record(
+            lambda record: record.kind is RecordKind.GENERATOR_INPUT
+            and record.channel is Channel.GENERATOR
+            and record.payload.get("generation_event_id") == event.event_id
+        )
+        if existing is not None:
+            return existing.record_hash
         from smart_beta.science import adapters as _adapters
 
         record = _adapters.record_generation_input(
@@ -434,6 +472,14 @@ class KnowledgeLogKpitWriter:
         influenced_by: Sequence[str],
         proposal_id: str,
     ) -> str:
+        existing = self._existing_record(
+            lambda record: record.kind is RecordKind.HYPOTHESIS_FREEZE
+            and record.channel is Channel.GENERATOR
+            and record.payload.get("hypothesis_id") == hypothesis_id
+            and record.payload.get("proposal_id") == proposal_id
+        )
+        if existing is not None:
+            return existing.record_hash
         from smart_beta.science import adapters as _adapters
 
         record = _adapters.record_hypothesis_freeze(
@@ -523,6 +569,15 @@ class BudgetTruncatedCandidate:
             "disposition": self.disposition,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BudgetTruncatedCandidate":
+        return cls(
+            event_id=str(payload["event_id"]),
+            raw_index=int(payload["raw_index"]),
+            factor_spec_hash=payload.get("factor_spec_hash"),
+            disposition=str(payload.get("disposition", "BUDGET_TRUNCATED")),
+        )
+
 
 @dataclass(frozen=True)
 class Campaign3RunManifest:
@@ -588,6 +643,88 @@ class Campaign3RunResult:
 
 
 # ---------------------------------------------------------------------------
+# write-ahead journal (P6-E3 C3-R-R4)
+# ---------------------------------------------------------------------------
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    """Atomically (write-tmp + ``os.replace``) persist a JSON document."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def _evaluation_payload(evaluation: TaEvaluation) -> dict[str, Any]:
+    """JSON-safe content of one :class:`TaEvaluation` (all fields)."""
+    return {
+        "proposal_id": evaluation.proposal_id,
+        "factor_spec_hash": evaluation.factor_spec_hash,
+        "declaration_hash": evaluation.declaration_hash,
+        "is_fold_key": evaluation.is_fold_key,
+        "diagnostics_hash": evaluation.diagnostics_hash,
+        "assessed": bool(evaluation.assessed),
+        "not_assessed_reason": evaluation.not_assessed_reason,
+        "metrics": [metric.to_dict() for metric in evaluation.metrics],
+    }
+
+
+def _evaluation_from_payload(payload: Mapping[str, Any]) -> TaEvaluation:
+    """Rebuild a :class:`TaEvaluation` from its persisted content."""
+    from smart_beta.evaluation.spec import MetricValue
+
+    return TaEvaluation(
+        proposal_id=str(payload["proposal_id"]),
+        factor_spec_hash=str(payload["factor_spec_hash"]),
+        declaration_hash=str(payload["declaration_hash"]),
+        is_fold_key=str(payload["is_fold_key"]),
+        diagnostics_hash=str(payload["diagnostics_hash"]),
+        assessed=bool(payload["assessed"]),
+        not_assessed_reason=payload.get("not_assessed_reason"),
+        metrics=tuple(
+            MetricValue.from_dict(item) for item in payload.get("metrics", ())
+        ),
+    )
+
+
+@dataclass
+class GenerationJournal:
+    """Atomic, resumable write-ahead state for the C3-X executor.
+
+    Every ``GenerationEvent`` (with its raw artifact), every normalization
+    outcome and every candidate disposition (counted / truncated / registered /
+    certified / frozen / evaluated-with-diagnostics-hash) is part of one JSON
+    document written atomically **before** normalization/evaluation proceeds.
+    A fresh executor pointed at the same directory reloads it and continues
+    without re-calling the generator, double counting, re-freezing the K-PIT or
+    re-evaluating a completed candidate.
+    """
+
+    root: Path
+
+    def __post_init__(self) -> None:
+        self.root = Path(self.root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def path(self) -> Path:
+        return self.root / "executor_state.json"
+
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+    def load(self) -> dict[str, Any]:
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def save(self, payload: Mapping[str, Any]) -> Path:
+        _atomic_write_json(self.path, dict(payload))
+        return self.path
+
+
+# ---------------------------------------------------------------------------
 # the executor
 # ---------------------------------------------------------------------------
 
@@ -606,6 +743,9 @@ class Campaign3Executor:
     inclusion_provider: Callable[[GeneratorVisibleResearchHistory], Sequence[str]] | None = None
     crash_hook: Callable[[str], None] | None = None
     settings: tuple[tuple[str, str | int | float | bool | None], ...] = ()
+    #: Optional on-disk write-ahead journal (P6-E3 C3-R-R4).  ``None`` keeps the
+    #: original in-memory-only behaviour the synthetic tests rely on.
+    journal: GenerationJournal | None = None
 
     # internal mutable state (never part of the frozen contract)
     _events: list[GenerationEvent] = field(default_factory=list, repr=False)
@@ -655,6 +795,136 @@ class Campaign3Executor:
             raise Campaign3ConfigurationError(
                 "C3-X requires the generator holdout firewall (NONE)"
             )
+
+    # -- write-ahead state (P6-E3 C3-R-R4) -------------------------------
+    def _state_payload(self) -> dict[str, Any]:
+        """The full JSON-safe write-ahead state (events, dispositions, counters)."""
+        history = self._full_history()
+        return {
+            "schema": "campaign3-executor-write-ahead-v1",
+            "registry": self.boundary.registry.to_dict(),
+            "proposals": [entry.proposal.to_dict() for entry in self.registry.entries],
+            "history": history.to_dict(),
+            "used": self._used,
+            "truncated": self._truncated,
+            "truncated_candidates": [
+                item.to_dict() for item in self._truncated_candidates
+            ],
+            "event_plans": {
+                event_id: {
+                    "allowed_indices": [item.raw_index for item in plan.allowed],
+                    "counted": plan.counted,
+                }
+                for event_id, plan in self._event_plans.items()
+            },
+            "certified": {
+                proposal_id: bool(is_certified(classification))
+                for proposal_id, classification in self._certified.items()
+            },
+            "frozen": {
+                proposal_id: [value[0], value[1]]
+                for proposal_id, value in self._frozen.items()
+            },
+            "evaluated": {
+                proposal_id: _evaluation_payload(evaluation)
+                for proposal_id, evaluation in self._evaluated.items()
+            },
+            "historized": sorted(self._historized),
+            "generation_inputs": dict(self._generation_inputs),
+            "duplicate_proposals": sorted(self._duplicate_proposals),
+            "generator_calls": self._generator_calls,
+            "failed_calls": self._failed_calls,
+            "failed_call_tokens": self._failed_call_tokens,
+            "tokens_used": self._tokens_used,
+            "cost_used": self._cost_used,
+        }
+
+    def _save_state(self) -> None:
+        if self.journal is not None:
+            self.journal.save(self._state_payload())
+
+    def _restore_state(self) -> None:
+        if self.journal is None or not self.journal.exists():
+            return
+        self._load_state(self.journal.load())
+
+    def _load_state(self, payload: Mapping[str, Any]) -> None:
+        """Rebuild the write-ahead state from a persisted document.
+
+        Idempotent: events/outcomes/proposals are re-appended through the
+        registry's deterministic replay, so calling this on an executor that
+        already holds the state adds nothing.  A candidate whose evaluation
+        was persisted is restored whole and never re-evaluated; a candidate
+        frozen before the crash is never re-frozen in the K-PIT.
+        """
+        known = {event.event_id for event in self._events}
+        registry_payload = payload.get("registry")
+        if registry_payload:
+            restored = GenerationEventRegistry.from_dict(registry_payload)
+            for event in restored.events:
+                self.boundary.registry.append(event)
+                if event.event_id not in known:
+                    self._events.append(event)
+                    known.add(event.event_id)
+            for event_id in restored.event_ids():
+                outcome = restored.outcome_for(event_id)
+                if outcome is not None:
+                    self.boundary.registry.record_outcome(outcome)
+        for proposal_payload in payload.get("proposals", ()):
+            from smart_beta.research.proposal import ResearchProposal
+
+            self.registry.register(ResearchProposal.from_dict(proposal_payload))
+        self._registered = {
+            entry.proposal_id: entry for entry in self.registry.entries
+        }
+        self._proposal_records = [
+            ProposalHistoryRecord(entry.proposal) for entry in self.registry.entries
+        ]
+        history_payload = payload.get("history")
+        if history_payload:
+            history = FullResearchHistory.from_dict(history_payload)
+            self._experiment_records = list(history.experiments)
+            self._evidence_records = list(history.evidence)
+        self._used = int(payload.get("used", 0))
+        self._truncated = int(payload.get("truncated", 0))
+        self._truncated_candidates = [
+            BudgetTruncatedCandidate.from_dict(item)
+            for item in payload.get("truncated_candidates", ())
+        ]
+        for event_id, plan in payload.get("event_plans", {}).items():
+            outcome = self.boundary.outcome_for(event_id)
+            allowed_indices = tuple(
+                int(index) for index in plan.get("allowed_indices", ())
+            )
+            candidates = tuple(outcome.candidates) if outcome is not None else ()
+            allowed = tuple(
+                item for item in candidates if item.raw_index in allowed_indices
+            )
+            self._event_plans[event_id] = _EventBudgetPlan(
+                allowed=allowed, counted=int(plan.get("counted", 0))
+            )
+        for proposal_id in payload.get("certified", {}):
+            entry = self._registered.get(proposal_id)
+            if entry is not None:
+                self._certified[proposal_id] = certify_candidate(
+                    entry.proposal.proposed_factor_spec
+                )
+        self._frozen = {
+            proposal_id: (value[0], value[1])
+            for proposal_id, value in payload.get("frozen", {}).items()
+        }
+        self._evaluated = {
+            proposal_id: _evaluation_from_payload(item)
+            for proposal_id, item in payload.get("evaluated", {}).items()
+        }
+        self._historized = set(payload.get("historized", ()))
+        self._generation_inputs = dict(payload.get("generation_inputs", {}))
+        self._duplicate_proposals = set(payload.get("duplicate_proposals", ()))
+        self._generator_calls = int(payload.get("generator_calls", 0))
+        self._failed_calls = int(payload.get("failed_calls", 0))
+        self._failed_call_tokens = int(payload.get("failed_call_tokens", 0))
+        self._tokens_used = int(payload.get("tokens_used", 0))
+        self._cost_used = float(payload.get("cost_used", 0.0))
 
     # -- read-only views -------------------------------------------------
     @property
@@ -772,6 +1042,7 @@ class Campaign3Executor:
         self._tokens_used += coerced.tokens_used
         if coerced.cost_used is not None:
             self._cost_used += float(coerced.cost_used)
+        self._save_state()
         self._hook("after_persist_before_normalize")
         return event
 
@@ -788,6 +1059,7 @@ class Campaign3Executor:
             except HoldoutFirewallError as exc:  # pragma: no cover - structural
                 raise Campaign3FirewallError(str(exc)) from exc
         allowed = self._plan_for_event(event, outcome)
+        self._save_state()
         self._hook("after_normalize_before_register")
         for candidate in allowed:
             if candidate.reason in (
@@ -845,6 +1117,7 @@ class Campaign3Executor:
             self.registry.register(proposal)
             self._registered[proposal_id] = self.registry.get(proposal_id)
             self._proposal_records.append(ProposalHistoryRecord(proposal))
+        self._save_state()
         self._hook("after_register_before_certify")
         if proposal_id not in self._certified:
             classification = certify_candidate(proposal.proposed_factor_spec)
@@ -852,7 +1125,9 @@ class Campaign3Executor:
         classification = self._certified[proposal_id]
         if not is_certified(classification):
             # NOT_CERTIFIED: recorded, counted, never evaluated or resampled.
+            self._save_state()
             return
+        self._save_state()
         self._hook("after_certify_before_freeze")
         if proposal_id not in self._frozen:
             included = self._generation_inputs.get(event.event_id)
@@ -879,6 +1154,7 @@ class Campaign3Executor:
                 else ""
             )
             self._frozen[proposal_id] = (included, freeze_hash)
+        self._save_state()
         self._hook("after_freeze_before_evaluate")
         if proposal_id in self._evaluated:
             evaluation = self._evaluated[proposal_id]
@@ -893,6 +1169,7 @@ class Campaign3Executor:
                     "the evaluator returned a TaEvaluation for a different proposal"
                 )
             self._evaluated[proposal_id] = evaluation
+            self._save_state()
             self._hook("after_evaluate_before_history")
         if proposal_id in self._historized:
             return
@@ -900,6 +1177,7 @@ class Campaign3Executor:
         self._experiment_records.append(experiment)
         self._evidence_records.append(evidence)
         self._historized.add(proposal_id)
+        self._save_state()
 
     def _visible_for_event(
         self, event: GenerationEvent
@@ -982,6 +1260,7 @@ class Campaign3Executor:
     def run(self) -> Campaign3RunResult:
         """Run/reconcile to a frozen stop; idempotent on repeated calls."""
         self._stop_reason = None
+        self._restore_state()
         self.reconcile()
         while True:
             stop = self._budget_stop()

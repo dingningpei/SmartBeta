@@ -33,12 +33,20 @@ from smart_beta.science.knowledge import KnowledgeLog
 
 __all__ = [
     "PRIOR_CAMPAIGN_SCHEMA",
+    "CAMPAIGN3_RECORD_SCHEMA",
+    "CAMPAIGN3_CONTROL_SCHEMA",
     "artifact_footprint",
+    "seed_attempt1",
     "seed_production_prefix",
 ]
 
 #: A schema deliberately different from any Campaign-3 record schema.
 PRIOR_CAMPAIGN_SCHEMA = "campaign2-precommitment-v1"
+
+#: The Campaign-3 record schemas (mirrors ``campaign3_run``; imported here as
+#: literals so the fixture has no dependency on the module under test).
+CAMPAIGN3_RECORD_SCHEMA = "campaign3-p6-precommitment-v1"
+CAMPAIGN3_CONTROL_SCHEMA = "campaign3-p6-control-freeze-v1"
 
 _PRIOR_FREEZE_PREFIX = "C1-H"
 
@@ -160,4 +168,77 @@ def seed_production_prefix(
         "program_freeze": program_freeze,
         "prior_campaign": prior_campaign,
         "freezes": tuple(freezes),
+    }
+
+
+def seed_attempt1(log: KnowledgeLog) -> dict[str, Any]:
+    """Append a disposable, production-shaped attempt-1 Campaign-3 set.
+
+    The attempt-1 set is ``(CAMPAIGN, control, GENERATOR_INPUT, 2 freezes)``,
+    exactly the shape the real K-PIT holds at seq 11-15 after attempt 1
+    stopped RUN_INCOMPLETE.  The returned ``campaign`` record's hash is what
+    attempt 2 passes as ``supersedes_record_hash``.
+    """
+    from smart_beta.science.adapters import (
+        record_generation_input,
+        record_hypothesis_freeze,
+    )
+
+    campaign = _human_decision(
+        log,
+        program_id="campaign3",
+        payload={
+            "campaign_precommitment": {
+                "schema": CAMPAIGN3_RECORD_SCHEMA,
+                "record_type": "CAMPAIGN_PRECOMMITMENT",
+                "attempt": 1,
+                "bindings_hash": content_hash({"attempt": "1-bindings"}),
+                "control_factor_hash": content_hash({"attempt": "1-control"}),
+                "code_sha256": {},
+            }
+        },
+    )
+    control = log.append(
+        kind=RecordKind.HYPOTHESIS_FREEZE,
+        channel=Channel.HUMAN,
+        program_id="campaign3",
+        payload={
+            "hypothesis_id": "event_ear_k_kp1",
+            "factor_spec_hash": content_hash({"attempt": "1-control-factor"}),
+            "hold_months": 1,
+            "sign": 1,
+            "control": True,
+            "schema": CAMPAIGN3_CONTROL_SCHEMA,
+            "campaign_record_hash": campaign.record_hash,
+        },
+        refs={"influenced_by": [campaign.record_hash]},
+    )
+
+    class _Attempt1Event:
+        event_id = content_hash({"attempt": "1-event"})
+        history_snapshot_hash = content_hash({"attempt": "1-history"})
+        generator_identity = "deepseek:deepseek-v4-flash"
+
+    generation_input = record_generation_input(
+        log,
+        generation_event=_Attempt1Event(),
+        included=(),
+        program_id="campaign3",
+    )
+    freezes = tuple(
+        record_hypothesis_freeze(
+            log,
+            hypothesis_id=content_hash({"attempt": "1-hypothesis", "index": index}),
+            factor_spec_hash=content_hash({"attempt": "1-factor", "index": index}),
+            influenced_by=(generation_input.record_hash,),
+            program_id="campaign3",
+            proposal_id=content_hash({"attempt": "1-proposal", "index": index}),
+        )
+        for index in (1, 2)
+    )
+    return {
+        "campaign": campaign,
+        "control": control,
+        "generation_input": generation_input,
+        "freezes": freezes,
     }

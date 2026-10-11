@@ -27,10 +27,19 @@ write-ahead, resumable run:
   :data:`CAMPAIGN_RECORD_TYPE` HUMAN decision and the HUMAN-channel control
   ``HYPOTHESIS_FREEZE`` are both written **before** the first generator call,
   and the CAMPAIGN record carries the P5 hash and the SHA-256 of every frozen
-  code file.
+  code file.  **P6-E3 supersession:** a payload carrying
+  ``supersedes_record_hash`` names the exact prior CAMPAIGN record it replaces;
+  the *active* CAMPAIGN record is the Campaign-3-schema record no later record
+  supersedes, and the control / GENERATOR / TB_SELECTION records are scoped to
+  it.  :data:`ATTEMPT1_CAMPAIGN_RECORD_HASH` is the frozen production attempt-1
+  record that attempt 2 supersedes.
 * **Write-ahead run directory (e/f).** Each stage is atomically persisted
-  under ``data_store/campaign3/<attempt_id>/``; a completed stage is never
-  recomputed, so a resume cannot double count a candidate or a generator call.
+  under ``data_store/campaign3/<attempt_id>/``; the C3-X executor additionally
+  journals every ``GenerationEvent`` (raw artifact), normalization outcome and
+  candidate disposition (counted / truncated / registered / certified / frozen
+  / evaluated-with-diagnostics-hash) so a restart reloads them without
+  re-calling the generator, double counting, re-freezing the K-PIT or
+  re-evaluating a completed candidate.
 
 **Testing.**  Every test is offline and synthetic: a stub generator, a stub
 evaluator, a disposable :class:`~smart_beta.science.knowledge.KnowledgeLog`
@@ -102,6 +111,11 @@ __all__ = [
     "CONTROL_HOLD_MONTHS",
     "CONTROL_SIGN",
     "CAMPAIGN_RECORD_TYPE",
+    "CAMPAIGN_RECORD_SCHEMA",
+    "CONTROL_RECORD_SCHEMA",
+    "TB_SELECTION_SCHEMA",
+    "ATTEMPT1_CAMPAIGN_RECORD_HASH",
+    "ATTEMPT1_SUPERSEDED_DISPOSITION",
     # errors
     "Campaign3RunError",
     "C3BindingError",
@@ -252,6 +266,24 @@ CAMPAIGN_RECORD_TYPE = "CAMPAIGN_PRECOMMITMENT"
 CAMPAIGN_RECORD_SCHEMA = "campaign3-p6-precommitment-v1"
 CONTROL_RECORD_SCHEMA = "campaign3-p6-control-freeze-v1"
 TB_SELECTION_SCHEMA = "campaign3-tb-selection-v1"
+
+#: The production attempt-1 CAMPAIGN record (P6-E3).  Attempt 1 stopped with a
+#: ``PQv2InvariantError`` and its in-memory generation cannot be resumed
+#: faithfully, so attempt 2 supersedes this exact record.
+ATTEMPT1_CAMPAIGN_RECORD_HASH = (
+    "523763100f9d3d0d0539c58016c4708b41729571fddc207a5ae9f1614af641e8"
+)
+
+#: The attempt-1 disposition carried by the superseding CAMPAIGN payload.
+ATTEMPT1_SUPERSEDED_DISPOSITION: Mapping[str, Any] = {
+    "attempt": 1,
+    "status": "RUN_INCOMPLETE",
+    "cause": (
+        "PQv2InvariantError in _realize_std_x_rank on the first STD_X_RANK "
+        "candidate (panel parity); generation events and raw artifacts were "
+        "held in memory at 85ed5f4, so attempt 1 cannot be resumed faithfully."
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # errors
@@ -529,6 +561,59 @@ def _is_campaign3_campaign_record(record: KnowledgeRecord) -> bool:
     )
 
 
+def _superseded_campaign_hashes(records: Sequence[KnowledgeRecord]) -> set[str]:
+    """The CAMPAIGN record hashes named by a later superseding record."""
+    superseded: set[str] = set()
+    for record in records:
+        if not _is_campaign3_campaign_record(record):
+            continue
+        target = _campaign_payload(record.payload).get("supersedes_record_hash")
+        if isinstance(target, str):
+            superseded.add(target)
+    return superseded
+
+
+def _active_campaign_records(log: KnowledgeLog) -> list[KnowledgeRecord]:
+    """Every Campaign-3 CAMPAIGN record no later record supersedes."""
+    records = list(log.read())
+    active_superseded = _superseded_campaign_hashes(records)
+    return [
+        record
+        for record in records
+        if _is_campaign3_campaign_record(record)
+        and record.record_hash not in active_superseded
+    ]
+
+
+def _active_campaign_record(log: KnowledgeLog) -> KnowledgeRecord | None:
+    """The single active CAMPAIGN record, or ``None`` when none exists.
+
+    A CAMPAIGN record superseded by a later one (its hash named in that
+    later record's ``supersedes_record_hash``) is never returned.  Ambiguity
+    (more than one unsuperseded record) fails closed rather than picking one.
+    """
+    active = _active_campaign_records(log)
+    if not active:
+        return None
+    if len(active) != 1:
+        raise C3GovernanceConflict(
+            f"expected exactly one active CAMPAIGN record, found {len(active)}"
+        )
+    return active[0]
+
+
+def _campaign3_campaign_by_hash(
+    log: KnowledgeLog, record_hash: str
+) -> KnowledgeRecord | None:
+    """The Campaign-3 CAMPAIGN record with ``record_hash``, or ``None``."""
+    for record in log.read():
+        if record.record_hash == record_hash and _is_campaign3_campaign_record(
+            record
+        ):
+            return record
+    return None
+
+
 def _is_campaign3_control_record(
     record: KnowledgeRecord,
     campaign_record: KnowledgeRecord | None = None,
@@ -555,11 +640,20 @@ def _is_campaign3_control_record(
     return True
 
 
-def _is_campaign3_tb_selection_record(record: KnowledgeRecord) -> bool:
-    """True only for this run's TB_SELECTION HUMAN decision."""
+def _is_campaign3_tb_selection_record(
+    record: KnowledgeRecord,
+    campaign_record: KnowledgeRecord | None = None,
+) -> bool:
+    """True only for the active campaign's TB_SELECTION HUMAN decision."""
     if record.kind is not RecordKind.HUMAN_DECISION:
         return False
     selection = record.payload.get("tb_selection")
+    if not isinstance(selection, Mapping):
+        return False
+    if campaign_record is not None:
+        bound = selection.get("campaign_record_hash")
+        if bound is not None and bound != campaign_record.record_hash:
+            return False
     return (
         isinstance(selection, Mapping)
         and selection.get("schema") == TB_SELECTION_SCHEMA
@@ -573,10 +667,12 @@ def verify_kpit_ordering(
 ) -> KpitPreflight:
     """The read-only Campaign-3 K-PIT ordering preflight.
 
-    The CAMPAIGN precommitment record must precede the HUMAN-channel control
-    ``HYPOTHESIS_FREEZE``; both must precede every GENERATOR-channel record.
-    When ``pinned`` is supplied the terminal check is included.  The function
-    is strictly read-only.
+    The **active** CAMPAIGN precommitment record (the Campaign-3-schema record
+    no later record supersedes) must precede the HUMAN-channel control
+    ``HYPOTHESIS_FREEZE``; both must precede every GENERATOR-channel record
+    belonging to the active campaign (attempt-1 GENERATOR records that precede
+    the active CAMPAIGN record are ignored).  When ``pinned`` is supplied the
+    terminal check is included.  The function is strictly read-only.
     """
     try:
         records = read_records(log_path)
@@ -591,15 +687,23 @@ def verify_kpit_ordering(
                 terminal.length,
                 terminal.head_hash,
             )
-    campaign = [
-        record for record in records if _is_campaign3_campaign_record(record)
+    superseded = _superseded_campaign_hashes(records)
+    active = [
+        record
+        for record in records
+        if _is_campaign3_campaign_record(record)
+        and record.record_hash not in superseded
     ]
+    if len(active) != 1:
+        return KpitPreflight(
+            False, "an active CAMPAIGN precommitment must appear exactly once"
+        )
+    campaign_record = active[0]
     generator = [
-        record for record in records if record.channel is Channel.GENERATOR
+        record
+        for record in records
+        if record.channel is Channel.GENERATOR and record.seq > campaign_record.seq
     ]
-    if len(campaign) != 1:
-        return KpitPreflight(False, "CAMPAIGN precommitment must appear exactly once")
-    campaign_record = campaign[0]
     control = [
         record
         for record in records
@@ -714,9 +818,16 @@ def campaign_precommitment_content(
     a2_sha256: str,
     code_sha256: Mapping[str, str | None],
     control: ControlHypothesis = CONTROL,
+    supersedes_record_hash: str | None = None,
+    superseded_disposition: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The canonical CAMPAIGN precommitment payload."""
-    return {
+    """The canonical CAMPAIGN precommitment payload.
+
+    A superseding attempt (P6-E3) additionally carries
+    ``supersedes_record_hash`` (the exact CAMPAIGN record it replaces) and the
+    ``superseded_disposition`` of the attempt it replaces.
+    """
+    payload: dict[str, Any] = {
         "schema": CAMPAIGN_RECORD_SCHEMA,
         "record_type": CAMPAIGN_RECORD_TYPE,
         "precommitment_sha256": precommitment_sha256,
@@ -741,13 +852,14 @@ def campaign_precommitment_content(
         },
         "code_sha256": dict(code_sha256),
     }
-
-
-def _existing_campaign_record(log: KnowledgeLog) -> KnowledgeRecord | None:
-    for record in log.read():
-        if _is_campaign3_campaign_record(record):
-            return record
-    return None
+    if supersedes_record_hash is not None:
+        payload["supersedes_record_hash"] = supersedes_record_hash
+        payload["superseded_disposition"] = dict(
+            superseded_disposition
+            if superseded_disposition is not None
+            else ATTEMPT1_SUPERSEDED_DISPOSITION
+        )
+    return payload
 
 
 def _campaign_decision_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -764,15 +876,38 @@ def write_campaign_precommitment(
     *,
     payload: Mapping[str, Any],
 ) -> KnowledgeRecord:
-    """Append the CAMPAIGN precommitment HUMAN decision (idempotent)."""
+    """Append the CAMPAIGN precommitment HUMAN decision (idempotent).
+
+    P6-E3 supersession: a payload carrying ``supersedes_record_hash`` must
+    name an existing Campaign-3 CAMPAIGN record; the new record is appended
+    and the named record stops being active.  Re-writing the active record's
+    identical content is an idempotent no-op.
+    """
     decision_payload = _campaign_decision_payload(payload)
-    existing = _existing_campaign_record(log)
-    if existing is not None:
-        if _jsonable(dict(existing.payload)) != _jsonable(decision_payload):
+    supersedes = payload.get("supersedes_record_hash")
+    if isinstance(supersedes, str):
+        if _campaign3_campaign_by_hash(log, supersedes) is None:
+            raise C3GovernanceConflict(
+                f"supersedes_record_hash {supersedes!r} is not an existing "
+                "Campaign-3 CAMPAIGN record"
+            )
+        active = _active_campaign_record(log)
+        if active is not None and _jsonable(dict(active.payload)) == _jsonable(
+            decision_payload
+        ):
+            return active
+        return log.append(
+            kind=RecordKind.HUMAN_DECISION,
+            channel=Channel.HUMAN,
+            payload=decision_payload,
+        )
+    active = _active_campaign_record(log)
+    if active is not None:
+        if _jsonable(dict(active.payload)) != _jsonable(decision_payload):
             raise C3GovernanceConflict(
                 "an existing CAMPAIGN record has different content"
             )
-        return existing
+        return active
     return log.append(
         kind=RecordKind.HUMAN_DECISION,
         channel=Channel.HUMAN,
@@ -792,9 +927,10 @@ def _existing_control_record(
 
 def _existing_tb_selection_record(
     log: KnowledgeLog,
+    campaign_record: KnowledgeRecord | None = None,
 ) -> KnowledgeRecord | None:
     for record in log.read():
-        if _is_campaign3_tb_selection_record(record):
+        if _is_campaign3_tb_selection_record(record, campaign_record):
             return record
     return None
 
@@ -1509,6 +1645,18 @@ class Campaign3Run:
     attempt_id: str | None = None
     launch_terminal: KnowledgeSnapshot | None = None
     inclusion_provider: Callable[..., Sequence[str]] | None = None
+    #: P6-E3 supersession: the exact active CAMPAIGN record this attempt
+    #: replaces.  ``None`` auto-detects the frozen production attempt-1 record
+    #: when it is present in the K-PIT (a fresh K-PIT keeps the attempt-1
+    #: payload shape and writes an ordinary first CAMPAIGN record).
+    supersedes_record_hash: str | None = None
+    superseded_disposition: Mapping[str, Any] | None = None
+    #: The active CAMPAIGN record written (or reused) by this run.  Set by
+    #: :meth:`_write_campaign_record`; scopes the control / GENERATOR /
+    #: TB_SELECTION records to this attempt.
+    _active_campaign: KnowledgeRecord | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.bindings = verify_bindings(self.bindings)
@@ -1532,6 +1680,20 @@ class Campaign3Run:
         )
 
     # -- precommitment ---------------------------------------------------
+    def _resolve_supersedes(self) -> str | None:
+        """The CAMPAIGN record this attempt supersedes, if any.
+
+        An explicit ``supersedes_record_hash`` wins.  Otherwise the frozen
+        production attempt-1 record is superseded **only when it is actually
+        present** in the K-PIT, so a fresh log still writes a first attempt.
+        """
+        target = self.supersedes_record_hash
+        if target is None and _campaign3_campaign_by_hash(
+            self.knowledge_log, ATTEMPT1_CAMPAIGN_RECORD_HASH
+        ) is not None:
+            target = ATTEMPT1_CAMPAIGN_RECORD_HASH
+        return target
+
     def _campaign_payload(self) -> dict[str, Any]:
         precommitment_sha = verify_precommitment(self.precommitment_path)
         a2_sha = _sha256_file(self.a2_path)
@@ -1542,12 +1704,16 @@ class Campaign3Run:
             a2_sha256=a2_sha,
             code_sha256=code,
             control=self.control,
+            supersedes_record_hash=self._resolve_supersedes(),
+            superseded_disposition=self.superseded_disposition,
         )
 
     def _write_campaign_record(self) -> KnowledgeRecord:
-        return write_campaign_precommitment(
+        record = write_campaign_precommitment(
             self.knowledge_log, payload=self._campaign_payload()
         )
+        self._active_campaign = record
+        return record
 
     def _write_control_record(
         self, campaign_record: KnowledgeRecord
@@ -1568,6 +1734,7 @@ class Campaign3Run:
         kpit = _gen.KnowledgeLogKpitWriter(
             self.knowledge_log,
             program_id=self.policy.program.program_id,
+            campaign_record=self._active_campaign,
         )
         executor = _gen.Campaign3Executor(
             policy=self.policy,
@@ -1575,6 +1742,7 @@ class Campaign3Run:
             evaluator=self.ta_evaluator,
             kpit=kpit,
             inclusion_provider=self.inclusion_provider,
+            journal=_gen.GenerationJournal(journal.root / "generation_state"),
         )
         result = executor.run()
         evaluations = {item.proposal_id: item for item in result.evaluations}
@@ -1727,7 +1895,11 @@ class Campaign3Run:
 
     def _selection_writer(self, selection: Any) -> KnowledgeRecord:
         """Write the TB_SELECTION K-PIT record (write-ahead, before T-B)."""
-        return write_tb_selection_record(self.knowledge_log, selection)
+        return write_tb_selection_record(
+            self.knowledge_log,
+            selection,
+            campaign_record=self._active_campaign,
+        )
 
     def _screen_tb_evaluator(self, hypothesis_id: str) -> Any:
         """Adapt the bound T-B evaluator to the C3-S ``TbDiagnostics``."""
@@ -1773,26 +1945,33 @@ def _tb_evaluation_to_diagnostics(
 
 
 def write_tb_selection_record(
-    log: KnowledgeLog, selection: Any
+    log: KnowledgeLog,
+    selection: Any,
+    *,
+    campaign_record: KnowledgeRecord | None = None,
 ) -> KnowledgeRecord:
     """Append the TB_SELECTION HUMAN decision (the P6 write-ahead).
 
     Written **before** any T-B evaluation; the C3-S ``write_tb_selection``
     caller marks the selection written only after this returns a record.
+    The selection is bound to the active CAMPAIGN record's hash, and the
+    idempotency lookup ignores other campaigns' selections.
     """
     payload = selection.to_content()
     payload.setdefault("record_type", "TB_SELECTION")
+    if campaign_record is not None:
+        payload["campaign_record_hash"] = campaign_record.record_hash
     decision_payload = {
         "decision_kind": "OTHER",
         "actor_role": "OPERATOR",
         "consulted_all_prior": True,
         "tb_selection": payload,
     }
-    # Scope the idempotency lookup to the Campaign-3 TB_SELECTION schema: a
-    # prior campaign's ``tb_selection`` record must never be mistaken for this
-    # run's write-ahead.  A partial resume re-uses the record it already wrote
-    # rather than appending a duplicate.
-    existing = _existing_tb_selection_record(log)
+    # Scope the idempotency lookup to the Campaign-3 TB_SELECTION schema and
+    # the active CAMPAIGN record: a prior campaign's ``tb_selection`` record
+    # must never be mistaken for this run's write-ahead.  A partial resume
+    # re-uses the record it already wrote rather than appending a duplicate.
+    existing = _existing_tb_selection_record(log, campaign_record)
     if existing is not None:
         if _jsonable(dict(existing.payload)) != _jsonable(decision_payload):
             raise C3GovernanceConflict(
