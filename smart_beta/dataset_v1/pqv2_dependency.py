@@ -1362,13 +1362,15 @@ def _tri_support(tri: dict[int, float] | None) -> tuple[Window, ...] | None:
 class ObservedValues:
     """Observed per-key inputs for :func:`input_uncertainty`.
 
-    ``M_obs`` is the observed momentum sub-expression value (``STD_X_RANK`` only)
-    and ``dv`` maps a formation-relative offset to the observed dollar volume at
-    that offset (the ``STD_X_RANK`` volume windows).
+    ``M_obs`` is the observed momentum sub-expression value and ``V_obs`` the
+    observed volume ratio (``STD_X_RANK`` only); both are the realized values
+    at the formation row.  ``dv`` maps a formation-relative offset to the
+    observed dollar volume at that offset (the ``STD_X_RANK`` volume windows).
     """
 
     M_obs: float | None = None
     dv: Mapping[int, float] = field(default_factory=dict)
+    V_obs: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1379,7 +1381,9 @@ class InputUncertainty:
     reserve firewall; ``causes`` is the per-cell dependency-local cause set
     (``unknown[key] == not causes[key].is_empty``); ``M_interval`` /
     ``V_interval`` are the ``STD_X_RANK`` certified intervals (a missing entry
-    means the observed value is unavailable).
+    means the observed value is unavailable).  ``V_widened`` records, per key,
+    whether an uncertain V interval had to be widened to contain the realized
+    ``V_obs`` that floating reconstruction would have excluded.
     """
 
     cls: str
@@ -1390,6 +1394,7 @@ class InputUncertainty:
     M_interval: Mapping[str, Any]
     V_interval: Mapping[str, Any]
     windows: Windows
+    V_widened: Mapping[str, bool] = field(default_factory=dict)
 
 
 def _offset(formation_pos: Any, session: Any) -> int | None:
@@ -1751,11 +1756,11 @@ def _v_interval(
     formation_pos: Any,
     transitions: Sequence[_core.UncertainTransition],
     observed: ObservedValues | None,
-) -> _core.PositiveInterval | None:
+) -> tuple[_core.NonNegativeInterval | None, bool]:
     short = _window_cells(windows.numerical_dv_short)
     long = _window_cells(windows.numerical_dv_long)
     if not short or not long:
-        return None
+        return None, False
     cells: dict[int, _core.PositiveInterval] = {}
     for transition in transitions:
         s_off = _offset(formation_pos, transition.s)
@@ -1770,6 +1775,14 @@ def _v_interval(
                 cells[offset] = (
                     cells[offset].mul(kappa) if offset in cells else kappa
                 )
+    v_obs = observed.V_obs if observed is not None else None
+    # A key whose V cells carry no uncertainty is clean: its certified V box is
+    # exactly the realized V_obs.  Reconstructing it from the dv sums only
+    # approximates the pandas rolling-mean realization (the two reductions can
+    # differ by a few ulp), which would create a spurious strict order against
+    # a true rank tie; M uses M_obs the same way.
+    if not cells and v_obs is not None and math.isfinite(v_obs):
+        return _core.NonNegativeInterval(v_obs, v_obs), False
     dv: Mapping[int, float] = observed.dv if observed is not None else {}
     n_short = len(short)
     n_long = len(long)
@@ -1790,14 +1803,26 @@ def _v_interval(
     long_only_hi_sum = weighted(long_only, True)
     long_only_lo_sum = weighted(long_only, False)
     if short_hi_sum + long_only_lo_sum <= 0.0 or short_lo_sum + long_only_hi_sum <= 0.0:
-        return None
-    # M§11.2: V is increasing in every short-window cell and decreasing in every
-    # long-only cell (short window is a subset of the long window, positive dv),
-    # so the extremes are the box vertices: short-high / long-only-low for the
-    # maximum and the reverse for the minimum.
+        return None, False
+    # M§11.2 / PQ-SX-A: V is increasing in every short-window cell and
+    # decreasing in every long-only cell (short window is a subset of the long
+    # window, dv >= 0), so the extremes are the box vertices: short-high /
+    # long-only-low for the maximum and the reverse for the minimum.  A
+    # short-window sum of zero is admitted as V = 0; a long-window sum of zero
+    # is excluded above (no V).
     v_max = (n_long / n_short) * short_hi_sum / (short_hi_sum + long_only_lo_sum)
     v_min = (n_long / n_short) * short_lo_sum / (short_lo_sum + long_only_hi_sum)
-    return _core.PositiveInterval(v_min, v_max)
+    # An uncertain interval must still contain the realized V_obs.  Floating
+    # reconstruction may exclude it by a few ulp; widen and record it.
+    widened = False
+    if v_obs is not None and math.isfinite(v_obs):
+        if v_obs < v_min:
+            v_min = v_obs
+            widened = True
+        if v_obs > v_max:
+            v_max = v_obs
+            widened = True
+    return _core.NonNegativeInterval(v_min, v_max), widened
 
 
 def _std_x_rank_cell(
@@ -1808,11 +1833,14 @@ def _std_x_rank_cell(
     observed: ObservedValues | None,
 ) -> tuple[
     _core.PositiveInterval | None,
-    _core.PositiveInterval | None,
+    _core.NonNegativeInterval | None,
+    bool,
     bool,
 ]:
     m_interval = _m_interval(windows, formation_pos, transitions, candidates, observed)
-    v_interval = _v_interval(windows, formation_pos, transitions, observed)
+    v_interval, v_widened = _v_interval(
+        windows, formation_pos, transitions, observed
+    )
     uncertain = (
         m_interval is not None
         and not (m_interval.lo == m_interval.hi)
@@ -1820,7 +1848,7 @@ def _std_x_rank_cell(
         v_interval is not None
         and not (v_interval.lo == v_interval.hi)
     )
-    return m_interval, v_interval, uncertain
+    return m_interval, v_interval, uncertain, v_widened
 
 
 def _with_event_windows(
@@ -1912,7 +1940,8 @@ def input_uncertainty(
     unknown: dict[str, bool] = {}
     causes: dict[str, _core.CauseSet] = {}
     m_intervals: dict[str, _core.PositiveInterval] = {}
-    v_intervals: dict[str, _core.PositiveInterval] = {}
+    v_intervals: dict[str, _core.NonNegativeInterval] = {}
+    v_widened: dict[str, bool] = {}
     for key in key_list:
         cell_windows = _with_event_windows(windows, event_windows, key)
         transitions = tuple(source_set.transitions_by_key.get(key, ()))
@@ -1941,7 +1970,7 @@ def input_uncertainty(
                 cell_windows, formation_pos, transitions, factor_candidates
             )
         else:
-            m_interval, v_interval, is_uncertain = _std_x_rank_cell(
+            m_interval, v_interval, is_uncertain, is_widened = _std_x_rank_cell(
                 cell_windows,
                 formation_pos,
                 transitions,
@@ -1951,6 +1980,7 @@ def input_uncertainty(
             m_intervals[key] = m_interval
             v_intervals[key] = v_interval
             uncertain[key] = is_uncertain
+            v_widened[key] = is_widened
     return InputUncertainty(
         cls=cls,
         keys=key_list,
@@ -1960,4 +1990,5 @@ def input_uncertainty(
         M_interval=MappingProxyType(m_intervals),
         V_interval=MappingProxyType(v_intervals),
         windows=windows,
+        V_widened=MappingProxyType(v_widened),
     )
