@@ -65,14 +65,38 @@
  },
  {
   "id": "L-M6",
-  "description": "the preflight omits the STD_X_RANK probe",
+  "description": "the preflight omits the first STD_X_RANK probe",
   "file": "smart_beta/campaign/campaign3_launch.py",
   "edits": [
    {
-    "old": "        (\"cross_sectional\", std_x_rank_factor_spec()),\n",
+    "old": "        PreflightProbe(\"cross_sectional\", \"STD_X_RANK\", std_x_rank_factor_spec()),\n",
     "new": ""
    }
   ],
-  "test": "tests/test_campaign3_launch.py::test_preflight_evaluates_three_fixed_specs"
+  "test": "tests/test_campaign3_launch.py::test_preflight_battery_is_exact"
+ },
+ {
+  "id": "L-M7",
+  "description": "the preflight omits the SIMPLE probe (a probe dropped from the battery)",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        PreflightProbe(\"simple\", \"SIMPLE\", simple_factor_spec()),\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_preflight_battery_is_exact"
+ },
+ {
+  "id": "L-M8",
+  "description": "a preflight marker is written despite a FAILED probe",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    if failures:\n        # A FAILED probe is reported, and the preflight writes **no** marker.\n",
+    "new": "    if False and failures:  # mutation L-M8: a marker is written anyway\n        # A FAILED probe is reported, and the preflight writes **no** marker.\n"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_preflight_failed_probe_writes_no_marker"
  }
 ]

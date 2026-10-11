@@ -1,8 +1,8 @@
 """C3-L Campaign-3 production launcher / preflight tests (synthetic only).
 
 Authority: the frozen ``docs/campaign3_p6_implementation_spec.md`` (task C3-L,
-Erratum P6-E2 and Erratum P6-E3 plus its 2026-10-10 correction) and section 2
-mutations L-M1..L-M6, on top of the frozen
+Erratum P6-E2, Erratum P6-E3 plus its 2026-10-10 correction, and Erratum
+P6-E4) and section 2 mutations L-M1..L-M8, on top of the frozen
 ``docs/campaign3_p5_precommitment.md`` (+E1) and the K-PIT dataset reference
 note.
 
@@ -46,6 +46,21 @@ _TESTS = _REPO_ROOT / "tests" / "test_campaign3_launch.py"
 
 _PROMPT_HASH = "a" * 64
 _MASTER_SHA = "f" * 40
+
+#: The exact frozen P6-E4 battery: ``(probe name, certify_candidate class)``.
+_EXPECTED_BATTERY = (
+    ("control", "EVENT_SIMPLE"),
+    ("simple", "SIMPLE"),
+    ("cross_sectional", "STD_X_RANK"),
+    ("event_times_ret", "EVENT_SIMPLE"),
+    ("event_recent_momentum", "EVENT_SIMPLE"),
+    ("event_days_since_ea", "EVENT_SIMPLE"),
+    ("dv_ratio", "SIMPLE"),
+    ("ret_std", "SIMPLE"),
+    ("momentum", "SIMPLE"),
+    ("cross_sectional_21_252", "STD_X_RANK"),
+)
+_EXPECTED_BATTERY_NAMES = tuple(name for name, _class in _EXPECTED_BATTERY)
 
 
 def _load_module(name: str, path: Path):
@@ -218,7 +233,7 @@ def _run_preflight(tmp_path: Path, **overrides: Any):
 def test_preflight_summary_is_statistic_free(tmp_path):
     _src, _asm, result, printed = _run_preflight(tmp_path)
     summary = result["summary"]
-    assert set(summary) == {"control", "simple", "cross_sectional"}
+    assert list(summary) == list(_EXPECTED_BATTERY_NAMES)
     for per_spec in summary.values():
         assert set(per_spec) <= L._PREFLIGHT_ALLOWED_KEYS
         assert per_spec["status"] == "ASSESSED"
@@ -226,7 +241,7 @@ def test_preflight_summary_is_statistic_free(tmp_path):
         assert per_spec["binding_ok"] is True
         assert per_spec["periods"]
     parsed = json.loads(printed.strip())
-    assert set(parsed) == {"control", "simple", "cross_sectional"}
+    assert set(parsed) == set(_EXPECTED_BATTERY_NAMES)
     L.assert_statistic_free(parsed)
 
 
@@ -277,26 +292,89 @@ def test_assert_statistic_free_guards():
 # ---------------------------------------------------------------------------
 
 
-def test_preflight_probe_specs_are_certified():
-    assert str(E.certify_candidate(L.control_factor_spec())) == "EVENT_SIMPLE"
-    assert str(E.certify_candidate(L.simple_factor_spec())) == "SIMPLE"
-    assert str(E.certify_candidate(L.std_x_rank_factor_spec())) == "STD_X_RANK"
+def test_preflight_battery_is_exact():
+    """Kills mutations L-M6 / L-M7 (a fixed probe is dropped from the battery)."""
+    probes = L.preflight_probes()
+    assert [(probe.name, probe.certified_class) for probe in probes] == list(
+        _EXPECTED_BATTERY
+    )
+    assert len({probe.spec.id for probe in probes}) == len(probes)
 
 
-def test_preflight_evaluates_three_fixed_specs(tmp_path):
-    """Kills mutation L-M6 (the preflight omits the STD_X_RANK probe)."""
+def test_each_preflight_probe_certifies_its_frozen_class():
+    """Each probe asserts its planner-verified ``certify_candidate`` class."""
+    for probe in L.preflight_probes():
+        classification = E.certify_candidate(probe.spec)
+        assert E.is_certified(classification), probe.name
+        assert str(classification) == probe.certified_class, probe.name
+
+
+def test_preflight_evaluates_all_ten_fixed_probes(tmp_path):
+    """Kills mutation L-M7 (a probe is dropped from the evaluated battery)."""
     _src, _asm, result, printed = _run_preflight(tmp_path)
-    assert [name for name, _spec in L.preflight_factor_specs()] == [
-        "control",
-        "simple",
-        "cross_sectional",
-    ]
-    assert set(result["summary"]) == {"control", "simple", "cross_sectional"}
-    assert set(json.loads(printed.strip())) == {
-        "control",
-        "simple",
-        "cross_sectional",
+    assert list(result["summary"]) == list(_EXPECTED_BATTERY_NAMES)
+    assert set(json.loads(printed.strip())) == set(_EXPECTED_BATTERY_NAMES)
+
+
+def test_preflight_class_mismatch_is_a_spec_defect(tmp_path):
+    """A probe outside its intended class fails closed; no marker is written."""
+    source = tmp_path / "production_kpit.jsonl"
+    _seed_kpit(source)
+    assembly = _assembly(tmp_path, knowledge_log_path=source)
+    marker_path = tmp_path / "runs" / L.PREFLIGHT_MARKER_NAME
+    bad = L.PreflightProbe("control", "SIMPLE", L.control_factor_spec())
+    with pytest.raises(L.PreflightError):
+        L.run_preflight(
+            kpit_copy=source,
+            run_root=tmp_path / "runs",
+            assembly=assembly,
+            master_sha=_MASTER_SHA,
+            evaluate=fx.FakeControlEvaluator(),
+            specs=(bad,),
+        )
+    assert not marker_path.exists()
+
+
+class _FailingEvaluator:
+    """A fake evaluator that raises for one probe id (the FAILED-probe case)."""
+
+    def __init__(self, fail_id: str) -> None:
+        self.fail_id = fail_id
+        self.calls = 0
+
+    def __call__(self, _assembly: Any, spec: Any) -> tuple[Any, Any]:
+        self.calls += 1
+        if spec.id == self.fail_id:
+            raise RuntimeError("injected preflight failure")
+        return fx.FakeDiagnostics(), fx.fake_export_series_fn()
+
+
+def test_preflight_failed_probe_writes_no_marker(tmp_path):
+    """Kills mutation L-M8 (a marker is written despite a FAILED probe)."""
+    source = tmp_path / "production_kpit.jsonl"
+    _seed_kpit(source)
+    assembly = _assembly(tmp_path, knowledge_log_path=source)
+    marker_path = tmp_path / "runs" / L.PREFLIGHT_MARKER_NAME
+    writer = io.StringIO()
+    with pytest.raises(L.PreflightProbeFailure) as excinfo:
+        L.run_preflight(
+            kpit_copy=source,
+            run_root=tmp_path / "runs",
+            assembly=assembly,
+            master_sha=_MASTER_SHA,
+            evaluate=_FailingEvaluator(L.control_factor_spec().id),
+            writer=writer,
+        )
+    assert not marker_path.exists()
+    summary = json.loads(writer.getvalue().strip())
+    assert set(summary) == set(_EXPECTED_BATTERY_NAMES)
+    assert summary["control"] == {
+        "status": "FAILED",
+        "error": "RuntimeError",
     }
+    assert excinfo.value.summary["control"]["error"] == "RuntimeError"
+    assert excinfo.value.failures == (("control", "RuntimeError"),)
+    L.assert_statistic_free(summary)
 
 
 def _assert_masked(case) -> None:
@@ -325,6 +403,22 @@ def test_panel_for_parity_cross_sectional(tmp_path):
 
 def test_panel_for_parity_event_simple(tmp_path):
     case = parity.build_parity_case(tmp_path, "event")
+    diagnostics = parity.run_diagnostics(case)
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == "EVENT_SIMPLE"
+    assert diagnostics.event_scenarios == ("K0", "K1")
+
+
+def test_panel_for_parity_mixed_event_simple(tmp_path):
+    """P6-E4 probe #4 (mixed EVENT_SIMPLE) evaluates end-to-end (PQ-EV).
+
+    Before PQ-EV, ``build_event_inputs`` built event frames on ``layer.keys``
+    and a mixed event/price expression failed the trusted-input grid check
+    with ``InputGridMismatchError`` (a strict-subset layer is used so the
+    mismatch really occurs); after PQ-EV the mixed probe realizes the certified
+    ``EVENT_SIMPLE`` panel and evaluates both K0/K1 scenarios.
+    """
+    case = parity.build_parity_case(tmp_path, "mixed_event")
     diagnostics = parity.run_diagnostics(case)
     assert diagnostics.not_assessed is None
     assert diagnostics.certified_class == "EVENT_SIMPLE"
@@ -454,7 +548,16 @@ def test_pool_tb_folds_concatenates_in_fold_order():
 def test_mutations_fixture_is_wellformed():
     entries = json.loads(_MUTATIONS.read_text(encoding="utf-8"))
     ids = {entry["id"] for entry in entries}
-    assert {"L-M1", "L-M2", "L-M3", "L-M4"} <= ids
+    assert {
+        "L-M1",
+        "L-M2",
+        "L-M3",
+        "L-M4",
+        "L-M5",
+        "L-M6",
+        "L-M7",
+        "L-M8",
+    } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
         assert target.is_file(), entry["file"]
