@@ -946,19 +946,38 @@ def _observed_values(
     session_at_offset: Mapping[int, date],
     offsets: Sequence[int],
 ) -> _dependency.ObservedValues:
+    """Observed M and dv values for one key at one formation.
+
+    ``M_obs`` is the realized momentum sub-expression at the formation row,
+    which already carries the D7c bridge lag.  ``dv`` maps a formation-relative
+    dependency offset to the **observation** of that offset's session.  The
+    dependency offsets are session-relative (offset ``u`` denotes session
+    ``f + u``), while the D7c frames follow the §11 bridge convention: **row
+    ``r`` holds the observation of ``prev(r)``**.  The observation of session
+    ``f + u`` therefore lives at row ``f + u + 1``, i.e. at the session one
+    step *after* the offset's own session.  Reading the frame at the offset's
+    own raw session double-lags the value (through ``f - 2`` instead of
+    ``f - 1``) and would make the reconstructed V box disagree with the
+    realization at row ``f``.
+    """
+
     m_obs = None
     if m_row is not None and key in m_row.index:
         value = m_row[key]
         if _is_finite(value):
             m_obs = float(value)
     dv: dict[int, float] = {}
-    if dv_frame is not None:
+    if dv_frame is not None and key in dv_frame.columns:
         for offset in offsets:
-            session = session_at_offset.get(offset)
-            if session is None:
+            # The observation of session ``f + offset`` is carried by the
+            # bridge-lagged row one session later (``f + offset + 1``).  The
+            # formation row is offset 0, so ``offset + 1`` always exists for
+            # the certified windows (whose right edge is ``-1``).
+            row_session = session_at_offset.get(offset + 1)
+            if row_session is None:
                 continue
-            stamp = pd.Timestamp(session)
-            if stamp not in dv_frame.index or key not in dv_frame.columns:
+            stamp = pd.Timestamp(row_session)
+            if stamp not in dv_frame.index:
                 continue
             value = dv_frame.at[stamp, key]
             if _is_finite(value):

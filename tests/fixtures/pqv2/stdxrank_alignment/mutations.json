@@ -1,0 +1,36 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the smoke test",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [],
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_control_is_green",
+    "expected": "pass"
+  },
+  {
+    "id": "SX-M1",
+    "description": "the double lag is restored: _observed_values reads the raw session of each dependency offset instead of the bridge-lagged row, so the V box uses dv through f-2",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            row_session = session_at_offset.get(offset + 1)",
+        "new": "            row_session = session_at_offset.get(offset)"
+      }
+    ],
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_v_box_equals_realization_and_oracle",
+    "expected": "killed"
+  },
+  {
+    "id": "SX-M2",
+    "description": "the alignment is off by one the other way: _observed_values reads row f+u+2, so the V box uses dv through f instead of f-1",
+    "file": "smart_beta/dataset_v1/pqv2_evaluation.py",
+    "edits": [
+      {
+        "old": "            row_session = session_at_offset.get(offset + 1)",
+        "new": "            row_session = session_at_offset.get(offset + 2)"
+      }
+    ],
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_v_box_equals_realization_and_oracle",
+    "expected": "killed"
+  }
+]
