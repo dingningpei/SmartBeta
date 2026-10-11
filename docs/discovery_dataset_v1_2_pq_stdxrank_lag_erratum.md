@@ -66,3 +66,26 @@ A hand computation on the D7c `dollar_volume` frame, for keys A and AAL:
 - the full suite.
 - **Then** the 3-spec preflight, and Campaign-3 attempt 2 under the standing
   authorization.
+
+## Addendum PQ-SX-A (APPROVED 2026-10-10, user: "放宽为 dv ≥ 0")
+
+**Evidence:** the real-data recertification probe on the fixed code (`f703f03`) raised
+`PQv2InputError: PositiveInterval requires 0 < lo <= hi, got [0.0, 0.0]` from
+`pqv2_dependency._v_interval`. A key in the full valid cross-section has zero dollar
+volume over the short window, so V = 0. The double lag had masked this, because the
+sandwich failed earlier.
+
+**What it contradicts:** the frozen M§11.2 / Props. 5–6 text assumes "positive dv".
+
+**Correction (methodology assumption relaxed; proof re-checked by the planner):**
+- dv ≥ 0, with a long-window sum > 0;
+- with V = (n_long/n_short)·S/(S+L), S ≥ 0, L ≥ 0, S+L > 0:
+  - ∂V/∂S = L/(S+L)² ≥ 0 and ∂V/∂L = −S/(S+L)² ≤ 0, so the extremes stay at the box
+    vertices;
+  - V = 0 is a valid finite value; average rank handles it.
+- The realization and D7b already rank V = 0 as valid.
+- **Implementation:** the V interval admits lo = 0 (a non-negative interval).
+  - A long-window sum of 0 still yields no V (excluded, as now).
+  - M (a TRI ratio > 0) keeps `PositiveInterval`.
+- **Audit:** the PQ-SX worker audits every other positivity/non-zero assumption on
+  dv-derived values (e.g. any `PositiveInterval` on dv quantities) and reports each one.
