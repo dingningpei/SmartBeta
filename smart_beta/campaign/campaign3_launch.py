@@ -32,14 +32,16 @@ gap and adds the two CLI modes:
   panel is therefore byte-identical to the one P-Q checks in
   ``_realize_std_x_rank``.
 * ``--preflight`` runs on a **copy** of the production K-PIT, in a scratch run
-  directory.  The real T-A evaluator evaluates the three fixed P6-E3 probes
-  (the EVENT_SIMPLE positive control, the SIMPLE ``tri/lag(tri,20) - 1`` and
-  the certified STD_X_RANK ``standardize(lag(tri,20)/lag(tri,60)) *
-  rank(rolling_mean(dv,20)/rolling_mean(dv,60))``) and the ``pqv2_series``
-  export is bound for each; only ``status`` / ``assessed`` /
-  ``NOT_ASSESSED`` reason / ``binding_ok`` / per-scenario period counts are
-  printed or written.  On success it writes a preflight marker (master SHA +
-  bindings hash + K-PIT source hash) next to the scratch run directory.
+  directory.  The real T-A evaluator evaluates the ten fixed **P6-E4** probes
+  (the EVENT_SIMPLE positive control, SIMPLE momentum/dv-ratio/ret-std probes,
+  the certified STD_X_RANK probes and the mixed EVENT_SIMPLE probes) and the
+  ``pqv2_series`` export is bound for each; every probe first asserts its
+  planner-verified ``certify_candidate`` class (a mismatch is a spec defect).
+  Only ``status`` / ``assessed`` / ``NOT_ASSESSED`` reason / ``binding_ok`` /
+  per-scenario period counts are printed or written; a probe that raises is
+  reported as ``FAILED`` with its exception type and **no** marker is written.
+  On success it writes a preflight marker (master SHA + bindings hash + K-PIT
+  source hash) next to the scratch run directory.
 * ``--production`` requires a matching preflight marker and then performs the
   authorized real run.  **T-C is never started** (the reserve fold is
   structurally absent).
@@ -74,6 +76,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from smart_beta.campaign import campaign3_eval as _eval
 from smart_beta.campaign import campaign3_run as _run
 from smart_beta.evaluation.partition import Fold, FoldRole, Partition
 from smart_beta.research.policy import ResearchPolicy
@@ -97,12 +100,14 @@ __all__ = [
     "LaunchError",
     "PreflightRequired",
     "PreflightError",
+    "PreflightProbeFailure",
     "StatisticLeakError",
     "control_factor_spec",
     "control_raw_artifact",
     "simple_factor_spec",
     "std_x_rank_factor_spec",
-    "preflight_factor_specs",
+    "PreflightProbe",
+    "preflight_probes",
     "FixedArtifactGenerator",
     "build_production_policy",
     "production_partition_folds",
@@ -137,6 +142,25 @@ class PreflightRequired(LaunchError):
 
 class PreflightError(LaunchError):
     """The preflight itself failed or an invariant was violated."""
+
+
+class PreflightProbeFailure(PreflightError):
+    """One or more fixed P6-E4 preflight probes raised during evaluation.
+
+    Carries the statistic-free summary (including each ``FAILED`` probe's
+    exception type) so the caller can report it.  No preflight marker is
+    ever written when this is raised.
+    """
+
+    def __init__(
+        self,
+        summary: Mapping[str, Any],
+        failures: Sequence[tuple[str, str]],
+    ) -> None:
+        self.summary = dict(summary)
+        self.failures = tuple(failures)
+        detail = ", ".join(f"{name} ({kind})" for name, kind in self.failures)
+        super().__init__(f"preflight probe(s) FAILED: {detail}")
 
 
 class StatisticLeakError(LaunchError):
@@ -237,7 +261,7 @@ def control_raw_artifact(
 
 
 # ---------------------------------------------------------------------------
-# the frozen P6-E3 preflight probes
+# the fixed P6-E4 preflight battery
 # ---------------------------------------------------------------------------
 
 #: The certifiable A§15A.2 STD_X_RANK shape (P6-E3 *correction*).  The erratum's
@@ -379,16 +403,277 @@ def std_x_rank_factor_spec() -> FactorSpec:
     return factor_spec_from_dict(payload)
 
 
-def preflight_factor_specs() -> tuple[tuple[str, FactorSpec], ...]:
-    """The three frozen P6-E3 preflight probes, in evaluation order.
+def _preflight_probe_spec(
+    *,
+    probe_id: str,
+    description: str,
+    expression: Mapping[str, Any],
+    inputs: Sequence[tuple[str, str, str, str]],
+) -> FactorSpec:
+    """Build one benign P6-E4 probe through the frozen FactorSpec parser.
 
-    The keys deliberately carry no :data:`_FORBIDDEN_KEY_MARKERS` token, so
-    the statistic-free guard applies to the whole summary uniformly.
+    ``inputs`` is ``(alias, semantic_id, observation_period, units)`` per
+    declared role.  Building through :func:`factor_spec_from_dict` (never a
+    hand-rolled ``FactorSpec``) keeps every probe on the same admission path
+    a generated candidate takes.
+    """
+    payload = {
+        "id": probe_id,
+        "description": description,
+        "hypothesis": probe_id,
+        "expression": dict(expression),
+        "inputs": [
+            {
+                "alias": alias,
+                "requirement": _factor_requirement(
+                    semantic_id, observation_period=period, units=units
+                ),
+            }
+            for alias, semantic_id, period, units in inputs
+        ],
+        "frequency": "daily",
+        "missing_policy": "propagate",
+        "sign": 1,
+    }
+    return factor_spec_from_dict(payload)
+
+
+@dataclass(frozen=True)
+class PreflightProbe:
+    """One fixed P6-E4 preflight probe.
+
+    ``certified_class`` is the planner-verified ``certify_candidate`` class
+    the probe must certify as **before** it is evaluated; a mismatch is a
+    specification defect that fails the whole preflight closed.
+    """
+
+    name: str
+    certified_class: str
+    spec: FactorSpec
+
+
+def preflight_probes() -> tuple[PreflightProbe, ...]:
+    """The ten fixed P6-E4 preflight probes, in evaluation order.
+
+    The battery covers every certified class (EVENT_SIMPLE, SIMPLE,
+    STD_X_RANK) and both grammar families.  Every probe is built through the
+    frozen ``factor_spec_from_dict`` parser and certifies in exactly its
+    ``certified_class``; the planner verified each pairing with
+    :func:`campaign3_eval.certify_candidate`.  The probe names deliberately
+    carry no :data:`_FORBIDDEN_KEY_MARKERS` token, so the statistic-free
+    guard applies to the whole summary uniformly.
     """
     return (
-        ("control", control_factor_spec()),
-        ("simple", simple_factor_spec()),
-        ("cross_sectional", std_x_rank_factor_spec()),
+        PreflightProbe("control", "EVENT_SIMPLE", control_factor_spec()),
+        PreflightProbe("simple", "SIMPLE", simple_factor_spec()),
+        PreflightProbe("cross_sectional", "STD_X_RANK", std_x_rank_factor_spec()),
+        PreflightProbe(
+            "event_times_ret",
+            "EVENT_SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_event_times_ret",
+                description=(
+                    "P6-E4 EVENT_SIMPLE probe: "
+                    "event_ear_k_kp1 * rolling_mean(ret,20)"
+                ),
+                expression={
+                    "op": "mul",
+                    "left": {"op": "field", "role": "event_ear_k_kp1"},
+                    "right": {
+                        "op": "rolling",
+                        "fn": "mean",
+                        "operand": {"op": "field", "role": "ret"},
+                        "window": 20,
+                    },
+                },
+                inputs=(
+                    (
+                        "event_ear_k_kp1",
+                        "event_ear_k_kp1",
+                        "period",
+                        "fraction",
+                    ),
+                    ("ret", "daily_total_return", "period", "fraction"),
+                ),
+            ),
+        ),
+        PreflightProbe(
+            "event_recent_momentum",
+            "EVENT_SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_event_recent_momentum",
+                description=(
+                    "P6-E4 EVENT_SIMPLE probe: "
+                    "event_recent_ea_w20 * (tri/lag(tri,5) - 1)"
+                ),
+                expression={
+                    "op": "mul",
+                    "left": {"op": "field", "role": "event_recent_ea_w20"},
+                    "right": {
+                        "op": "sub",
+                        "left": {
+                            "op": "div",
+                            "left": {"op": "field", "role": "tri"},
+                            "right": {
+                                "op": "lag",
+                                "operand": {"op": "field", "role": "tri"},
+                                "periods": 5,
+                            },
+                        },
+                        "right": {"op": "const", "value": 1.0},
+                    },
+                },
+                inputs=(
+                    (
+                        "event_recent_ea_w20",
+                        "event_recent_ea_w20",
+                        "instant",
+                        "count",
+                    ),
+                    ("tri", "total_return_index", "instant", "ratio"),
+                ),
+            ),
+        ),
+        PreflightProbe(
+            "event_days_since_ea",
+            "EVENT_SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_event_days_since_ea",
+                description="P6-E4 EVENT_SIMPLE probe: event_days_since_ea",
+                expression={"op": "field", "role": "event_days_since_ea"},
+                inputs=(
+                    (
+                        "event_days_since_ea",
+                        "event_days_since_ea",
+                        "instant",
+                        "count",
+                    ),
+                ),
+            ),
+        ),
+        PreflightProbe(
+            "dv_ratio",
+            "SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_dv_ratio",
+                description=(
+                    "P6-E4 SIMPLE probe: "
+                    "rolling_mean(dv,20)/rolling_mean(dv,120)"
+                ),
+                expression={
+                    "op": "div",
+                    "left": {
+                        "op": "rolling",
+                        "fn": "mean",
+                        "operand": {"op": "field", "role": "dv"},
+                        "window": 20,
+                    },
+                    "right": {
+                        "op": "rolling",
+                        "fn": "mean",
+                        "operand": {"op": "field", "role": "dv"},
+                        "window": 120,
+                    },
+                },
+                inputs=(("dv", "dollar_volume", "period", "currency"),),
+            ),
+        ),
+        PreflightProbe(
+            "ret_std",
+            "SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_ret_std",
+                description="P6-E4 SIMPLE probe: rolling_std(ret,60)",
+                expression={
+                    "op": "rolling",
+                    "fn": "std",
+                    "operand": {"op": "field", "role": "ret"},
+                    "window": 60,
+                },
+                inputs=(("ret", "daily_total_return", "period", "fraction"),),
+            ),
+        ),
+        PreflightProbe(
+            "momentum",
+            "SIMPLE",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_momentum",
+                description="P6-E4 SIMPLE probe: lag(tri,21)/lag(tri,252) - 1",
+                expression={
+                    "op": "sub",
+                    "left": {
+                        "op": "div",
+                        "left": {
+                            "op": "lag",
+                            "operand": {"op": "field", "role": "tri"},
+                            "periods": 21,
+                        },
+                        "right": {
+                            "op": "lag",
+                            "operand": {"op": "field", "role": "tri"},
+                            "periods": 252,
+                        },
+                    },
+                    "right": {"op": "const", "value": 1.0},
+                },
+                inputs=(("tri", "total_return_index", "instant", "ratio"),),
+            ),
+        ),
+        PreflightProbe(
+            "cross_sectional_21_252",
+            "STD_X_RANK",
+            _preflight_probe_spec(
+                probe_id="campaign3_preflight_std_x_rank_21_252",
+                description=(
+                    "P6-E4 STD_X_RANK probe: standardize(lag(tri,21)/"
+                    "lag(tri,252)) * rank(rolling_mean(dv,20)/"
+                    "rolling_mean(dv,120))"
+                ),
+                expression={
+                    "op": "mul",
+                    "left": {
+                        "op": "cross_section",
+                        "fn": "standardize",
+                        "operand": {
+                            "op": "div",
+                            "left": {
+                                "op": "lag",
+                                "operand": {"op": "field", "role": "tri"},
+                                "periods": 21,
+                            },
+                            "right": {
+                                "op": "lag",
+                                "operand": {"op": "field", "role": "tri"},
+                                "periods": 252,
+                            },
+                        },
+                    },
+                    "right": {
+                        "op": "cross_section",
+                        "fn": "rank",
+                        "operand": {
+                            "op": "div",
+                            "left": {
+                                "op": "rolling",
+                                "fn": "mean",
+                                "operand": {"op": "field", "role": "dv"},
+                                "window": 20,
+                            },
+                            "right": {
+                                "op": "rolling",
+                                "fn": "mean",
+                                "operand": {"op": "field", "role": "dv"},
+                                "window": 120,
+                            },
+                        },
+                    },
+                },
+                inputs=(
+                    ("tri", "total_return_index", "instant", "ratio"),
+                    ("dv", "dollar_volume", "period", "currency"),
+                ),
+            ),
+        ),
     )
 
 
@@ -1211,6 +1496,7 @@ _PREFLIGHT_ALLOWED_KEYS: frozenset[str] = frozenset(
         "not_assessed_reason",
         "binding_ok",
         "periods",
+        "error",
     }
 )
 
@@ -1391,13 +1677,19 @@ def run_preflight(
     | None = None,
     print_summary: bool = True,
     writer: Any = None,
-    specs: Sequence[tuple[str, FactorSpec]] | None = None,
+    specs: Sequence[PreflightProbe] | None = None,
 ) -> dict[str, Any]:
     """The ``--preflight`` mode (statistic-free, scratch-only).
 
     ``kpit_copy`` is the **source** K-PIT to copy; ``run_root`` is the scratch
     directory.  The source is hash-checked before and after, so a write that
     escaped to the production K-PIT fails closed (mutation L-M1).
+
+    Each fixed P6-E4 probe first asserts its planner-verified
+    ``certify_candidate`` class; a mismatch raises :class:`PreflightError` (a
+    specification defect).  A probe whose evaluation raises is recorded as
+    ``FAILED`` with its exception type and :class:`PreflightProbeFailure` is
+    raised **without writing a marker**.
     """
     source = Path(kpit_copy)
     scratch = Path(run_root) / "preflight"
@@ -1411,11 +1703,34 @@ def run_preflight(
     _probe_copy(copy_path)
 
     evaluate_fn = evaluate or evaluate_spec
-    spec_list = tuple(specs) if specs is not None else preflight_factor_specs()
+    probe_list = tuple(specs) if specs is not None else preflight_probes()
     summary: dict[str, Any] = {}
-    for name, spec in spec_list:
-        diagnostics, series = evaluate_fn(assembly, spec)
-        summary[str(name)] = preflight_summary(diagnostics, series)
+    failures: list[tuple[str, str]] = []
+    for probe in probe_list:
+        # Assert the planner-verified class *before* evaluation.  A mismatch
+        # is a specification defect, never an implementation result.
+        classification = _eval.certify_candidate(probe.spec)
+        if (
+            not _eval.is_certified(classification)
+            or str(classification) != probe.certified_class
+        ):
+            raise PreflightError(
+                f"preflight probe {probe.name!r} certifies as "
+                f"{classification!s} but the fixed battery expects "
+                f"{probe.certified_class!r} (planner spec defect)"
+            )
+        try:
+            diagnostics, series = evaluate_fn(assembly, probe.spec)
+        except Exception as exc:  # noqa: BLE001 - the type is the evidence
+            summary[probe.name] = {
+                "status": "FAILED",
+                "error": type(exc).__name__,
+            }
+            failures.append((probe.name, type(exc).__name__))
+            continue
+        summary[probe.name] = preflight_summary(diagnostics, series)
+
+    assert_statistic_free(summary)
 
     after = _sha256_file(source)
     if before != after:
@@ -1423,6 +1738,15 @@ def run_preflight(
             "the production K-PIT changed during the preflight; the copy was "
             "not used (mutation L-M1)"
         )
+
+    if failures:
+        # A FAILED probe is reported, and the preflight writes **no** marker.
+        if print_summary:
+            stream = writer if writer is not None else sys.stdout
+            stream.write(
+                json.dumps(summary, sort_keys=True, ensure_ascii=True) + "\n"
+            )
+        raise PreflightProbeFailure(summary, failures)
 
     marker = {
         "schema": LAUNCH_SCHEMA,
