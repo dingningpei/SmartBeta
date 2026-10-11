@@ -852,7 +852,9 @@ def build_event_inputs(
         An :class:`EventLayer` from :func:`load_event_layer`.
     tri_frame:
         The D7c ``total_return_index`` wide frame (row ``d`` carries
-        ``TRI(prev(d))``).
+        ``TRI(prev(d))``).  The returned frames carry **exactly** this frame's
+        columns, in order: a key absent from ``layer`` is NaN in every
+        primitive, and a mapped key keeps its value bit-for-bit.
     sessions:
         The trusted-session grid; the returned frames are indexed by it.
     scenario:
@@ -881,7 +883,12 @@ def build_event_inputs(
     semantic_ids = _resolve_roles(roles)
 
     predecessor = _predecessor_labels(tri_frame)
-    keys = layer.keys
+    # PQ-EV: the event frames live on the supplied D7c grid (the columns of
+    # ``tri_frame``), never on ``layer.keys``.  A key absent from the layer is
+    # NaN in every primitive; a mapped key keeps its value bit-for-bit.  This
+    # is what lets a mixed EVENT_SIMPLE expression share one grid with its
+    # price term.
+    keys = list(tri_frame.columns)
     n_rows = len(session_list)
 
     days = np.full((n_rows, len(keys)), np.nan, dtype="float64")
@@ -930,8 +937,8 @@ def build_event_inputs(
                 continue
             ears[row, column] = high / low - 1.0
 
-    days_frame = pd.DataFrame(days, index=session_index, columns=list(keys))
-    ear_frame = pd.DataFrame(ears, index=session_index, columns=list(keys))
+    days_frame = pd.DataFrame(days, index=session_index, columns=tri_frame.columns)
+    ear_frame = pd.DataFrame(ears, index=session_index, columns=tri_frame.columns)
 
     built: dict[str, TrustedInput] = {}
     for semantic_id in semantic_ids:
@@ -946,7 +953,7 @@ def build_event_inputs(
                 np.isnan(values), np.nan, (values <= float(window)).astype("float64")
             )
             frame = pd.DataFrame(
-                indicator, index=session_index, columns=list(keys)
+                indicator, index=session_index, columns=tri_frame.columns
             )
         built[semantic_id] = TrustedInput(
             values=frame,
