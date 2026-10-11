@@ -45,6 +45,15 @@ write-ahead, resumable run:
   / evaluated-with-diagnostics-hash) so a restart reloads them without
   re-calling the generator, double counting, re-freezing the K-PIT or
   re-evaluating a completed candidate.
+* **Per-attempt state binding (P6-E5).** ``attempt_id`` binds the active
+  CAMPAIGN record hash, so each attempt gets a fresh run directory.  Every
+  persisted stage and the executor write-ahead state carry that hash; state
+  bound to a different CAMPAIGN record is refused with
+  :class:`C3ForeignStateError` and never loaded or merged.  A generation stop
+  other than ``PROPOSAL_BUDGET_EXHAUSTED`` ends the run ``RUN_INCOMPLETE`` with
+  a terminal report and no ranking, TB_SELECTION or T-B.  The run manifest
+  records each failed generator call's exception type and secret-scanned
+  message.
 
 **Testing.**  Every test is offline and synthetic: a stub generator, a stub
 evaluator, a disposable :class:`~smart_beta.science.knowledge.KnowledgeLog`
@@ -70,6 +79,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,12 +133,17 @@ __all__ = [
     "ATTEMPT1_SUPERSEDED_DISPOSITION",
     "ATTEMPT2_CAMPAIGN_RECORD_HASH",
     "ATTEMPT2_SUPERSEDED_DISPOSITION",
+    "ATTEMPT3_CAMPAIGN_RECORD_HASH",
+    "ATTEMPT3_SUPERSEDED_DISPOSITION",
+    "RUN_INCOMPLETE",
+    "CREDENTIAL_ENV_VARS",
     # errors
     "Campaign3RunError",
     "C3BindingError",
     "C3PreflightError",
     "C3GovernanceConflict",
     "C3ConfigurationError",
+    "C3ForeignStateError",
     # bindings
     "Campaign3Bindings",
     "verify_bindings",
@@ -311,6 +326,44 @@ ATTEMPT2_SUPERSEDED_DISPOSITION: Mapping[str, Any] = {
     ),
 }
 
+#: The production attempt-3 CAMPAIGN record (P6-E5).  Attempt 3 stopped with
+#: a ``generator_failure`` transport stop after 26 candidates; attempt 4
+#: supersedes this exact record with its disposition.
+ATTEMPT3_CAMPAIGN_RECORD_HASH = (
+    "bc061d8419bcccf492b52348dae663e02386b77b16925fdeb2e2b040e1737b4b"
+)
+
+#: The attempt-3 disposition carried by the superseding CAMPAIGN payload.
+ATTEMPT3_SUPERSEDED_DISPOSITION: Mapping[str, Any] = {
+    "attempt": 3,
+    "status": "RUN_INCOMPLETE",
+    "cause": (
+        "generator transport failure after 26 candidates; run directory "
+        "shared across attempts reloaded attempt-2 state (pre-PQ-EV "
+        "evaluations); run continued past an early stop"
+    ),
+}
+
+#: A generation stop other than the proposal budget being exhausted ends the
+#: run as RUN_INCOMPLETE (P5 / P6-E5): no ranking, no TB_SELECTION, no T-B.
+RUN_INCOMPLETE = "RUN_INCOMPLETE"
+
+#: The credential environment variables scrubbed from a persisted failed-call
+#: message.  No value is ever logged; a value found in a message is replaced.
+CREDENTIAL_ENV_VARS: tuple[str, ...] = (
+    "TIINGO_API_KEY",
+    "TUSHARE_PROXY_TOKEN",
+    "TUSHARE_BASIC_PROXY_TOKEN",
+    "TUSHARE_API_TOKEN",
+    "DEEPSEEK_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "SEC_CONTACT",
+)
+
+_REDACTED = "[REDACTED]"
+
 # ---------------------------------------------------------------------------
 # errors
 # ---------------------------------------------------------------------------
@@ -334,6 +387,16 @@ class C3GovernanceConflict(Campaign3RunError):
 
 class C3ConfigurationError(Campaign3RunError):
     """The run driver was configured outside the frozen P6 contract."""
+
+
+class C3ForeignStateError(Campaign3RunError):
+    """Persisted run state is bound to a different CAMPAIGN record.
+
+    P6-E5: every persisted stage and the executor write-ahead state carry the
+    CAMPAIGN record hash of the attempt that wrote them.  Loading state bound
+    to another attempt's CAMPAIGN record is refused with this typed error: the
+    foreign state is never loaded, merged or counted.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +716,8 @@ def _superseded_disposition_for(
         return ATTEMPT1_SUPERSEDED_DISPOSITION
     if record_hash == ATTEMPT2_CAMPAIGN_RECORD_HASH:
         return ATTEMPT2_SUPERSEDED_DISPOSITION
+    if record_hash == ATTEMPT3_CAMPAIGN_RECORD_HASH:
+        return ATTEMPT3_SUPERSEDED_DISPOSITION
     return None
 
 
@@ -1036,9 +1101,16 @@ class RunJournal:
     Each stage is atomically persisted once.  ``completed`` lets a resume skip
     a stage that already finished, so a generator call or an evaluation is
     never double counted.
+
+    P6-E5: when ``campaign_record_hash`` is set every persisted stage carries
+    that hash (and the ``attempt_id``), and :meth:`read` refuses a stage bound
+    to a different CAMPAIGN record with :class:`C3ForeignStateError`.  The
+    foreign state is never returned, loaded or merged.
     """
 
     root: Path
+    campaign_record_hash: str | None = None
+    attempt_id: str | None = None
 
     def __post_init__(self) -> None:
         self.root = Path(self.root)
@@ -1056,15 +1128,36 @@ class RunJournal:
         path = self.path_for(stage)
         body = dict(payload)
         body.setdefault("stage", stage)
+        if self.campaign_record_hash is not None:
+            body["campaign_record_hash"] = self.campaign_record_hash
+        if self.attempt_id is not None:
+            body["attempt_id"] = self.attempt_id
         body["content_hash"] = content_hash(_jsonable(body))
         _atomic_write_json(path, body)
         return path
+
+    def _assert_binding(self, stage: str, payload: Any) -> None:
+        if self.campaign_record_hash is None:
+            return
+        if not isinstance(payload, Mapping):
+            raise C3ForeignStateError(
+                f"the persisted {stage!r} state is malformed"
+            )
+        bound = payload.get("campaign_record_hash")
+        if bound != self.campaign_record_hash:
+            raise C3ForeignStateError(
+                f"the persisted {stage!r} state is bound to CAMPAIGN record "
+                f"{bound!r}, not this attempt's {self.campaign_record_hash!r}; "
+                "a foreign attempt's state is never loaded or merged"
+            )
 
     def read(self, stage: str) -> dict[str, Any] | None:
         path = self.path_for(stage)
         if not path.is_file():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self._assert_binding(stage, payload)
+        return payload
 
     def completed_stages(self) -> tuple[str, ...]:
         return tuple(stage for stage in _STAGE_NAMES if self.is_complete(stage))
@@ -1624,6 +1717,102 @@ class Campaign3RunResult:
     kpit_record_hashes: tuple[str, ...]
 
 
+# ---------------------------------------------------------------------------
+# failed generator calls: secret-scanned manifest evidence (P6-E5)
+# ---------------------------------------------------------------------------
+
+
+def _scrub_message(
+    text: str, environ: Mapping[str, str] | None = None
+) -> str:
+    """Redact credential values and credential-shaped tokens from ``text``.
+
+    P6-E5: a failed generator call's exception message is persisted, so the
+    message is scanned first.  Every known credential environment value found
+    in the text is replaced, as are bearer/API-key-shaped tokens.  No key
+    value is ever written, logged or returned by this function.
+    """
+    source = os.environ if environ is None else environ
+    result = text
+    for name in CREDENTIAL_ENV_VARS:
+        value = source.get(name)
+        if isinstance(value, str) and len(value) >= 4:
+            result = result.replace(value, _REDACTED)
+    result = re.sub(
+        r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}", r"\1" + _REDACTED, result
+    )
+    result = re.sub(r"\bsk-[A-Za-z0-9._\-]{8,}", _REDACTED, result)
+    return result
+
+
+class _GeneratorFailureRecorder:
+    """Wrap a generator callable and record each raised exception's detail.
+
+    The wrapper observes only: it re-raises the original exception so the
+    C3-X executor's counting, stop reason and no-hidden-retry semantics are
+    unchanged.  Each recorded entry is the exception type and the
+    secret-scrubbed message; the credential key is never present.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> None:
+        self._inner = inner
+        self._environ = os.environ if environ is None else environ
+        self.failures: list[dict[str, Any]] = []
+
+    @property
+    def prompt_template_hash(self) -> Any:
+        return getattr(self._inner, "prompt_template_hash", None)
+
+    def __call__(self, visible: Any, feedback: Any) -> Any:
+        try:
+            return self._inner(visible, feedback)
+        except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+            self.failures.append(
+                {
+                    "call_index": len(self.failures),
+                    "exception_type": type(exc).__name__,
+                    "message": _scrub_message(str(exc), self._environ),
+                }
+            )
+            raise
+
+
+@dataclass
+class _BoundGenerationJournal(_gen.GenerationJournal):
+    """The C3-X executor write-ahead state, bound to the CAMPAIGN record.
+
+    P6-E5: :meth:`save` stamps the CAMPAIGN record hash into every persisted
+    executor state and :meth:`load` refuses (with :class:`C3ForeignStateError`)
+    a state written by a different attempt instead of loading or merging it.
+    """
+
+    campaign_record_hash: str | None = None
+
+    def save(self, payload: Mapping[str, Any]) -> Path:
+        body = dict(payload)
+        if self.campaign_record_hash is not None:
+            body["campaign_record_hash"] = self.campaign_record_hash
+        return super().save(body)
+
+    def load(self) -> dict[str, Any]:
+        payload = super().load()
+        if self.campaign_record_hash is not None:
+            bound = payload.get("campaign_record_hash")
+            if bound != self.campaign_record_hash:
+                raise C3ForeignStateError(
+                    "the persisted executor state is bound to CAMPAIGN record "
+                    f"{bound!r}, not this attempt's "
+                    f"{self.campaign_record_hash!r}; a foreign attempt's state "
+                    "is never loaded or merged"
+                )
+        return payload
+
+
 def _generator_prompt_template_hash(generator: Any) -> str | None:
     """The injected generator's own prompt-template hash, when it exposes one.
 
@@ -1705,10 +1894,19 @@ class Campaign3Run:
     #: overrides the frozen constant for an unrecognized active record.
     supersedes_record_hash: str | None = None
     superseded_disposition: Mapping[str, Any] | None = None
+    #: The credential environment scanned out of a persisted failed-call
+    #: message (P6-E5).  Defaults to ``os.environ``; tests inject a mapping so
+    #: no real credential is ever needed.
+    generator_credential_environ: Mapping[str, str] | None = None
     #: The active CAMPAIGN record written (or reused) by this run.  Set by
     #: :meth:`_write_campaign_record`; scopes the control / GENERATOR /
     #: TB_SELECTION records to this attempt.
     _active_campaign: KnowledgeRecord | None = field(
+        default=None, init=False, repr=False
+    )
+    #: Records every generator call that raised (type + secret-scanned
+    #: message) for the run manifest (P6-E5).
+    _failure_recorder: _GeneratorFailureRecorder | None = field(
         default=None, init=False, repr=False
     )
 
@@ -1719,19 +1917,35 @@ class Campaign3Run:
         )
         if self.attempt_id is not None and not isinstance(self.attempt_id, str):
             raise C3ConfigurationError("attempt_id must be text")
+        self._failure_recorder = _GeneratorFailureRecorder(
+            self.generator,
+            environ=self.generator_credential_environ,
+        )
 
     # -- identity --------------------------------------------------------
-    def compute_attempt_id(self) -> str:
-        precommitment = verify_precommitment(self.precommitment_path)
-        return content_hash(
-            {
-                "domain": "campaign3-p6-attempt",
-                "precommitment_sha256": precommitment,
-                "bindings_hash": self.bindings.content_hash,
-                "control_factor_hash": control_factor_hash(self.control),
-                "policy_hash": self.policy.content_hash,
-            }
-        )
+    def compute_attempt_id(self, campaign_record_hash: str) -> str:
+        """The attempt identity, bound to the active CAMPAIGN record hash.
+
+        P6-E5: the CAMPAIGN record hash is part of the identity, so each
+        attempt gets its own run directory and can never reload another
+        attempt's on-disk state.  The caller-supplied ``attempt_id`` (when
+        present) is the base identity this binding extends.
+        """
+        if not isinstance(campaign_record_hash, str) or not campaign_record_hash:
+            raise C3ConfigurationError(
+                "the attempt identity requires the active CAMPAIGN record hash"
+            )
+        identity: dict[str, Any] = {
+            "domain": "campaign3-p6-attempt",
+            "precommitment_sha256": verify_precommitment(self.precommitment_path),
+            "bindings_hash": self.bindings.content_hash,
+            "control_factor_hash": control_factor_hash(self.control),
+            "policy_hash": self.policy.content_hash,
+            "campaign_record_hash": campaign_record_hash,
+        }
+        if self.attempt_id is not None:
+            identity["base_attempt_id"] = self.attempt_id
+        return content_hash(identity)
 
     # -- precommitment ---------------------------------------------------
     def _identity_payload(self) -> dict[str, Any]:
@@ -1755,7 +1969,7 @@ class Campaign3Run:
 
         An explicit ``supersedes_record_hash`` wins; its disposition is the
         explicit ``superseded_disposition`` when given, else the matching
-        frozen constant for a recognized attempt (attempt 1 / attempt 2).
+        frozen constant for a recognized attempt (attempt 1 / 2 / 3).
 
         Otherwise the single **active** Campaign-3 CAMPAIGN record is
         superseded with its matching frozen disposition constant.  A fresh
@@ -1840,11 +2054,18 @@ class Campaign3Run:
         )
         executor = _gen.Campaign3Executor(
             policy=self.policy,
-            generator=self.generator,
+            generator=(
+                self._failure_recorder
+                if self._failure_recorder is not None
+                else self.generator
+            ),
             evaluator=self.ta_evaluator,
             kpit=kpit,
             inclusion_provider=self.inclusion_provider,
-            journal=_gen.GenerationJournal(journal.root / "generation_state"),
+            journal=_BoundGenerationJournal(
+                journal.root / "generation_state",
+                campaign_record_hash=journal.campaign_record_hash,
+            ),
         )
         result = executor.run()
         evaluations = {item.proposal_id: item for item in result.evaluations}
@@ -1854,6 +2075,9 @@ class Campaign3Run:
             if entry.proposal_id in evaluations
         )
         manifest = result.manifest.to_dict()
+        # P6-E5: persist each failed generator call's exception type and
+        # secret-scanned message in the manifest.
+        manifest["failed_call_details"] = self._failed_call_details()
         snapshot = GenerationSnapshot(
             manifest=manifest,
             candidates=candidates,
@@ -1867,10 +2091,6 @@ class Campaign3Run:
     # -- run -------------------------------------------------------------
     def run(self) -> Campaign3RunResult:
         """Run/reconcile the P6 stages to a frozen stop (idempotent)."""
-        attempt_id = self.attempt_id or self.compute_attempt_id()
-        run_dir = run_dir_for(attempt_id, self.run_root)
-        journal = RunJournal(run_dir)
-
         # The C3-S selection tier is required: there is no implicit stub
         # fallback.  A runner is either explicitly injected or resolved from
         # the merged campaign3_screen module, which raises when it is absent.
@@ -1886,14 +2106,31 @@ class Campaign3Run:
         campaign_record = self._write_campaign_record()
         control_record = self._write_control_record(campaign_record)
 
-        # (e) generation (write-ahead; a resume never re-calls the generator).
+        # (e) attempt identity binds the active CAMPAIGN record hash, so every
+        # attempt gets its own run directory and can never reload another
+        # attempt's persisted state (P6-E5).  A caller-supplied ``attempt_id``
+        # is the base identity this binding extends, never a bypass of it.
+        attempt_id = self.compute_attempt_id(campaign_record.record_hash)
+        run_dir = run_dir_for(attempt_id, self.run_root)
+        journal = RunJournal(
+            run_dir,
+            campaign_record_hash=campaign_record.record_hash,
+            attempt_id=attempt_id,
+        )
+
+        # (f) generation (write-ahead; a resume never re-calls the generator).
         generation = self._generation_snapshot(journal)
 
-        # (f) the C3-S selection tier (rank -> TB_SELECTION -> T-B -> report).
-        screen_report: Mapping[str, Any] | None = None
-        if journal.is_complete("report"):
-            stored = journal.read("report")
-            screen_report = dict(stored) if isinstance(stored, Mapping) else None
+        # (g) any generation stop other than the proposal budget being
+        # exhausted ends the run RUN_INCOMPLETE: no ranking, no TB_SELECTION,
+        # no T-B (P6-E5).
+        budget_exhausted = (
+            _gen.Campaign3StopReason.PROPOSAL_BUDGET_EXHAUSTED.value
+        )
+        if generation.stop_reason != budget_exhausted:
+            screen_report = self._run_incomplete(journal, generation)
+        elif journal.is_complete("report"):
+            screen_report = self._read_report(journal)
         else:
             screen_report = self._run_screen(journal, generation, screen_runner)
 
@@ -1901,11 +2138,16 @@ class Campaign3Run:
         manifest["attempt_id"] = attempt_id
         manifest["campaign_record_hash"] = campaign_record.record_hash
         manifest["control_record_hash"] = control_record.record_hash
+        manifest.setdefault("failed_call_details", self._failed_call_details())
         journal.write("manifest", {"manifest": manifest})
         return Campaign3RunResult(
             attempt_id=attempt_id,
             run_dir=str(run_dir),
-            stop_reason=generation.stop_reason,
+            stop_reason=(
+                generation.stop_reason
+                if generation.stop_reason == budget_exhausted
+                else RUN_INCOMPLETE
+            ),
             completed_stages=journal.completed_stages(),
             manifest=manifest,
             screen_report=screen_report,
@@ -1913,6 +2155,40 @@ class Campaign3Run:
                 record.record_hash for record in self.knowledge_log.read()
             ),
         )
+
+    # -- P6-E5 helpers ---------------------------------------------------
+    def _failed_call_details(self) -> list[dict[str, Any]]:
+        """Each failed generator call's type + secret-scanned message."""
+        recorder = self._failure_recorder
+        if recorder is None:
+            return []
+        return [dict(item) for item in recorder.failures]
+
+    def _read_report(self, journal: RunJournal) -> Mapping[str, Any] | None:
+        stored = journal.read("report")
+        if not isinstance(stored, Mapping):
+            return None
+        inner = stored.get("report")
+        return dict(inner) if isinstance(inner, Mapping) else dict(stored)
+
+    def _run_incomplete(
+        self,
+        journal: RunJournal,
+        generation: GenerationSnapshot,
+    ) -> Mapping[str, Any]:
+        """The terminal RUN_INCOMPLETE report for a non-budget stop (P6-E5)."""
+        payload: dict[str, Any] = {
+            "status": RUN_INCOMPLETE,
+            "stop_reason": generation.stop_reason,
+            "attempt_id": journal.attempt_id,
+            "campaign_record_hash": journal.campaign_record_hash,
+            "note": (
+                "a generation stop other than proposal_budget_exhausted ends "
+                "the run RUN_INCOMPLETE; no ranking, TB_SELECTION or T-B runs"
+            ),
+        }
+        journal.write("report", {"report": payload})
+        return payload
 
     def _run_screen(
         self,

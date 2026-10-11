@@ -103,11 +103,12 @@ def _policy(budget: int = 2) -> Any:
     )
 
 
-def _scripted_generator(budget: int) -> Any:
+def _scripted_generator(budget: int, *, raise_on: Any = None) -> Any:
     """A stub that rises after ``budget + 1`` calls (the loop is bounded).
 
     The stub exposes the injected ``prompt_template_hash`` that erratum A2-E2
-    requires every generator to carry.
+    requires every generator to carry.  ``raise_on`` names the call indices
+    that raise a ``RuntimeError`` (a bounded generator-failure stop).
     """
 
     def factory(visible: Any, feedback: Any, index: int) -> Any:
@@ -115,7 +116,11 @@ def _scripted_generator(budget: int) -> Any:
             fx.candidate(fx.simple_spec_dict(numerator_lag=21 + index))
         )
 
-    generator = fx.ScriptedGenerator(factory=factory, max_calls=budget + 1)
+    generator = fx.ScriptedGenerator(
+        factory=factory,
+        max_calls=budget + 1,
+        raise_on=set(raise_on or ()),
+    )
     generator.prompt_template_hash = PROMPT_TEMPLATE_HASH
     return generator
 
@@ -167,9 +172,11 @@ def _make_run(
     screen_runner: Any = None,
     log: KnowledgeLog | None = None,
     supersedes_record_hash: str | None = None,
+    generator: Any = None,
+    generator_credential_environ: Mapping[str, str] | None = None,
 ) -> tuple[R.Campaign3Run, Any, KnowledgeLog]:
     log = log if log is not None else KnowledgeLog(tmp_path / "kpit.jsonl")
-    generator = _scripted_generator(budget)
+    generator = generator if generator is not None else _scripted_generator(budget)
     runner = R.Campaign3Run(
         bindings=_bindings(),
         policy=_policy(budget),
@@ -181,6 +188,7 @@ def _make_run(
         screen_candidate_builder=_synthetic_screen_candidates,
         launch_terminal=launch_terminal,
         supersedes_record_hash=supersedes_record_hash,
+        generator_credential_environ=generator_credential_environ,
     )
     return runner, generator, log
 
@@ -460,6 +468,19 @@ def test_run_is_write_ahead_and_resumable(tmp_path):
     run_dir = Path(first.run_dir)
     assert (run_dir / "generation.json").is_file()
     assert (run_dir / "report.json").is_file()
+    # P6-E5: every persisted stage and the executor state carry the CAMPAIGN
+    # record hash of this attempt.
+    campaign_hash = first.manifest["campaign_record_hash"]
+    stored_generation = json.loads(
+        (run_dir / "generation.json").read_text(encoding="utf-8")
+    )
+    assert stored_generation["campaign_record_hash"] == campaign_hash
+    executor_state = json.loads(
+        (run_dir / "generation_state" / "executor_state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert executor_state["campaign_record_hash"] == campaign_hash
 
     # A resume re-pins the now-current terminal and never re-calls the generator.
     runner.launch_terminal = R.pin_kpit_terminal(log.path)
@@ -1485,6 +1506,281 @@ def test_supersession_of_a_non_existent_record_is_refused(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 13. P6-E5: per-attempt state binding, halt on an early stop, attempt 3/4
+# ---------------------------------------------------------------------------
+
+
+def test_attempt3_constants_are_frozen():
+    assert R.ATTEMPT3_CAMPAIGN_RECORD_HASH == (
+        "bc061d8419bcccf492b52348dae663e02386b77b16925fdeb2e2b040e1737b4b"
+    )
+    disposition = dict(R.ATTEMPT3_SUPERSEDED_DISPOSITION)
+    assert disposition["attempt"] == 3
+    assert disposition["status"] == "RUN_INCOMPLETE"
+    assert "transport" in disposition["cause"]
+    assert "shared" in disposition["cause"]
+    assert "early stop" in disposition["cause"]
+
+
+def test_attempt_id_binds_the_campaign_record_hash(tmp_path):
+    """Kills mutation R-M21 (attempt_id ignores the CAMPAIGN record)."""
+    runner, _generator, _ = _make_run(tmp_path)
+    first = runner.compute_attempt_id("a" * 64)
+    second = runner.compute_attempt_id("b" * 64)
+    assert first != second
+    # Deterministic for a fixed campaign record.
+    assert runner.compute_attempt_id("a" * 64) == first
+    with pytest.raises(R.C3ConfigurationError):
+        runner.compute_attempt_id("")
+
+
+def test_explicit_attempt_id_still_binds_the_campaign_record(tmp_path):
+    """A caller-supplied attempt_id is a base, never a binding bypass."""
+    runner = R.Campaign3Run(
+        bindings=_bindings(),
+        policy=_policy(1),
+        generator=_scripted_generator(1),
+        ta_evaluator=fx.StubEvaluator(),
+        knowledge_log=KnowledgeLog(tmp_path / "kpit.jsonl"),
+        run_root=tmp_path / "runs",
+        screen_runner=_ScreenSpy(),
+        screen_candidate_builder=_synthetic_screen_candidates,
+        attempt_id="caller-base",
+    )
+    first = runner.compute_attempt_id("a" * 64)
+    second = runner.compute_attempt_id("b" * 64)
+    assert first != second
+    assert first != "caller-base"
+
+
+def test_attempts_get_fresh_run_directories(tmp_path, monkeypatch):
+    """Two attempts with different CAMPAIGN records get distinct run dirs."""
+    log_a = KnowledgeLog(tmp_path / "a_kpit.jsonl")
+    attempt1 = prefixfx.seed_attempt1(log_a)
+    monkeypatch.setattr(
+        R, "ATTEMPT1_CAMPAIGN_RECORD_HASH", attempt1["campaign"].record_hash
+    )
+    runner_a, _gen_a, _ = _make_run(tmp_path, budget=2, log=log_a)
+    runner_a.launch_terminal = R.pin_kpit_terminal(log_a.path)
+    result_a = runner_a.run()
+
+    log_b = KnowledgeLog(tmp_path / "b_kpit.jsonl")
+    b1 = prefixfx.seed_attempt1(log_b)
+    b2 = prefixfx.seed_attempt2(log_b, supersedes=b1["campaign"].record_hash)
+    monkeypatch.setattr(
+        R, "ATTEMPT2_CAMPAIGN_RECORD_HASH", b2["campaign"].record_hash
+    )
+    runner_b, _gen_b, _ = _make_run(tmp_path, budget=2, log=log_b)
+    runner_b.launch_terminal = R.pin_kpit_terminal(log_b.path)
+    result_b = runner_b.run()
+
+    assert result_a.run_dir != result_b.run_dir
+    assert Path(result_a.run_dir).is_dir()
+    assert Path(result_b.run_dir).is_dir()
+
+
+def test_run_refuses_state_bound_to_a_foreign_campaign_record(
+    tmp_path, monkeypatch
+):
+    """Kills mutation R-M19 (foreign state is loaded).
+
+    A run directory already holding another attempt's ``generation`` stage
+    (bound to a different CAMPAIGN record hash) is refused with the typed
+    error: the foreign state is never returned, loaded or merged.
+    """
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    foreign_dir = tmp_path / "runs" / "foreign"
+    foreign = R.RunJournal(foreign_dir, campaign_record_hash="f" * 64)
+    foreign.write(
+        "generation",
+        {
+            "manifest": {"stop_reason": "proposal_budget_exhausted"},
+            "candidates": [],
+            "stop_reason": "proposal_budget_exhausted",
+            "kpit_record_hashes": [],
+            "diagnostics_dir": str(foreign_dir / "diagnostics"),
+        },
+    )
+    monkeypatch.setattr(
+        R, "run_dir_for", lambda attempt_id, run_root=None: foreign_dir
+    )
+    runner, generator, _ = _make_run(tmp_path, log=log)
+    with pytest.raises(R.C3ForeignStateError):
+        runner.run()
+    assert generator.calls == []
+
+
+def test_run_refuses_foreign_executor_state(tmp_path, monkeypatch):
+    """Kills mutation R-M19 (foreign executor state is loaded)."""
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    foreign_dir = tmp_path / "runs" / "foreign_state"
+    state_dir = foreign_dir / "generation_state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "executor_state.json").write_text(
+        json.dumps(
+            {
+                "schema": "campaign3-executor-write-ahead-v1",
+                "campaign_record_hash": "f" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        R, "run_dir_for", lambda attempt_id, run_root=None: foreign_dir
+    )
+    runner, generator, _ = _make_run(tmp_path, log=log)
+    with pytest.raises(R.C3ForeignStateError):
+        runner.run()
+    assert generator.calls == []
+
+
+def test_generator_failure_stop_is_run_incomplete(tmp_path):
+    """Kills mutation R-M20 (ranking runs after a generator_failure stop)."""
+    spy = _ScreenSpy()
+    generator = _scripted_generator(5, raise_on={2})
+    runner, _gen, log = _make_run(
+        tmp_path, budget=5, screen_runner=spy, generator=generator
+    )
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    result = runner.run()
+
+    assert result.stop_reason == R.RUN_INCOMPLETE
+    assert result.screen_report is not None
+    assert result.screen_report["status"] == R.RUN_INCOMPLETE
+    assert result.screen_report["stop_reason"] == "generator_failure"
+    assert spy.calls == []  # the selection tier never runs
+    run_dir = Path(result.run_dir)
+    assert (run_dir / "generation.json").is_file()
+    assert (run_dir / "report.json").is_file()
+    assert not (run_dir / "ranking.json").exists()
+    assert not (run_dir / "tb_selection.json").exists()
+    assert not (run_dir / "tb.json").exists()
+    # No TB_SELECTION K-PIT record is written.
+    assert not [
+        record
+        for record in log.read()
+        if isinstance(record.payload.get("tb_selection"), Mapping)
+    ]
+    assert result.manifest["failed_call_details"][0]["exception_type"] == (
+        "RuntimeError"
+    )
+
+
+def test_run_incomplete_resume_is_stable(tmp_path):
+    """A RUN_INCOMPLETE resume never re-calls the generator or ranks."""
+    generator = _scripted_generator(5, raise_on={2})
+    runner, _gen, log = _make_run(tmp_path, budget=5, generator=generator)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    first = runner.run()
+    calls = len(generator.calls)
+    assert first.stop_reason == R.RUN_INCOMPLETE
+
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    second = runner.run()
+    assert len(generator.calls) == calls
+    assert second.stop_reason == R.RUN_INCOMPLETE
+    assert not (Path(second.run_dir) / "ranking.json").exists()
+
+
+def test_manifest_records_failed_call_details_secret_scanned(tmp_path):
+    """The manifest records a failed call's type and secret-scanned message."""
+    secret = "dsk-live-SECRETVALUE0123456789"
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+
+    class _LeakyGenerator:
+        prompt_template_hash = PROMPT_TEMPLATE_HASH
+
+        def __call__(self, visible: Any, feedback: Any) -> Any:
+            raise RuntimeError(f"transport failed: bearer {secret}")
+
+    runner, _gen, _ = _make_run(
+        tmp_path,
+        budget=3,
+        log=log,
+        generator=_LeakyGenerator(),
+        generator_credential_environ={"DEEPSEEK_API_KEY": secret},
+    )
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    result = runner.run()
+
+    assert result.stop_reason == R.RUN_INCOMPLETE
+    details = result.manifest["failed_call_details"]
+    assert len(details) == 1
+    assert details[0]["exception_type"] == "RuntimeError"
+    assert secret not in details[0]["message"]
+    assert R._REDACTED in details[0]["message"]
+    # The key never appears in any persisted stage or K-PIT record.
+    blob = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in Path(result.run_dir).rglob("*.json")
+    )
+    assert secret not in blob
+    assert secret not in _canonical(
+        [record.to_dict() for record in log.read()]
+    )
+
+
+def test_attempt4_supersedes_the_active_attempt3_and_chain_resolves(
+    tmp_path, monkeypatch
+):
+    """P6-E5: attempt 4 supersedes the active attempt 3 with its disposition."""
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=True)
+    attempt1 = prefixfx.seed_attempt1(log)
+    attempt1_hash = attempt1["campaign"].record_hash
+    attempt2 = prefixfx.seed_attempt2(log, supersedes=attempt1_hash)
+    attempt2_hash = attempt2["campaign"].record_hash
+    attempt3 = prefixfx.seed_attempt3(log, supersedes=attempt2_hash)
+    attempt3_hash = attempt3["campaign"].record_hash
+    monkeypatch.setattr(R, "ATTEMPT1_CAMPAIGN_RECORD_HASH", attempt1_hash)
+    monkeypatch.setattr(R, "ATTEMPT2_CAMPAIGN_RECORD_HASH", attempt2_hash)
+    monkeypatch.setattr(R, "ATTEMPT3_CAMPAIGN_RECORD_HASH", attempt3_hash)
+
+    runner, generator, _ = _make_run(tmp_path, budget=3, log=log)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    first = runner.run()
+    assert len(generator.calls) == 3
+
+    campaigns = _c3_campaign_records(log)
+    assert len(campaigns) == 4
+    superseding = [
+        record
+        for record in campaigns
+        if record.record_hash not in (attempt1_hash, attempt2_hash, attempt3_hash)
+    ]
+    assert len(superseding) == 1
+    attempt4 = superseding[0]
+    payload = attempt4.payload["campaign_precommitment"]
+    assert payload["supersedes_record_hash"] == attempt3_hash
+    assert payload["superseded_disposition"] == dict(
+        R.ATTEMPT3_SUPERSEDED_DISPOSITION
+    )
+    assert payload["superseded_disposition"]["attempt"] == 3
+    assert "transport" in payload["superseded_disposition"]["cause"]
+
+    # The chain resolves to exactly one active record: attempt 4.
+    active = R._active_campaign_record(log)
+    assert active is not None and active.record_hash == attempt4.record_hash
+
+    controls = _c3_control_records(log)
+    assert len(controls) == 4
+    bound = [
+        record
+        for record in controls
+        if record.payload.get("campaign_record_hash") == attempt4.record_hash
+    ]
+    assert len(bound) == 1
+
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+    # An idempotent resume keeps exactly one active record and writes no fifth.
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    second = runner.run()
+    assert len(_c3_campaign_records(log)) == 4
+    assert second.manifest["n_used"] == first.manifest["n_used"]
+
+
+# ---------------------------------------------------------------------------
 # 10. mutation fixture integrity
 # ---------------------------------------------------------------------------
 
@@ -1495,7 +1791,7 @@ def test_mutations_fixture_is_wellformed():
     assert {
         "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8",
         "R-M9", "R-M10", "R-M11", "R-M12", "R-M13", "R-M14", "R-M15",
-        "R-M16", "R-M17", "R-M18",
+        "R-M16", "R-M17", "R-M18", "R-M19", "R-M20", "R-M21",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
