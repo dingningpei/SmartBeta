@@ -19,7 +19,7 @@ caller-supplied temporary file.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from smart_beta.science.contracts import (
     DERIVATION_RULES_VERSION,
@@ -37,6 +37,7 @@ __all__ = [
     "CAMPAIGN3_CONTROL_SCHEMA",
     "artifact_footprint",
     "seed_attempt1",
+    "seed_attempt2",
     "seed_production_prefix",
 ]
 
@@ -233,6 +234,95 @@ def seed_attempt1(log: KnowledgeLog) -> dict[str, Any]:
             influenced_by=(generation_input.record_hash,),
             program_id="campaign3",
             proposal_id=content_hash({"attempt": "1-proposal", "index": index}),
+        )
+        for index in (1, 2)
+    )
+    return {
+        "campaign": campaign,
+        "control": control,
+        "generation_input": generation_input,
+        "freezes": freezes,
+    }
+
+
+def seed_attempt2(
+    log: KnowledgeLog,
+    *,
+    supersedes: str,
+    superseded_disposition: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append a disposable, production-shaped attempt-2 Campaign-3 set.
+
+    Attempt 2 is the **superseding** attempt: its CAMPAIGN record names the
+    attempt-1 ``supersedes`` record and carries the attempt-1 disposition.
+    The set is ``(CAMPAIGN, control, GENERATOR_INPUT, 2 freezes)``, matching
+    the real K-PIT seq 16-22 after attempt 2 stopped RUN_INCOMPLETE (P6-E4).
+    The returned ``campaign`` record's hash is what attempt 3 supersedes.
+    """
+    from smart_beta.science.adapters import (
+        record_generation_input,
+        record_hypothesis_freeze,
+    )
+
+    campaign = _human_decision(
+        log,
+        program_id="campaign3",
+        payload={
+            "campaign_precommitment": {
+                "schema": CAMPAIGN3_RECORD_SCHEMA,
+                "record_type": "CAMPAIGN_PRECOMMITMENT",
+                "attempt": 2,
+                "bindings_hash": content_hash({"attempt": "2-bindings"}),
+                "control_factor_hash": content_hash({"attempt": "2-control"}),
+                "code_sha256": {},
+                "supersedes_record_hash": supersedes,
+                "superseded_disposition": dict(
+                    superseded_disposition
+                    if superseded_disposition is not None
+                    else {
+                        "attempt": 1,
+                        "status": "RUN_INCOMPLETE",
+                        "cause": "synthetic attempt-1 disposition",
+                    }
+                ),
+            }
+        },
+    )
+    control = log.append(
+        kind=RecordKind.HYPOTHESIS_FREEZE,
+        channel=Channel.HUMAN,
+        program_id="campaign3",
+        payload={
+            "hypothesis_id": "event_ear_k_kp1",
+            "factor_spec_hash": content_hash({"attempt": "2-control-factor"}),
+            "hold_months": 1,
+            "sign": 1,
+            "control": True,
+            "schema": CAMPAIGN3_CONTROL_SCHEMA,
+            "campaign_record_hash": campaign.record_hash,
+        },
+        refs={"influenced_by": [campaign.record_hash]},
+    )
+
+    class _Attempt2Event:
+        event_id = content_hash({"attempt": "2-event"})
+        history_snapshot_hash = content_hash({"attempt": "2-history"})
+        generator_identity = "deepseek:deepseek-v4-flash"
+
+    generation_input = record_generation_input(
+        log,
+        generation_event=_Attempt2Event(),
+        included=(),
+        program_id="campaign3",
+    )
+    freezes = tuple(
+        record_hypothesis_freeze(
+            log,
+            hypothesis_id=content_hash({"attempt": "2-hypothesis", "index": index}),
+            factor_spec_hash=content_hash({"attempt": "2-factor", "index": index}),
+            influenced_by=(generation_input.record_hash,),
+            program_id="campaign3",
+            proposal_id=content_hash({"attempt": "2-proposal", "index": index}),
         )
         for index in (1, 2)
     )

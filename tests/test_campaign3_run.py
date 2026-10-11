@@ -1365,6 +1365,111 @@ def test_production_auto_detects_and_supersedes_attempt1(tmp_path, monkeypatch):
     assert preflight.ok, preflight.reason
 
 
+def test_attempt3_supersedes_the_active_attempt2_and_chain_resolves(
+    tmp_path, monkeypatch
+):
+    """Kills mutation R-M17 (attempt 3 supersedes attempt 1, not the active 2).
+
+    A disposable K-PIT is seeded with the production-shaped prefix plus the
+    attempt-1 and attempt-2 sets (attempt 2 already supersedes attempt 1).
+    The generalized production default must supersede the **active** attempt 2,
+    so the chain resolves to exactly one active record: attempt 3.
+    """
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=True)
+    attempt1 = prefixfx.seed_attempt1(log)
+    attempt1_hash = attempt1["campaign"].record_hash
+    attempt2 = prefixfx.seed_attempt2(log, supersedes=attempt1_hash)
+    attempt2_hash = attempt2["campaign"].record_hash
+    monkeypatch.setattr(R, "ATTEMPT1_CAMPAIGN_RECORD_HASH", attempt1_hash)
+    monkeypatch.setattr(R, "ATTEMPT2_CAMPAIGN_RECORD_HASH", attempt2_hash)
+
+    runner, generator, _ = _make_run(tmp_path, budget=3, log=log)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    first = runner.run()
+    assert len(generator.calls) == 3
+
+    campaigns = _c3_campaign_records(log)
+    assert len(campaigns) == 3
+    superseding = [
+        record
+        for record in campaigns
+        if record.record_hash not in (attempt1_hash, attempt2_hash)
+    ]
+    assert len(superseding) == 1
+    attempt3 = superseding[0]
+    payload = attempt3.payload["campaign_precommitment"]
+    assert payload["supersedes_record_hash"] == attempt2_hash
+    assert payload["superseded_disposition"] == dict(
+        R.ATTEMPT2_SUPERSEDED_DISPOSITION
+    )
+    assert payload["superseded_disposition"]["attempt"] == 2
+    assert payload["superseded_disposition"]["status"] == "RUN_INCOMPLETE"
+    assert "GridMismatchError" in payload["superseded_disposition"]["cause"]
+
+    # The supersession chain resolves to exactly one active record: attempt 3.
+    active = R._active_campaign_record(log)
+    assert active is not None and active.record_hash == attempt3.record_hash
+
+    # The control is scoped to attempt 3, never attempt 1/2.
+    controls = _c3_control_records(log)
+    assert len(controls) == 3
+    bound = [
+        record
+        for record in controls
+        if record.payload.get("campaign_record_hash") == attempt3.record_hash
+    ]
+    assert len(bound) == 1
+
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+    # An idempotent resume keeps exactly one active record and writes no more.
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    second = runner.run()
+    assert len(_c3_campaign_records(log)) == 3
+    assert second.manifest["n_used"] == first.manifest["n_used"]
+
+
+def test_ambiguous_supersession_chain_is_refused(tmp_path, monkeypatch):
+    """Kills mutation R-M18 (an ambiguous supersession chain is accepted).
+
+    Two records both supersede attempt 1 and neither supersedes the other, so
+    the chain has two active records.  The production default must fail closed
+    rather than silently choosing one.
+    """
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
+    attempt1 = prefixfx.seed_attempt1(log)
+    attempt1_hash = attempt1["campaign"].record_hash
+    first_attempt2 = prefixfx.seed_attempt2(log, supersedes=attempt1_hash)
+    prefixfx.seed_attempt2(log, supersedes=attempt1_hash)
+    monkeypatch.setattr(R, "ATTEMPT1_CAMPAIGN_RECORD_HASH", attempt1_hash)
+    monkeypatch.setattr(
+        R, "ATTEMPT2_CAMPAIGN_RECORD_HASH", first_attempt2["campaign"].record_hash
+    )
+
+    runner, _generator, _ = _make_run(tmp_path, budget=2, log=log)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    with pytest.raises(R.C3GovernanceConflict):
+        runner.run()
+    assert len(_c3_campaign_records(log)) == 3
+
+
+def test_unknown_active_record_requires_an_explicit_disposition(tmp_path):
+    """The default refuses an active record with no frozen disposition.
+
+    The seeded attempt-1 record's hash is deliberately *not* the frozen
+    production attempt-1/attempt-2 hash, so no disposition constant matches
+    and the run must fail closed rather than guess one.
+    """
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
+    prefixfx.seed_attempt1(log)
+    runner, _generator, _ = _make_run(tmp_path, budget=2, log=log)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    with pytest.raises(R.C3GovernanceConflict):
+        runner.run()
+    assert len(_c3_campaign_records(log)) == 1
+
+
 def test_supersession_of_a_non_existent_record_is_refused(tmp_path):
     """Kills mutation R-M16 (a supersession target need not exist)."""
     log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
@@ -1390,7 +1495,7 @@ def test_mutations_fixture_is_wellformed():
     assert {
         "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8",
         "R-M9", "R-M10", "R-M11", "R-M12", "R-M13", "R-M14", "R-M15",
-        "R-M16",
+        "R-M16", "R-M17", "R-M18",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
