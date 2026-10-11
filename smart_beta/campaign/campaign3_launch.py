@@ -68,6 +68,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -89,8 +91,9 @@ from smart_beta.science.knowledge import (
     RecordKind,
     read_records,
 )
-from smart_beta.spec.factor_spec import FactorSpec
+from smart_beta.spec.factor_spec import FactorSpec, factor_spec_hash
 from smart_beta.spec.factor_spec import from_dict as factor_spec_from_dict
+from smart_beta.spec.factor_spec import to_dict as factor_spec_to_dict
 
 __all__ = [
     "LAUNCH_SCHEMA",
@@ -112,6 +115,7 @@ __all__ = [
     "build_production_policy",
     "production_partition_folds",
     "compute_attempt_id",
+    "persist_ta_provenance",
     "ProductionAssembly",
     "assemble_production",
     "preflight_summary",
@@ -126,6 +130,14 @@ LAUNCH_SCHEMA = "campaign3-launch-v1"
 PREFLIGHT_MARKER_NAME = "campaign3_preflight.json"
 PREFLIGHT_STATUS_OK = "PREFLIGHT_OK"
 PREFLIGHT_RECORD_SCHEMA = "campaign3-preflight-probe-v1"
+
+#: The C3-L-R3 persisted T-A provenance sidecar (P6-E5 item 3).  The JSON
+#: generation snapshot does not carry the FactorSpec, so a cold-resume screen
+#: builder cannot rebuild the ``pqv2_series`` export without it.  The record is
+#: written write-once next to the content-addressed diagnostics artifact and is
+#: keyed by ``diagnostics_hash``.
+TA_PROVENANCE_SCHEMA = "campaign3-ta-provenance-v1"
+TA_PROVENANCE_SUFFIX = ".provenance.json"
 
 #: The single frozen DeepSeek prompt-template hash (A2-E2).  Only consulted
 #: when a generator exposes no ``prompt_template_hash``.
@@ -893,6 +905,71 @@ def _pqv2_fold(partition_fold: Fold) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# persisted T-A provenance (P6-E5 C3-L-R3)
+# ---------------------------------------------------------------------------
+
+
+def _ta_provenance_path(diagnostics_dir: Path | str, digest: str) -> Path:
+    """``<diagnostics_dir>/<diagnostics_hash>.provenance.json`` (P6-E5)."""
+    return Path(diagnostics_dir) / f"{digest}{TA_PROVENANCE_SUFFIX}"
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Atomically create ``path`` (temp file + fsync + ``os.replace``)."""
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:  # pragma: no cover - already removed
+            pass
+        raise
+
+
+def persist_ta_provenance(
+    diagnostics_dir: Path | str,
+    digest: str,
+    spec: FactorSpec,
+    partition_fold: Fold,
+) -> Path:
+    """Persist the FactorSpec provenance of one T-A diagnostics hash.
+
+    Write-once: an identical existing record is verified and reused; a
+    conflicting one fails closed.  Written by the T-A evaluator's diagnostics
+    sink next to the content-addressed diagnostics artifact, and read by the
+    cold-resume screen candidate builder (P6-E5 item 3).
+    """
+    payload = json.dumps(
+        {
+            "schema": TA_PROVENANCE_SCHEMA,
+            "diagnostics_hash": str(digest),
+            "factor_spec_hash": factor_spec_hash(spec),
+            "factor_spec": factor_spec_to_dict(spec),
+            "partition_fold": partition_fold.to_dict(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    path = _ta_provenance_path(diagnostics_dir, str(digest))
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise LaunchError(
+                f"existing T-A provenance {path.name} conflicts with the "
+                "diagnostics being persisted"
+            )
+        return path
+    _atomic_write_bytes(path, payload)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # attempt identity (mirrors Campaign3Run.compute_attempt_id)
 # ---------------------------------------------------------------------------
 
@@ -948,6 +1025,10 @@ class ProductionAssembly:
     diagnostics_builder: Callable[..., Any]
     export_series_fn: Callable[..., Any]
     adapter: Any = None
+    #: The run directory's persisted T-A diagnostics store (``<run_dir>/diagnostics``);
+    #: the cold-resume screen builder loads ``diagnostics_hash``-keyed artifacts
+    #: and their provenance sidecars from here (P6-E5 C3-L-R3).
+    diagnostics_dir: Path | None = None
     ta_cache: dict[str, Any] = field(default_factory=dict, repr=False)
     proposal_lookup: dict[str, Any] = field(default_factory=dict, repr=False)
     attempt_id: str = ""
@@ -1020,7 +1101,13 @@ class ProductionAssembly:
         The T-A IS diagnostics and their ``pqv2_series`` export are captured
         in memory by :attr:`ta_cache` during generation (the C3-R driver does
         not put them in the JSON snapshot).  A snapshot entry with no cached
-        diagnostics fails closed.
+        diagnostics is **resumed from disk** (P6-E5 item 3): the persisted
+        diagnostics is loaded and verified from the run directory's
+        ``diagnostics_store`` by ``diagnostics_hash``, and the
+        ``pqv2_series`` export is rebuilt deterministically from the persisted
+        FactorSpec provenance with the same panel/declaration builders.  A
+        missing/corrupt artifact, a mismatched provenance, or a rebuilt
+        diagnostics hash that differs from the persisted one fails closed.
         """
         from smart_beta.campaign import campaign3_screen as _screen
 
@@ -1029,11 +1116,8 @@ class ProductionAssembly:
             digest = record.get("diagnostics_hash")
             entry = self.ta_cache.get(str(digest))
             if entry is None:
-                raise LaunchError(
-                    "no cached T-A IS diagnostics for snapshot candidate "
-                    f"{record.get('hypothesis_id')!r} (diagnostics_hash "
-                    f"{digest!r}); the production run must be a single process"
-                )
+                entry = self._load_persisted_entry(snapshot, record, str(digest))
+                self.ta_cache[str(digest)] = entry
             series = self._export_entry(entry)
             hypothesis_id = str(record["hypothesis_id"])
             self.proposal_lookup[hypothesis_id] = _ProposalView(
@@ -1058,6 +1142,131 @@ class ProductionAssembly:
             series_export=None,
         )
         return tuple(candidates), control
+
+    def _diagnostics_dir(self, snapshot: Any) -> Path:
+        """The run directory's persisted T-A diagnostics store (P6-E5)."""
+        if self.diagnostics_dir is not None:
+            return Path(self.diagnostics_dir)
+        value = getattr(snapshot, "diagnostics_dir", None)
+        if not value:
+            raise LaunchError(
+                "the assembly has no persisted T-A diagnostics store bound for "
+                "a cold screen resume"
+            )
+        return Path(value)
+
+    def _load_persisted_provenance(
+        self, diagnostics_dir: Path, digest: str, record: Mapping[str, Any]
+    ) -> FactorSpec:
+        """Load and verify the persisted FactorSpec provenance (P6-E5).
+
+        The record is written write-once next to the diagnostics artifact and
+        keyed by ``diagnostics_hash``.  A missing, malformed, mislabeled or
+        conflicting record fails closed.
+        """
+        path = _ta_provenance_path(diagnostics_dir, digest)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise LaunchError(
+                "no readable persisted T-A provenance for snapshot candidate "
+                f"{record.get('hypothesis_id')!r} (diagnostics_hash "
+                f"{digest!r})"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise LaunchError(
+                f"the persisted T-A provenance for {digest!r} is malformed"
+            )
+        if payload.get("schema") != TA_PROVENANCE_SCHEMA:
+            raise LaunchError(
+                f"the persisted T-A provenance for {digest!r} has schema "
+                f"{payload.get('schema')!r}, not {TA_PROVENANCE_SCHEMA!r}"
+            )
+        if str(payload.get("diagnostics_hash", "")) != digest:
+            raise LaunchError(
+                f"the persisted T-A provenance names diagnostics_hash "
+                f"{payload.get('diagnostics_hash')!r}, not {digest!r}"
+            )
+        try:
+            spec = factor_spec_from_dict(payload.get("factor_spec"))
+        except Exception as exc:  # noqa: BLE001 - re-typed, fail closed
+            raise LaunchError(
+                "the persisted T-A provenance is not a valid FactorSpec "
+                f"({type(exc).__name__})"
+            ) from exc
+        spec_hash = str(payload.get("factor_spec_hash", ""))
+        if factor_spec_hash(spec) != spec_hash:
+            raise LaunchError(
+                f"the persisted T-A provenance for {digest!r} declares "
+                f"factor_spec_hash {spec_hash!r}, which does not match its "
+                "FactorSpec"
+            )
+        record_hash = str(record.get("factor_spec_hash", "") or "")
+        if record_hash and record_hash != spec_hash:
+            raise LaunchError(
+                "the persisted T-A provenance for snapshot candidate "
+                f"{record.get('hypothesis_id')!r} names factor_spec_hash "
+                f"{spec_hash!r}, not the candidate's {record_hash!r}"
+            )
+        if payload.get("partition_fold") != self.is_fold.to_dict():
+            raise LaunchError(
+                f"the persisted T-A provenance for {digest!r} is not bound to "
+                "the assembly's IS fold"
+            )
+        return spec
+
+    def _load_persisted_entry(
+        self, snapshot: Any, record: Mapping[str, Any], digest: str
+    ) -> dict[str, Any]:
+        """Rebuild one cache entry from the run directory's persisted state.
+
+        The content-addressed diagnostics is loaded and fully verified from
+        ``diagnostics_store`` (missing/corrupt fails closed); its persisted
+        FactorSpec provenance drives the same ``panel_for`` / declaration /
+        diagnostics builders the warm path used; and the rebuilt diagnostics
+        must hash to exactly the persisted ``diagnostics_hash``.
+        """
+        from smart_beta.campaign import diagnostics_store as _store
+
+        diagnostics_dir = self._diagnostics_dir(snapshot)
+        try:
+            _store.load_verified(diagnostics_dir, digest)
+        except _store.C1DiagnosticsError as exc:
+            raise LaunchError(
+                "the persisted T-A IS diagnostics for snapshot candidate "
+                f"{record.get('hypothesis_id')!r} is missing or corrupt "
+                f"(diagnostics_hash {digest!r})"
+            ) from exc
+        spec = self._load_persisted_provenance(diagnostics_dir, digest, record)
+        panel = self.panel_for(spec, self.is_fold)
+        declaration = self.declaration_builder(spec, panel, self.is_fold)
+        diagnostics = self.diagnostics_builder(
+            self.dataset_root,
+            declaration,
+            spec,
+            panel,
+            self.partition,
+            fold=_pqv2_fold(self.is_fold),
+            overlay=self.overlay,
+            inputs=self.inputs,
+            event_layer=self.event_layer,
+        )
+        rebuilt = str(getattr(diagnostics, "diagnostics_hash", ""))
+        if rebuilt != digest:
+            raise LaunchError(
+                "the rebuilt T-A IS diagnostics for snapshot candidate "
+                f"{record.get('hypothesis_id')!r} hashes to {rebuilt!r}, not "
+                f"the persisted {digest!r}"
+            )
+        return {
+            "diagnostics": diagnostics,
+            "provenance": {
+                "spec": spec,
+                "panel": panel,
+                "declaration": declaration,
+                "partition_fold": self.is_fold,
+            },
+        }
 
     def _export_entry(self, entry: Mapping[str, Any]) -> Any:
         from smart_beta.campaign import campaign3_screen as _screen
@@ -1397,6 +1606,7 @@ def assemble_production(
         diagnostics_builder=build_diagnostics,
         export_series_fn=export_series,
         adapter=adapter,
+        diagnostics_dir=diagnostics_dir,
         attempt_id=identity,
     )
     assembly.declaration_builder = _make_declaration_builder(assembly)
@@ -1434,11 +1644,25 @@ def _make_ta_evaluator(
         # generation snapshot does not carry.  The snapshot candidate's
         # ``diagnostics_hash`` is the key; the provenance is the *current*
         # declaration (the executor processes one candidate at a time).
-        entry = cache.setdefault(
-            str(diagnostics.diagnostics_hash), {"diagnostics": diagnostics}
-        )
+        digest = str(diagnostics.diagnostics_hash)
+        entry = cache.setdefault(digest, {"diagnostics": diagnostics})
         entry["diagnostics"] = diagnostics
-        entry["provenance"] = dict(_LAST_DECLARATION)
+        provenance = dict(_LAST_DECLARATION)
+        entry["provenance"] = provenance
+        # P6-E5 C3-L-R3: persist the FactorSpec provenance write-once next to
+        # the content-addressed diagnostics, so a cold (resumed) screen can
+        # rebuild the ``pqv2_series`` export without the in-process cache.
+        if "spec" not in provenance or "partition_fold" not in provenance:
+            raise LaunchError(
+                "the T-A evaluator did not record the declaration provenance "
+                "required to persist the diagnostics sidecar"
+            )
+        persist_ta_provenance(
+            diagnostics_dir,
+            digest,
+            provenance["spec"],
+            provenance["partition_fold"],
+        )
 
     return TaEvaluator(
         root=assembly.dataset_root,

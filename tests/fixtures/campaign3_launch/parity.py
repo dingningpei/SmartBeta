@@ -264,3 +264,161 @@ def run_diagnostics(case: ParityCase, *, panel: Any = None) -> Any:
         event_layer=case.event_layer,
         fold=C.DEVELOPMENT_FOLD,
     )
+
+
+# ---------------------------------------------------------------------------
+# cold-resume assembly wiring (P6-E5 C3-L-R3)
+# ---------------------------------------------------------------------------
+
+
+def _declaration_builder_for(case: ParityCase):
+    """The production ``(spec, panel, fold) -> declaration`` builder."""
+    fx = T._load_fixture()
+
+    def build(spec: Any, panel: Any, fold: Any) -> Any:
+        # The C3 screen requires the NET metric (``TURNOVER_COST_ADJUSTED``);
+        # the parity default is the GROSS ``LONG_SHORT`` basis.
+        base = fx.base_declaration(
+            spec,
+            panel,
+            primary_metric="turnover_cost_adjusted",
+            basis="NET",
+        )
+        return fx.declaration(
+            base, identity_hash=case.identity_hash, **T._V23_DECLARATION
+        )
+
+    return build
+
+
+def _diagnostics_builder_for(case: ParityCase):
+    """The real T-A diagnostics builder, bound to the parity store."""
+    from smart_beta.dataset_v1 import pqv2_evaluation as E
+
+    fx = T._load_fixture()
+
+    def build(
+        root: Any,
+        declaration: Any,
+        spec: Any,
+        panel: Any,
+        partition: Any,
+        *,
+        fold: Any,
+        **kwargs: Any,
+    ) -> Any:
+        return E.build_pqv2_diagnostics(
+            root,
+            declaration,
+            spec,
+            panel,
+            partition,
+            overlay=kwargs["overlay"],
+            inputs=kwargs["inputs"],
+            bindings=case.store.d7b_bindings,
+            source_bindings=case.store.source_bindings,
+            pq_bindings=case.pq_bindings,
+            pq_read_records_fn=lambda path: fx.genesis_records(),
+            event_layer=kwargs.get("event_layer"),
+            fold=fold,
+        )
+
+    return build
+
+
+def _export_series_fn_for(case: ParityCase):
+    """The real ``pqv2_series.export_series``, bound to the parity store."""
+    from smart_beta.dataset_v1 import pqv2_series as S
+
+    fx = T._load_fixture()
+
+    def export(
+        root: Any,
+        declaration: Any,
+        spec: Any,
+        panel: Any,
+        partition: Any,
+        *,
+        diagnostics: Any,
+        fold: Any,
+        **kwargs: Any,
+    ) -> Any:
+        return S.export_series(
+            root,
+            declaration,
+            spec,
+            panel,
+            partition,
+            diagnostics=diagnostics,
+            overlay=kwargs["overlay"],
+            inputs=kwargs["inputs"],
+            bindings=case.store.d7b_bindings,
+            source_bindings=case.store.source_bindings,
+            pq_bindings=case.pq_bindings,
+            pq_read_records_fn=lambda path: fx.genesis_records(),
+            event_layer=kwargs.get("event_layer"),
+            fold=fold,
+        )
+
+    return export
+
+
+def build_resumable_assembly(
+    tmp_path: Path, spec_key: str, *, mask: bool = True
+) -> tuple[ParityCase, Any]:
+    """A production-shaped assembly over the parity store for cold-resume tests.
+
+    The returned assembly carries the parity declaration/diagnostics/export
+    builders and a ``diagnostics_dir``, so ``screen_candidate_builder``'s
+    warm cache and cold disk rebuild exercise the same real P-Q builders.
+    """
+    case = build_parity_case(tmp_path, spec_key, mask=mask)
+    assembly = dataclasses.replace(
+        case.assembly,
+        declaration_builder=_declaration_builder_for(case),
+        diagnostics_builder=_diagnostics_builder_for(case),
+        export_series_fn=_export_series_fn_for(case),
+        diagnostics_dir=Path(tmp_path) / "runs" / "test-attempt" / "diagnostics",
+    )
+    return case, assembly
+
+
+def build_persisted_entry(case: ParityCase, assembly: Any) -> tuple[Any, Any, Any]:
+    """Build one T-A entry exactly as the warm path would, and persist it.
+
+    Returns ``(digest, diagnostics, provenance)``; the content-addressed
+    diagnostics artifact and its FactorSpec provenance sidecar are written to
+    ``assembly.diagnostics_dir`` (write-once).
+    """
+    from smart_beta.campaign import campaign3_launch as L
+    from smart_beta.campaign import diagnostics_store as store
+
+    spec = case.spec
+    panel = assembly.panel_for(spec, assembly.is_fold)
+    declaration = assembly.declaration_builder(spec, panel, assembly.is_fold)
+    diagnostics = assembly.diagnostics_builder(
+        assembly.dataset_root,
+        declaration,
+        spec,
+        panel,
+        assembly.partition,
+        fold=L._pqv2_fold(assembly.is_fold),
+        overlay=assembly.overlay,
+        inputs=assembly.inputs,
+        event_layer=assembly.event_layer,
+    )
+    digest = diagnostics.diagnostics_hash
+    # E6.1: the parent Campaign directory must already exist (the run driver
+    # creates it before the diagnostics store is used).
+    Path(assembly.diagnostics_dir).parent.mkdir(parents=True, exist_ok=True)
+    store.persist(diagnostics, assembly.diagnostics_dir)
+    L.persist_ta_provenance(
+        assembly.diagnostics_dir, str(digest), spec, assembly.is_fold
+    )
+    provenance = {
+        "spec": spec,
+        "panel": panel,
+        "declaration": declaration,
+        "partition_fold": assembly.is_fold,
+    }
+    return digest, diagnostics, provenance
