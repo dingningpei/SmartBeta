@@ -1,0 +1,35 @@
+[
+  {
+    "id": "CONTROL",
+    "description": "no-op control: the unmutated module must pass the event-grid test",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [],
+    "test": "tests/test_pqv2_event_grid.py::test_columns_are_exactly_the_tri_frame_grid",
+    "expected": "pass"
+  },
+  {
+    "id": "EV-M1",
+    "description": "the event frames are restricted to layer.keys again, so a mixed EVENT_SIMPLE expression's event and price inputs cover different stock identifiers",
+    "file": "smart_beta/dataset_v1/pqv2_events.py",
+    "edits": [
+      {
+        "old": "    keys = list(tri_frame.columns)",
+        "new": "    keys = list(layer.keys)"
+      },
+      {
+        "old": "    days_frame = pd.DataFrame(days, index=session_index, columns=tri_frame.columns)",
+        "new": "    days_frame = pd.DataFrame(days, index=session_index, columns=list(keys))"
+      },
+      {
+        "old": "    ear_frame = pd.DataFrame(ears, index=session_index, columns=tri_frame.columns)",
+        "new": "    ear_frame = pd.DataFrame(ears, index=session_index, columns=list(keys))"
+      },
+      {
+        "old": "            frame = pd.DataFrame(\n                indicator, index=session_index, columns=tri_frame.columns\n            )",
+        "new": "            frame = pd.DataFrame(\n                indicator, index=session_index, columns=list(keys)\n            )"
+      }
+    ],
+    "test": "tests/test_pqv2_event_grid.py::test_columns_are_exactly_the_tri_frame_grid",
+    "expected": "killed"
+  }
+]

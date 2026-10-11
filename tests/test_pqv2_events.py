@@ -485,9 +485,13 @@ def test_b_e_dst(fx) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _levels(sessions, increment: float = 0.01):
+def _levels(sessions, increment: float = 0.01, keys=("A",)):
     return {
-        "A": {session: 1.0 + increment * index for index, session in enumerate(sessions)}
+        key: {
+            session: 1.0 + increment * index
+            for index, session in enumerate(sessions)
+        }
+        for key in keys
     }
 
 
@@ -524,7 +528,7 @@ def test_bridge_lag_alignment_offset_labels(tmp_path: Path, fx) -> None:
 
 def test_observability_boundary(tmp_path: Path, fx) -> None:
     sessions = fx.business_days(date(2021, 1, 4), 10)
-    levels = _levels(sessions)
+    levels = _levels(sessions, keys=("OBS", "EQ"))
     tri = _tri(fx, sessions, levels)
     identities = [fx.make_identity("OBS"), fx.make_identity("EQ")]
     events = [
@@ -612,7 +616,7 @@ def test_days_since_ea_and_recent_ea(tmp_path: Path, fx) -> None:
 
 def test_k1_shifts_only_b_e_events(tmp_path: Path, fx) -> None:
     sessions = fx.business_days(date(2021, 1, 4), 12)
-    levels = _levels(sessions)
+    levels = _levels(sessions, keys=("BEE", "NOBEE", "LATE"))
     tri = _tri(fx, sessions, levels)
     identities = [
         fx.make_identity("BEE"),
