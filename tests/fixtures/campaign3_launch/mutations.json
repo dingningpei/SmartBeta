@@ -50,5 +50,29 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_tb_folds_are_the_frozen_oos_and_sealed"
+ },
+ {
+  "id": "L-M5",
+  "description": "the panel builder is reverted to the Campaign-1 panel_of values",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        return _pe._scenario_panel(template, spec, merged, self.overlay)",
+    "new": "        return template  # mutation L-M5: the Campaign-1 panel_of values"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_panel_for_parity_cross_sectional"
+ },
+ {
+  "id": "L-M6",
+  "description": "the preflight omits the STD_X_RANK probe",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        (\"cross_sectional\", std_x_rank_factor_spec()),\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_preflight_evaluates_three_fixed_specs"
  }
 ]

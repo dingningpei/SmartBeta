@@ -1,13 +1,16 @@
 """C3-L Campaign-3 production launcher / preflight tests (synthetic only).
 
 Authority: the frozen ``docs/campaign3_p6_implementation_spec.md`` (task C3-L,
-Erratum P6-E2) and section 2 mutations L-M1..L-M4, on top of the frozen
+Erratum P6-E2 and Erratum P6-E3 plus its 2026-10-10 correction) and section 2
+mutations L-M1..L-M6, on top of the frozen
 ``docs/campaign3_p5_precommitment.md`` (+E1) and the K-PIT dataset reference
 note.
 
 Every test is offline and synthetic: every production loader is a fake, the
 K-PIT is a disposable copy, and no production artifact, ``data_store``,
-reserve, holdout or network path is touched.
+reserve, holdout or network path is touched.  The panel-builder parity cases
+drive the real P-Q v2.3 ``build_pqv2_diagnostics`` over a ``tmp_path``
+Dataset-v1.2-shaped synthetic root.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +34,9 @@ from smart_beta.science.knowledge import Channel, KnowledgeLog, RecordKind
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCH_FIXTURE = (
     _REPO_ROOT / "tests" / "fixtures" / "campaign3_launch" / "synthetic.py"
+)
+_PARITY_FIXTURE = (
+    _REPO_ROOT / "tests" / "fixtures" / "campaign3_launch" / "parity.py"
 )
 _C3_SYNTHETIC = _REPO_ROOT / "tests" / "fixtures" / "campaign3" / "synthetic.py"
 _MUTATIONS = (
@@ -53,6 +60,19 @@ def _load_module(name: str, path: Path):
 
 fx = _load_module("c3_launch_synthetic", _LAUNCH_FIXTURE)
 c3fx = _load_module("c3_launch_c3_synthetic", _C3_SYNTHETIC)
+parity = _load_module("c3_launch_parity", _PARITY_FIXTURE)
+
+
+@pytest.fixture(autouse=True)
+def _no_sockets(monkeypatch: pytest.MonkeyPatch):
+    """Fail closed if any C3-L test tries to open a socket."""
+
+    def _refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("C3-L tests must never open a socket")
+
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+    monkeypatch.setattr(socket, "create_connection", _refuse)
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +218,15 @@ def _run_preflight(tmp_path: Path, **overrides: Any):
 def test_preflight_summary_is_statistic_free(tmp_path):
     _src, _asm, result, printed = _run_preflight(tmp_path)
     summary = result["summary"]
-    assert set(summary) <= L._PREFLIGHT_ALLOWED_KEYS
-    assert summary["status"] == "ASSESSED"
-    assert summary["assessed"] is True
-    assert summary["binding_ok"] is True
-    assert summary["periods"]
-    # Nothing printed carries a forbidden field or a float.
+    assert set(summary) == {"control", "simple", "cross_sectional"}
+    for per_spec in summary.values():
+        assert set(per_spec) <= L._PREFLIGHT_ALLOWED_KEYS
+        assert per_spec["status"] == "ASSESSED"
+        assert per_spec["assessed"] is True
+        assert per_spec["binding_ok"] is True
+        assert per_spec["periods"]
     parsed = json.loads(printed.strip())
-    assert set(parsed) <= L._PREFLIGHT_ALLOWED_KEYS
+    assert set(parsed) == {"control", "simple", "cross_sectional"}
     L.assert_statistic_free(parsed)
 
 
@@ -238,9 +259,9 @@ def test_preflight_prints_no_statistic(tmp_path):
     L.assert_statistic_free(result["summary"])
     L.assert_statistic_free(result["marker"])
     assert "mean" not in printed
-    assert all(
-        key in L._PREFLIGHT_ALLOWED_KEYS for key in json.loads(printed.strip())
-    )
+    parsed = json.loads(printed.strip())
+    for per_spec in parsed.values():
+        assert set(per_spec) <= L._PREFLIGHT_ALLOWED_KEYS
 
 
 def test_assert_statistic_free_guards():
@@ -249,6 +270,73 @@ def test_assert_statistic_free_guards():
     with pytest.raises(L.StatisticLeakError):
         L.assert_statistic_free({"periods": {"B-T0": 1.5}})
     L.assert_statistic_free({"status": "ASSESSED", "periods": {"B-T0": 1}})
+
+
+# ---------------------------------------------------------------------------
+# 3b. panel-builder parity (P6-E3 correction)
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_probe_specs_are_certified():
+    assert str(E.certify_candidate(L.control_factor_spec())) == "EVENT_SIMPLE"
+    assert str(E.certify_candidate(L.simple_factor_spec())) == "SIMPLE"
+    assert str(E.certify_candidate(L.std_x_rank_factor_spec())) == "STD_X_RANK"
+
+
+def test_preflight_evaluates_three_fixed_specs(tmp_path):
+    """Kills mutation L-M6 (the preflight omits the STD_X_RANK probe)."""
+    _src, _asm, result, printed = _run_preflight(tmp_path)
+    assert [name for name, _spec in L.preflight_factor_specs()] == [
+        "control",
+        "simple",
+        "cross_sectional",
+    ]
+    assert set(result["summary"]) == {"control", "simple", "cross_sectional"}
+    assert set(json.loads(printed.strip())) == {
+        "control",
+        "simple",
+        "cross_sectional",
+    }
+
+
+def _assert_masked(case) -> None:
+    """The synthetic overlay must actually move the panel (not a no-op)."""
+    assert not case.panel.reset_index(drop=True).equals(
+        case.reference_panel.reset_index(drop=True)
+    )
+
+
+def test_panel_for_parity_simple(tmp_path):
+    case = parity.build_parity_case(tmp_path, "simple")
+    diagnostics = parity.run_diagnostics(case)
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == "SIMPLE"
+    _assert_masked(case)
+
+
+def test_panel_for_parity_cross_sectional(tmp_path):
+    """Kills mutation L-M5 (the panel builder is reverted to ``panel_of``)."""
+    case = parity.build_parity_case(tmp_path, "cross_sectional")
+    diagnostics = parity.run_diagnostics(case)
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == "STD_X_RANK"
+    _assert_masked(case)
+
+
+def test_panel_for_parity_event_simple(tmp_path):
+    case = parity.build_parity_case(tmp_path, "event")
+    diagnostics = parity.run_diagnostics(case)
+    assert diagnostics.not_assessed is None
+    assert diagnostics.certified_class == "EVENT_SIMPLE"
+    assert diagnostics.event_scenarios == ("K0", "K1")
+
+
+def test_unmasked_campaign1_panel_fails_the_std_x_rank_invariant(tmp_path):
+    from smart_beta.dataset_v1 import pqv2_evaluation as PE
+
+    case = parity.build_parity_case(tmp_path, "cross_sectional")
+    with pytest.raises(PE.PQv2InvariantError):
+        parity.run_diagnostics(case, panel=case.reference_panel)
 
 
 # ---------------------------------------------------------------------------

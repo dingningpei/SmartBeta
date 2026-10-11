@@ -2,7 +2,8 @@
 
 Authority: the frozen ``docs/campaign3_p6_implementation_spec.md`` (task row
 C3-L, section 1 row C3-L and section 2 mutations L-M1..L-M4) as amended by
-**Erratum P6-E2** (APPROVED), on top of the frozen
+**Erratum P6-E2** and **Erratum P6-E3** (APPROVED; the latter plus its
+2026-10-10 correction), on top of the frozen
 ``docs/campaign3_p5_precommitment.md`` (+E1),
 ``docs/campaign3_p4_amendment_a2_deepseek.md`` (+A2-E1) and
 ``docs/campaign3_kpit_dataset_reference_note.md``.
@@ -23,14 +24,22 @@ gap and adds the two CLI modes:
   admitted ``EWC_T23_ONE_SIDED`` and its K-PIT ``PROCEDURE_ADMISSION`` records,
   the real T-A/T-B evaluators, the C3-S candidate builder and the DeepSeek
   generator.
+* the per-candidate **panel builder** (P6-E3) takes the Campaign-1 adapter's
+  frozen ``(formation, universe member)`` row grid only and fills the values
+  from the Phase-6 specification evaluator over exactly
+  ``pqv2_evaluation._alias_frames(spec, inputs, overlay)`` (the sealed
+  ``_scenario_panel`` realization).  A cross-sectional candidate's declared
+  panel is therefore byte-identical to the one P-Q checks in
+  ``_realize_std_x_rank``.
 * ``--preflight`` runs on a **copy** of the production K-PIT, in a scratch run
-  directory, with the generator replaced by a fixed raw artifact carrying
-  **only** the positive control's FactorSpec.  The real T-A evaluator
-  evaluates it under K0 + K1 and the ``pqv2_series`` export is bound; only
-  ``status`` / ``assessed`` / ``NOT_ASSESSED`` reason / ``binding_ok`` /
-  per-scenario period counts are printed or written.  On success it writes a
-  preflight marker (master SHA + bindings hash + K-PIT source hash) next to
-  the scratch run directory.
+  directory.  The real T-A evaluator evaluates the three fixed P6-E3 probes
+  (the EVENT_SIMPLE positive control, the SIMPLE ``tri/lag(tri,20) - 1`` and
+  the certified STD_X_RANK ``standardize(lag(tri,20)/lag(tri,60)) *
+  rank(rolling_mean(dv,20)/rolling_mean(dv,60))``) and the ``pqv2_series``
+  export is bound for each; only ``status`` / ``assessed`` /
+  ``NOT_ASSESSED`` reason / ``binding_ok`` / per-scenario period counts are
+  printed or written.  On success it writes a preflight marker (master SHA +
+  bindings hash + K-PIT source hash) next to the scratch run directory.
 * ``--production`` requires a matching preflight marker and then performs the
   authorized real run.  **T-C is never started** (the reserve fold is
   structurally absent).
@@ -91,6 +100,9 @@ __all__ = [
     "StatisticLeakError",
     "control_factor_spec",
     "control_raw_artifact",
+    "simple_factor_spec",
+    "std_x_rank_factor_spec",
+    "preflight_factor_specs",
     "FixedArtifactGenerator",
     "build_production_policy",
     "production_partition_folds",
@@ -222,6 +234,162 @@ def control_raw_artifact(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     )
     return RawArtifact(content=content)
+
+
+# ---------------------------------------------------------------------------
+# the frozen P6-E3 preflight probes
+# ---------------------------------------------------------------------------
+
+#: The certifiable A§15A.2 STD_X_RANK shape (P6-E3 *correction*).  The erratum's
+#: original ``standardize(rolling_mean(ret,20)) x rank(rolling_mean(dv,60))``
+#: is ``NOT_CERTIFIED`` and never reaches ``_realize_std_x_rank``; the planner
+#: replaced it after the C3-L-R1 blocker.
+_PREFLIGHT_SIMPLE_ID = "campaign3_preflight_simple_momentum"
+_PREFLIGHT_STD_X_RANK_ID = "campaign3_preflight_std_x_rank"
+
+
+def _factor_requirement(
+    semantic_id: str, *, observation_period: str, units: str
+) -> dict[str, Any]:
+    """A v2-prompt-table semantic requirement for the D7c roles."""
+    return {
+        "semantic_id": semantic_id,
+        "frequency": "daily",
+        "observation_period": observation_period,
+        "units": units,
+        "lookback": 0,
+        "revision_policy": "point_in_time",
+        "require_knowledge_date": True,
+        "require_positive_vintage_identity": False,
+    }
+
+
+def simple_factor_spec() -> FactorSpec:
+    """The frozen SIMPLE preflight probe: ``tri/lag(tri,20) - 1``."""
+    payload = {
+        "id": _PREFLIGHT_SIMPLE_ID,
+        "description": "P6-E3 preflight SIMPLE probe: tri/lag(tri,20) - 1",
+        "hypothesis": "preflight_simple",
+        "expression": {
+            "op": "sub",
+            "left": {
+                "op": "div",
+                "left": {"op": "field", "role": "tri"},
+                "right": {
+                    "op": "lag",
+                    "operand": {"op": "field", "role": "tri"},
+                    "periods": 20,
+                },
+            },
+            "right": {"op": "const", "value": 1.0},
+        },
+        "inputs": [
+            {
+                "alias": "tri",
+                "requirement": _factor_requirement(
+                    "total_return_index",
+                    observation_period="instant",
+                    units="ratio",
+                ),
+            }
+        ],
+        "frequency": "daily",
+        "missing_policy": "propagate",
+        "sign": 1,
+    }
+    return factor_spec_from_dict(payload)
+
+
+def std_x_rank_factor_spec() -> FactorSpec:
+    """The frozen STD_X_RANK preflight probe (P6-E3 correction).
+
+    ``standardize(lag(tri,20)/lag(tri,60)) * rank(rolling_mean(dv,20)/
+    rolling_mean(dv,60))`` — the certifiable A§15A.2 shape, built through the
+    frozen ``factor_spec_from_dict`` parser so it cannot drift from the
+    admission contract.
+    """
+    payload = {
+        "id": _PREFLIGHT_STD_X_RANK_ID,
+        "description": (
+            "P6-E3 preflight STD_X_RANK probe: standardize(lag(tri,20)/"
+            "lag(tri,60)) * rank(rolling_mean(dv,20)/rolling_mean(dv,60))"
+        ),
+        "hypothesis": "preflight_std_x_rank",
+        "expression": {
+            "op": "mul",
+            "left": {
+                "op": "cross_section",
+                "fn": "standardize",
+                "operand": {
+                    "op": "div",
+                    "left": {
+                        "op": "lag",
+                        "operand": {"op": "field", "role": "tri"},
+                        "periods": 20,
+                    },
+                    "right": {
+                        "op": "lag",
+                        "operand": {"op": "field", "role": "tri"},
+                        "periods": 60,
+                    },
+                },
+            },
+            "right": {
+                "op": "cross_section",
+                "fn": "rank",
+                "operand": {
+                    "op": "div",
+                    "left": {
+                        "op": "rolling",
+                        "fn": "mean",
+                        "operand": {"op": "field", "role": "dv"},
+                        "window": 20,
+                    },
+                    "right": {
+                        "op": "rolling",
+                        "fn": "mean",
+                        "operand": {"op": "field", "role": "dv"},
+                        "window": 60,
+                    },
+                },
+            },
+        },
+        "inputs": [
+            {
+                "alias": "tri",
+                "requirement": _factor_requirement(
+                    "total_return_index",
+                    observation_period="instant",
+                    units="ratio",
+                ),
+            },
+            {
+                "alias": "dv",
+                "requirement": _factor_requirement(
+                    "dollar_volume",
+                    observation_period="period",
+                    units="currency",
+                ),
+            },
+        ],
+        "frequency": "daily",
+        "missing_policy": "propagate",
+        "sign": 1,
+    }
+    return factor_spec_from_dict(payload)
+
+
+def preflight_factor_specs() -> tuple[tuple[str, FactorSpec], ...]:
+    """The three frozen P6-E3 preflight probes, in evaluation order.
+
+    The keys deliberately carry no :data:`_FORBIDDEN_KEY_MARKERS` token, so
+    the statistic-free guard applies to the whole summary uniformly.
+    """
+    return (
+        ("control", control_factor_spec()),
+        ("simple", simple_factor_spec()),
+        ("cross_sectional", std_x_rank_factor_spec()),
+    )
 
 
 @dataclass
@@ -505,39 +673,61 @@ class ProductionAssembly:
         return (self.oos_fold, self.sealed_fold)
 
     def panel_for(self, spec: FactorSpec, fold: Fold) -> Any:
-        """The declared factor panel for ``spec``/``fold``.
+        """The declared factor panel for ``spec``/``fold`` (P6-E3 correction).
 
-        Non-event candidates go straight through the Campaign-1 production
-        ``panel_of``.  An ``EVENT_SIMPLE`` candidate needs the frozen PQ23-B
-        K0 event inputs mixed into the D7c inputs; the panel **math** is still
-        the Campaign-1 adapter's ``panel_of`` path and only the (frozen) event
-        input construction is added here.
+        The panel *values* come from the Phase-6 specification evaluator over
+        the **exact** frames P-Q realizes against —
+        ``pqv2_evaluation._alias_frames(spec, inputs, overlay)`` (read-only
+        import) — so a cross-sectional candidate's panel is byte-identical to
+        the one :func:`pqv2_evaluation.build_pqv2_diagnostics` checks in
+        ``_realize_std_x_rank``.  The Campaign-1 ``panel_of`` only supplies the
+        frozen ``(formation, universe member)`` row grid that D7b
+        ``_validate_factor_panel`` expects; its values are discarded.  The
+        evaluator call is the sealed ``_scenario_panel`` realization (no new
+        math), so the declared panel and the K1 re-realization cannot drift.
+
+        An ``EVENT_SIMPLE`` candidate needs the frozen PQ23-B K0 event inputs
+        mixed into the D7c inputs before either step.
         """
         from smart_beta.campaign import campaign3_eval as _eval
+        from smart_beta.dataset_v1 import pqv2_evaluation as _pe
 
         roles = _eval.event_roles(spec) if isinstance(spec, FactorSpec) else ()
-        if not roles or self.adapter is None or not hasattr(self.adapter, "_inputs"):
-            return self.panel_of(spec, _run.C3_UNIVERSE, fold)
-        from smart_beta.dataset_v1 import pqv2_events as _events
-        from smart_beta.dataset_v1.pqv2_evaluation import _sessions_from_inputs
-
         base = dict(self.inputs)
-        tri = base["total_return_index"].values
-        sessions = _sessions_from_inputs(base)
-        built = _events.build_event_inputs(
-            self.event_layer,
-            tri,
-            sessions,
-            scenario=_events.SCENARIO_K0,
-            roles=roles,
-        )
-        merged = {key: value for key, value in base.items() if key not in set(roles)}
-        merged.update(built)
-        self.adapter._inputs = merged
+        merged = base
+        if roles:
+            if self.event_layer is None:
+                raise LaunchError(
+                    "an event candidate requires the bound event_layer"
+                )
+            from smart_beta.dataset_v1 import pqv2_events as _events
+            from smart_beta.dataset_v1.pqv2_evaluation import (
+                _sessions_from_inputs,
+            )
+
+            tri = base["total_return_index"].values
+            sessions = _sessions_from_inputs(base)
+            built = _events.build_event_inputs(
+                self.event_layer,
+                tri,
+                sessions,
+                scenario=_events.SCENARIO_K0,
+                roles=roles,
+            )
+            merged = {
+                key: value for key, value in base.items() if key not in set(roles)
+            }
+            merged.update(built)
+        swapped = self.adapter is not None and hasattr(self.adapter, "_inputs")
+        previous = getattr(self.adapter, "_inputs", None)
+        if swapped:
+            self.adapter._inputs = merged
         try:
-            return self.panel_of(spec, _run.C3_UNIVERSE, fold)
+            template = self.panel_of(spec, _run.C3_UNIVERSE, fold)
         finally:
-            self.adapter._inputs = base
+            if swapped:
+                self.adapter._inputs = previous
+        return _pe._scenario_panel(template, spec, merged, self.overlay)
 
     def screen_candidate_builder(self, snapshot: Any) -> tuple[tuple[Any, ...], Any]:
         """Build the C3-S candidates + control from the generation snapshot.
@@ -1092,12 +1282,11 @@ def preflight_summary(diagnostics: Any, series: Any) -> dict[str, Any]:
     return summary
 
 
-def _control_proposal(control: _run.ControlHypothesis = _run.CONTROL) -> Any:
-    """A minimal proposal-like view of the fixed control (for the evaluator)."""
-    spec = control_factor_spec(control)
+def _preflight_proposal(spec: FactorSpec) -> Any:
+    """A minimal proposal-like view of one fixed preflight spec."""
     return _ProposalView(
         proposal_id=content_hash(
-            {"domain": "campaign3:positive-control-proposal", "spec": spec.version}
+            {"domain": "campaign3:preflight-proposal", "spec": spec.version}
         ),
         proposed_factor_spec=spec,
         proposed_factor_spec_hash=spec.version,
@@ -1113,25 +1302,24 @@ class _ProposalView:
     proposed_factor_spec_hash: str
 
 
-def evaluate_control(
-    assembly: ProductionAssembly,
-    *,
-    control: _run.ControlHypothesis = _run.CONTROL,
+def evaluate_spec(
+    assembly: ProductionAssembly, spec: FactorSpec
 ) -> tuple[Any, Any]:
-    """Evaluate the fixed control FactorSpec over the real T-A IS fold.
+    """Evaluate one fixed preflight ``spec`` over the real T-A IS fold.
 
     It drives the assembly's real C3-X :class:`TaEvaluator` (the same one the
-    production generation stage uses), so the control is evaluated under K0 +
-    K1 exactly as a generated event candidate would be.  The captured IS
-    diagnostics are then exported with ``pqv2_series.export_series``, whose
-    binding check runs inside the exporter.
+    production generation stage uses), so an ``EVENT_SIMPLE`` spec is evaluated
+    under K0 + K1 exactly as a generated event candidate would be.  The
+    captured IS diagnostics are then exported with
+    ``pqv2_series.export_series``, whose binding check runs inside the
+    exporter.
     """
-    proposal = _control_proposal(control)
-    evaluation = assembly.ta_evaluator(proposal)
+    evaluation = assembly.ta_evaluator(_preflight_proposal(spec))
     entry = assembly.ta_cache.get(str(evaluation.diagnostics_hash))
     if entry is None or "provenance" not in entry:
         raise PreflightError(
-            "the real T-A evaluator did not record the control diagnostics"
+            f"the real T-A evaluator did not record the preflight diagnostics "
+            f"for {spec.id!r}"
         )
     provenance = dict(entry["provenance"])
     diagnostics = entry["diagnostics"]
@@ -1148,6 +1336,15 @@ def evaluate_control(
         event_layer=assembly.event_layer,
     )
     return diagnostics, series
+
+
+def evaluate_control(
+    assembly: ProductionAssembly,
+    *,
+    control: _run.ControlHypothesis = _run.CONTROL,
+) -> tuple[Any, Any]:
+    """Evaluate the fixed control FactorSpec over the real T-A IS fold."""
+    return evaluate_spec(assembly, control_factor_spec(control))
 
 
 def _copy_kpit(source: Path | str, scratch_dir: Path) -> Path:
@@ -1190,9 +1387,11 @@ def run_preflight(
     run_root: Path | str,
     assembly: ProductionAssembly,
     master_sha: str,
-    evaluate: Callable[[ProductionAssembly], tuple[Any, Any]] | None = None,
+    evaluate: Callable[[ProductionAssembly, FactorSpec], tuple[Any, Any]]
+    | None = None,
     print_summary: bool = True,
     writer: Any = None,
+    specs: Sequence[tuple[str, FactorSpec]] | None = None,
 ) -> dict[str, Any]:
     """The ``--preflight`` mode (statistic-free, scratch-only).
 
@@ -1211,8 +1410,12 @@ def run_preflight(
     _run.verify_kpit_terminal(copy_path, _run.pin_kpit_terminal(copy_path))
     _probe_copy(copy_path)
 
-    diagnostics, series = (evaluate or evaluate_control)(assembly)
-    summary = preflight_summary(diagnostics, series)
+    evaluate_fn = evaluate or evaluate_spec
+    spec_list = tuple(specs) if specs is not None else preflight_factor_specs()
+    summary: dict[str, Any] = {}
+    for name, spec in spec_list:
+        diagnostics, series = evaluate_fn(assembly, spec)
+        summary[str(name)] = preflight_summary(diagnostics, series)
 
     after = _sha256_file(source)
     if before != after:

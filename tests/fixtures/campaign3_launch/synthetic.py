@@ -220,12 +220,15 @@ def fake_export_series_fn(*_args: Any, **_kwargs: Any) -> FakeSeriesExport:
 
 @dataclass
 class FakeControlEvaluator:
-    """A recording stand-in for the real control evaluation."""
+    """A recording stand-in for the real fixed-spec evaluation."""
 
     diagnostics: Any = field(default_factory=FakeDiagnostics)
     export: Any = field(default_factory=fake_export_series_fn)
     calls: int = 0
+    specs: list[Any] = field(default_factory=list)
 
     def __call__(self, *_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
         self.calls += 1
+        if len(_args) >= 2:
+            self.specs.append(_args[1])
         return self.diagnostics, self.export
