@@ -89,6 +89,28 @@ def bridge_frame(raw: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def zero_short_window_indices(
+    w1: int,
+    *,
+    formations: Sequence[Any] = fx.FORMATIONS,
+    sessions: Sequence[Any] = fx.SESSIONS,
+) -> tuple[int, ...]:
+    """Raw session indices zeroed so a key's short-window sum is exactly zero.
+
+    The short window of formation ``f`` is the ``w1`` observations ending at
+    ``f - 1`` -- session indices ``[f - w1, f - 1]``.  Zeroing exactly those
+    sessions (for one key) keeps the long window's long-only part positive, so
+    the key has ``V = 0`` rather than "no V" (which needs the long sum zero).
+    """
+
+    position = {session: index for index, session in enumerate(sessions)}
+    cells: set[int] = set()
+    for formation in formations:
+        base = position[formation]
+        cells.update(range(base - w1, base))
+    return tuple(sorted(cells))
+
+
 def std_x_rank_spec(*, w1: int = 2, w2: int = 6, momentum: tuple[int, int] = (21, 252)):
     """A §15A.2 ``STD_X_RANK_G`` member with small volume windows.
 
@@ -153,6 +175,7 @@ def build_case(
     raw: pd.DataFrame | None = None,
     spec: Any = None,
     fold: Any = None,
+    zero_dv_key: str | None = None,
 ) -> Case:
     """Build and evaluate the prev(d) ``STD_X_RANK`` case end to end."""
 
@@ -165,6 +188,11 @@ def build_case(
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
     raw = raw if raw is not None else raw_observations(seed)
+    if zero_dv_key is not None:
+        raw = raw.copy()
+        indices = list(zero_short_window_indices(w1))
+        column = raw.columns.get_loc(zero_dv_key)
+        raw.iloc[indices, column] = 0.0
     spec = spec if spec is not None else std_x_rank_spec(w1=w1, w2=w2)
     inputs = build_inputs(store, raw)
     panel = fx.factor_panel(spec, inputs, store)

@@ -338,6 +338,102 @@ def test_suspect_v_interval_contains_realization(tmp_path: Path, align, oracle) 
 
 
 # ---------------------------------------------------------------------------
+# dv >= 0 (PQ-SX-A): V = 0 is a valid finite value
+# ---------------------------------------------------------------------------
+
+
+def test_nonnegative_interval_admits_zero_but_m_stays_strict() -> None:
+    """The V interval type admits lo = 0; M keeps the strict positive type."""
+
+    zero = C.NonNegativeInterval(0.0, 0.0)
+    assert (zero.lo, zero.hi) == (0.0, 0.0)
+    assert isinstance(zero, C.PositiveInterval)  # accepted by the frozen plumbing
+    assert C.NonNegativeInterval(0.0, 2.0).contains(0.0)
+    assert C.NonNegativeInterval(0.0, 2.0).mul(C.UNIT).lo == 0.0
+    assert C.NonNegativeInterval(1.0, 2.0).inv().lo == pytest.approx(0.5)
+    with pytest.raises(C.PQv2InputError):
+        C.NonNegativeInterval(-0.5, 1.0)
+    with pytest.raises(C.PQv2InputError):
+        C.NonNegativeInterval(0.0, 2.0).inv()
+    # M is a TRI ratio: the strict positive type still rejects zero.
+    with pytest.raises(C.PQv2InputError):
+        C.PositiveInterval(0.0, 1.0)
+
+
+def test_v_interval_admits_zero_short_window_and_excludes_zero_long() -> None:
+    """Short-window zero -> V = 0; long-window zero -> no V (unchanged)."""
+
+    windows = D.Windows(
+        numerical_dv_short=((-3, -1),),
+        numerical_dv_long=((-7, -1),),
+    )
+    short_zero = {
+        -6: 5.0,
+        -5: 4.0,
+        -4: 3.0,
+        -3: 2.0,
+        -2: 0.0,
+        -1: 0.0,
+    }
+    interval = D._v_interval(
+        windows, 0, (), D.ObservedValues(M_obs=1.0, dv=short_zero)
+    )
+    assert isinstance(interval, C.NonNegativeInterval)
+    assert (interval.lo, interval.hi) == (0.0, 0.0)
+
+    # A suspect short cell keeps V = 0 as the lower endpoint and stays >= 0.
+    rel = C.s2_relative(1.0)
+    transition = C.UncertainTransition("A", -1, -2, 0, 1.0, rel)
+    suspect = D._v_interval(
+        windows, 0, (transition,), D.ObservedValues(M_obs=1.0, dv=short_zero)
+    )
+    assert suspect is not None
+    assert suspect.lo == 0.0
+    assert 0.0 <= suspect.lo <= suspect.hi
+
+    long_zero = {offset: 0.0 for offset in short_zero}
+    assert (
+        D._v_interval(
+            windows, 0, (), D.ObservedValues(M_obs=1.0, dv=long_zero)
+        )
+        is None
+    )
+
+
+def test_zero_dv_short_window_boxes_and_ranking(tmp_path: Path, align, oracle) -> None:
+    """A zero-dv short-window key has V = 0, boxed at [0, 0] and ranked."""
+
+    case = align.build_case(
+        tmp_path, seed=20241010, w1=2, w2=6, zero_dv_key="A"
+    )
+    diag = case.diagnostics
+    assert diag.not_assessed is None
+    assert diag.certified_class == "STD_X_RANK"
+    boxes, realized = _clean_boxes(case)
+    for formation in case.fx.FORMATIONS:
+        f_index = case.fx.SESSIONS.index(formation)
+        lo, hi = boxes[(formation, "A")]
+        assert lo == hi == 0.0  # the box contains the realization V = 0 exactly
+        assert realized[(formation, "A")] == 0.0
+        reference = oracle.v_ratio(list(case.raw["A"]), f_index, 2, 6)
+        assert reference == 0.0
+        # V = 0 is the cross-sectional minimum and is ranked as a valid value:
+        # the realized factor panel cell for A is finite (D7b grouped it) and
+        # the end-to-end assignment above stayed ASSESSED.
+        cross = [
+            oracle.v_ratio(list(case.raw[key]), f_index, 2, 6)
+            for key in case.fx.KEYS
+        ]
+        assert min(cross) == 0.0
+        cell = case.panel[
+            (case.panel["stock_id"] == "A")
+            & (case.panel["date"] == pd.Timestamp(formation))
+        ]
+        assert len(cell) == 1
+        assert math.isfinite(float(cell.iloc[0]["value"]))
+
+
+# ---------------------------------------------------------------------------
 # The formerly failing case shape: B's observed group must be reachable
 # ---------------------------------------------------------------------------
 
@@ -536,10 +632,14 @@ def test_mutations_fixture_has_control_and_required_ids() -> None:
     payload = json.loads(MUTATIONS.read_text(encoding="utf-8"))
     ids = [entry["id"] for entry in payload]
     assert ids[0] == "CONTROL"
-    assert {"SX-M1", "SX-M2"} <= set(ids)
+    assert {"SX-M1", "SX-M2", "SX-M3"} <= set(ids)
+    allowed_files = {
+        "smart_beta/dataset_v1/pqv2_evaluation.py",
+        "smart_beta/dataset_v1/pqv2_dependency.py",
+    }
     for entry in payload:
         assert {"id", "description", "file", "edits", "test"} <= set(entry)
-        assert entry["file"] == "smart_beta/dataset_v1/pqv2_evaluation.py"
+        assert entry["file"] in allowed_files
         if entry["id"] == "CONTROL":
             assert entry["edits"] == []
         else:

@@ -32,5 +32,18 @@
     ],
     "test": "tests/test_pqv2_stdxrank_alignment.py::test_clean_v_box_equals_realization_and_oracle",
     "expected": "killed"
+  },
+  {
+    "id": "SX-M3",
+    "description": "positivity is re-imposed on V: _v_interval returns a strict PositiveInterval, so a zero-dv short-window key (V = 0) raises instead of being ranked",
+    "file": "smart_beta/dataset_v1/pqv2_dependency.py",
+    "edits": [
+      {
+        "old": "    return _core.NonNegativeInterval(v_min, v_max)",
+        "new": "    return _core.PositiveInterval(v_min, v_max)"
+      }
+    ],
+    "test": "tests/test_pqv2_stdxrank_alignment.py::test_zero_dv_short_window_boxes_and_ranking",
+    "expected": "killed"
   }
 ]

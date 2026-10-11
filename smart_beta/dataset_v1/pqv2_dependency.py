@@ -1751,7 +1751,7 @@ def _v_interval(
     formation_pos: Any,
     transitions: Sequence[_core.UncertainTransition],
     observed: ObservedValues | None,
-) -> _core.PositiveInterval | None:
+) -> _core.NonNegativeInterval | None:
     short = _window_cells(windows.numerical_dv_short)
     long = _window_cells(windows.numerical_dv_long)
     if not short or not long:
@@ -1791,13 +1791,15 @@ def _v_interval(
     long_only_lo_sum = weighted(long_only, False)
     if short_hi_sum + long_only_lo_sum <= 0.0 or short_lo_sum + long_only_hi_sum <= 0.0:
         return None
-    # M§11.2: V is increasing in every short-window cell and decreasing in every
-    # long-only cell (short window is a subset of the long window, positive dv),
-    # so the extremes are the box vertices: short-high / long-only-low for the
-    # maximum and the reverse for the minimum.
+    # M§11.2 / PQ-SX-A: V is increasing in every short-window cell and
+    # decreasing in every long-only cell (short window is a subset of the long
+    # window, dv >= 0), so the extremes are the box vertices: short-high /
+    # long-only-low for the maximum and the reverse for the minimum.  A
+    # short-window sum of zero is admitted as V = 0; a long-window sum of zero
+    # is excluded above (no V).
     v_max = (n_long / n_short) * short_hi_sum / (short_hi_sum + long_only_lo_sum)
     v_min = (n_long / n_short) * short_lo_sum / (short_lo_sum + long_only_hi_sum)
-    return _core.PositiveInterval(v_min, v_max)
+    return _core.NonNegativeInterval(v_min, v_max)
 
 
 def _std_x_rank_cell(
@@ -1808,7 +1810,7 @@ def _std_x_rank_cell(
     observed: ObservedValues | None,
 ) -> tuple[
     _core.PositiveInterval | None,
-    _core.PositiveInterval | None,
+    _core.NonNegativeInterval | None,
     bool,
 ]:
     m_interval = _m_interval(windows, formation_pos, transitions, candidates, observed)
@@ -1912,7 +1914,7 @@ def input_uncertainty(
     unknown: dict[str, bool] = {}
     causes: dict[str, _core.CauseSet] = {}
     m_intervals: dict[str, _core.PositiveInterval] = {}
-    v_intervals: dict[str, _core.PositiveInterval] = {}
+    v_intervals: dict[str, _core.NonNegativeInterval] = {}
     for key in key_list:
         cell_windows = _with_event_windows(windows, event_windows, key)
         transitions = tuple(source_set.transitions_by_key.get(key, ()))

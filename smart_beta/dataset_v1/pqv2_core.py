@@ -84,6 +84,7 @@ __all__ = [
     "methodology_path",
     # intervals / S2
     "PositiveInterval",
+    "NonNegativeInterval",
     "UNIT",
     "s2_absolute",
     "s2_relative",
@@ -760,6 +761,53 @@ class PositiveInterval:
     @property
     def is_unit(self) -> bool:
         return self.lo == 1.0 and self.hi == 1.0
+
+
+@dataclass(frozen=True)
+class NonNegativeInterval(PositiveInterval):
+    """A closed non-negative interval ``[lo, hi]`` with ``0 <= lo <= hi < inf``.
+
+    The ``STD_X_RANK`` volume ratio ``V`` is non-negative: dv >= 0 (addendum
+    PQ-SX-A), so a short-window sum of zero gives ``V = 0``.  It subclasses
+    :class:`PositiveInterval` so the frozen interval plumbing accepts it
+    unchanged, while ``M`` (a TRI ratio) stays a strict
+    :class:`PositiveInterval`.
+    """
+
+    def __post_init__(self) -> None:
+        try:
+            lo = float(self.lo)
+            hi = float(self.hi)
+        except (TypeError, ValueError) as exc:
+            raise PQv2InputError(
+                "NonNegativeInterval bounds must be real numbers"
+            ) from exc
+        if not (math.isfinite(lo) and math.isfinite(hi)):
+            raise PQv2InputError("NonNegativeInterval bounds must be finite")
+        if not (0.0 <= lo <= hi):
+            raise PQv2InputError(
+                f"NonNegativeInterval requires 0 <= lo <= hi, got [{lo}, {hi}]"
+            )
+        object.__setattr__(self, "lo", lo)
+        object.__setattr__(self, "hi", hi)
+
+    def mul(self, other: "PositiveInterval") -> "NonNegativeInterval":
+        return NonNegativeInterval(self.lo * other.lo, self.hi * other.hi)
+
+    def inv(self) -> "NonNegativeInterval":
+        if self.lo <= 0.0:
+            raise PQv2InputError(
+                "NonNegativeInterval inverse is unbounded when lo == 0"
+            )
+        return NonNegativeInterval(1.0 / self.hi, 1.0 / self.lo)
+
+    def hull(self, *others: "PositiveInterval") -> "NonNegativeInterval":
+        lo = self.lo
+        hi = self.hi
+        for other in others:
+            lo = min(lo, other.lo)
+            hi = max(hi, other.hi)
+        return NonNegativeInterval(lo, hi)
 
 
 #: The neutral multiplier interval ``[1, 1]``.
