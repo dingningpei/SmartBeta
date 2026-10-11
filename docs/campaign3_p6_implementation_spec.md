@@ -223,3 +223,52 @@ verified by the planner with `certify_candidate`):**
 - **Also binding:** the parity tests use a synthetic overlay that **actually masks
   cells**, so that a reversion to the Campaign-1 `panel_of` (mutation L-M5) produces a
   different cross-section and is killed.
+
+## Erratum P6-E4 (APPROVED 2026-10-11, user: "修复 + 扩大预检，再做第 3 次") — attempt 2 RUN_INCOMPLETE; grammar-coverage preflight; attempt 3
+
+**Attempt 2** (master `8b82856`; 2026-10-11, 00:33–00:49):
+- **Stopped by:** `GridMismatchError` on the first mixed EVENT_SIMPLE candidate. This is a
+  P-Q defect; see `docs/discovery_dataset_v1_2_pq_event_grid_erratum.md`.
+- **K-PIT seq 16–22 appended** and permanent:
+  - seq 16: the superseding CAMPAIGN `eb058bfee1e1cb29b9380f31195003277b4b1b61aeb2d607ba1ec1147b2331d3`;
+  - seq 17: the control;
+  - seq 18: GENERATOR_INPUT;
+  - seq 19–22: four freezes.
+- **What was checked after the stop:** 1 DeepSeek call; 0 reserve opens.
+- **Why it cannot be resumed:** the generation state is on disk, but `pqv2_events.py` is
+  hash-bound by the attempt-2 CAMPAIGN record, and fixing it breaks that binding. Attempt 2
+  is therefore **RUN_INCOMPLETE**, and its candidates never enter ranking, T-B or T-C.
+
+**Fixes (Pi; disjoint files):**
+
+1. **PQ-EV** (`pqv2_events.py` + tests): as in the erratum.
+2. **C3-R-R5** (`campaign3_run.py` + tests):
+   - the supersession is generalized: the production run supersedes **the active
+     CAMPAIGN record** (now attempt 2, `eb058bfee1e1cb29b9380f31195003277b4b1b61aeb2d607ba1ec1147b2331d3`), carrying
+     `superseded_disposition = {attempt: 2, status: RUN_INCOMPLETE, cause: …}`;
+   - `ATTEMPT2_CAMPAIGN_RECORD_HASH` and `ATTEMPT2_SUPERSEDED_DISPOSITION` are added;
+   - a chain of supersessions resolves to exactly one active record.
+3. **C3-L-R2** (`campaign3_launch.py` + tests): the preflight battery grows to fixed,
+   planner-specified probes, each certified and its class asserted. The output stays
+   statistic-free.
+
+   | # | Class | Expression |
+   |---|---|---|
+   | 1 | EVENT_SIMPLE | the control |
+   | 2 | SIMPLE | `tri/lag(tri,20) − 1` |
+   | 3 | STD_X_RANK | `standardize(lag(tri,20)/lag(tri,60)) × rank(rolling_mean(dv,20)/rolling_mean(dv,60))` |
+   | 4 | mixed EVENT_SIMPLE | `event_ear_k_kp1 × rolling_mean(ret,20)` |
+   | 5 | EVENT_SIMPLE | `event_recent_ea_w20 × (tri/lag(tri,5) − 1)` |
+   | 6 | EVENT_SIMPLE | `event_days_since_ea` alone |
+   | 7 | SIMPLE | `rolling_mean(dv,20)/rolling_mean(dv,120)` |
+   | 8 | SIMPLE | `rolling_std(ret,60)` |
+   | 9 | SIMPLE | `lag(tri,21)/lag(tri,252) − 1` |
+   | 10 | STD_X_RANK | `standardize(lag(tri,21)/lag(tri,252)) × rank(rolling_mean(dv,20)/rolling_mean(dv,120))` |
+
+   Any probe that the planner's `certify_candidate` check finds outside its intended class
+   is a spec defect to report, not to adjust.
+4. **Then:**
+   - the planner recertification (EVENT scope) and a K-PIT copy simulation that includes
+     the attempt-3 supersession;
+   - **the battery preflight**;
+   - attempt 3, under the standing authorization.
