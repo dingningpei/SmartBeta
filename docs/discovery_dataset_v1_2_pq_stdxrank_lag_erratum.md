@@ -89,3 +89,60 @@ sandwich failed earlier.
   - M (a TRI ratio > 0) keeps `PositiveInterval`.
 - **Audit:** the PQ-SX worker audits every other positivity/non-zero assumption on
   dv-derived values (e.g. any `PositiveInterval` on dv quantities) and reports each one.
+
+## Recertification evidence (planner; STD_X_RANK scope) — merged `41ac6e4`
+
+**Merged worker commits:**
+
+| Commit | Change |
+|---|---|
+| `f703f03` | the observed dv is read from the D7c bridge row: `session_at_offset.get(offset + 1)` |
+| `884c8c2` | the V interval admits 0 (addendum A) |
+| `4f636d4` | a clean V box is the realized V_obs itself. Before this, a floating dv-sum reconstruction differed from the pandas rolling mean by 8.5e-12 relative for one real key (IPDN, V = 3) |
+
+**Value-lookup audit (worker, reviewed):**
+- every other P-Q lookup of input values reads the realized formation row, or applies
+  the explicit bridge rule (`pqv2_sources` `next(s)`, `pqv2_events` predecessor map);
+- the flag/dependency windows stay in raw sessions.
+
+**Real data:**
+- the preflight STD_X_RANK probe on the TOP_1000 IS fold is ASSESSED;
+- binding OK; B/L × T0/TS have 54 periods each;
+- sandwich calls 54/54 (every IS formation);
+- **box-containment violations 0**; clean V boxes ≠ V_obs **0**; clean M boxes ≠ M_obs
+  **0**;
+- 0 reserve opens.
+- Statistic-free; no return was printed or read by the planner.
+
+**Software** (at `4f636d4`, same tree as the merge):
+- the P-Q suites: 1,033 passed;
+- full-tier grammar + event cross-checks: 12,015 passed.
+- **Mutations** (canonical test files):
+
+  | Family | Result |
+  |---|---|
+  | stdxrank_alignment | 4/4 killed |
+  | sandwich | 16/16 killed |
+  | dependency | 33/33 killed |
+  | evaluation | 37 killed; H-M13 (equivalent) and H-M14 (tooling) carried forward unchanged from the v2.4 barrier |
+
+  The worker reported V2-M10 as surviving. That was a test-file mismatch: with the
+  canonical `tests/test_pqv2_assign_sandwich.py` it is killed.
+
+**Default-path content identity:**
+- C1-H1 (SIMPLE), C1-H4 and C1-H5 (STD_X_RANK) diagnostics at `d6e9e68` vs `41ac6e4`:
+  the only differing field is `/pqv2_code_sha256`, the expected provenance change; every
+  value is identical. The in-repo goldens pass.
+- **Why no synthetic hash changed:** the synthetic dv is a key-independent geometric
+  series, so a one-row shift preserves every cross-sectional rank. This is also why
+  synthetic certification never revealed the defect.
+
+**Full suite at `41ac6e4`:** 6,703 passed, 1 skipped, 0 failed. The run took 903 s, while the concurrent real-data preflight shared the CPU; a solo re-measurement against the 900 s Phase-5A bound is pending and will be reported.
+
+**Result:** **PQ-SX RECERTIFIED (STD_X_RANK scope)**.
+- STD_X_RANK_G is now evaluable on real data with the sandwich containment invariant
+  verified on all 54 IS formations.
+- **Non-claims:**
+  - T-B (OOS + sealed) and the reserve folds were not exercised by this barrier. Attempt 2
+    evaluates them under the same code;
+  - no alpha claim.
