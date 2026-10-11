@@ -5,8 +5,8 @@
   "file": "smart_beta/campaign/campaign3_run.py",
   "edits": [
    {
-    "old": "        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
-    "new": "        generation = self._generation_snapshot(journal)\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)"
+    "old": "        # (d) precommitment + control BEFORE the first generator call.\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)\n\n        # (e) attempt identity binds the active CAMPAIGN record hash, so every\n        # attempt gets its own run directory and can never reload another\n        # attempt's persisted state (P6-E5).  A caller-supplied ``attempt_id``\n        # is the base identity this binding extends, never a bypass of it.\n        attempt_id = self.compute_attempt_id(campaign_record.record_hash)\n        run_dir = run_dir_for(attempt_id, self.run_root)\n        journal = RunJournal(\n            run_dir,\n            campaign_record_hash=campaign_record.record_hash,\n            attempt_id=attempt_id,\n        )\n\n        # (f) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        # mutation R-M1: the first generator call happens before the CAMPAIGN\n        # record (a placeholder identity is used to build the journal).\n        attempt_id = self.compute_attempt_id(\"0\" * 64)\n        run_dir = run_dir_for(attempt_id, self.run_root)\n        journal = RunJournal(\n            run_dir,\n            campaign_record_hash=\"0\" * 64,\n            attempt_id=attempt_id,\n        )\n        generation = self._generation_snapshot(journal)\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)"
    }
   ],
   "test": "tests/test_campaign3_run.py::test_campaign_record_precedes_first_generator_call"
@@ -17,8 +17,12 @@
   "file": "smart_beta/campaign/campaign3_run.py",
   "edits": [
    {
-    "old": "        control_record = self._write_control_record(campaign_record)\n\n        # (e) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
-    "new": "        generation = self._generation_snapshot(journal)\n        control_record = self._write_control_record(campaign_record)"
+    "old": "        # (d) precommitment + control BEFORE the first generator call.\n        campaign_record = self._write_campaign_record()\n        control_record = self._write_control_record(campaign_record)",
+    "new": "        # mutation R-M2: the control is frozen after generation.\n        campaign_record = self._write_campaign_record()\n        _deferred_control = campaign_record"
+   },
+   {
+    "old": "        # (f) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)",
+    "new": "        # (f) generation (write-ahead; a resume never re-calls the generator).\n        generation = self._generation_snapshot(journal)\n        control_record = self._write_control_record(_deferred_control)"
    }
   ],
   "test": "tests/test_campaign3_run.py::test_control_freeze_precedes_first_generator_call"
@@ -214,5 +218,41 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_ambiguous_supersession_chain_is_refused"
+ },
+ {
+  "id": "R-M19",
+  "description": "persisted state bound to a foreign CAMPAIGN record is loaded (P6-E5)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        if self.campaign_record_hash is None:\n            return",
+    "new": "        if True:  # mutation R-M19: foreign state is loaded\n            return"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_run_refuses_state_bound_to_a_foreign_campaign_record"
+ },
+ {
+  "id": "R-M20",
+  "description": "ranking runs after a generator_failure stop (P6-E5)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        if generation.stop_reason != budget_exhausted:\n            screen_report = self._run_incomplete(journal, generation)\n        elif journal.is_complete(\"report\"):",
+    "new": "        if False:  # mutation R-M20: ranking runs after a generator_failure stop\n            screen_report = self._run_incomplete(journal, generation)\n        elif journal.is_complete(\"report\"):"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_generator_failure_stop_is_run_incomplete"
+ },
+ {
+  "id": "R-M21",
+  "description": "attempt_id ignores the CAMPAIGN record (P6-E5)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "            \"policy_hash\": self.policy.content_hash,\n            \"campaign_record_hash\": campaign_record_hash,\n        }",
+    "new": "            \"policy_hash\": self.policy.content_hash,\n            # mutation R-M21: the attempt_id ignores the CAMPAIGN record\n        }"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_attempt_id_binds_the_campaign_record_hash"
  }
 ]
