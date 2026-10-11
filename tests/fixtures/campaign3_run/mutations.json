@@ -142,5 +142,53 @@
    }
   ],
   "test": "tests/test_campaign3_run.py::test_tb_selection_write_is_idempotent_and_schema_scoped"
+ },
+ {
+  "id": "R-M13",
+  "description": "the persisted generation event is not reloaded on resume (the generator is re-called)",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "                self.boundary.registry.append(event)",
+    "new": "                pass  # mutation R-M13: the persisted event is not reloaded"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_resume_from_disk_after_persist_does_not_regenerate"
+ },
+ {
+  "id": "R-M14",
+  "description": "a resumed event is charged against the budget a second time",
+  "file": "smart_beta/campaign/campaign3_generation.py",
+  "edits": [
+   {
+    "old": "        if cached is not None:",
+    "new": "        if False:  # mutation R-M14: the plan is recomputed and the event double counts"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_resume_from_disk_does_not_double_count"
+ },
+ {
+  "id": "R-M15",
+  "description": "the active-campaign lookup ignores supersession (attempt 2 picks attempt 1)",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "    active_superseded = _superseded_campaign_hashes(records)",
+    "new": "    active_superseded = set()  # mutation R-M15: the superseded set is ignored"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_attempt2_supersedes_attempt1_and_writes_its_own_control"
+ },
+ {
+  "id": "R-M16",
+  "description": "a supersession target need not be an existing Campaign-3 CAMPAIGN record",
+  "file": "smart_beta/campaign/campaign3_run.py",
+  "edits": [
+   {
+    "old": "        if _campaign3_campaign_by_hash(log, supersedes) is None:",
+    "new": "        if False:  # mutation R-M16: a supersession target need not exist"
+   }
+  ],
+  "test": "tests/test_campaign3_run.py::test_supersession_of_a_non_existent_record_is_refused"
  }
 ]

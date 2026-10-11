@@ -165,8 +165,10 @@ def _make_run(
     budget: int = 2,
     launch_terminal: R.KnowledgeSnapshot | None = None,
     screen_runner: Any = None,
+    log: KnowledgeLog | None = None,
+    supersedes_record_hash: str | None = None,
 ) -> tuple[R.Campaign3Run, Any, KnowledgeLog]:
-    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    log = log if log is not None else KnowledgeLog(tmp_path / "kpit.jsonl")
     generator = _scripted_generator(budget)
     runner = R.Campaign3Run(
         bindings=_bindings(),
@@ -178,6 +180,7 @@ def _make_run(
         screen_runner=screen_runner or _ScreenSpy(),
         screen_candidate_builder=_synthetic_screen_candidates,
         launch_terminal=launch_terminal,
+        supersedes_record_hash=supersedes_record_hash,
     )
     return runner, generator, log
 
@@ -1039,6 +1042,344 @@ def test_tb_selection_write_is_idempotent_and_schema_scoped(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 11. executor write-ahead to disk (P6-E3 C3-R-R4; mutations R-M13/R-M14)
+# ---------------------------------------------------------------------------
+
+
+class _ExecutorCrash(Exception):
+    """A test-local crash injected at a named executor step."""
+
+
+def _executor_crash_at(step: str):
+    state = {"fired": False}
+
+    def hook(name: str) -> None:
+        if name == step and not state["fired"]:
+            state["fired"] = True
+            raise _ExecutorCrash(name)
+
+    return hook
+
+
+def _disk_executor(
+    *,
+    generator: Any,
+    evaluator: Any,
+    journal: G.GenerationJournal,
+    policy: Any = None,
+    kpit: Any = None,
+    crash_hook: Any = None,
+) -> G.Campaign3Executor:
+    return G.Campaign3Executor(
+        policy=policy or _policy(budget=1),
+        generator=generator,
+        evaluator=evaluator,
+        kpit=kpit,
+        journal=journal,
+        crash_hook=crash_hook,
+    )
+
+
+def test_resume_from_disk_after_persist_does_not_regenerate(tmp_path):
+    """Kills mutation R-M13 (generator re-called on resume for a persisted event)."""
+    journal = G.GenerationJournal(tmp_path / "executor")
+    gen = _scripted_generator(1)
+    first = _disk_executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        journal=journal,
+        crash_hook=_executor_crash_at("after_persist_before_normalize"),
+    )
+    with pytest.raises(_ExecutorCrash):
+        first.run()
+    assert len(gen.calls) == 1
+    assert journal.exists()
+
+    resumed = _disk_executor(
+        generator=gen, evaluator=fx.StubEvaluator(), journal=journal
+    )
+    result = resumed.run()
+    assert len(gen.calls) == 1  # no re-call for the persisted event
+    assert result.manifest.n_used == 1
+    assert result.manifest.n_evaluated == 1
+    assert len(result.full_history.evidence) == 1
+
+
+@pytest.mark.parametrize(
+    "step",
+    ["after_persist_before_normalize", "after_freeze_before_evaluate"],
+)
+def test_resume_from_disk_yields_identical_final_state(tmp_path, step):
+    clean = _disk_executor(
+        generator=_scripted_generator(2),
+        evaluator=fx.StubEvaluator(),
+        journal=G.GenerationJournal(tmp_path / "clean"),
+        policy=_policy(budget=2),
+    )
+    clean_result = clean.run()
+
+    crashed_journal = G.GenerationJournal(tmp_path / "crashed")
+    crashed_gen = _scripted_generator(2)
+    crashed = _disk_executor(
+        generator=crashed_gen,
+        evaluator=fx.StubEvaluator(),
+        journal=crashed_journal,
+        policy=_policy(budget=2),
+        crash_hook=_executor_crash_at(step),
+    )
+    with pytest.raises(_ExecutorCrash):
+        crashed.run()
+    resumed = _disk_executor(
+        generator=crashed_gen,
+        evaluator=fx.StubEvaluator(),
+        journal=crashed_journal,
+        policy=_policy(budget=2),
+    )
+    resumed_result = resumed.run()
+
+    assert len(crashed_gen.calls) == 2
+    assert resumed_result.manifest.to_dict() == clean_result.manifest.to_dict()
+
+
+def test_resume_from_disk_does_not_double_count(tmp_path):
+    """Kills mutation R-M14 (a resume charges the same event twice)."""
+    journal = G.GenerationJournal(tmp_path / "executor")
+    gen = _scripted_generator(1)
+    first = _disk_executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        journal=journal,
+        crash_hook=_executor_crash_at("after_freeze_before_evaluate"),
+    )
+    with pytest.raises(_ExecutorCrash):
+        first.run()
+    assert first._used == 1
+
+    resumed = _disk_executor(
+        generator=gen, evaluator=fx.StubEvaluator(), journal=journal
+    )
+    result = resumed.run()
+    assert result.manifest.n_used == 1
+    assert result.manifest.n_evaluated == 1
+    assert len(gen.calls) == 1
+
+
+class _FailingEvaluator:
+    """Raises on its second call, after the first evaluation completed."""
+
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def __call__(self, proposal: Any) -> Any:
+        self.calls.append(proposal)
+        if len(self.calls) == 2:
+            raise _ExecutorCrash("mid-evaluation")
+        return fx.make_ta_evaluation(proposal)
+
+
+def test_resume_from_disk_mid_evaluation_reevaluates_only_incomplete(tmp_path):
+    journal = G.GenerationJournal(tmp_path / "executor")
+    specs = [
+        fx.candidate(fx.simple_spec_dict(numerator_lag=lag))
+        for lag in (31, 32, 33)
+    ]
+    gen = fx.ScriptedGenerator(outputs=[fx.generation_output(*specs)])
+    flaky = _FailingEvaluator()
+    first = _disk_executor(
+        generator=gen,
+        evaluator=flaky,
+        journal=journal,
+        policy=_policy(budget=3),
+    )
+    with pytest.raises(_ExecutorCrash):
+        first.run()
+    assert len(flaky.calls) == 2
+
+    good = fx.StubEvaluator()
+    resumed = _disk_executor(
+        generator=gen,
+        evaluator=good,
+        journal=journal,
+        policy=_policy(budget=3),
+    )
+    result = resumed.run()
+    assert len(flaky.calls) == 2  # the completed evaluation is never redone
+    assert len(good.calls) == 2  # only candidates 2 and 3
+    assert len(gen.calls) == 1
+    assert result.manifest.n_used == 3
+    assert result.manifest.n_evaluated == 3
+    assert len(result.full_history.evidence) == 3
+
+
+def test_resume_from_disk_after_freeze_does_not_refreeze_kpit(tmp_path):
+    journal = G.GenerationJournal(tmp_path / "executor")
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    gen = _scripted_generator(1)
+    first = _disk_executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        journal=journal,
+        kpit=G.KnowledgeLogKpitWriter(log),
+        crash_hook=_executor_crash_at("after_freeze_before_evaluate"),
+    )
+    with pytest.raises(_ExecutorCrash):
+        first.run()
+    assert len(log.read()) == 2
+
+    resumed = _disk_executor(
+        generator=gen,
+        evaluator=fx.StubEvaluator(),
+        journal=journal,
+        kpit=G.KnowledgeLogKpitWriter(log),
+    )
+    result = resumed.run()
+    assert len(log.read()) == 2  # no duplicate GENERATOR_INPUT/HYPOTHESIS_FREEZE
+    assert len(gen.calls) == 1
+    assert result.manifest.n_evaluated == 1
+
+
+def test_run_resumes_generation_from_disk_without_regenerating(tmp_path):
+    """The run wires the executor journal under its own run directory."""
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    runner, generator, _ = _make_run(tmp_path, budget=3)
+    runner.ta_evaluator = _FailingEvaluator()
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    with pytest.raises(_ExecutorCrash):
+        runner.run()
+    calls_after_crash = len(generator.calls)
+    assert calls_after_crash >= 2  # event 2 was persisted before the crash
+
+    runner.ta_evaluator = fx.StubEvaluator()
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    result = runner.run()
+    # Exactly one generator call per event: the persisted events are restored,
+    # never regenerated.
+    assert len(generator.calls) == 3
+    assert result.manifest["n_used"] == 3
+    state = Path(result.run_dir) / "generation_state" / "executor_state.json"
+    assert state.is_file()
+
+
+def test_kpit_writer_replay_is_idempotent(tmp_path):
+    from smart_beta.research.policy import GenerationMethod
+
+    log = KnowledgeLog(tmp_path / "kpit.jsonl")
+    writer = G.KnowledgeLogKpitWriter(log)
+    event = G.GenerationEvent(
+        invocation_ordinal=0,
+        generator_identity=G.CAMPAIGN3_GENERATOR_IDENTITY,
+        generation_method=GenerationMethod.LLM,
+        generation_policy_id="a" * 64,
+        prompt_template_hash="b" * 64,
+        history_snapshot_hash="c" * 64,
+        seed=1,
+        raw_artifact=G.RawArtifact(content='{"candidates": []}'),
+    )
+    first_input = writer.generation_input(event)
+    assert writer.generation_input(event) == first_input
+    first_freeze = writer.hypothesis_freeze(
+        hypothesis_id="h" * 64,
+        factor_spec_hash="f" * 64,
+        influenced_by=(first_input,),
+        proposal_id="p" * 64,
+    )
+    assert (
+        writer.hypothesis_freeze(
+            hypothesis_id="h" * 64,
+            factor_spec_hash="f" * 64,
+            influenced_by=(first_input,),
+            proposal_id="p" * 64,
+        )
+        == first_freeze
+    )
+    assert len(log.read()) == 2
+
+
+# ---------------------------------------------------------------------------
+# 12. CAMPAIGN supersession (P6-E3; mutations R-M15/R-M16)
+# ---------------------------------------------------------------------------
+
+
+def test_attempt2_supersedes_attempt1_and_writes_its_own_control(tmp_path):
+    """Kills mutation R-M15 (attempt 2 picks the superseded attempt-1 records)."""
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=True)
+    attempt1 = prefixfx.seed_attempt1(log)
+    attempt1_hash = attempt1["campaign"].record_hash
+
+    runner, generator, _ = _make_run(
+        tmp_path,
+        budget=3,
+        log=log,
+        supersedes_record_hash=attempt1_hash,
+    )
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    first = runner.run()
+    assert len(generator.calls) == 3
+
+    campaigns = _c3_campaign_records(log)
+    assert len(campaigns) == 2
+    superseding = [c for c in campaigns if c.record_hash != attempt1_hash]
+    assert len(superseding) == 1
+    payload = superseding[0].payload["campaign_precommitment"]
+    assert payload["supersedes_record_hash"] == attempt1_hash
+    assert payload["superseded_disposition"]["attempt"] == 1
+    assert payload["superseded_disposition"]["status"] == "RUN_INCOMPLETE"
+    assert payload["superseded_disposition"]["cause"]
+
+    controls = _c3_control_records(log)
+    assert len(controls) == 2
+    bound = [
+        record
+        for record in controls
+        if record.payload.get("campaign_record_hash") == superseding[0].record_hash
+    ]
+    assert len(bound) == 1
+
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+    # A resume keeps exactly one active CAMPAIGN record and writes no third.
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    second = runner.run()
+    assert len(_c3_campaign_records(log)) == 2
+    assert second.manifest["n_used"] == first.manifest["n_used"]
+
+
+def test_production_auto_detects_and_supersedes_attempt1(tmp_path, monkeypatch):
+    """The production ``run()`` supersedes the frozen attempt-1 record."""
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
+    attempt1 = prefixfx.seed_attempt1(log)
+    attempt1_hash = attempt1["campaign"].record_hash
+    monkeypatch.setattr(R, "ATTEMPT1_CAMPAIGN_RECORD_HASH", attempt1_hash)
+
+    runner, generator, _ = _make_run(tmp_path, budget=2, log=log)
+    runner.launch_terminal = R.pin_kpit_terminal(log.path)
+    runner.run()
+    assert len(generator.calls) == 2
+    assert any(
+        record.payload["campaign_precommitment"].get("supersedes_record_hash")
+        == attempt1_hash
+        for record in _c3_campaign_records(log)
+    )
+    preflight = R.verify_kpit_ordering(log.path)
+    assert preflight.ok, preflight.reason
+
+
+def test_supersession_of_a_non_existent_record_is_refused(tmp_path):
+    """Kills mutation R-M16 (a supersession target need not exist)."""
+    log, _prefix = _seed_prefix(tmp_path, include_prior_campaign=False)
+    runner, _generator, _ = _make_run(
+        tmp_path,
+        budget=2,
+        log=log,
+        supersedes_record_hash="a" * 64,
+    )
+    with pytest.raises(R.C3GovernanceConflict):
+        runner.run()
+    assert _c3_campaign_records(log) == []
+
+
+# ---------------------------------------------------------------------------
 # 10. mutation fixture integrity
 # ---------------------------------------------------------------------------
 
@@ -1048,7 +1389,8 @@ def test_mutations_fixture_is_wellformed():
     ids = {entry["id"] for entry in entries}
     assert {
         "R-M1", "R-M2", "R-M3", "R-M4", "R-M5", "R-M6", "R-M7", "R-M8",
-        "R-M9", "R-M10", "R-M11", "R-M12",
+        "R-M9", "R-M10", "R-M11", "R-M12", "R-M13", "R-M14", "R-M15",
+        "R-M16",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
