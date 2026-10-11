@@ -37,6 +37,24 @@ the history token and the firewall are unchanged.
 
 **C3-G is not modified.**
 
+Erratum P6-E5 (APPROVED 2026-10-11, this task C3-D-R2)
+-------------------------------------------------------
+
+This amendment relaxes P4 A2 / Phase-9's "no hidden retry" for transport
+errors **only**. A provider call that fails with no response content --
+``openai.APIConnectionError``, ``openai.APITimeoutError``,
+``openai.InternalServerError`` (5xx) or ``openai.RateLimitError`` (429) -- is
+retried at most :data:`MAX_TRANSPORT_RETRIES` (3) times, with the exact backoff
+:data:`TRANSPORT_RETRY_WAITS` (10 s, 30 s, 90 s). The sleep function is
+injectable so tests never sleep. Every retry is recorded in a
+:class:`DeepSeekRetryRecord` (exception type, attempt index, wait) and exposed
+through :class:`DeepSeekCallRecord` for the manifest. Any failure that arrives
+**with** a response (a ``finish_reason == "length"`` truncation, malformed or
+empty content, a non-retryable 4xx other than 429, a detected secret) is never
+retried. An exhausted retry budget raises the existing typed failure. The real
+client stays built with ``max_retries=0``: the retry is the adapter's own and
+is therefore visible.
+
 Frozen literals (amendment section 1)
 -------------------------------------
 
@@ -75,12 +93,13 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from smart_beta.research.generator import RawArtifact
+from smart_beta.research.generator import RawArtifact, RawArtifactError
 from smart_beta.research.history import (
     GeneratorVisibleResearchHistory,
     ResearchFeedback,
@@ -109,9 +128,12 @@ __all__ = [
     "prompt_template_v2_hash",
     "FINISH_REASON_STOP",
     "FINISH_REASON_LENGTH",
+    "MAX_TRANSPORT_RETRIES",
+    "TRANSPORT_RETRY_WAITS",
     "DeepSeekLlmGeneratorError",
     "DeepSeekGeneratorFailure",
     "DeepSeekLengthTruncationError",
+    "DeepSeekRetryRecord",
     "DeepSeekCallRecord",
     "Campaign3DeepSeekGenerator",
 ]
@@ -175,6 +197,14 @@ FINISH_REASON_LENGTH = "length"
 #: Token conversion unit. This is a unit of measure, never a price.
 _TOKENS_PER_MTOK = 1_000_000
 
+#: The bounded transport-retry budget (Erratum P6-E5): at most three retries,
+#: i.e. at most four provider attempts. The real client keeps ``max_retries=0``
+#: so this retry is the adapter's own and is visible in the call record.
+MAX_TRANSPORT_RETRIES = 3
+
+#: The exact backoff (seconds) observed before each successive retry attempt.
+TRANSPORT_RETRY_WAITS = (10.0, 30.0, 90.0)
+
 
 # ---------------------------------------------------------------------------
 # Errors (fail closed)
@@ -222,12 +252,37 @@ class DeepSeekLengthTruncationError(DeepSeekGeneratorFailure):
 
 
 @dataclass(frozen=True)
+class DeepSeekRetryRecord:
+    """One recorded transport retry of a DeepSeek call (Erratum P6-E5).
+
+    ``attempt_index`` is the 1-based index of the failed attempt that triggered
+    this retry (so retries carry indices 1, 2, 3); ``wait_seconds`` is the
+    backoff observed before the next attempt. ``exception_type`` is the class
+    name of the retryable transport error -- never its message, which may echo
+    request data.
+    """
+
+    exception_type: str
+    attempt_index: int
+    wait_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "exception_type": self.exception_type,
+            "attempt_index": self.attempt_index,
+            "wait_seconds": self.wait_seconds,
+        }
+
+
+@dataclass(frozen=True)
 class DeepSeekCallRecord:
     """The per-call provenance of one DeepSeek completion.
 
     Records the provider-reported model string (which may alias the requested
     model), the ``finish_reason``, and the usage counters. ``reasoning_tokens``
-    is recorded for provenance only; reasoning **text** is never stored.
+    is recorded for provenance only; reasoning **text** is never stored. The
+    bounded transport retries made before this call's outcome are recorded in
+    ``retries`` (Erratum P6-E5) and exposed by :meth:`to_dict` for the manifest.
     """
 
     response_model: str | None
@@ -236,6 +291,7 @@ class DeepSeekCallRecord:
     prompt_tokens: int
     completion_tokens: int
     reasoning_tokens: int
+    retries: tuple[DeepSeekRetryRecord, ...] = ()
 
     @property
     def tokens_used(self) -> int:
@@ -250,6 +306,7 @@ class DeepSeekCallRecord:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "reasoning_tokens": self.reasoning_tokens,
+            "retries": [item.to_dict() for item in self.retries],
         }
 
 
@@ -332,6 +389,34 @@ def _coerce_price_table(
     )
 
 
+def _is_retryable_transport_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is a no-content transport error eligible for retry.
+
+    Erratum P6-E5 retries exactly four provider-side, response-less transport
+    failures: ``openai.APIConnectionError``, ``openai.APITimeoutError``,
+    ``openai.InternalServerError`` (5xx) and ``openai.RateLimitError`` (429).
+    Every other exception -- in particular a non-retryable ``APIStatusError``
+    4xx other than 429, and any failure raised after a response was received --
+    is not retried. The ``openai`` SDK is imported lazily (only on the error
+    path), so an injected fake client never requires it.
+    """
+    if isinstance(exc, GeneratorFailureError):
+        return False
+    try:
+        import openai  # noqa: PLC0415 - lazy provider import (error path only)
+    except Exception:  # pragma: no cover - SDK absent (injected-client use)
+        return False
+    return isinstance(
+        exc,
+        (
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            openai.InternalServerError,
+            openai.RateLimitError,
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The adapter
 # ---------------------------------------------------------------------------
@@ -355,6 +440,7 @@ class Campaign3DeepSeekGenerator:
         model_id: str = MODEL_ID,
         max_tokens: int = MAX_TOKENS,
         base_url: str = BASE_URL,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         if not isinstance(model_id, str) or not model_id.strip():
             raise DeepSeekLlmGeneratorError("model_id must be non-empty text")
@@ -369,9 +455,14 @@ class Campaign3DeepSeekGenerator:
                 "the base URL is frozen; refusing a base-URL override "
                 f"(got {base_url!r})"
             )
+        if sleep is not None and not callable(sleep):
+            raise DeepSeekLlmGeneratorError("sleep must be callable or None")
         self._model_id = model_id
         self._max_tokens = max_tokens
         self._price_table = _coerce_price_table(price_table)
+        self._sleep: Callable[[float], None] = (
+            sleep if sleep is not None else time.sleep
+        )
         self._client = client if client is not None else self._build_client()
         self._last_record: DeepSeekCallRecord | None = None
 
@@ -469,7 +560,12 @@ class Campaign3DeepSeekGenerator:
         visible_history: GeneratorVisibleResearchHistory,
         feedback: ResearchFeedback,
     ) -> GenerationOutput:
-        """Render the v2 prompt, make exactly one SDK call and account usage."""
+        """Render the v2 prompt, call the provider and account usage.
+
+        The provider call is wrapped in the bounded transport retry of Erratum
+        P6-E5 (see :meth:`_call_with_transport_retry`); everything else about
+        the request and the accounting is unchanged.
+        """
         prompt = render_prompt(
             visible_history, feedback, template=load_prompt_template_v2()
         )
@@ -484,18 +580,15 @@ class Campaign3DeepSeekGenerator:
             "reasoning_effort": REASONING_EFFORT,
             "stream": False,
         }
-        try:
-            response = self._client.chat.completions.create(**request_kwargs)
-        except GeneratorFailureError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - mapped to one typed failure
-            # Exactly one attempt is made (the SDK client is built with
-            # max_retries=0); an API/transport error is a typed failure and is
-            # never silently retried.
-            raise GeneratorFailureError(
-                f"deepseek chat.completions.create failed ({type(exc).__name__})"
-            ) from exc
+        return self._call_with_transport_retry(request_kwargs)
 
+    def _call_once(
+        self,
+        request_kwargs: dict[str, Any],
+        retries: list[DeepSeekRetryRecord],
+    ) -> GenerationOutput:
+        """One provider call and its content validation (no retry here)."""
+        response = self._client.chat.completions.create(**request_kwargs)
         choice = _first_choice(response)
         response_model = _response_model(response)
         finish_reason = _field(choice, "finish_reason")
@@ -507,6 +600,7 @@ class Campaign3DeepSeekGenerator:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             reasoning_tokens=reasoning_tokens,
+            retries=tuple(retries),
         )
         if finish_reason == FINISH_REASON_LENGTH:
             raise DeepSeekLengthTruncationError(
@@ -529,3 +623,62 @@ class Campaign3DeepSeekGenerator:
             tokens_used=prompt_tokens + completion_tokens,
             cost_used=cost,
         )
+
+    def _call_with_transport_retry(
+        self, request_kwargs: dict[str, Any]
+    ) -> GenerationOutput:
+        """Call once, then retry only response-less transport failures.
+
+        Erratum P6-E5: ``APIConnectionError``/``APITimeoutError``,
+        ``InternalServerError`` (5xx) and ``RateLimitError`` (429) are retried
+        at most :data:`MAX_TRANSPORT_RETRIES` times with the exact waits in
+        :data:`TRANSPORT_RETRY_WAITS`; every retry is recorded. A failure that
+        arrives with a response (a ``length`` truncation, malformed or empty
+        content, a non-retryable 4xx, a secret) is re-raised and never retried.
+        An exhausted budget raises the existing typed failure. The real client
+        is built with ``max_retries=0``, so this retry is the adapter's own and
+        is visible in the call record.
+        """
+        retries: list[DeepSeekRetryRecord] = []
+        attempt_index = 0
+        while True:
+            attempt_index += 1
+            try:
+                return self._call_once(request_kwargs, retries)
+            except RawArtifactError:
+                # The boundary rejected the response (empty/malformed content or
+                # a secret): a response was received, so it is never retried.
+                raise
+            except GeneratorFailureError:
+                # A typed failure from content validation (a length truncation):
+                # a response was received, so it is never retried.
+                raise
+            except Exception as exc:  # noqa: BLE001 - classified below
+                if (
+                    attempt_index > MAX_TRANSPORT_RETRIES
+                    or not _is_retryable_transport_error(exc)
+                ):
+                    # No response content was obtained and the budget is spent
+                    # (or the error is not retryable): the existing typed
+                    # failure. Any retries already made remain on the record.
+                    self._last_record = DeepSeekCallRecord(
+                        response_model=None,
+                        finish_reason=None,
+                        reasoning_effort=REASONING_EFFORT,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        reasoning_tokens=0,
+                        retries=tuple(retries),
+                    )
+                    raise GeneratorFailureError(
+                        f"deepseek chat.completions.create failed ({type(exc).__name__})"
+                    ) from exc
+                wait_seconds = TRANSPORT_RETRY_WAITS[attempt_index - 1]
+                retries.append(
+                    DeepSeekRetryRecord(
+                        exception_type=type(exc).__name__,
+                        attempt_index=attempt_index,
+                        wait_seconds=wait_seconds,
+                    )
+                )
+                self._sleep(wait_seconds)
