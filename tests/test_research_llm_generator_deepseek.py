@@ -132,16 +132,29 @@ class _FakeChat:
 
 
 class _FakeClient:
-    """A recording fake with the single SDK surface the adapter uses."""
+    """A recording fake with the single SDK surface the adapter uses.
 
-    def __init__(self, *, response=None, exc: Exception | None = None) -> None:
+    ``exc_sequence`` raises its exceptions in order (one per call) and then
+    returns ``response``; ``exc`` raises on every call. No network is used.
+    """
+
+    def __init__(
+        self,
+        *,
+        response=None,
+        exc: Exception | None = None,
+        exc_sequence: list[Exception] | None = None,
+    ) -> None:
         self.calls: list[dict] = []
         self._response = response
         self._exc = exc
+        self._exc_sequence = list(exc_sequence) if exc_sequence else []
         self.chat = _FakeChat(self)
 
     def _create(self, **kwargs):
         self.calls.append(kwargs)
+        if self._exc_sequence:
+            raise self._exc_sequence.pop(0)
         if self._exc is not None:
             raise self._exc
         return self._response
@@ -167,6 +180,61 @@ def _response(
             prompt_tokens=input_tokens, completion_tokens=output_tokens
         ),
         model=response_model,
+    )
+
+
+class _SleepRecorder:
+    """A deterministic replacement for ``time.sleep`` (tests never sleep)."""
+
+    def __init__(self) -> None:
+        self.waits: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+class _FakeHttpRequest:
+    """The minimal ``request`` shape ``openai.APIError`` reads."""
+
+    method = "POST"
+    url = BASE_URL
+
+
+class _FakeHttpResponse:
+    """The minimal ``response`` shape ``openai.APIStatusError`` reads."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.request = _FakeHttpRequest()
+        self.headers: dict[str, str] = {}
+
+
+def _openai_transport_error(name: str) -> Exception:
+    """Build a real openai transport exception of a named retryable type."""
+    import openai
+
+    if name == "APIConnectionError":
+        return openai.APIConnectionError(request=_FakeHttpRequest())
+    if name == "APITimeoutError":
+        return openai.APITimeoutError(request=_FakeHttpRequest())
+    if name == "InternalServerError":
+        return openai.InternalServerError(
+            "server error", response=_FakeHttpResponse(500), body=None
+        )
+    if name == "RateLimitError":
+        return openai.RateLimitError(
+            "rate limited", response=_FakeHttpResponse(429), body=None
+        )
+    raise AssertionError(f"not a retryable transport error: {name}")
+
+
+def _openai_status_error(name: str, status_code: int) -> Exception:
+    """Build a real non-retryable openai ``APIStatusError`` (a 4xx)."""
+    import openai
+
+    error_type = getattr(openai, name)
+    return error_type(
+        "status error", response=_FakeHttpResponse(status_code), body=None
     )
 
 
@@ -587,10 +655,11 @@ def test_model_id_and_settings_are_recorded():
 
 
 def test_length_truncation_is_a_typed_failure():
+    sleep = _SleepRecorder()
     client = _FakeClient(
         response=_response("{", finish_reason=FINISH_REASON_LENGTH)
     )
-    generator = Campaign3DeepSeekGenerator(client=client)
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
     with pytest.raises(DeepSeekLengthTruncationError) as excinfo:
         generator(_empty_history(), _is_feedback())
     assert isinstance(excinfo.value, GeneratorFailureError)
@@ -599,9 +668,12 @@ def test_length_truncation_is_a_typed_failure():
     # though the truncated response is never accepted as a candidate.
     assert excinfo.value.tokens_used == 11 + 7
     assert len(client.calls) == 1
+    # Erratum P6-E5: a response-carrying failure is never retried.
+    assert sleep.waits == []
     assert generator.last_finish_reason == "length"
     assert generator.last_call is not None
     assert generator.last_call.tokens_used == 11 + 7
+    assert generator.last_call.retries == ()
 
 
 def test_default_failed_call_carries_zero_tokens():
@@ -609,11 +681,155 @@ def test_default_failed_call_carries_zero_tokens():
 
 
 def test_api_error_is_a_typed_failure_and_is_never_retried():
+    sleep = _SleepRecorder()
     client = _FakeClient(exc=RuntimeError("boom"))
-    generator = Campaign3DeepSeekGenerator(client=client)
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
     with pytest.raises(GeneratorFailureError):
         generator(_empty_history(), _is_feedback())
     assert len(client.calls) == 1
+    assert sleep.waits == []
+    assert generator.last_call is not None
+    assert generator.last_call.retries == ()
+
+
+# ---------------------------------------------------------------------------
+# bounded transport retry (Erratum P6-E5)
+# ---------------------------------------------------------------------------
+
+_RETRYABLE_TRANSPORT_ERRORS = (
+    "APIConnectionError",
+    "APITimeoutError",
+    "InternalServerError",
+    "RateLimitError",
+)
+
+
+@pytest.mark.parametrize("error_name", _RETRYABLE_TRANSPORT_ERRORS)
+def test_each_retryable_transport_error_is_retried_then_succeeds(error_name):
+    sleep = _SleepRecorder()
+    client = _FakeClient(
+        response=_response("{}"),
+        exc_sequence=[_openai_transport_error(error_name)],
+    )
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    output = generator(_empty_history(), _is_feedback())
+    assert output.raw_artifact.content == "{}"
+    assert len(client.calls) == 2
+    assert sleep.waits == [10.0]
+    record = generator.last_call
+    assert record is not None
+    assert [item.to_dict() for item in record.retries] == [
+        {
+            "exception_type": error_name,
+            "attempt_index": 1,
+            "wait_seconds": 10.0,
+        }
+    ]
+    assert record.tokens_used == 11 + 7
+
+
+def test_transport_retry_exhausts_after_three_and_stops():
+    sleep = _SleepRecorder()
+    client = _FakeClient(exc=_openai_transport_error("APIConnectionError"))
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    with pytest.raises(GeneratorFailureError) as excinfo:
+        generator(_empty_history(), _is_feedback())
+    assert "APIConnectionError" in str(excinfo.value)
+    # one initial attempt plus exactly three retries
+    assert len(client.calls) == 4
+    assert sleep.waits == [10.0, 30.0, 90.0]
+    record = generator.last_call
+    assert record is not None
+    assert [item.attempt_index for item in record.retries] == [1, 2, 3]
+    assert [item.wait_seconds for item in record.retries] == [10.0, 30.0, 90.0]
+    assert {item.exception_type for item in record.retries} == {"APIConnectionError"}
+    assert record.tokens_used == 0
+
+
+def test_retry_waits_are_exact():
+    sleep = _SleepRecorder()
+    client = _FakeClient(
+        response=_response("{}"),
+        exc_sequence=[
+            _openai_transport_error("APIConnectionError"),
+            _openai_transport_error("APITimeoutError"),
+            _openai_transport_error("InternalServerError"),
+        ],
+    )
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    generator(_empty_history(), _is_feedback())
+    assert len(client.calls) == 4
+    assert sleep.waits == [10.0, 30.0, 90.0]
+
+
+def test_non_retryable_api_status_error_is_not_retried():
+    sleep = _SleepRecorder()
+    client = _FakeClient(exc=_openai_status_error("BadRequestError", 400))
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    with pytest.raises(GeneratorFailureError):
+        generator(_empty_history(), _is_feedback())
+    assert len(client.calls) == 1
+    assert sleep.waits == []
+    assert generator.last_call is not None
+    assert generator.last_call.retries == ()
+
+
+def test_length_truncation_is_never_retried_even_after_a_transport_retry():
+    sleep = _SleepRecorder()
+    client = _FakeClient(
+        response=_response("{", finish_reason=FINISH_REASON_LENGTH),
+        exc_sequence=[_openai_transport_error("RateLimitError")],
+    )
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    with pytest.raises(DeepSeekLengthTruncationError):
+        generator(_empty_history(), _is_feedback())
+    assert len(client.calls) == 2
+    assert sleep.waits == [10.0]
+    assert generator.last_finish_reason == "length"
+    assert generator.last_call is not None
+    assert [item.exception_type for item in generator.last_call.retries] == [
+        "RateLimitError"
+    ]
+
+
+def test_retry_records_are_complete_and_serialized_for_the_manifest():
+    sleep = _SleepRecorder()
+    client = _FakeClient(
+        response=_response("{}"),
+        exc_sequence=[
+            _openai_transport_error("RateLimitError"),
+            _openai_transport_error("InternalServerError"),
+        ],
+    )
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=sleep)
+    generator(_empty_history(), _is_feedback())
+    assert generator.last_call is not None
+    assert generator.last_call.to_dict()["retries"] == [
+        {"exception_type": "RateLimitError", "attempt_index": 1, "wait_seconds": 10.0},
+        {
+            "exception_type": "InternalServerError",
+            "attempt_index": 2,
+            "wait_seconds": 30.0,
+        },
+    ]
+
+
+def test_successful_call_without_retries_records_no_retries():
+    client = _FakeClient(response=_response("{}"))
+    generator = Campaign3DeepSeekGenerator(client=client, sleep=_SleepRecorder())
+    generator(_empty_history(), _is_feedback())
+    assert generator.last_call is not None
+    assert generator.last_call.retries == ()
+    assert generator.last_call.to_dict()["retries"] == []
+    assert len(client.calls) == 1
+
+
+def test_sleep_must_be_callable():
+    with pytest.raises(DeepSeekLlmGeneratorError):
+        Campaign3DeepSeekGenerator(
+            client=_FakeClient(response=_response("{}")),
+            sleep=1.0,  # type: ignore[arg-type]
+        )
 
 
 def test_empty_response_is_rejected_by_the_raw_artifact():
@@ -864,7 +1080,7 @@ def test_intended_family_id_bearing_response_is_family_escape(tmp_path):
 def test_mutation_fixture_contract():
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
     assert [mutation["id"] for mutation in mutations] == [
-        f"D3-M{i}" for i in range(1, 10)
+        f"D3-M{i}" for i in range(1, 13)
     ] + ["P-M1", "P-M2", "P-M3"]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
@@ -890,6 +1106,12 @@ def test_mutation_fixture_contract():
     assert by_id["D3-M7"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
     assert by_id["D3-M8"]["file"] == "smart_beta/campaign/campaign3_generation.py"
     assert by_id["D3-M9"]["file"] == "smart_beta/campaign/campaign3_generation.py"
+    # erratum P6-E5 transport-retry mutations all target the C3-D adapter
+    for mutation_id in ("D3-M10", "D3-M11", "D3-M12"):
+        assert (
+            by_id[mutation_id]["file"]
+            == "smart_beta/research/llm_generator_deepseek.py"
+        )
     # erratum A2-E2 mutations: P-M1/P-M3 target the adapter, P-M2 the template
     assert by_id["P-M1"]["file"] == "smart_beta/research/llm_generator_deepseek.py"
     assert by_id["P-M2"]["file"] == "smart_beta/research/prompts/campaign3_v2.txt"

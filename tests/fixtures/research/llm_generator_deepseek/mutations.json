@@ -25,12 +25,12 @@
  },
  {
   "id": "D3-M3",
-  "description": "a silent retry on an API error (the typed failure is not the only attempt)",
+  "description": "a silent retry on a non-retryable API error (the typed failure is not the only attempt)",
   "file": "smart_beta/research/llm_generator_deepseek.py",
   "edits": [
    {
-    "old": "        except Exception as exc:  # noqa: BLE001 - mapped to one typed failure\n            # Exactly one attempt is made (the SDK client is built with\n            # max_retries=0); an API/transport error is a typed failure and is\n            # never silently retried.\n            raise GeneratorFailureError(\n                f\"deepseek chat.completions.create failed ({type(exc).__name__})\"\n            ) from exc\n",
-    "new": "        except Exception as exc:  # noqa: BLE001 - MUTATED silent retry\n            try:\n                response = self._client.chat.completions.create(**request_kwargs)\n            except Exception as exc2:\n                raise GeneratorFailureError(\n                    f\"deepseek chat.completions.create failed ({type(exc2).__name__})\"\n                ) from exc2\n"
+    "old": "                    raise GeneratorFailureError(\n                        f\"deepseek chat.completions.create failed ({type(exc).__name__})\"\n                    ) from exc",
+    "new": "                    try:\n                        return self._call_once(request_kwargs, retries)\n                    except Exception as exc2:  # noqa: BLE001 - MUTATED silent retry\n                        raise GeneratorFailureError(\n                            f\"deepseek chat.completions.create failed ({type(exc2).__name__})\"\n                        ) from exc2"
    }
   ],
   "test": "tests/test_research_llm_generator_deepseek.py::test_api_error_is_a_typed_failure_and_is_never_retried"
@@ -106,6 +106,46 @@
    }
   ],
   "test": "tests/test_campaign3_generation.py::test_policy_literals_frozen"
+ },
+ {
+  "id": "D3-M10",
+  "description": "a response-carrying failure (a length truncation) is retried",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "            except GeneratorFailureError:\n                # A typed failure from content validation (a length truncation):\n                # a response was received, so it is never retried.\n                raise",
+    "new": "            except GeneratorFailureError:\n                # MUTATED: a response-carrying failure is retried\n                return self._call_once(request_kwargs, retries)"
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_length_truncation_is_a_typed_failure"
+ },
+ {
+  "id": "D3-M11",
+  "description": "the transport retry budget allows more than 3 retries",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "MAX_TRANSPORT_RETRIES = 3",
+    "new": "MAX_TRANSPORT_RETRIES = 4"
+   },
+   {
+    "old": "TRANSPORT_RETRY_WAITS = (10.0, 30.0, 90.0)",
+    "new": "TRANSPORT_RETRY_WAITS = (10.0, 30.0, 90.0, 90.0)"
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_transport_retry_exhausts_after_three_and_stops"
+ },
+ {
+  "id": "D3-M12",
+  "description": "a transport retry is made but not recorded in the call record",
+  "file": "smart_beta/research/llm_generator_deepseek.py",
+  "edits": [
+   {
+    "old": "                retries.append(\n                    DeepSeekRetryRecord(\n                        exception_type=type(exc).__name__,\n                        attempt_index=attempt_index,\n                        wait_seconds=wait_seconds,\n                    )\n                )\n",
+    "new": ""
+   }
+  ],
+  "test": "tests/test_research_llm_generator_deepseek.py::test_retry_records_are_complete_and_serialized_for_the_manifest"
  },
  {
   "id": "P-M1",
