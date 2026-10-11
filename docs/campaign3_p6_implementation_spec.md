@@ -211,3 +211,15 @@ nothing assembles the production dependencies from real data:
 3. **Then:** the planner re-runs the K-PIT copy simulation (now including the
    supersession) and the 3-spec preflight; only then does attempt 2 run, under the
    standing authorization.
+
+**P6-E3 correction (2026-10-10; a planner literal error, found by the C3-L-R1 worker and
+verified by the planner with `certify_candidate`):**
+- The E3 STD_X_RANK probe `standardize(rolling_mean(ret,20)) × rank(rolling_mean(dv,60))`
+  is **NOT_CERTIFIED** (outside A§15A STD_X_RANK_G). It would never reach
+  `_realize_std_x_rank`, so it could not detect Cause 1.
+- **Replaced by** `standardize(lag(tri,20)/lag(tri,60)) × rank(rolling_mean(dv,20)/rolling_mean(dv,60))`.
+  The planner verified that it certifies as STD_X_RANK; the SIMPLE probe certifies as
+  SIMPLE.
+- **Also binding:** the parity tests use a synthetic overlay that **actually masks
+  cells**, so that a reversion to the Campaign-1 `panel_of` (mutation L-M5) produces a
+  different cross-section and is killed.
