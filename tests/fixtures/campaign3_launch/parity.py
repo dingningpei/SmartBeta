@@ -363,23 +363,87 @@ def _export_series_fn_for(case: ParityCase):
     return export
 
 
+def _ta_evaluator_for(case: ParityCase, assembly: Any, diagnostics_dir: Path):
+    """The real C3-X ``TaEvaluator`` bound to the parity store (warm path).
+
+    This mirrors the production ``campaign3_launch._make_ta_evaluator`` sink
+    (cache entry + write-once provenance sidecar) but additionally threads the
+    parity store's D7b / source / P-Q bindings, which the synthetic root needs.
+    """
+    from smart_beta.campaign import campaign3_eval as E
+    from smart_beta.campaign import campaign3_launch as L
+
+    fx = T._load_fixture()
+    cache = assembly.ta_cache
+
+    def panel_builder(spec: Any) -> Any:
+        return assembly.panel_for(spec, assembly.is_fold)
+
+    def declaration_builder(spec: Any, panel: Any) -> Any:
+        return assembly.declaration_builder(spec, panel, assembly.is_fold)
+
+    def diagnostics_sink(diagnostics: Any) -> None:
+        digest = str(diagnostics.diagnostics_hash)
+        entry = cache.setdefault(digest, {"diagnostics": diagnostics})
+        entry["diagnostics"] = diagnostics
+        provenance = dict(L._LAST_DECLARATION)
+        entry["provenance"] = provenance
+        L.persist_ta_provenance(
+            diagnostics_dir,
+            digest,
+            provenance["spec"],
+            provenance["partition_fold"],
+        )
+
+    return E.TaEvaluator(
+        root=case.root,
+        partition=case.partition,
+        fold=assembly.is_fold,
+        overlay=assembly.overlay,
+        inputs=assembly.inputs,
+        declaration_builder=lambda spec, panel: L._record_declaration(
+            declaration_builder, spec, panel
+        ),
+        panel_builder=lambda spec: L._record_panel(
+            panel_builder, spec, assembly.is_fold
+        ),
+        persist_dir=diagnostics_dir,
+        diagnostics_sink=diagnostics_sink,
+        event_layer=assembly.event_layer,
+        bindings=case.store.d7b_bindings,
+        source_bindings=case.store.source_bindings,
+        pq_bindings=case.pq_bindings,
+        pq_read_records_fn=lambda path: fx.genesis_records(),
+    )
+
+
 def build_resumable_assembly(
     tmp_path: Path, spec_key: str, *, mask: bool = True
 ) -> tuple[ParityCase, Any]:
     """A production-shaped assembly over the parity store for cold-resume tests.
 
-    The returned assembly carries the parity declaration/diagnostics/export
-    builders and a ``diagnostics_dir``, so ``screen_candidate_builder``'s
-    warm cache and cold disk rebuild exercise the same real P-Q builders.
+    The returned assembly carries the real C3-X ``TaEvaluator`` (bound to the
+    parity store), the parity declaration/diagnostics/export builders and a
+    ``diagnostics_dir``.  The P-Q v1.3 event layer is bound for **every** spec
+    key -- as the production assembly always does -- so a non-event candidate's
+    cold rebuild must still dispatch it away (``event_layer=None``) exactly as
+    the warm ``TaEvaluator.__call__`` does (P6-E5 item 3; C3-L-R4).
     """
     case = build_parity_case(tmp_path, spec_key, mask=mask)
+    fx = T._load_fixture()
+    event_layer = case.event_layer
+    if event_layer is None:
+        event_layer = _mixed_event_layer(fx)
+    diagnostics_dir = Path(tmp_path) / "runs" / "test-attempt" / "diagnostics"
     assembly = dataclasses.replace(
         case.assembly,
+        event_layer=event_layer,
         declaration_builder=_declaration_builder_for(case),
         diagnostics_builder=_diagnostics_builder_for(case),
         export_series_fn=_export_series_fn_for(case),
-        diagnostics_dir=Path(tmp_path) / "runs" / "test-attempt" / "diagnostics",
+        diagnostics_dir=diagnostics_dir,
     )
+    assembly.ta_evaluator = _ta_evaluator_for(case, assembly, diagnostics_dir)
     return case, assembly
 
 
@@ -388,37 +452,23 @@ def build_persisted_entry(case: ParityCase, assembly: Any) -> tuple[Any, Any, An
 
     Returns ``(digest, diagnostics, provenance)``; the content-addressed
     diagnostics artifact and its FactorSpec provenance sidecar are written to
-    ``assembly.diagnostics_dir`` (write-once).
+    ``assembly.diagnostics_dir`` (write-once) by the bound evaluator's sink,
+    i.e. by the same warm ``TaEvaluator`` the cold rebuild reuses.
     """
     from smart_beta.campaign import campaign3_launch as L
-    from smart_beta.campaign import diagnostics_store as store
 
-    spec = case.spec
-    panel = assembly.panel_for(spec, assembly.is_fold)
-    declaration = assembly.declaration_builder(spec, panel, assembly.is_fold)
-    diagnostics = assembly.diagnostics_builder(
-        assembly.dataset_root,
-        declaration,
-        spec,
-        panel,
-        assembly.partition,
-        fold=L._pqv2_fold(assembly.is_fold),
-        overlay=assembly.overlay,
-        inputs=assembly.inputs,
-        event_layer=assembly.event_layer,
-    )
-    digest = diagnostics.diagnostics_hash
     # E6.1: the parent Campaign directory must already exist (the run driver
     # creates it before the diagnostics store is used).
     Path(assembly.diagnostics_dir).parent.mkdir(parents=True, exist_ok=True)
-    store.persist(diagnostics, assembly.diagnostics_dir)
-    L.persist_ta_provenance(
-        assembly.diagnostics_dir, str(digest), spec, assembly.is_fold
+    proposal = L._ProposalView(
+        proposal_id="p" * 64,
+        proposed_factor_spec=case.spec,
+        proposed_factor_spec_hash=case.spec.version,
     )
-    provenance = {
-        "spec": spec,
-        "panel": panel,
-        "declaration": declaration,
-        "partition_fold": assembly.is_fold,
-    }
-    return digest, diagnostics, provenance
+    evaluation = assembly.ta_evaluator(proposal)
+    entry = assembly.ta_cache[str(evaluation.diagnostics_hash)]
+    return (
+        evaluation.diagnostics_hash,
+        entry["diagnostics"],
+        dict(entry["provenance"]),
+    )

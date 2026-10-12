@@ -569,22 +569,28 @@ def _candidate_record(case: Any, digest: Any, *, spec: Any = None, sign: int = 1
     }
 
 
-def test_cold_resume_rebuilds_the_same_candidates_and_exports(tmp_path):
-    """A cache-cold resume yields the warm path's candidates/exports."""
-    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
-    digest, diagnostics, provenance = parity.build_persisted_entry(case, assembly)
+@pytest.mark.parametrize(
+    "spec_key", ["simple", "cross_sectional", "event", "mixed_event"]
+)
+def test_cold_resume_rebuilds_the_same_candidates_and_exports(tmp_path, spec_key):
+    """A cache-cold resume yields exactly the warm path's candidates/exports.
+
+    Kills mutation L-M10: the cold rebuild must reuse the bound warm-path
+    ``TaEvaluator`` (with its per-candidate K0/K1 dispatch), never call the raw
+    ``build_pqv2_diagnostics`` with the bound event layer for every candidate.
+    The assembly binds a real event layer even for a non-event spec, exactly as
+    the production assembly does, so the warm path must dispatch it away.
+    """
+    case, assembly = parity.build_resumable_assembly(tmp_path, spec_key)
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
     snapshot = _Snapshot((_candidate_record(case, digest),))
 
-    # Warm: the generation-time in-process cache.
-    assembly.ta_cache[str(digest)] = {
-        "diagnostics": diagnostics,
-        "provenance": provenance,
-    }
+    # Warm: the generation-time in-process cache (populated by the sink).
     warm_candidates, warm_control = assembly.screen_candidate_builder(snapshot)
     assert warm_control.hypothesis_id == R.CONTROL_HYPOTHESIS_ID
 
     # Cold: no cache; load the persisted diagnostics + provenance and rebuild
-    # the export with the same panel/declaration builders.
+    # through the same bound warm-path evaluator.
     assembly.ta_cache.clear()
     cold_candidates, cold_control = assembly.screen_candidate_builder(snapshot)
 
@@ -607,6 +613,10 @@ def test_cold_resume_rebuilds_the_same_candidates_and_exports(tmp_path):
         == warm_candidates[0].series_export.diagnostics_hash
         == str(digest)
     )
+    # Event candidates carry both scenarios; non-event candidates none.
+    expected_scenarios = ("K0", "K1") if E.event_roles(case.spec) else ()
+    assert tuple(cold_candidates[0].diagnostics.event_scenarios) == expected_scenarios
+    assert tuple(warm_candidates[0].diagnostics.event_scenarios) == expected_scenarios
     # The persisted diagnostics artifact + provenance sidecar were reused, not
     # rewritten (write-once).
     artifact = Path(assembly.diagnostics_dir) / f"{digest}.json"
@@ -675,6 +685,7 @@ def test_mutations_fixture_is_wellformed():
         "L-M7",
         "L-M8",
         "L-M9",
+        "L-M10",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]

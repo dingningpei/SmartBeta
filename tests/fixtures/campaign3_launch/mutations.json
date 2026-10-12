@@ -110,5 +110,17 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilt_hash_mismatch_is_launch_error"
+ },
+ {
+  "id": "L-M10",
+  "description": "the cold-resume screen rebuild omits the warm K0/K1 event dispatch",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        evaluation = self.ta_evaluator(proposal)",
+    "new": "        evaluation = self.diagnostics_builder(\n            self.dataset_root,\n            self.declaration_builder(\n                spec, self.panel_for(spec, self.is_fold), self.is_fold\n            ),\n            spec,\n            self.panel_for(spec, self.is_fold),\n            self.partition,\n            fold=_pqv2_fold(self.is_fold),\n            overlay=self.overlay,\n            inputs=self.inputs,\n            event_layer=self.event_layer,  # mutation L-M10: omit the warm K0/K1 dispatch\n        )"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilds_the_same_candidates_and_exports"
  }
 ]
