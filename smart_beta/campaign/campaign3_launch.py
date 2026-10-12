@@ -1218,13 +1218,18 @@ class ProductionAssembly:
     def _load_persisted_entry(
         self, snapshot: Any, record: Mapping[str, Any], digest: str
     ) -> dict[str, Any]:
-        """Rebuild one cache entry from the run directory's persisted state.
+        """Rebuild one cache entry by the exact warm-path T-A evaluation.
 
         The content-addressed diagnostics is loaded and fully verified from
-        ``diagnostics_store`` (missing/corrupt fails closed); its persisted
-        FactorSpec provenance drives the same ``panel_for`` / declaration /
-        diagnostics builders the warm path used; and the rebuilt diagnostics
-        must hash to exactly the persisted ``diagnostics_hash``.
+        ``diagnostics_store`` (missing/corrupt fails closed), and its persisted
+        FactorSpec provenance sidecar names the candidate's spec
+        (missing/mismatched fails closed).  The rebuild then drives the **same
+        bound** :class:`~smart_beta.campaign.campaign3_eval.TaEvaluator` the
+        warm generation path used, so every builder argument and the sealed
+        P-Q v2.3 K0/K1 event dispatch are identical: an event-role candidate is
+        evaluated under both scenarios and a non-event candidate receives
+        ``event_layer=None``.  The rebuilt diagnostics must hash to exactly the
+        persisted ``diagnostics_hash``.
         """
         from smart_beta.campaign import diagnostics_store as _store
 
@@ -1238,35 +1243,38 @@ class ProductionAssembly:
                 f"(diagnostics_hash {digest!r})"
             ) from exc
         spec = self._load_persisted_provenance(diagnostics_dir, digest, record)
-        panel = self.panel_for(spec, self.is_fold)
-        declaration = self.declaration_builder(spec, panel, self.is_fold)
-        diagnostics = self.diagnostics_builder(
-            self.dataset_root,
-            declaration,
-            spec,
-            panel,
-            self.partition,
-            fold=_pqv2_fold(self.is_fold),
-            overlay=self.overlay,
-            inputs=self.inputs,
-            event_layer=self.event_layer,
+        if self.ta_evaluator is None:
+            raise LaunchError(
+                "the assembly has no bound T-A evaluator to rebuild a cold "
+                "screen candidate"
+            )
+        # Reuse the exact warm-path evaluation (C3-E TaEvaluator.__call__): the
+        # bound builder and `event_roles` dispatch, never a raw
+        # `diagnostics_builder` call (which would pass the bound event layer to
+        # a non-event candidate and trip `_event_maps`).
+        proposal = _ProposalView(
+            proposal_id=str(
+                record.get("proposal_id", record.get("hypothesis_id", ""))
+            ),
+            proposed_factor_spec=spec,
+            proposed_factor_spec_hash=str(record.get("factor_spec_hash", "")),
         )
-        rebuilt = str(getattr(diagnostics, "diagnostics_hash", ""))
+        evaluation = self.ta_evaluator(proposal)
+        rebuilt = str(getattr(evaluation, "diagnostics_hash", ""))
         if rebuilt != digest:
             raise LaunchError(
                 "the rebuilt T-A IS diagnostics for snapshot candidate "
                 f"{record.get('hypothesis_id')!r} hashes to {rebuilt!r}, not "
                 f"the persisted {digest!r}"
             )
-        return {
-            "diagnostics": diagnostics,
-            "provenance": {
-                "spec": spec,
-                "panel": panel,
-                "declaration": declaration,
-                "partition_fold": self.is_fold,
-            },
-        }
+        entry = self.ta_cache.get(rebuilt)
+        if entry is None or "diagnostics" not in entry or "provenance" not in entry:
+            raise LaunchError(
+                "the bound T-A evaluator did not record the rebuilt "
+                "diagnostics for snapshot candidate "
+                f"{record.get('hypothesis_id')!r}"
+            )
+        return dict(entry)
 
     def _export_entry(self, entry: Mapping[str, Any]) -> Any:
         from smart_beta.campaign import campaign3_screen as _screen
