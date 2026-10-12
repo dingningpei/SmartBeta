@@ -68,13 +68,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import secrets
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from dataclasses import replace as _dataclass_replace
+from datetime import date as _calendar_date
+from datetime import datetime as _datetime
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +121,9 @@ __all__ = [
     "production_partition_folds",
     "compute_attempt_id",
     "persist_ta_provenance",
+    "SCREEN_CACHE_DIRNAME",
+    "SCREEN_EXPORT_CACHE_SCHEMA",
+    "SCREEN_WORKERS_DEFAULT",
     "ProductionAssembly",
     "assemble_production",
     "preflight_summary",
@@ -138,6 +146,25 @@ PREFLIGHT_RECORD_SCHEMA = "campaign3-preflight-probe-v1"
 #: keyed by ``diagnostics_hash``.
 TA_PROVENANCE_SCHEMA = "campaign3-ta-provenance-v1"
 TA_PROVENANCE_SUFFIX = ".provenance.json"
+
+#: The C3-L-R5 run-level screen-export cache (P6-E5 item 3, resume-safe).  A
+#: cold resume must **not** re-run the T-A evaluator (the persisted diagnostics
+#: is content-hash verified) and must not rebuild an export it already built:
+#: each candidate's ``pqv2_series`` export is written atomically to the run's
+#: ``screen_cache/`` directory, keyed by ``diagnostics_hash``, and carries the
+#: content hash of the export so a later resume can verify and reuse it.
+SCREEN_CACHE_DIRNAME = "screen_cache"
+SCREEN_EXPORT_CACHE_SCHEMA = "campaign3-screen-export-cache-v1"
+SCREEN_EXPORT_SUFFIX = ".export.json"
+
+#: The default ``--screen-workers``: parallel export reconstruction with five
+#: spawned workers (1 = the sequential path, byte-identical results).
+SCREEN_WORKERS_DEFAULT = 5
+
+#: P6-E5 C3-L-R5: a content-hash-verified persisted T-A diagnostics is
+#: authoritative on a cold resume, so the T-A evaluator is never re-run.
+#: Mutation L-M11 flips this anchor; the cold path then calls the evaluator.
+_COLD_RESUME_RERUNS_EVALUATOR = False
 
 #: The single frozen DeepSeek prompt-template hash (A2-E2).  Only consulted
 #: when a generator exposes no ``prompt_template_hash``.
@@ -970,6 +997,441 @@ def persist_ta_provenance(
 
 
 # ---------------------------------------------------------------------------
+# cold-resume rehydration + screen-export cache (P6-E5 C3-L-R5)
+# ---------------------------------------------------------------------------
+
+
+def _parse_date(value: Any) -> _calendar_date:
+    """Parse one persisted ISO date/datetime back to a ``datetime.date``."""
+    if isinstance(value, _datetime):
+        return value.date()
+    if isinstance(value, _calendar_date):
+        return value
+    text = str(value)
+    try:
+        return _calendar_date.fromisoformat(text)
+    except ValueError:
+        return _datetime.fromisoformat(text).date()
+
+
+def _rehydrate_cell(payload: Mapping[str, Any]) -> Any:
+    """Rebuild one persisted ``PQv2Cell`` (the exact ``to_dict`` inverse)."""
+    from smart_beta.dataset_v1 import pqv2_evaluation as _pe
+
+    return _pe.PQv2Cell(
+        cell=str(payload["cell"]),
+        scenario=str(payload["scenario"]),
+        estimand=str(payload["estimand"]),
+        value=payload["value"],
+        t_stat=payload["t_stat"],
+        n_obs=int(payload["n_obs"]),
+        status=payload["status"],
+        reason=payload["reason"],
+        n_index=int(payload["n_index"]),
+        support=int(payload["support"]),
+        estimator=payload["estimator"],
+        period_identities=tuple(
+            _parse_date(item) for item in payload["period_identities"]
+        ),
+        period_statuses=tuple(payload["period_statuses"]),
+        period_values=tuple(payload["period_values"]),
+        period_reasons=tuple(payload["period_reasons"]),
+        declaration_hash=str(payload["declaration_hash"]),
+        period_causes=tuple(
+            tuple(item) for item in payload.get("period_causes", ())
+        ),
+        cause_union=tuple(payload.get("cause_union", ())),
+        event_scenario=payload.get("event_scenario"),
+    )
+
+
+def _rehydrate_period(payload: Mapping[str, Any]) -> Any:
+    """Rebuild one persisted ``PQv2Period`` (the exact ``to_dict`` inverse)."""
+    from smart_beta.dataset_v1 import pqv2_evaluation as _pe
+
+    return _pe.PQv2Period(
+        period=_parse_date(payload["period"]),
+        rule=payload["rule"],
+        winsor_ok=payload["winsor_ok"],
+        D_t=payload["D_t"],
+        TO_b=payload["TO_b"],
+        TO_hi=payload["TO_hi"],
+        changed_b=int(payload["changed_b"]),
+        union=int(payload["union"]),
+        LS_b_t0=payload["LS_b_t0"],
+        LS_b_ts=payload["LS_b_ts"],
+        L_t0=payload["L_t0"],
+        L_ts=payload["L_ts"],
+        status_t0=payload["status_t0"],
+        status_ts=payload["status_ts"],
+        reason_t0=payload["reason_t0"],
+        reason_ts=payload["reason_ts"],
+        exposure=dict(payload["exposure"]),
+        label_counts=dict(payload["label_counts"]),
+        n_unknown_reserve=int(payload["n_unknown_reserve"]),
+        sigma_ok=payload["sigma_ok"],
+        position_counts=dict(payload["position_counts"]),
+        n_misdated=int(payload["n_misdated"]),
+        causes_t0=tuple(payload.get("causes_t0", ())),
+        causes_ts=tuple(payload.get("causes_ts", ())),
+        n_unknown_source=int(payload.get("n_unknown_source", 0)),
+    )
+
+
+def _rehydrate_diagnostics(digest: str, payload: Mapping[str, Any]) -> Any:
+    """Rebuild the persisted T-A ``PQv2Diagnostics`` without re-evaluating it.
+
+    The persisted artifact is exactly ``canonical_json(diagnostics.to_dict())``
+    so the inverse reconstruction is lossless; the rebuilt object must hash to
+    the persisted ``diagnostics_hash`` or the cold path fails closed.  This is
+    the P6-E5 C3-L-R5 replacement for re-running the T-A evaluator.
+    """
+    from smart_beta.dataset_v1 import pqv2_core as _core
+    from smart_beta.dataset_v1 import pqv2_evaluation as _pe
+
+    try:
+        fold_payload = payload.get("fold")
+        if fold_payload is None:
+            fold = _core.DEVELOPMENT_FOLD
+        else:
+            start = fold_payload.get("start")
+            fold = _core.Fold(
+                name=str(fold_payload["name"]),
+                start=None if start is None else _parse_date(start),
+                end=_parse_date(fold_payload["end"]),
+            )
+        diagnostics = _pe.PQv2Diagnostics(
+            not_assessed=payload.get("not_assessed"),
+            declaration_hash=str(payload["declaration_hash"]),
+            dataset_identity_hash=str(payload["dataset_identity_hash"]),
+            overlay_pq_hash=str(payload["overlay_pq_hash"]),
+            methodology_sha256=str(payload["methodology_sha256"]),
+            cs_id=str(payload["cs_id"]),
+            ed_id=str(payload["ed_id"]),
+            ce_id=str(payload["ce_id"]),
+            pqv2_code_sha256=str(payload["pqv2_code_sha256"]),
+            primary_metric=str(payload["primary_metric"]),
+            metric_basis=str(payload["metric_basis"]),
+            basis=str(payload["basis"]),
+            sign=int(payload["sign"]),
+            orientation_rule=str(payload["orientation_rule"]),
+            screen_id=str(payload["screen_id"]),
+            screen_policy_hash=str(payload["screen_policy_hash"]),
+            certified_class=payload["certified_class"],
+            certified_hypothesis=payload["certified_hypothesis"],
+            assignment_rule=payload["assignment_rule"],
+            relaxations=tuple(payload["relaxations"]),
+            factor_panel_sha256=payload["factor_panel_sha256"],
+            index=tuple(_parse_date(item) for item in payload["index"]),
+            cells=tuple(_rehydrate_cell(item) for item in payload["cells"]),
+            periods=tuple(
+                _rehydrate_period(item) for item in payload["periods"]
+            ),
+            b_periods_t0=tuple(
+                _parse_date(item) for item in payload["b_periods_t0"]
+            ),
+            b_periods_ts=tuple(
+                _parse_date(item) for item in payload["b_periods_ts"]
+            ),
+            l_periods_t0=tuple(
+                _parse_date(item) for item in payload["l_periods_t0"]
+            ),
+            l_periods_ts=tuple(
+                _parse_date(item) for item in payload["l_periods_ts"]
+            ),
+            estimator_identity=payload["estimator_identity"],
+            cost_bps=float(payload["cost_bps"]),
+            cost_rate=float(payload["cost_rate"]),
+            n_groups=int(payload["n_groups"]),
+            q=float(payload["q"]),
+            support=tuple(
+                (str(item["cell"]), int(item["n"]))
+                for item in payload["support"]
+            ),
+            non_claims=tuple(payload["non_claims"]),
+            b_diagnostics_hash=payload["b_diagnostics_hash"],
+            methodology_version=payload.get("methodology_version"),
+            base_methodology_sha256=payload.get("base_methodology_sha256"),
+            event_scenarios=tuple(payload.get("event_scenarios", ())),
+            event_scenarios_identical=payload.get("event_scenarios_identical"),
+            fold=fold,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LaunchError(
+            f"the persisted T-A diagnostics {digest!r} cannot be rehydrated "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+    if str(diagnostics.diagnostics_hash) != str(digest):
+        raise LaunchError(
+            f"the rehydrated T-A diagnostics hashes to "
+            f"{diagnostics.diagnostics_hash!r}, not the snapshot's {digest!r}"
+        )
+    return diagnostics
+
+
+def _rehydrate_export(payload: Mapping[str, Any]) -> Any:
+    """Rebuild one persisted ``PQv2SeriesExport`` from its ``to_dict`` form."""
+    from smart_beta.dataset_v1 import pqv2_series as _series
+
+    records = tuple(
+        _series.PQv2SeriesRecord(
+            cell=str(item["cell"]),
+            estimand=str(item["estimand"]),
+            scenario=str(item["scenario"]),
+            event_scenario=item.get("event_scenario"),
+            periods=tuple(_parse_date(value) for value in item["periods"]),
+            b_series=tuple(item["b_series"]),
+            l_series=tuple(item["l_series"]),
+            gross_series=tuple(item["gross_series"]),
+            net_series=tuple(item["net_series"]),
+            status=item.get("status"),
+            reason=item.get("reason"),
+            declaration_hash=str(item["declaration_hash"]),
+        )
+        for item in payload["records"]
+    )
+    return _series.PQv2SeriesExport(
+        declaration_hash=str(payload["declaration_hash"]),
+        diagnostics_hash=str(payload["diagnostics_hash"]),
+        estimator=str(payload["estimator"]),
+        records=records,
+    )
+
+
+@dataclass
+class _EventLayerState:
+    """A picklable snapshot of a P-Q event layer for spawned workers.
+
+    ``EventLayer`` wraps its mappings in ``MappingProxyType`` (not picklable),
+    so the worker receives the plain state and rebuilds the real layer once in
+    its initializer.
+    """
+
+    acq_id: str
+    ev_id: str
+    keys: tuple[str, ...]
+    status_by_key: Mapping[str, str]
+    verdict_by_key: Mapping[str, str]
+    interval_by_key: Mapping[str, Any]
+    events_by_key: Mapping[str, Any]
+    null_time_by_key: Mapping[str, Any]
+    reserve_incident: bool
+
+
+def _serialize_event_layer(layer: Any) -> _EventLayerState | None:
+    if layer is None:
+        return None
+    return _EventLayerState(
+        acq_id=str(layer.acq_id),
+        ev_id=str(layer.ev_id),
+        keys=tuple(layer.keys),
+        status_by_key=dict(layer.status_by_key),
+        verdict_by_key=dict(layer.verdict_by_key),
+        interval_by_key=dict(layer.interval_by_key),
+        events_by_key=dict(layer.events_by_key),
+        null_time_by_key=dict(layer.null_time_by_key),
+        reserve_incident=bool(getattr(layer, "reserve_incident", False)),
+    )
+
+
+def _restore_event_layer(state: _EventLayerState | None) -> Any:
+    if state is None:
+        return None
+    from smart_beta.dataset_v1 import pqv2_events as _events
+
+    return _events.EventLayer(
+        acq_id=state.acq_id,
+        ev_id=state.ev_id,
+        keys=state.keys,
+        status_by_key=state.status_by_key,
+        verdict_by_key=state.verdict_by_key,
+        interval_by_key=state.interval_by_key,
+        events_by_key=state.events_by_key,
+        null_time_by_key=state.null_time_by_key,
+        reserve_incident=state.reserve_incident,
+    )
+
+
+@dataclass
+class _ExportContext:
+    """The picklable, per-worker shared export build context (P6-E5 R5).
+
+    The per-worker initializer receives this once and reuses it for every
+    candidate the worker builds: the dataset inputs, overlay, partition, event
+    layer and export callable are never re-serialized per candidate.
+    """
+
+    dataset_root: str
+    partition: Any
+    pqv2_fold: Any
+    overlay: Any
+    inputs: Mapping[str, Any]
+    event_layer_state: _EventLayerState | None
+    bindings: Any
+    export_series_fn: Callable[..., Any]
+    event_layer: Any = field(default=None, repr=False)
+
+
+@dataclass
+class _ExportJob:
+    """One candidate's picklable export job (per-candidate build arguments)."""
+
+    diagnostics_dir: str
+    diagnostics_hash: str
+    spec: FactorSpec
+    panel: Any
+    declaration: Any
+    cache_dir: str
+
+
+#: The worker-process context set once by :func:`_init_export_worker`.
+_WORKER_CONTEXT: _ExportContext | None = None
+
+
+def _init_export_worker(context: _ExportContext) -> None:
+    """Spawned-worker initializer: rebuild the event layer exactly once."""
+    global _WORKER_CONTEXT
+    _WORKER_CONTEXT = _dataclass_replace(
+        context, event_layer=_restore_event_layer(context.event_layer_state)
+    )
+
+
+def _build_export_worker(job: _ExportJob) -> str:
+    context = _WORKER_CONTEXT
+    if context is None:
+        raise LaunchError("the screen export worker was not initialized")
+    return _build_export_from_job(context, job)
+
+
+def _build_export_from_job(context: _ExportContext, job: _ExportJob) -> str:
+    """Build, bind and persist one candidate's export; return its hash.
+
+    The persisted diagnostics is loaded and content-hash verified in the
+    worker (never re-evaluated), then the export is built from exactly the
+    warm-path build arguments carried in ``job`` and written atomically to
+    the run's screen cache keyed by ``diagnostics_hash``.  Only the export
+    content hash is returned; the parent re-loads and verifies the artifact.
+    """
+    from smart_beta.campaign import campaign3_screen as _screen
+    from smart_beta.campaign import diagnostics_store as _store
+
+    try:
+        payload = _store.load_verified(job.diagnostics_dir, job.diagnostics_hash)
+    except _store.C1DiagnosticsError as exc:
+        raise LaunchError(
+            "the persisted T-A IS diagnostics for a screen export is missing "
+            f"or corrupt (diagnostics_hash {job.diagnostics_hash!r})"
+        ) from exc
+    diagnostics = _rehydrate_diagnostics(job.diagnostics_hash, payload)
+    series = context.export_series_fn(
+        context.dataset_root,
+        job.declaration,
+        job.spec,
+        job.panel,
+        context.partition,
+        diagnostics=diagnostics,
+        fold=context.pqv2_fold,
+        overlay=context.overlay,
+        inputs=context.inputs,
+        event_layer=context.event_layer,
+        bindings=context.bindings,
+    )
+    _screen._bind_export(diagnostics, series)
+    _persist_screen_export(job.cache_dir, job.diagnostics_hash, series)
+    return str(series.export_hash)
+
+
+def _screen_export_path(cache_dir: Path | str, digest: str) -> Path:
+    """``<screen_cache>/<diagnostics_hash>.export.json`` (P6-E5 R5)."""
+    return Path(cache_dir) / f"{digest}{SCREEN_EXPORT_SUFFIX}"
+
+
+def _persist_screen_export(cache_dir: Path | str, digest: str, series: Any) -> None:
+    """Atomically persist one export, keyed by diagnostics + export hash.
+
+    Write-once: an identical existing artifact is verified and reused; a
+    conflicting or corrupt one fails closed.  A sibling that was already
+    persisted by another worker stays valid for the next resume.
+    """
+    path = _screen_export_path(cache_dir, digest)
+    export_hash = str(series.export_hash)
+    if path.exists():
+        existing = _load_screen_export(cache_dir, digest)
+        if existing is None or str(existing.export_hash) != export_hash:
+            raise LaunchError(
+                f"existing screen export cache {path.name} conflicts with the "
+                "export being persisted"
+            )
+        return
+    from smart_beta.dataset_v1 import delisting_bridge as _d7b
+
+    payload = _d7b.canonical_json(
+        {
+            "schema": SCREEN_EXPORT_CACHE_SCHEMA,
+            "diagnostics_hash": str(digest),
+            "export_hash": export_hash,
+            "export": series.to_dict(),
+        }
+    ).encode("utf-8")
+    cache = Path(cache_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+    _atomic_write_bytes(path, payload)
+
+
+def _load_screen_export(cache_dir: Path | str, digest: str) -> Any | None:
+    """Load and fully verify one persisted export, or ``None`` if absent.
+
+    Corruption fails closed: a missing file is a cache miss, but a present
+    file whose recorded export content hash, diagnostics hash or schema does
+    not verify is a :class:`LaunchError` (mutation L-M12).
+    """
+    path = _screen_export_path(cache_dir, digest)
+    if not path.exists():
+        return None
+    try:
+        parsed = json.loads(path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise LaunchError(
+            f"the persisted screen export {path.name} is unreadable"
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise LaunchError(f"the persisted screen export {path.name} is malformed")
+    if parsed.get("schema") != SCREEN_EXPORT_CACHE_SCHEMA:
+        raise LaunchError(
+            f"the persisted screen export {path.name} has schema "
+            f"{parsed.get('schema')!r}"
+        )
+    if str(parsed.get("diagnostics_hash", "")) != str(digest):
+        raise LaunchError(
+            f"the persisted screen export {path.name} is bound to "
+            f"diagnostics {parsed.get('diagnostics_hash')!r}, not {digest!r}"
+        )
+    export_payload = parsed.get("export")
+    if not isinstance(export_payload, Mapping):
+        raise LaunchError(
+            f"the persisted screen export {path.name} carries no export body"
+        )
+    actual = content_hash(export_payload)
+    if actual != str(parsed.get("export_hash", "")):
+        raise LaunchError(
+            f"the persisted screen export {path.name} content hash "
+            f"{actual!r} does not match its recorded hash "
+            f"{parsed.get('export_hash')!r}"
+        )
+    series = _rehydrate_export(export_payload)
+    if str(series.diagnostics_hash) != str(digest):
+        raise LaunchError(
+            f"the persisted screen export {path.name} names diagnostics "
+            f"{series.diagnostics_hash!r}, not {digest!r}"
+        )
+    if str(series.export_hash) != actual:
+        raise LaunchError(
+            f"the persisted screen export {path.name} does not round-trip"
+        )
+    return series
+
+
+# ---------------------------------------------------------------------------
 # attempt identity (mirrors Campaign3Run.compute_attempt_id)
 # ---------------------------------------------------------------------------
 
@@ -1029,6 +1491,15 @@ class ProductionAssembly:
     #: the cold-resume screen builder loads ``diagnostics_hash``-keyed artifacts
     #: and their provenance sidecars from here (P6-E5 C3-L-R3).
     diagnostics_dir: Path | None = None
+    #: The run directory's screen-export cache (P6-E5 C3-L-R5); defaults to
+    #: ``<diagnostics_dir>/../screen_cache`` when unset.
+    screen_cache_dir: Path | None = None
+    #: The D7b bindings passed through to ``export_series_fn``; ``None`` uses
+    #: the production default bindings (the parity tests inject the synthetic
+    #: store's bindings).
+    export_bindings: Any = None
+    #: The ``--screen-workers`` count (>= 1; 1 is the sequential path).
+    screen_workers: int = 1
     ta_cache: dict[str, Any] = field(default_factory=dict, repr=False)
     proposal_lookup: dict[str, Any] = field(default_factory=dict, repr=False)
     attempt_id: str = ""
@@ -1102,23 +1573,35 @@ class ProductionAssembly:
         in memory by :attr:`ta_cache` during generation (the C3-R driver does
         not put them in the JSON snapshot).  A snapshot entry with no cached
         diagnostics is **resumed from disk** (P6-E5 item 3): the persisted
-        diagnostics is loaded and verified from the run directory's
-        ``diagnostics_store`` by ``diagnostics_hash``, and the
-        ``pqv2_series`` export is rebuilt deterministically from the persisted
-        FactorSpec provenance with the same panel/declaration builders.  A
-        missing/corrupt artifact, a mismatched provenance, or a rebuilt
-        diagnostics hash that differs from the persisted one fails closed.
+        diagnostics is loaded and content-hash verified from the run
+        directory's ``diagnostics_store`` by ``diagnostics_hash`` (never
+        re-evaluated) and its persisted FactorSpec provenance names the
+        candidate's spec.  The ``pqv2_series`` export is then loaded from the
+        run's screen-export cache when its content hash verifies, or built
+        once (optionally in parallel workers) from the same warm-path build
+        arguments and persisted write-ahead for the next resume.  A
+        missing/corrupt artifact, a mismatched provenance/declaration, a
+        corrupt export cache or a failed worker all fail closed.
         """
         from smart_beta.campaign import campaign3_screen as _screen
 
-        candidates: list[Any] = []
-        for record in getattr(snapshot, "candidates", ()):
-            digest = record.get("diagnostics_hash")
-            entry = self.ta_cache.get(str(digest))
+        records = tuple(getattr(snapshot, "candidates", ()))
+        entries: list[tuple[Mapping[str, Any], str, dict[str, Any]]] = []
+        for record in records:
+            digest = str(record.get("diagnostics_hash"))
+            entry = self.ta_cache.get(digest)
             if entry is None:
-                entry = self._load_persisted_entry(snapshot, record, str(digest))
-                self.ta_cache[str(digest)] = entry
-            series = self._export_entry(entry)
+                entry = self._load_persisted_entry(snapshot, record, digest)
+                self.ta_cache[digest] = entry
+            entries.append((record, digest, entry))
+        series_by_index, completion_order = self._build_exports(snapshot, entries)
+        # P6-E5 C3-L-R5: the candidate list is assembled in the original
+        # generation-snapshot order, never in worker-completion order.
+        ordered = list(range(len(entries)))
+        candidates: list[Any] = []
+        for index in ordered:
+            record, _digest, entry = entries[index]
+            series = series_by_index[index]
             hypothesis_id = str(record["hypothesis_id"])
             self.proposal_lookup[hypothesis_id] = _ProposalView(
                 proposal_id=str(record.get("proposal_id", hypothesis_id)),
@@ -1142,6 +1625,193 @@ class ProductionAssembly:
             series_export=None,
         )
         return tuple(candidates), control
+
+    def _screen_cache_dir(self, snapshot: Any) -> Path:
+        """The run's screen-export cache directory (P6-E5 C3-L-R5)."""
+        if self.screen_cache_dir is not None:
+            return Path(self.screen_cache_dir)
+        return self._diagnostics_dir(snapshot).parent / SCREEN_CACHE_DIRNAME
+
+    def _export_context(self, *, restore: bool = False) -> _ExportContext:
+        """The (picklable) shared export build context for this assembly."""
+        context = _ExportContext(
+            dataset_root=str(self.dataset_root),
+            partition=self.partition,
+            pqv2_fold=_pqv2_fold(self.is_fold),
+            overlay=self.overlay,
+            inputs=dict(self.inputs),
+            event_layer_state=_serialize_event_layer(self.event_layer),
+            bindings=self.export_bindings,
+            export_series_fn=self.export_series_fn,
+        )
+        if restore:
+            return _dataclass_replace(
+                context,
+                event_layer=_restore_event_layer(context.event_layer_state),
+            )
+        return context
+
+    def _export_job(
+        self,
+        diagnostics_dir: Path,
+        cache_dir: Path,
+        entry: Mapping[str, Any],
+        digest: str,
+    ) -> _ExportJob:
+        provenance = entry["provenance"]
+        return _ExportJob(
+            diagnostics_dir=str(diagnostics_dir),
+            diagnostics_hash=str(digest),
+            spec=provenance["spec"],
+            panel=provenance["panel"],
+            declaration=provenance["declaration"],
+            cache_dir=str(cache_dir),
+        )
+
+    def _emit_screen_progress(
+        self,
+        index: int,
+        total: int,
+        digest: str,
+        status: str,
+        *,
+        stream: Any = None,
+    ) -> None:
+        """One statistic-free resume-progress line per candidate (stderr)."""
+        line = (
+            f"screen-export {int(index)}/{int(total)} "
+            f"{str(digest)[:12]} {status}"
+        )
+        print(line, file=stream if stream is not None else sys.stderr)
+
+    def _open_screen_pool(self, workers: int, context: _ExportContext) -> Any:
+        """The spawn-based process pool for parallel export reconstruction."""
+        mp_context = multiprocessing.get_context("spawn")
+        return ProcessPoolExecutor(
+            max_workers=int(workers),
+            mp_context=mp_context,
+            initializer=_init_export_worker,
+            initargs=(context,),
+        )
+
+    def _screen_completed(self, future_to_index: Mapping[Any, int]) -> Any:
+        return as_completed(future_to_index)
+
+    def _build_exports(
+        self,
+        snapshot: Any,
+        entries: Sequence[tuple[Mapping[str, Any], str, dict[str, Any]]],
+    ) -> tuple[list[Any], list[int]]:
+        """Load or build every candidate's export in snapshot order.
+
+        A persisted export whose content hash verifies is loaded (never
+        rebuilt).  The remaining exports are built once -- in a process pool
+        when ``screen_workers > 1`` -- persisted write-ahead, and re-loaded in
+        the parent.  ``completion_order`` records the order results were
+        finalized (used only by the mutation anchor).
+        """
+        from smart_beta.campaign import campaign3_screen as _screen
+
+        cache_dir = self._screen_cache_dir(snapshot)
+        diagnostics_dir = self._diagnostics_dir(snapshot)
+        total = len(entries)
+        series_by_index: list[Any] = [None] * total
+        completion_order: list[int] = []
+        pending: list[tuple[int, _ExportJob]] = []
+        for index, (_record, digest, entry) in enumerate(entries):
+            cached = _load_screen_export(cache_dir, digest)
+            if cached is not None:
+                _screen._bind_export(entry["diagnostics"], cached)
+                series_by_index[index] = cached
+                completion_order.append(index)
+                self._emit_screen_progress(index + 1, total, digest, "cached")
+                continue
+            pending.append(
+                (
+                    index,
+                    self._export_job(
+                        diagnostics_dir, cache_dir, entry, digest
+                    ),
+                )
+            )
+        if not pending:
+            return series_by_index, completion_order
+        workers = max(1, int(self.screen_workers))
+        if workers == 1:
+            context = self._export_context(restore=True)
+            for index, job in pending:
+                returned = _build_export_from_job(context, job)
+                series = _load_screen_export(cache_dir, job.diagnostics_hash)
+                if series is None or str(series.export_hash) != str(returned):
+                    raise LaunchError(
+                        "a sequentially built screen export was not persisted "
+                        f"or verified (diagnostics_hash "
+                        f"{job.diagnostics_hash!r})"
+                    )
+                _screen._bind_export(entries[index][2]["diagnostics"], series)
+                series_by_index[index] = series
+                completion_order.append(index)
+                self._emit_screen_progress(
+                    index + 1, total, job.diagnostics_hash, "built"
+                )
+        else:
+            self._run_parallel_exports(
+                workers,
+                cache_dir,
+                entries,
+                series_by_index,
+                completion_order,
+                pending,
+                total,
+            )
+        return series_by_index, completion_order
+
+    def _run_parallel_exports(
+        self,
+        workers: int,
+        cache_dir: Path,
+        entries: Sequence[tuple[Mapping[str, Any], str, dict[str, Any]]],
+        series_by_index: list[Any],
+        completion_order: list[int],
+        pending: Sequence[tuple[int, _ExportJob]],
+        total: int,
+    ) -> None:
+        """Build the pending exports in a spawned process pool (fail closed)."""
+        from smart_beta.campaign import campaign3_screen as _screen
+
+        context = self._export_context()
+        pool = self._open_screen_pool(workers, context)
+        future_to_index: dict[Future, int] = {}
+        jobs_by_index: dict[int, _ExportJob] = {}
+        try:
+            for index, job in pending:
+                jobs_by_index[index] = job
+                future_to_index[pool.submit(_build_export_worker, job)] = index
+            for future in self._screen_completed(future_to_index):
+                index = future_to_index[future]
+                job = jobs_by_index[index]
+                try:
+                    returned = future.result()
+                except Exception as exc:  # noqa: BLE001 - fail closed
+                    raise LaunchError(
+                        "a screen export worker failed for diagnostics_hash "
+                        f"{job.diagnostics_hash!r} "
+                        f"({type(exc).__name__}: {exc})"
+                    ) from exc
+                series = _load_screen_export(cache_dir, job.diagnostics_hash)
+                if series is None or str(series.export_hash) != str(returned):
+                    raise LaunchError(
+                        "a screen export worker did not persist its export "
+                        f"(diagnostics_hash {job.diagnostics_hash!r})"
+                    )
+                _screen._bind_export(entries[index][2]["diagnostics"], series)
+                series_by_index[index] = series
+                completion_order.append(index)
+                self._emit_screen_progress(
+                    index + 1, total, job.diagnostics_hash, "built"
+                )
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _diagnostics_dir(self, snapshot: Any) -> Path:
         """The run directory's persisted T-A diagnostics store (P6-E5)."""
@@ -1218,24 +1888,22 @@ class ProductionAssembly:
     def _load_persisted_entry(
         self, snapshot: Any, record: Mapping[str, Any], digest: str
     ) -> dict[str, Any]:
-        """Rebuild one cache entry by the exact warm-path T-A evaluation.
+        """Rehydrate one cache entry from the verified persisted diagnostics.
 
         The content-addressed diagnostics is loaded and fully verified from
-        ``diagnostics_store`` (missing/corrupt fails closed), and its persisted
-        FactorSpec provenance sidecar names the candidate's spec
-        (missing/mismatched fails closed).  The rebuild then drives the **same
-        bound** :class:`~smart_beta.campaign.campaign3_eval.TaEvaluator` the
-        warm generation path used, so every builder argument and the sealed
-        P-Q v2.3 K0/K1 event dispatch are identical: an event-role candidate is
-        evaluated under both scenarios and a non-event candidate receives
-        ``event_layer=None``.  The rebuilt diagnostics must hash to exactly the
-        persisted ``diagnostics_hash``.
+        ``diagnostics_store`` (missing/corrupt/mismatched-hash fails closed),
+        its persisted FactorSpec provenance sidecar names the candidate's spec
+        (missing/mismatched fails closed), and the artifact is rehydrated from
+        its exact ``to_dict`` payload -- the T-A evaluator is **never** re-run
+        (P6-E5 C3-L-R5).  The panel/declaration are rebuilt from the persisted
+        spec with the same warm-path builders, and must name exactly the
+        persisted declaration hash or the cold path fails closed.
         """
         from smart_beta.campaign import diagnostics_store as _store
 
         diagnostics_dir = self._diagnostics_dir(snapshot)
         try:
-            _store.load_verified(diagnostics_dir, digest)
+            payload = _store.load_verified(diagnostics_dir, digest)
         except _store.C1DiagnosticsError as exc:
             raise LaunchError(
                 "the persisted T-A IS diagnostics for snapshot candidate "
@@ -1243,57 +1911,52 @@ class ProductionAssembly:
                 f"(diagnostics_hash {digest!r})"
             ) from exc
         spec = self._load_persisted_provenance(diagnostics_dir, digest, record)
+        diagnostics = _rehydrate_diagnostics(digest, payload)
         if self.ta_evaluator is None:
             raise LaunchError(
                 "the assembly has no bound T-A evaluator to rebuild a cold "
                 "screen candidate"
             )
-        # Reuse the exact warm-path evaluation (C3-E TaEvaluator.__call__): the
-        # bound builder and `event_roles` dispatch, never a raw
-        # `diagnostics_builder` call (which would pass the bound event layer to
-        # a non-event candidate and trip `_event_maps`).
-        proposal = _ProposalView(
-            proposal_id=str(
-                record.get("proposal_id", record.get("hypothesis_id", ""))
-            ),
-            proposed_factor_spec=spec,
-            proposed_factor_spec_hash=str(record.get("factor_spec_hash", "")),
-        )
-        evaluation = self.ta_evaluator(proposal)
-        rebuilt = str(getattr(evaluation, "diagnostics_hash", ""))
-        if rebuilt != digest:
-            raise LaunchError(
-                "the rebuilt T-A IS diagnostics for snapshot candidate "
-                f"{record.get('hypothesis_id')!r} hashes to {rebuilt!r}, not "
-                f"the persisted {digest!r}"
+        if self._cold_resume_rebuilds_via_evaluator():
+            self.ta_evaluator(
+                _ProposalView(
+                    proposal_id=str(
+                        record.get(
+                            "proposal_id", record.get("hypothesis_id", "")
+                        )
+                    ),
+                    proposed_factor_spec=spec,
+                    proposed_factor_spec_hash=str(
+                        record.get("factor_spec_hash", "")
+                    ),
+                )
             )
-        entry = self.ta_cache.get(rebuilt)
-        if entry is None or "diagnostics" not in entry or "provenance" not in entry:
+        panel = self.panel_for(spec, self.is_fold)
+        declaration = self.declaration_builder(spec, panel, self.is_fold)
+        if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):
             raise LaunchError(
-                "the bound T-A evaluator did not record the rebuilt "
-                "diagnostics for snapshot candidate "
-                f"{record.get('hypothesis_id')!r}"
+                "the persisted T-A IS diagnostics for snapshot candidate "
+                f"{record.get('hypothesis_id')!r} names declaration "
+                f"{diagnostics.declaration_hash!r}, which does not match the "
+                f"rebuilt declaration {declaration.declaration_hash!r}"
             )
-        return dict(entry)
+        return {
+            "diagnostics": diagnostics,
+            "provenance": {
+                "spec": spec,
+                "panel": panel,
+                "declaration": declaration,
+                "partition_fold": self.is_fold,
+            },
+        }
 
-    def _export_entry(self, entry: Mapping[str, Any]) -> Any:
-        from smart_beta.campaign import campaign3_screen as _screen
+    def _cold_resume_rebuilds_via_evaluator(self) -> bool:
+        """P6-E5 C3-L-R5: a verified persisted diagnostics is authoritative.
 
-        provenance = dict(entry["provenance"])
-        series = self.export_series_fn(
-            self.dataset_root,
-            provenance["declaration"],
-            provenance["spec"],
-            provenance["panel"],
-            self.partition,
-            diagnostics=entry["diagnostics"],
-            fold=_pqv2_fold(provenance["partition_fold"]),
-            overlay=self.overlay,
-            inputs=self.inputs,
-            event_layer=self.event_layer,
-        )
-        _screen._bind_export(entry["diagnostics"], series)
-        return series
+        The cold path never re-runs the T-A evaluator when the persisted
+        artifact verifies.  Mutation L-M11 flips the module anchor.
+        """
+        return _COLD_RESUME_RERUNS_EVALUATOR
 
     def tb_evaluator(self, hypothesis_id: str) -> Any:
         """The C3-S T-B evaluation of one hypothesis (pooled 36 formations).
@@ -1536,6 +2199,7 @@ def assemble_production(
     diagnostics_builder: Callable[..., Any] | None = None,
     export_series_fn: Callable[..., Any] | None = None,
     procedure_ref: Mapping[str, str] | None = None,
+    screen_workers: int = SCREEN_WORKERS_DEFAULT,
 ) -> ProductionAssembly:
     """Build every dependency of ``Campaign3Run`` from the real stores.
 
@@ -1615,6 +2279,8 @@ def assemble_production(
         export_series_fn=export_series,
         adapter=adapter,
         diagnostics_dir=diagnostics_dir,
+        screen_cache_dir=runs / identity / SCREEN_CACHE_DIRNAME,
+        screen_workers=int(screen_workers),
         attempt_id=identity,
     )
     assembly.declaration_builder = _make_declaration_builder(assembly)
@@ -2098,6 +2764,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", default=str(_run.RUN_ROOT))
     parser.add_argument("--dataset-root", default=None)
     parser.add_argument("--master-sha", default=None)
+    parser.add_argument(
+        "--screen-workers",
+        type=int,
+        default=SCREEN_WORKERS_DEFAULT,
+        help=(
+            "parallel pqv2_series export reconstruction workers "
+            f"(default {SCREEN_WORKERS_DEFAULT}; 1 = sequential)"
+        ),
+    )
     return parser
 
 
@@ -2112,6 +2787,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else _run.REPO_ROOT.parent / "data_store" / "discovery_dataset_v1"
     )
     run_root = Path(args.run_root)
+    if args.screen_workers < 1:
+        parser.error("--screen-workers must be >= 1")
 
     if args.preflight:
         if not args.kpit_copy:
@@ -2127,6 +2804,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_root,
             generator,
             attempt_id="preflight",
+            screen_workers=args.screen_workers,
         )
         run_preflight(
             kpit_copy=args.kpit_copy,
@@ -2143,7 +2821,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     generator = Campaign3DeepSeekGenerator()
     assembly = assemble_production(
-        dataset_root, args.knowledge_log, run_root, generator
+        dataset_root,
+        args.knowledge_log,
+        run_root,
+        generator,
+        screen_workers=args.screen_workers,
     )
     run_production(assembly, master_sha=master_sha)
     return 0

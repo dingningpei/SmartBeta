@@ -19,8 +19,10 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
 import socket
 import sys
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
@@ -554,19 +556,96 @@ class _Snapshot:
         self.diagnostics_dir = diagnostics_dir
 
 
-def _candidate_record(case: Any, digest: Any, *, spec: Any = None, sign: int = 1):
+def _candidate_record(
+    case: Any,
+    digest: Any,
+    *,
+    spec: Any = None,
+    sign: int = 1,
+    hypothesis_id: str = "h" * 64,
+):
     from smart_beta.spec.factor_spec import factor_spec_hash
 
     chosen = case.spec if spec is None else spec
     spec_hash = factor_spec_hash(chosen)
     return {
-        "hypothesis_id": "h" * 64,
+        "hypothesis_id": hypothesis_id,
         "proposal_id": "p" * 64,
         "factor_spec_hash": spec_hash,
         "canonical_key": spec_hash,
         "sign": sign,
         "diagnostics_hash": str(digest),
     }
+
+
+def _screen_cache_dir(assembly: Any) -> Path:
+    return Path(assembly.diagnostics_dir).parent / L.SCREEN_CACHE_DIRNAME
+
+
+def _export_cache_path(assembly: Any, digest: Any) -> Path:
+    return _screen_cache_dir(assembly) / f"{digest}{L.SCREEN_EXPORT_SUFFIX}"
+
+
+class _CountingExport:
+    """A callable wrapper that counts export reconstructions (sequential)."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.calls = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        return self.inner(*args, **kwargs)
+
+
+class _EvaluatorSpy:
+    """A callable wrapper that counts T-A evaluator invocations."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.calls = 0
+
+    def __call__(self, proposal: Any) -> Any:
+        self.calls += 1
+        return self.inner(proposal)
+
+
+class _FakeScreenPool:
+    """A deterministic in-process pool (no spawn) for order/failure tests.
+
+    ``submit`` runs the export job synchronously in the parent process so the
+    persisted artifacts and any worker failure are exact, while the parent's
+    completion iteration can be controlled independently.
+    """
+
+    def __init__(
+        self, context: Any, *, fail_on_index: int | None = None
+    ) -> None:
+        self.context = L._dataclass_replace(
+            context, event_layer=L._restore_event_layer(context.event_layer_state)
+        )
+        self.futures: list[Future] = []
+        self.fail_on_index = fail_on_index
+        self.submitted = 0
+
+    def submit(self, _fn: Any, job: Any) -> Future:
+        future: Future = Future()
+        index = self.submitted
+        self.submitted += 1
+        if index == self.fail_on_index:
+            future.set_exception(RuntimeError("simulated worker failure"))
+        else:
+            try:
+                result = L._build_export_from_job(self.context, job)
+            except Exception as exc:  # noqa: BLE001 - propagated via the future
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+        self.futures.append(future)
+        return future
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        return None
 
 
 @pytest.mark.parametrize(
@@ -647,11 +726,11 @@ def test_cold_resume_missing_provenance_is_launch_error(tmp_path):
 
 
 def test_cold_resume_rebuilt_hash_mismatch_is_launch_error(tmp_path):
-    """Kills mutation L-M9 (the cold path skips the rebuilt-hash check).
+    """Kills mutation L-M9 (the cold path skips the declaration-hash check).
 
     The persisted artifact is valid for one spec, but the provenance names a
-    different spec; the deterministic rebuild produces a different
-    diagnostics hash and the builder refuses it.
+    different spec; the rebuilt declaration then differs from the persisted
+    diagnostics' declaration hash and the builder refuses it.
     """
     case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
     digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
@@ -665,6 +744,142 @@ def test_cold_resume_rebuilt_hash_mismatch_is_launch_error(tmp_path):
     assembly.ta_cache.clear()
     with pytest.raises(L.LaunchError):
         assembly.screen_candidate_builder(snapshot)
+
+
+def test_cold_resume_does_not_call_the_evaluator(tmp_path):
+    """Kills mutation L-M11: a verified persisted diagnostics is authoritative."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    spy = _EvaluatorSpy(assembly.ta_evaluator)
+    assembly.ta_evaluator = spy
+    assembly.ta_cache.clear()
+    candidates, _control = assembly.screen_candidate_builder(snapshot)
+    assert spy.calls == 0
+    assert candidates[0].diagnostics.diagnostics_hash == str(digest)
+
+
+def test_cold_resume_reuses_the_persisted_export(tmp_path):
+    """A later resume loads the persisted export instead of rebuilding it."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    spy = _CountingExport(assembly.export_series_fn)
+    assembly.export_series_fn = spy
+    assembly.ta_cache.clear()
+    first, _ = assembly.screen_candidate_builder(snapshot)
+    assert spy.calls == 1
+    assembly.ta_cache.clear()
+    second, _ = assembly.screen_candidate_builder(snapshot)
+    assert spy.calls == 1  # the persisted export was reused, not rebuilt
+    assert first[0].series_export.records == second[0].series_export.records
+
+
+def test_corrupted_export_cache_is_launch_error(tmp_path):
+    """Kills mutation L-M12: the export cache is verified by content hash."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    assembly.ta_cache.clear()
+    assembly.screen_candidate_builder(snapshot)
+    cache = _export_cache_path(assembly, digest)
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    payload["export"]["estimator"] = "corrupted"  # valid JSON, broken hash
+    cache.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    assembly.ta_cache.clear()
+    with pytest.raises(L.LaunchError):
+        assembly.screen_candidate_builder(snapshot)
+
+
+def test_screen_export_progress_lines_are_statistic_free(tmp_path, capsys):
+    """Kills mutation L-M13: no statistic may appear in a progress line."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    digest, _diagnostics, _provenance = parity.build_persisted_entry(case, assembly)
+    snapshot = _Snapshot((_candidate_record(case, digest),))
+    assembly.ta_cache.clear()
+    assembly.screen_candidate_builder(snapshot)
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if line.startswith("screen-export")]
+    assert lines, err
+    forbidden = ("mean", "t_stat", "p_value", "return", "sharpe", "alpha", "beta")
+    for line in lines:
+        assert line.split() == [
+            "screen-export",
+            "1/1",
+            str(digest)[:12],
+            "built",
+        ]
+        for token in forbidden:
+            assert token not in line
+
+
+def test_parallel_screen_exports_match_sequential(tmp_path):
+    """Two spawned workers produce byte-identical exports and order."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    second_spec = L.simple_factor_spec()
+    first_digest, _, _ = parity.build_persisted_entry(case, assembly, case.spec)
+    second_digest, _, _ = parity.build_persisted_entry(case, assembly, second_spec)
+    records = (
+        _candidate_record(case, first_digest, spec=case.spec, hypothesis_id="1" * 64),
+        _candidate_record(case, second_digest, spec=second_spec, hypothesis_id="2" * 64),
+    )
+    cache = _screen_cache_dir(assembly)
+
+    assembly.ta_cache.clear()
+    assembly.screen_workers = 1
+    sequential, _ = assembly.screen_candidate_builder(_Snapshot(records))
+    sequential_ids = [item.hypothesis_id for item in sequential]
+    sequential_exports = [item.series_export.to_dict() for item in sequential]
+    shutil.rmtree(cache, ignore_errors=True)
+
+    assembly.ta_cache.clear()
+    assembly.screen_workers = 2
+    parallel, _ = assembly.screen_candidate_builder(_Snapshot(records))
+    assert [item.hypothesis_id for item in parallel] == sequential_ids
+    assert [item.series_export.to_dict() for item in parallel] == sequential_exports
+
+
+def test_parallel_export_assembly_preserves_snapshot_order(tmp_path):
+    """Kills mutation L-M14: completion order never reorders the candidates."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    second_spec = L.simple_factor_spec()
+    first_digest, _, _ = parity.build_persisted_entry(case, assembly, case.spec)
+    second_digest, _, _ = parity.build_persisted_entry(case, assembly, second_spec)
+    records = (
+        _candidate_record(case, first_digest, spec=case.spec, hypothesis_id="1" * 64),
+        _candidate_record(case, second_digest, spec=second_spec, hypothesis_id="2" * 64),
+    )
+    assembly.ta_cache.clear()
+    assembly.screen_workers = 2
+    assembly._open_screen_pool = lambda workers, context: _FakeScreenPool(context)
+    assembly._screen_completed = lambda mapping: list(reversed(list(mapping)))
+    candidates, _ = assembly.screen_candidate_builder(_Snapshot(records))
+    assert [item.hypothesis_id for item in candidates] == ["1" * 64, "2" * 64]
+
+
+def test_parallel_export_failure_is_launch_error_and_siblings_reusable(tmp_path):
+    """A worker failure fails closed; a persisted sibling stays reusable."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    second_spec = L.simple_factor_spec()
+    first_digest, _, _ = parity.build_persisted_entry(case, assembly, case.spec)
+    second_digest, _, _ = parity.build_persisted_entry(case, assembly, second_spec)
+    records = (
+        _candidate_record(case, first_digest, spec=case.spec, hypothesis_id="1" * 64),
+        _candidate_record(case, second_digest, spec=second_spec, hypothesis_id="2" * 64),
+    )
+    assembly.ta_cache.clear()
+    assembly.screen_workers = 2
+    # The first worker succeeds and persists; the second raises (L-M10-style
+    # fail-closed): the parent raises and the sibling stays on disk.
+    assembly._open_screen_pool = lambda workers, context: _FakeScreenPool(
+        context, fail_on_index=1
+    )
+    assembly._screen_completed = lambda mapping: list(mapping)
+    with pytest.raises(L.LaunchError):
+        assembly.screen_candidate_builder(_Snapshot(records))
+    sibling = _export_cache_path(assembly, first_digest)
+    assert sibling.is_file()
+    assert L._load_screen_export(sibling.parent, first_digest) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +901,10 @@ def test_mutations_fixture_is_wellformed():
         "L-M8",
         "L-M9",
         "L-M10",
+        "L-M11",
+        "L-M12",
+        "L-M13",
+        "L-M14",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]

@@ -101,26 +101,74 @@
  },
  {
   "id": "L-M9",
-  "description": "the cold-resume screen skips the rebuilt-diagnostics hash check",
+  "description": "the cold-resume screen skips the persisted-diagnostics declaration-hash consistency check",
   "file": "smart_beta/campaign/campaign3_launch.py",
   "edits": [
    {
-    "old": "        if rebuilt != digest:\n            raise LaunchError(\n                \"the rebuilt T-A IS diagnostics for snapshot candidate \"",
-    "new": "        if False and rebuilt != digest:  # mutation L-M9: the hash check is skipped\n            raise LaunchError(\n                \"the rebuilt T-A IS diagnostics for snapshot candidate \""
+    "old": "        if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):\n            raise LaunchError(",
+    "new": "        if False and str(declaration.declaration_hash) != str(diagnostics.declaration_hash):  # mutation L-M9: the check is skipped\n            raise LaunchError("
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilt_hash_mismatch_is_launch_error"
  },
  {
   "id": "L-M10",
-  "description": "the cold-resume screen rebuild omits the warm K0/K1 event dispatch",
+  "description": "the cold-resume export build omits the warm-path event layer (K0/K1 dispatch)",
   "file": "smart_beta/campaign/campaign3_launch.py",
   "edits": [
    {
-    "old": "        evaluation = self.ta_evaluator(proposal)",
-    "new": "        evaluation = self.diagnostics_builder(\n            self.dataset_root,\n            self.declaration_builder(\n                spec, self.panel_for(spec, self.is_fold), self.is_fold\n            ),\n            spec,\n            self.panel_for(spec, self.is_fold),\n            self.partition,\n            fold=_pqv2_fold(self.is_fold),\n            overlay=self.overlay,\n            inputs=self.inputs,\n            event_layer=self.event_layer,  # mutation L-M10: omit the warm K0/K1 dispatch\n        )"
+    "old": "        event_layer=context.event_layer,",
+    "new": "        event_layer=None,  # mutation L-M10: omit the warm K0/K1 event dispatch"
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilds_the_same_candidates_and_exports"
+ },
+ {
+  "id": "L-M11",
+  "description": "the cold path re-runs the T-A evaluator instead of trusting the verified persisted diagnostics",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "_COLD_RESUME_RERUNS_EVALUATOR = False",
+    "new": "_COLD_RESUME_RERUNS_EVALUATOR = True  # mutation L-M11: the cold path re-runs the evaluator"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_cold_resume_does_not_call_the_evaluator"
+ },
+ {
+  "id": "L-M12",
+  "description": "the screen-export cache is used without verifying its content hash",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    if actual != str(parsed.get(\"export_hash\", \"\")):",
+    "new": "    if False and actual != str(parsed.get(\"export_hash\", \"\")):  # mutation L-M12: no hash verification"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_corrupted_export_cache_is_launch_error"
+ },
+ {
+  "id": "L-M13",
+  "description": "the screen-export progress line carries a statistic",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        line = (\n            f\"screen-export {int(index)}/{int(total)} \"\n            f\"{str(digest)[:12]} {status}\"\n        )",
+    "new": "        line = (\n            f\"screen-export {int(index)}/{int(total)} \"\n            f\"{str(digest)[:12]} {status} mean=0.0\"  # mutation L-M13: a statistic\n        )"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_screen_export_progress_lines_are_statistic_free"
+ },
+ {
+  "id": "L-M14",
+  "description": "the parent assembles candidates in worker-completion order instead of snapshot order",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        ordered = list(range(len(entries)))",
+    "new": "        ordered = list(completion_order)  # mutation L-M14: completion order"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_parallel_export_assembly_preserves_snapshot_order"
  }
 ]

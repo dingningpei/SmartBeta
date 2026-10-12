@@ -326,43 +326,6 @@ def _diagnostics_builder_for(case: ParityCase):
     return build
 
 
-def _export_series_fn_for(case: ParityCase):
-    """The real ``pqv2_series.export_series``, bound to the parity store."""
-    from smart_beta.dataset_v1 import pqv2_series as S
-
-    fx = T._load_fixture()
-
-    def export(
-        root: Any,
-        declaration: Any,
-        spec: Any,
-        panel: Any,
-        partition: Any,
-        *,
-        diagnostics: Any,
-        fold: Any,
-        **kwargs: Any,
-    ) -> Any:
-        return S.export_series(
-            root,
-            declaration,
-            spec,
-            panel,
-            partition,
-            diagnostics=diagnostics,
-            overlay=kwargs["overlay"],
-            inputs=kwargs["inputs"],
-            bindings=case.store.d7b_bindings,
-            source_bindings=case.store.source_bindings,
-            pq_bindings=case.pq_bindings,
-            pq_read_records_fn=lambda path: fx.genesis_records(),
-            event_layer=kwargs.get("event_layer"),
-            fold=fold,
-        )
-
-    return export
-
-
 def _ta_evaluator_for(case: ParityCase, assembly: Any, diagnostics_dir: Path):
     """The real C3-X ``TaEvaluator`` bound to the parity store (warm path).
 
@@ -440,30 +403,38 @@ def build_resumable_assembly(
         event_layer=event_layer,
         declaration_builder=_declaration_builder_for(case),
         diagnostics_builder=_diagnostics_builder_for(case),
-        export_series_fn=_export_series_fn_for(case),
+        # C3-L-R5 uses the real module-level export function (picklable for the
+        # spawn worker pool) with the parity store's D7b bindings injected.
+        export_series_fn=L.default_export_series_fn(),
+        export_bindings=case.store.d7b_bindings,
         diagnostics_dir=diagnostics_dir,
     )
     assembly.ta_evaluator = _ta_evaluator_for(case, assembly, diagnostics_dir)
     return case, assembly
 
 
-def build_persisted_entry(case: ParityCase, assembly: Any) -> tuple[Any, Any, Any]:
+def build_persisted_entry(
+    case: ParityCase, assembly: Any, spec: Any = None
+) -> tuple[Any, Any, Any]:
     """Build one T-A entry exactly as the warm path would, and persist it.
 
     Returns ``(digest, diagnostics, provenance)``; the content-addressed
     diagnostics artifact and its FactorSpec provenance sidecar are written to
     ``assembly.diagnostics_dir`` (write-once) by the bound evaluator's sink,
-    i.e. by the same warm ``TaEvaluator`` the cold rebuild reuses.
+    i.e. by the same warm ``TaEvaluator`` the cold rebuild reuses.  ``spec``
+    defaults to the case's spec, so a second certified spec can be persisted
+    against the same synthetic store (the parallel/order tests).
     """
     from smart_beta.campaign import campaign3_launch as L
 
+    chosen = case.spec if spec is None else spec
     # E6.1: the parent Campaign directory must already exist (the run driver
     # creates it before the diagnostics store is used).
     Path(assembly.diagnostics_dir).parent.mkdir(parents=True, exist_ok=True)
     proposal = L._ProposalView(
         proposal_id="p" * 64,
-        proposed_factor_spec=case.spec,
-        proposed_factor_spec_hash=case.spec.version,
+        proposed_factor_spec=chosen,
+        proposed_factor_spec_hash=chosen.version,
     )
     evaluation = assembly.ta_evaluator(proposal)
     entry = assembly.ta_cache[str(evaluation.diagnostics_hash)]
