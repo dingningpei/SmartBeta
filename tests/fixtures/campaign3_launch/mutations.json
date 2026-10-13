@@ -230,5 +230,17 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_cold_resume_rehydrates_not_assessed_period_nans"
+ },
+ {
+  "id": "L-M20",
+  "description": "the single-fold T-B exporter's fold is required again",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "            *, diagnostics: Any, fold: Fold | None = None, **kwargs: Any,",
+    "new": "            *, diagnostics: Any, fold: Fold, **kwargs: Any,"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_single_fold_tb_evaluator_injects_the_bound_fold"
  }
 ]

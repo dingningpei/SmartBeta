@@ -936,6 +936,27 @@ def _pqv2_fold(partition_fold: Fold) -> Any:
     return _core.DEVELOPMENT_FOLD
 
 
+def _resolve_bound_tb_fold(*, supplied: Fold | None, bound: Fold) -> Fold:
+    """Resolve the fold of a single-fold T-B evaluator's exporter call.
+
+    The frozen T-B driver (:class:`campaign3_run.TbEvaluator`) calls the
+    exporter without a ``fold`` keyword, so ``supplied is None`` means
+    "use the fold this evaluator was built with" (the closure fold; the
+    evaluator is built with ``folds=(fold,)``).  A supplied fold must be
+    exactly that bound fold -- a different development-window fold (for
+    example the OOS fold when the evaluator is bound to DEVELOPMENT_SEALED)
+    is a wiring defect and fails closed.
+    """
+    if supplied is None:
+        return bound
+    if supplied != bound:
+        raise LaunchError(
+            "the single-fold T-B export_series_fn was called with fold "
+            f"{supplied!r}, not its bound fold {bound!r}"
+        )
+    return supplied
+
+
 # ---------------------------------------------------------------------------
 # persisted T-A provenance (P6-E5 C3-L-R3)
 # ---------------------------------------------------------------------------
@@ -2398,7 +2419,17 @@ class ProductionAssembly:
         )
 
     def _single_fold_tb_evaluator(self, fold: Fold) -> Any:
-        """The frozen one-fold T-B evaluator, bound to this assembly."""
+        """The frozen one-fold T-B evaluator, bound to this assembly.
+
+        The evaluator is built with ``folds=(fold,)``: the closure ``fold``
+        is the *only* fold this evaluator may evaluate, so the wrapped
+        ``export_series_fn`` treats it as the default when the frozen
+        driver calls the exporter without a ``fold`` keyword (the
+        :class:`~smart_beta.campaign.campaign3_run.TbEvaluator` call site
+        passes none) and rejects any explicitly supplied fold that is not
+        that same bound fold.
+        """
+        bound_fold = fold
 
         def diagnostics_builder(
             root: Any, declaration: Any, spec: Any, panel: Any, partition: Any,
@@ -2411,11 +2442,18 @@ class ProductionAssembly:
 
         def export_series_fn(
             root: Any, declaration: Any, spec: Any, panel: Any, partition: Any,
-            *, diagnostics: Any, fold: Fold, **kwargs: Any,
+            *, diagnostics: Any, fold: Fold | None = None, **kwargs: Any,
         ) -> Any:
+            # The T-B driver calls the exporter without a ``fold`` keyword;
+            # inject it as the single bound fold.  An explicitly supplied
+            # fold must be exactly that fold, or the call fails closed.
+            resolved_fold = _resolve_bound_tb_fold(
+                supplied=fold, bound=bound_fold
+            )
             return self.export_series_fn(
                 root, declaration, spec, panel, partition,
-                diagnostics=diagnostics, fold=_pqv2_fold(fold), **kwargs,
+                diagnostics=diagnostics,
+                fold=_pqv2_fold(resolved_fold), **kwargs,
             )
 
         return _run.build_tb_evaluator(
