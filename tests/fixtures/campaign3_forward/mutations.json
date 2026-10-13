@@ -58,5 +58,17 @@
    }
   ],
   "test": "tests/test_campaign3_forward.py::test_forwarding_record_binds_tb_selection"
+ },
+ {
+  "id": "F-M6",
+  "description": "the separate P5-E2 document SHA-256 is omitted from the FORWARDING payload",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "            \"p5_e2_sha256\": p5_e2_sha256,",
+    "new": "            # mutation F-M6: p5_e2_sha256 omitted"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_forwarding_record_carries_both_p5_hashes"
  }
 ]
