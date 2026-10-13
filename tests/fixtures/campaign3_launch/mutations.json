@@ -218,5 +218,17 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_parallel_prologue_assembly_preserves_snapshot_order"
+ },
+ {
+  "id": "L-M19",
+  "description": "rehydration leaves a persisted JSON null as None in the cell period_values",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    return _restore_dataclass_nulls(cell)",
+    "new": "    return cell  # mutation L-M19: null left as None in period_values"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_cold_resume_rehydrates_not_assessed_period_nans"
  }
 ]

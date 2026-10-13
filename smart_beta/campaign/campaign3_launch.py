@@ -1019,11 +1019,78 @@ def _parse_date(value: Any) -> _calendar_date:
         return _datetime.fromisoformat(text).date()
 
 
+def _restore_typed_nulls(value: Any, annotation: Any) -> Any:
+    """Restore one persisted JSON ``null`` to its declared in-memory value.
+
+    ``delisting_bridge.canonical_json`` maps every non-finite ``float`` (the
+    warm-path ``NaN``) to JSON ``null``, so the persisted payload alone cannot
+    tell a legitimate ``None`` from a persisted ``NaN``.  The dataclass field
+    declaration can: a field declared ``float`` is never ``None`` in the warm
+    in-memory object, so its ``null`` is a ``NaN`` again, while a field
+    declared ``float | None`` legitimately keeps ``None`` (e.g. a NOT_ASSESSED
+    cell's ``value``/``t_stat``).  Tuple element annotations recurse, so
+    ``tuple[float, ...]`` (``period_values``) and ``tuple[float | None, ...]``
+    are restored element-wise; every other annotation is returned unchanged.
+    This is the P6-E5 C3-L-R7 inverse of ``delisting_bridge._jsonable``.
+    """
+    import types as _types
+    import typing as _typing
+
+    if annotation is float:
+        return float("nan") if value is None else float(value)
+    origin = _typing.get_origin(annotation)
+    if origin is tuple:
+        element_types = _typing.get_args(annotation)
+        if len(element_types) == 2 and element_types[1] is Ellipsis:
+            element = element_types[0]
+            return tuple(_restore_typed_nulls(item, element) for item in value)
+        return tuple(
+            _restore_typed_nulls(item, element)
+            for item, element in zip(value, element_types)
+        )
+    if origin is _types.UnionType or origin is _typing.Union:
+        if value is None:
+            return None
+        branches = tuple(
+            item
+            for item in _typing.get_args(annotation)
+            if item is not type(None)
+        )
+        if len(branches) == 1:
+            return _restore_typed_nulls(value, branches[0])
+        return value
+    return value
+
+
+def _restore_dataclass_nulls(instance: Any) -> Any:
+    """Return ``instance`` with every declared-``float`` ``null`` restored.
+
+    Each field's declared type is read from the class annotations (never
+    guessed per field) and passed to :func:`_restore_typed_nulls`; the frozen
+    dataclass is rebuilt only when a field actually changed.
+    """
+    import dataclasses as _dataclasses
+    import typing as _typing
+
+    hints = _typing.get_type_hints(type(instance))
+    changes: dict[str, Any] = {}
+    for item in _dataclasses.fields(instance):
+        current = getattr(instance, item.name)
+        restored = _restore_typed_nulls(
+            current, hints.get(item.name, item.type)
+        )
+        if restored is not current:
+            changes[item.name] = restored
+    if not changes:
+        return instance
+    return _dataclass_replace(instance, **changes)
+
+
 def _rehydrate_cell(payload: Mapping[str, Any]) -> Any:
     """Rebuild one persisted ``PQv2Cell`` (the exact ``to_dict`` inverse)."""
     from smart_beta.dataset_v1 import pqv2_evaluation as _pe
 
-    return _pe.PQv2Cell(
+    cell = _pe.PQv2Cell(
         cell=str(payload["cell"]),
         scenario=str(payload["scenario"]),
         estimand=str(payload["estimand"]),
@@ -1048,13 +1115,14 @@ def _rehydrate_cell(payload: Mapping[str, Any]) -> Any:
         cause_union=tuple(payload.get("cause_union", ())),
         event_scenario=payload.get("event_scenario"),
     )
+    return _restore_dataclass_nulls(cell)
 
 
 def _rehydrate_period(payload: Mapping[str, Any]) -> Any:
     """Rebuild one persisted ``PQv2Period`` (the exact ``to_dict`` inverse)."""
     from smart_beta.dataset_v1 import pqv2_evaluation as _pe
 
-    return _pe.PQv2Period(
+    period = _pe.PQv2Period(
         period=_parse_date(payload["period"]),
         rule=payload["rule"],
         winsor_ok=payload["winsor_ok"],
@@ -1081,6 +1149,7 @@ def _rehydrate_period(payload: Mapping[str, Any]) -> Any:
         causes_ts=tuple(payload.get("causes_ts", ())),
         n_unknown_source=int(payload.get("n_unknown_source", 0)),
     )
+    return _restore_dataclass_nulls(period)
 
 
 def _rehydrate_diagnostics(digest: str, payload: Mapping[str, Any]) -> Any:
@@ -1161,6 +1230,7 @@ def _rehydrate_diagnostics(digest: str, payload: Mapping[str, Any]) -> Any:
             event_scenarios_identical=payload.get("event_scenarios_identical"),
             fold=fold,
         )
+        diagnostics = _restore_dataclass_nulls(diagnostics)
     except (KeyError, TypeError, ValueError) as exc:
         raise LaunchError(
             f"the persisted T-A diagnostics {digest!r} cannot be rehydrated "

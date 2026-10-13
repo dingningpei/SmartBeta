@@ -16,12 +16,16 @@ Dataset-v1.2-shaped synthetic root.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import io
 import json
+import math
 import shutil
 import socket
 import sys
+import types
+import typing
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
@@ -998,6 +1002,164 @@ def test_parallel_export_failure_is_launch_error_and_siblings_reusable(tmp_path)
     assert L._load_screen_export(sibling.parent, first_digest) is not None
 
 
+def _float_leaves(value: Any, annotation: Any):
+    """Yield ``(leaf, nullable)`` for every float-typed leaf of ``value``.
+
+    The field types are read from the dataclass annotations (never hard-coded),
+    so this independently re-derives which leaves must be ``float`` and which
+    may legitimately be ``None`` -- exactly the rule the production
+    rehydration must obey.
+    """
+    origin = typing.get_origin(annotation)
+    if annotation is float:
+        yield value, False
+        return
+    if origin is tuple:
+        element_types = typing.get_args(annotation)
+        if len(element_types) == 2 and element_types[1] is Ellipsis:
+            for item in value:
+                yield from _float_leaves(item, element_types[0])
+        else:
+            for item, element in zip(value, element_types):
+                yield from _float_leaves(item, element)
+        return
+    if origin is types.UnionType or origin is typing.Union:
+        branches = [
+            item
+            for item in typing.get_args(annotation)
+            if item is not type(None)
+        ]
+        # Only a ``float | None`` leaf is a float field; a ``str | None`` /
+        # ``bool | None`` / ``int | None`` field is not part of this rule.
+        if len(branches) == 1 and branches[0] is float:
+            yield (None, True) if value is None else (value, False)
+        return
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        hints = typing.get_type_hints(type(value))
+        for item in dataclasses.fields(value):
+            # A ``compare=False`` field (the re-evaluation-only ``b_diagnostics``)
+            # is not part of the persisted form nor of the warm object's
+            # equality contract, so it is not part of this equivalence either.
+            if not item.compare:
+                continue
+            yield from _float_leaves(
+                getattr(value, item.name), hints.get(item.name, item.type)
+            )
+
+
+def _assert_nan_equal(left: Any, right: Any) -> None:
+    """Structural equality that treats ``NaN`` as equal to ``NaN``.
+
+    ``==`` cannot compare two containers that hold ``NaN`` (``nan != nan``),
+    so the persisted-form ``to_dict()`` outputs are compared recursively.
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        assert left is right
+        return
+    if isinstance(left, float) and isinstance(right, float):
+        assert (math.isnan(left) and math.isnan(right)) or left == right
+        return
+    if isinstance(left, dict):
+        assert isinstance(right, dict) and set(left) == set(right)
+        for key in left:
+            _assert_nan_equal(left[key], right[key])
+        return
+    if isinstance(left, (list, tuple)):
+        assert type(left) is type(right) and len(left) == len(right)
+        for item_left, item_right in zip(left, right):
+            _assert_nan_equal(item_left, item_right)
+        return
+    assert left == right, (left, right)
+
+
+def _assert_float_restored(original: Any, rehydrated: Any) -> None:
+    """Every declared float leaf is a ``float`` again, with the warm repr."""
+    expected_leaves = list(_float_leaves(original, type(original)))
+    actual_leaves = list(_float_leaves(rehydrated, type(rehydrated)))
+    assert expected_leaves
+    assert len(expected_leaves) == len(actual_leaves)
+    for (expected, nullable), (actual, actual_nullable) in zip(
+        expected_leaves, actual_leaves
+    ):
+        assert nullable == actual_nullable
+        if nullable:
+            assert expected is None and actual is None
+            continue
+        assert type(actual) is float, (expected, actual)
+        assert repr(actual) == repr(expected), (expected, actual)
+        if isinstance(expected, float) and math.isnan(expected):
+            assert math.isnan(actual)
+
+
+def test_cold_resume_rehydrates_not_assessed_period_nans(tmp_path):
+    """Kills mutation L-M19: a persisted ``null`` is a warm-path ``NaN``.
+
+    ``build_pqv2_diagnostics`` holds ``float('nan')`` in the L envelope for a
+    NOT_ASSESSED period; ``diagnostics_store`` persists every non-finite float
+    as JSON ``null``.  ``_rehydrate_diagnostics`` must reconstruct the exact
+    warm object -- non-optional float fields (``period_values``,
+    ``L_t0``/``L_ts``, ``TO_b``/``TO_hi``, ...) back to ``NaN``, optional
+    fields (``value``/``t_stat``/``status``/...) still ``None`` -- or a cold
+    screen export raises ``TypeError`` inside
+    ``pqv2_series._restrict_to_b_index``.
+    """
+    from smart_beta.campaign import diagnostics_store as _store
+    from smart_beta.dataset_v1 import delisting_bridge as _d7b
+    from smart_beta.dataset_v1 import pqv2_series as _series
+
+    case = parity.T._build_case(
+        tmp_path, hypothesis="C1-H1", flags=(("A", 261, True),)
+    )
+    diagnostics = case.diagnostics
+    # The real synthetic IS diagnostics has a NOT_ASSESSED L period whose warm
+    # envelope value is NaN (the P6-E5 defect's exact precondition).
+    l_cell = diagnostics.cell("L-T0")
+    assert l_cell is not None and l_cell.status is not None
+    assert any(
+        isinstance(value, float) and math.isnan(value)
+        for value in l_cell.period_values
+    )
+
+    # Persist exactly as production does, then rehydrate from the raw payload.
+    directory = tmp_path / "campaign" / "diagnostics"
+    (tmp_path / "campaign").mkdir(parents=True, exist_ok=True)
+    digest = _store.persist(diagnostics, directory)
+    payload = _store.load_verified(directory, digest)
+    rehydrated = L._rehydrate_diagnostics(digest, payload)
+
+    # (a) the persisted form (hence the content hash) is unchanged.
+    assert rehydrated.diagnostics_hash == diagnostics.diagnostics_hash == digest
+    assert _d7b.canonical_json(
+        rehydrated.to_dict()
+    ) == _d7b.canonical_json(diagnostics.to_dict())
+    _assert_nan_equal(rehydrated.to_dict(), diagnostics.to_dict())
+
+    # (b) every float field is a float again with the warm repr, and every
+    # legitimately-None optional field is still None.
+    _assert_float_restored(diagnostics, rehydrated)
+
+    # (c) the export now succeeds on the rehydrated object and equals the warm
+    # export (its B records carry the NaN L envelope, so compare NaN-aware).
+    def _export(chosen: Any) -> Any:
+        return _series.export_series(
+            case.root,
+            case.declaration,
+            case.spec,
+            case.panel,
+            case.partition,
+            diagnostics=chosen,
+            overlay=case.overlay,
+            inputs=case.inputs,
+            bindings=case.store.d7b_bindings,
+            source_bindings=case.store.source_bindings,
+        )
+
+    warm_export = _export(diagnostics)
+    cold_export = _export(rehydrated)
+    assert cold_export.export_hash == warm_export.export_hash
+    _assert_nan_equal(cold_export.to_dict(), warm_export.to_dict())
+
+
 # ---------------------------------------------------------------------------
 # 8. mutation fixture integrity
 # ---------------------------------------------------------------------------
@@ -1025,6 +1187,7 @@ def test_mutations_fixture_is_wellformed():
         "L-M16",
         "L-M17",
         "L-M18",
+        "L-M19",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
