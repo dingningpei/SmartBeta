@@ -351,7 +351,7 @@ verified by the planner with `certify_candidate`):**
   4. append one K-PIT **FORWARDING** HUMAN_DECISION record with schema
      `campaign3-forwarding-v1`. It binds the active CAMPAIGN record hash, the
      TB_SELECTION record hash, the ranking table hash, the forwarded id or
-     NO_RESERVE_USE, the P5 document SHA-256 including E2, and the `campaign3_forward.py`
+     NO_RESERVE_USE, the P5 document SHA-256 (bound, unchanged) and the separate P5-E2 document `docs/campaign3_p5_erratum_e2.md` SHA-256, and the `campaign3_forward.py`
      SHA-256. The append is idempotent through a schema-scoped lookup;
   5. write the report (JSON + MD) per P5-E2 item 6.
 - **Prohibited:** no T-C, no ACCESS record, no reserve path. The tests assert that no
