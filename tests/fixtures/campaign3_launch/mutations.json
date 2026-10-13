@@ -53,12 +53,12 @@
  },
  {
   "id": "L-M5",
-  "description": "the panel builder is reverted to the Campaign-1 panel_of values",
+  "description": "the fast panel builder is reverted to the Campaign-1 panel_of values",
   "file": "smart_beta/campaign/campaign3_launch.py",
   "edits": [
    {
-    "old": "        return _pe._scenario_panel(template, spec, merged, self.overlay)",
-    "new": "        return template  # mutation L-M5: the Campaign-1 panel_of values"
+    "old": "        merged = _merge_event_inputs(spec, self.inputs, self.event_layer)\n        template = self._panel_template_for(fold)\n        return _fill_panel_values(template, spec, merged, self.overlay)",
+    "new": "        merged = _merge_event_inputs(spec, self.inputs, self.event_layer)\n        template = self._panel_template_for(fold)\n        return self.panel_of(spec, _run.C3_UNIVERSE, fold)  # mutation L-M5: panel_of values"
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_panel_for_parity_cross_sectional"
@@ -105,8 +105,8 @@
   "file": "smart_beta/campaign/campaign3_launch.py",
   "edits": [
    {
-    "old": "        if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):\n            raise LaunchError(",
-    "new": "        if False and str(declaration.declaration_hash) != str(diagnostics.declaration_hash):  # mutation L-M9: the check is skipped\n            raise LaunchError("
+    "old": "    if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):\n        raise LaunchError(",
+    "new": "    if False and str(declaration.declaration_hash) != str(diagnostics.declaration_hash):  # mutation L-M9: the check is skipped\n        raise LaunchError("
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_cold_resume_rebuilt_hash_mismatch_is_launch_error"
@@ -170,5 +170,53 @@
    }
   ],
   "test": "tests/test_campaign3_launch.py::test_parallel_export_assembly_preserves_snapshot_order"
+ },
+ {
+  "id": "L-M15",
+  "description": "the fast panel skeleton member order is changed",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    for member in universe_by_formation.get(formation, ()):",
+    "new": "    for member in reversed(list(universe_by_formation.get(formation, ()))):  # mutation L-M15: member order"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_fast_panel_preserves_the_reference_row_order"
+ },
+ {
+  "id": "L-M16",
+  "description": "the fast panel missing rows are filled with 0 instead of NaN",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    missing = np.isnan(values)\n    values = np.where(missing, float(\"nan\"), values)",
+    "new": "    missing = np.isnan(values)\n    values = np.where(missing, 0.0, values)  # mutation L-M16: zero fill"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_fast_panel_missing_rows_are_nan"
+ },
+ {
+  "id": "L-M17",
+  "description": "the fast panel skeleton date normalization is dropped",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "    panel[_PANEL_DATE_COL] = pd.to_datetime(panel[_PANEL_DATE_COL])",
+    "new": "    # mutation L-M17: the skeleton date normalization is dropped"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_fast_panel_date_dtype_matches_reference"
+ },
+ {
+  "id": "L-M18",
+  "description": "the parent assembles candidates in cold-prologue completion order instead of snapshot order",
+  "file": "smart_beta/campaign/campaign3_launch.py",
+  "edits": [
+   {
+    "old": "        ordered = list(range(len(entries)))",
+    "new": "        ordered = list(_prologue_completion)  # mutation L-M18: prologue completion order"
+   }
+  ],
+  "test": "tests/test_campaign3_launch.py::test_parallel_prologue_assembly_preserves_snapshot_order"
  }
 ]
