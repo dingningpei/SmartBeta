@@ -33,6 +33,14 @@ if str(_TESTS) not in sys.path:
 import test_pqv2_evaluation as T  # noqa: E402
 
 
+@dataclass
+class _ParityUniverse:
+    """The synthetic universe skeleton surface ``RealInputAdapter._load`` has."""
+
+    formations: tuple[Any, ...]
+    universe_by_formation: Mapping[Any, tuple[str, ...]]
+
+
 class ParityAdapter:
     """A Campaign-1-style adapter whose ``panel_of`` returns the *unmasked*
     panel (the exact value path the pre-E3 launcher reused).  The panel builder
@@ -50,6 +58,26 @@ class ParityAdapter:
 
     def panel_of(self, spec: Any, universe: str, fold: Any) -> Any:
         return self._fx.factor_panel(spec, self._inputs, self._store)
+
+    def _load(self, universe: str, fold: Any) -> _ParityUniverse:
+        """The spec-independent ``store.members`` skeleton (C3-L-R6 fast path).
+
+        Mirrors ``campaign1.RealInputAdapter._load``: the same formation order
+        (sorted) and member order (sorted per formation) that
+        ``fx.factor_panel`` builds its row grid from.
+        """
+        grouped: dict[Any, list[str]] = {}
+        for member in self._store.members:
+            grouped.setdefault(member.formation, []).append(str(member.key))
+        formations = tuple(sorted(grouped))
+        universe_by_formation = {
+            formation: tuple(sorted(grouped[formation]))
+            for formation in formations
+        }
+        return _ParityUniverse(
+            formations=formations,
+            universe_by_formation=universe_by_formation,
+        )
 
 
 def _mask_frame(fx: Any) -> pd.DataFrame:

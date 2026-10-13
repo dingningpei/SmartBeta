@@ -437,6 +437,66 @@ def test_unmasked_campaign1_panel_fails_the_std_x_rank_invariant(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 3c. fast-vs-reference panel parity (C3-L-R6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "spec_key", ["simple", "cross_sectional", "event", "mixed_event"]
+)
+def test_fast_panel_matches_reference(tmp_path, spec_key):
+    """C3-L-R6: the fast panel is bit-identical to the reference panel.
+
+    ``fast_panel_for`` must build the same row grid and evaluate the same
+    sealed realization, so ``panel_for`` is ``.equals()`` to the pre-R6
+    ``panel_for_reference`` (values, dtypes, column order and index) and the
+    resulting declaration hash is identical.
+    """
+    case = parity.build_parity_case(tmp_path, spec_key)
+    fast = case.panel
+    reference = case.assembly.panel_for_reference(case.spec, case.fold)
+    assert list(fast.columns) == list(reference.columns)
+    assert list(fast.index) == list(reference.index)
+    assert fast["date"].dtype == reference["date"].dtype
+    assert fast["stock_id"].dtype == reference["stock_id"].dtype
+    assert fast["value"].dtype == reference["value"].dtype
+    assert fast.reset_index(drop=True).equals(reference.reset_index(drop=True))
+    fast_diagnostics = parity.run_diagnostics(case, panel=fast)
+    reference_diagnostics = parity.run_diagnostics(case, panel=reference)
+    assert fast_diagnostics.declaration_hash == reference_diagnostics.declaration_hash
+
+
+def test_fast_panel_preserves_the_reference_row_order(tmp_path):
+    """Kills mutation L-M15 (the skeleton member order is changed)."""
+    case = parity.build_parity_case(tmp_path, "simple")
+    reference = case.assembly.panel_for_reference(case.spec, case.fold)
+    assert list(case.panel["date"]) == list(reference["date"])
+    assert list(case.panel["stock_id"]) == list(reference["stock_id"])
+    assert case.panel.reset_index(drop=True).equals(reference.reset_index(drop=True))
+
+
+def test_fast_panel_missing_rows_are_nan(tmp_path):
+    """Kills mutation L-M16 (missing rows are filled with 0 instead of NaN)."""
+    case = parity.build_parity_case(tmp_path, "simple")
+    reference = case.assembly.panel_for_reference(case.spec, case.fold)
+    missing = case.panel["value"].isna()
+    assert missing.any()
+    assert reference.loc[missing, "value"].isna().all()
+    assert case.panel.reset_index(drop=True).equals(reference.reset_index(drop=True))
+
+
+def test_fast_panel_date_dtype_matches_reference(tmp_path):
+    """Kills mutation L-M17 (date normalization is dropped)."""
+    import pandas as pd
+
+    case = parity.build_parity_case(tmp_path, "simple")
+    reference = case.assembly.panel_for_reference(case.spec, case.fold)
+    assert pd.api.types.is_datetime64_any_dtype(case.panel["date"])
+    assert case.panel["date"].dtype == reference["date"].dtype
+    assert case.panel.reset_index(drop=True).equals(reference.reset_index(drop=True))
+
+
+# ---------------------------------------------------------------------------
 # 4. production gating
 # ---------------------------------------------------------------------------
 
@@ -648,6 +708,31 @@ class _FakeScreenPool:
         return None
 
 
+class _FakeProloguePool:
+    """A deterministic in-process pool for the cold-prologue rebuild (R6)."""
+
+    def __init__(self, context: Any) -> None:
+        self.context = L._dataclass_replace(
+            context,
+            event_layer=L._restore_event_layer(context.event_layer_state),
+        )
+        self.futures: list[Future] = []
+
+    def submit(self, _fn: Any, job: Any) -> Future:
+        future: Future = Future()
+        try:
+            result = L._build_prologue_from_job(self.context, job)
+        except Exception as exc:  # noqa: BLE001 - propagated via the future
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+        self.futures.append(future)
+        return future
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        return None
+
+
 @pytest.mark.parametrize(
     "spec_key", ["simple", "cross_sectional", "event", "mixed_event"]
 )
@@ -834,6 +919,9 @@ def test_parallel_screen_exports_match_sequential(tmp_path):
 
     assembly.ta_cache.clear()
     assembly.screen_workers = 2
+    assembly._open_prologue_pool = lambda workers, context: _FakeProloguePool(
+        context
+    )
     parallel, _ = assembly.screen_candidate_builder(_Snapshot(records))
     assert [item.hypothesis_id for item in parallel] == sequential_ids
     assert [item.series_export.to_dict() for item in parallel] == sequential_exports
@@ -851,8 +939,33 @@ def test_parallel_export_assembly_preserves_snapshot_order(tmp_path):
     )
     assembly.ta_cache.clear()
     assembly.screen_workers = 2
+    assembly._open_prologue_pool = lambda workers, context: _FakeProloguePool(
+        context
+    )
     assembly._open_screen_pool = lambda workers, context: _FakeScreenPool(context)
     assembly._screen_completed = lambda mapping: list(reversed(list(mapping)))
+    candidates, _ = assembly.screen_candidate_builder(_Snapshot(records))
+    assert [item.hypothesis_id for item in candidates] == ["1" * 64, "2" * 64]
+
+
+def test_parallel_prologue_assembly_preserves_snapshot_order(tmp_path):
+    """Kills mutation L-M18: prologue completion order never reorders."""
+    case, assembly = parity.build_resumable_assembly(tmp_path, "cross_sectional")
+    second_spec = L.simple_factor_spec()
+    first_digest, _, _ = parity.build_persisted_entry(case, assembly, case.spec)
+    second_digest, _, _ = parity.build_persisted_entry(case, assembly, second_spec)
+    records = (
+        _candidate_record(case, first_digest, spec=case.spec, hypothesis_id="1" * 64),
+        _candidate_record(case, second_digest, spec=second_spec, hypothesis_id="2" * 64),
+    )
+    assembly.ta_cache.clear()
+    assembly.screen_workers = 2
+    assembly._open_prologue_pool = lambda workers, context: _FakeProloguePool(
+        context
+    )
+    assembly._open_screen_pool = lambda workers, context: _FakeScreenPool(context)
+    # Only the prologue completes out of order; the export path stays in order.
+    assembly._prologue_completed = lambda mapping: list(reversed(list(mapping)))
     candidates, _ = assembly.screen_candidate_builder(_Snapshot(records))
     assert [item.hypothesis_id for item in candidates] == ["1" * 64, "2" * 64]
 
@@ -871,6 +984,9 @@ def test_parallel_export_failure_is_launch_error_and_siblings_reusable(tmp_path)
     assembly.screen_workers = 2
     # The first worker succeeds and persists; the second raises (L-M10-style
     # fail-closed): the parent raises and the sibling stays on disk.
+    assembly._open_prologue_pool = lambda workers, context: _FakeProloguePool(
+        context
+    )
     assembly._open_screen_pool = lambda workers, context: _FakeScreenPool(
         context, fail_on_index=1
     )
@@ -905,6 +1021,10 @@ def test_mutations_fixture_is_wellformed():
         "L-M12",
         "L-M13",
         "L-M14",
+        "L-M15",
+        "L-M16",
+        "L-M17",
+        "L-M18",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]

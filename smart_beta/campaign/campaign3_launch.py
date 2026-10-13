@@ -30,7 +30,12 @@ gap and adds the two CLI modes:
   ``pqv2_evaluation._alias_frames(spec, inputs, overlay)`` (the sealed
   ``_scenario_panel`` realization).  A cross-sectional candidate's declared
   panel is therefore byte-identical to the one P-Q checks in
-  ``_realize_std_x_rank``.
+  ``_realize_std_x_rank``.  Since C3-L-R6 it builds that row grid directly
+  (never re-evaluating the factor through ``panel_of`` /
+  ``quarantine.factor_input_states`` just to obtain it), fills it with a
+  vectorized ``(normalized date, str stock_id)`` join, and rebuilds the cold
+  resume panel in ``--screen-workers`` workers while keeping the previous
+  realization available as ``panel_for_reference`` for parity tests.
 * ``--preflight`` runs on a **copy** of the production K-PIT, in a scratch run
   directory.  The real T-A evaluator evaluates the ten fixed **P6-E4** probes
   (the EVENT_SIMPLE positive control, SIMPLE momentum/dv-ratio/ret-std probes,
@@ -1284,6 +1289,93 @@ class _ExportJob:
     cache_dir: str
 
 
+@dataclass
+class _PrologueContext:
+    """The picklable, per-worker shared cold-prologue context (C3-L-R6).
+
+    The row grid (``template``) is spec-independent, so it is serialized once
+    per worker and reused for every candidate the worker rebuilds; the
+    declaration builder and merged event inputs are also fixed per assembly.
+    """
+
+    template: Any
+    inputs: Mapping[str, Any]
+    overlay: Any
+    event_layer_state: _EventLayerState | None
+    declaration_builder: Callable[..., Any]
+    event_layer: Any = field(default=None, repr=False)
+
+
+@dataclass
+class _PrologueJob:
+    """One candidate's picklable cold-prologue job (per-candidate spec)."""
+
+    diagnostics_dir: str
+    diagnostics_hash: str
+    spec: FactorSpec
+    fold: Any
+
+
+#: The worker-process context set once by :func:`_init_prologue_worker`.
+_WORKER_PROLOGUE_CONTEXT: _PrologueContext | None = None
+
+
+def _init_prologue_worker(context: _PrologueContext) -> None:
+    """Spawned-worker initializer: rebuild the event layer exactly once."""
+    global _WORKER_PROLOGUE_CONTEXT
+    _WORKER_PROLOGUE_CONTEXT = _dataclass_replace(
+        context, event_layer=_restore_event_layer(context.event_layer_state)
+    )
+
+
+def _build_prologue_worker(job: _PrologueJob) -> dict[str, Any]:
+    context = _WORKER_PROLOGUE_CONTEXT
+    if context is None:
+        raise LaunchError("the screen prologue worker was not initialized")
+    return _build_prologue_from_job(context, job)
+
+
+def _build_prologue_from_job(
+    context: _PrologueContext, job: _PrologueJob
+) -> dict[str, Any]:
+    """Rebuild one candidate's panel + declaration from persisted state.
+
+    The persisted diagnostics is loaded and content-hash verified (never
+    re-evaluated), the panel is rebuilt with the same fast builder the warm
+    path used, and the rebuilt declaration must name exactly the persisted
+    declaration hash or the cold path fails closed.
+    """
+    from smart_beta.campaign import diagnostics_store as _store
+
+    try:
+        payload = _store.load_verified(job.diagnostics_dir, job.diagnostics_hash)
+    except _store.C1DiagnosticsError as exc:
+        raise LaunchError(
+            "the persisted T-A IS diagnostics for a screen candidate is "
+            f"missing or corrupt (diagnostics_hash {job.diagnostics_hash!r})"
+        ) from exc
+    diagnostics = _rehydrate_diagnostics(job.diagnostics_hash, payload)
+    merged = _merge_event_inputs(job.spec, context.inputs, context.event_layer)
+    panel = _fill_panel_values(context.template, job.spec, merged, context.overlay)
+    declaration = context.declaration_builder(job.spec, panel, job.fold)
+    if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):
+        raise LaunchError(
+            "the persisted T-A IS diagnostics for snapshot candidate "
+            f"{job.diagnostics_hash!r} names declaration "
+            f"{diagnostics.declaration_hash!r}, which does not match the "
+            f"rebuilt declaration {declaration.declaration_hash!r}"
+        )
+    return {
+        "diagnostics": diagnostics,
+        "provenance": {
+            "spec": job.spec,
+            "panel": panel,
+            "declaration": declaration,
+            "partition_fold": job.fold,
+        },
+    }
+
+
 #: The worker-process context set once by :func:`_init_export_worker`.
 _WORKER_CONTEXT: _ExportContext | None = None
 
@@ -1460,6 +1552,142 @@ def compute_attempt_id(
 # the production assembly
 # ---------------------------------------------------------------------------
 
+#: The frozen factor-panel column names (the D7b/P-Q long-panel schema).
+_PANEL_DATE_COL = "date"
+_PANEL_STOCK_COL = "stock_id"
+_PANEL_VALUE_COL = "value"
+
+
+def _merge_event_inputs(
+    spec: Any, inputs: Mapping[str, Any], event_layer: Any
+) -> dict[str, Any]:
+    """The D7c inputs with the frozen PQ23-B K0 event inputs mixed in.
+
+    Shared by the fast panel builder and the reference (pre-R6) builder, so the
+    event contract can never drift between them.
+    """
+    roles = _eval.event_roles(spec) if isinstance(spec, FactorSpec) else ()
+    base = dict(inputs)
+    if not roles:
+        return base
+    if event_layer is None:
+        raise LaunchError("an event candidate requires the bound event_layer")
+    from smart_beta.dataset_v1 import pqv2_events as _events
+    from smart_beta.dataset_v1.pqv2_evaluation import _sessions_from_inputs
+
+    tri = base["total_return_index"].values
+    sessions = _sessions_from_inputs(base)
+    built = _events.build_event_inputs(
+        event_layer,
+        tri,
+        sessions,
+        scenario=_events.SCENARIO_K0,
+        roles=roles,
+    )
+    merged = {key: value for key, value in base.items() if key not in set(roles)}
+    merged.update(built)
+    return merged
+
+
+def _panel_skeleton(
+    formations: Sequence[Any],
+    universe_by_formation: Mapping[Any, Sequence[str]],
+) -> Any:
+    """The frozen ``(formation, universe member)`` row grid (P6-E3 row grid).
+
+    Built directly, exactly as ``campaign1.build_fold_panel`` builds it: the
+    same formation order, the same member order from ``universe_by_formation``
+    and the same dtypes (date ``datetime64``, stock_id ``string``, value
+    ``float64``), so the row grid is byte-identical to the template the
+    reference ``panel_of`` path carries.  No factor values are computed here.
+    """
+    import pandas as pd
+
+    records: list[tuple[Any, str, float]] = []
+    for formation in formations:
+        for member in universe_by_formation.get(formation, ()):
+            records.append((formation, str(member), float("nan")))
+    panel = pd.DataFrame(
+        records,
+        columns=[_PANEL_DATE_COL, _PANEL_STOCK_COL, _PANEL_VALUE_COL],
+    )
+    panel[_PANEL_DATE_COL] = pd.to_datetime(panel[_PANEL_DATE_COL])
+    panel[_PANEL_STOCK_COL] = panel[_PANEL_STOCK_COL].astype("string")
+    panel[_PANEL_VALUE_COL] = panel[_PANEL_VALUE_COL].astype("float64")
+    return panel
+
+
+def _fill_panel_values(
+    template: Any,
+    spec: FactorSpec,
+    merged: Mapping[str, Any],
+    overlay: Any,
+) -> Any:
+    """Fill ``template``'s values from the evaluator panel (vectorized join).
+
+    The evaluator is the same sealed realization the reference ``_scenario_panel``
+    uses -- ``pqv2_evaluation._alias_frames(spec, merged, overlay)`` plus the
+    Phase-6 ``spec.evaluator.evaluate`` -- and the same ``_as_date``
+    normalization, ``float`` conversion and dict last-wins duplicate handling
+    are replicated, so the result is ``.equals()`` to the reference
+    ``_scenario_panel`` output over the same row grid.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from smart_beta.dataset_v1 import delisting_bridge as _d7b
+    from smart_beta.dataset_v1 import pqv2_evaluation as _pe
+    from smart_beta.spec import evaluator as _evaluator
+
+    frames = _pe._alias_frames(spec, merged, overlay)
+    result = _evaluator.evaluate(spec, frames)
+    panel = result.panel
+    out = template.copy(deep=True)
+    if panel is None or len(panel) == 0:
+        return out
+    template_dates = pd.to_datetime(out[_PANEL_DATE_COL])
+    panel_dates = pd.to_datetime(panel[_PANEL_DATE_COL])
+    # Restrict the (potentially huge) evaluator output to the skeleton's
+    # formation dates *before* the per-row _as_date normalization, so the full
+    # grid is never materialized into Python objects.  A normalized panel date
+    # outside the skeleton dates can never contribute a skeleton cell.
+    wanted = pd.DatetimeIndex(template_dates.unique())
+    restricted = panel.loc[panel_dates.dt.normalize().isin(wanted)]
+    normalized_dates = restricted[_PANEL_DATE_COL].map(_d7b._as_date)
+    lookup = pd.Series(
+        restricted[_PANEL_VALUE_COL].astype("float64").to_numpy(),
+        index=pd.MultiIndex.from_arrays(
+            [
+                normalized_dates.to_numpy(),
+                restricted[_PANEL_STOCK_COL].astype(str).to_numpy(),
+            ],
+            names=[_PANEL_DATE_COL, _PANEL_STOCK_COL],
+        ),
+    )
+    lookup = lookup[lookup.index.get_level_values(0).notna()]
+    # The reference dict assignment is last-wins; keep exactly that occurrence.
+    lookup = lookup[~lookup.index.duplicated(keep="last")]
+    skeleton_keys = pd.MultiIndex.from_arrays(
+        [template_dates.dt.date, out[_PANEL_STOCK_COL].astype(str)],
+        names=[_PANEL_DATE_COL, _PANEL_STOCK_COL],
+    )
+    joined = lookup.reindex(skeleton_keys)
+    values = joined.to_numpy(dtype="float64")
+    # A missing evaluator row is the reference's ``float("nan")`` default.
+    missing = np.isnan(values)
+    values = np.where(missing, float("nan"), values)
+    out[_PANEL_VALUE_COL] = values
+    return out
+
+
+def _fold_cache_key(fold: Any) -> str:
+    """A stable cache key for one fold's spec-independent universe skeleton."""
+    try:
+        payload = fold.to_dict()
+    except AttributeError:  # pragma: no cover - defensive
+        return repr(fold)
+    return json.dumps(payload, sort_keys=True, default=str)
+
 
 @dataclass
 class ProductionAssembly:
@@ -1502,6 +1730,11 @@ class ProductionAssembly:
     screen_workers: int = 1
     ta_cache: dict[str, Any] = field(default_factory=dict, repr=False)
     proposal_lookup: dict[str, Any] = field(default_factory=dict, repr=False)
+    #: The spec-independent ``(formation, universe member)`` skeleton template,
+    #: cached per fold (C3-L-R6).
+    panel_template_cache: dict[str, Any] = field(
+        default_factory=dict, repr=False
+    )
     attempt_id: str = ""
     preflight_marker: Path | None = None
 
@@ -1510,51 +1743,39 @@ class ProductionAssembly:
         return (self.oos_fold, self.sealed_fold)
 
     def panel_for(self, spec: FactorSpec, fold: Fold) -> Any:
-        """The declared factor panel for ``spec``/``fold`` (P6-E3 correction).
+        """The declared factor panel for ``spec``/``fold`` (C3-L-R6 fast path).
 
-        The panel *values* come from the Phase-6 specification evaluator over
-        the **exact** frames P-Q realizes against —
-        ``pqv2_evaluation._alias_frames(spec, inputs, overlay)`` (read-only
-        import) — so a cross-sectional candidate's panel is byte-identical to
-        the one :func:`pqv2_evaluation.build_pqv2_diagnostics` checks in
-        ``_realize_std_x_rank``.  The Campaign-1 ``panel_of`` only supplies the
-        frozen ``(formation, universe member)`` row grid that D7b
-        ``_validate_factor_panel`` expects; its values are discarded.  The
-        evaluator call is the sealed ``_scenario_panel`` realization (no new
-        math), so the declared panel and the K1 re-realization cannot drift.
-
-        An ``EVENT_SIMPLE`` candidate needs the frozen PQ23-B K0 event inputs
-        mixed into the D7c inputs before either step.
+        This is the production entry point; :meth:`panel_for_reference` keeps
+        the pre-R6 realization available for parity tests.
         """
-        from smart_beta.campaign import campaign3_eval as _eval
+        return self.fast_panel_for(spec, fold)
+
+    def fast_panel_for(self, spec: FactorSpec, fold: Fold) -> Any:
+        """The declared factor panel, evaluated once over the full grid (R6).
+
+        The row grid is the frozen ``(formation, universe member)`` skeleton
+        that :meth:`panel_for_reference`'s ``panel_of`` only supplies (built
+        directly without ``panel_of`` / ``quarantine.factor_input_states``),
+        and the values come from the same sealed Phase-6 evaluator realization
+        over ``pqv2_evaluation._alias_frames`` -- so the result is bit-identical
+        to the reference path.  An ``EVENT_SIMPLE`` candidate mixes the frozen
+        PQ23-B K0 event inputs into the D7c inputs first.
+        """
+        merged = _merge_event_inputs(spec, self.inputs, self.event_layer)
+        template = self._panel_template_for(fold)
+        return _fill_panel_values(template, spec, merged, self.overlay)
+
+    def panel_for_reference(self, spec: FactorSpec, fold: Fold) -> Any:
+        """The pre-R6 panel realization (kept for parity tests).
+
+        It takes the row grid *and* values from the Campaign-1 ``panel_of``
+        and then overwrites every value from the sealed ``_scenario_panel``
+        realization.  This is the exact prior behavior; the fast path must be
+        ``.equals()`` to it.
+        """
         from smart_beta.dataset_v1 import pqv2_evaluation as _pe
 
-        roles = _eval.event_roles(spec) if isinstance(spec, FactorSpec) else ()
-        base = dict(self.inputs)
-        merged = base
-        if roles:
-            if self.event_layer is None:
-                raise LaunchError(
-                    "an event candidate requires the bound event_layer"
-                )
-            from smart_beta.dataset_v1 import pqv2_events as _events
-            from smart_beta.dataset_v1.pqv2_evaluation import (
-                _sessions_from_inputs,
-            )
-
-            tri = base["total_return_index"].values
-            sessions = _sessions_from_inputs(base)
-            built = _events.build_event_inputs(
-                self.event_layer,
-                tri,
-                sessions,
-                scenario=_events.SCENARIO_K0,
-                roles=roles,
-            )
-            merged = {
-                key: value for key, value in base.items() if key not in set(roles)
-            }
-            merged.update(built)
+        merged = _merge_event_inputs(spec, self.inputs, self.event_layer)
         swapped = self.adapter is not None and hasattr(self.adapter, "_inputs")
         previous = getattr(self.adapter, "_inputs", None)
         if swapped:
@@ -1565,6 +1786,36 @@ class ProductionAssembly:
             if swapped:
                 self.adapter._inputs = previous
         return _pe._scenario_panel(template, spec, merged, self.overlay)
+
+    def _universe_skeleton(
+        self, fold: Fold
+    ) -> tuple[tuple[Any, ...], Mapping[Any, Sequence[str]]]:
+        """The fold's universe skeleton, without evaluating any factor.
+
+        The skeleton is spec-independent, so it is read once from the
+        adapter's D7b/D6 loader (``RealInputAdapter._load``) and cached; this
+        avoids the per-candidate ``factor_input_states`` evaluation that the
+        reference ``panel_of`` performs only to obtain the row grid.
+        """
+        loader = getattr(self.adapter, "_load", None)
+        if loader is None:
+            raise LaunchError(
+                "the assembly's adapter exposes no universe skeleton loader; "
+                "the fast panel builder cannot rebuild the frozen row grid"
+            )
+        loaded = loader(_run.C3_UNIVERSE, fold)
+        return tuple(loaded.formations), dict(loaded.universe_by_formation)
+
+    def _panel_template_for(self, fold: Fold) -> Any:
+        """The cached, spec-independent skeleton template for ``fold``."""
+        key = _fold_cache_key(fold)
+        cached = self.panel_template_cache.get(key)
+        if cached is not None:
+            return cached
+        formations, universe = self._universe_skeleton(fold)
+        template = _panel_skeleton(formations, universe)
+        self.panel_template_cache[key] = template
+        return template
 
     def screen_candidate_builder(self, snapshot: Any) -> tuple[tuple[Any, ...], Any]:
         """Build the C3-S candidates + control from the generation snapshot.
@@ -1586,16 +1837,13 @@ class ProductionAssembly:
         from smart_beta.campaign import campaign3_screen as _screen
 
         records = tuple(getattr(snapshot, "candidates", ()))
-        entries: list[tuple[Mapping[str, Any], str, dict[str, Any]]] = []
-        for record in records:
-            digest = str(record.get("diagnostics_hash"))
-            entry = self.ta_cache.get(digest)
-            if entry is None:
-                entry = self._load_persisted_entry(snapshot, record, digest)
-                self.ta_cache[digest] = entry
-            entries.append((record, digest, entry))
+        # P6-E5 C3-L-R6: rebuild every cold candidate's panel + declaration in
+        # parallel workers (when requested) and assemble in snapshot order.
+        entries, _prologue_completion = self._load_persisted_entries(
+            snapshot, records
+        )
         series_by_index, completion_order = self._build_exports(snapshot, entries)
-        # P6-E5 C3-L-R5: the candidate list is assembled in the original
+        # P6-E5 C3-L-R5/R6: the candidate list is assembled in the original
         # generation-snapshot order, never in worker-completion order.
         ordered = list(range(len(entries)))
         candidates: list[Any] = []
@@ -1696,6 +1944,140 @@ class ProductionAssembly:
 
     def _screen_completed(self, future_to_index: Mapping[Any, int]) -> Any:
         return as_completed(future_to_index)
+
+    def _prologue_context(self, *, restore: bool = False) -> _PrologueContext:
+        """The (picklable) shared cold-prologue context for this assembly."""
+        context = _PrologueContext(
+            template=self._panel_template_for(self.is_fold),
+            inputs=dict(self.inputs),
+            overlay=self.overlay,
+            event_layer_state=_serialize_event_layer(self.event_layer),
+            declaration_builder=self.declaration_builder,
+        )
+        if restore:
+            return _dataclass_replace(
+                context,
+                event_layer=_restore_event_layer(context.event_layer_state),
+            )
+        return context
+
+    def _open_prologue_pool(self, workers: int, context: _PrologueContext) -> Any:
+        """The spawn-based process pool for cold-prologue rebuilds (R6)."""
+        mp_context = multiprocessing.get_context("spawn")
+        return ProcessPoolExecutor(
+            max_workers=int(workers),
+            mp_context=mp_context,
+            initializer=_init_prologue_worker,
+            initargs=(context,),
+        )
+
+    def _prologue_completed(self, future_to_index: Mapping[Any, int]) -> Any:
+        return as_completed(future_to_index)
+
+    def _load_persisted_entries(
+        self,
+        snapshot: Any,
+        records: Sequence[Mapping[str, Any]],
+    ) -> tuple[list[Any], list[int]]:
+        """Rebuild every cold candidate's panel + declaration, in snapshot order.
+
+        A snapshot entry already captured in the warm :attr:`ta_cache` is
+        reused.  Every other entry's persisted diagnostics is verified and its
+        spec-independent row grid/panel rebuild is dispatched to a worker pool
+        when ``screen_workers > 1``; the returned entries are always placed at
+        their snapshot index.  ``completion_order`` records finalization order
+        (used only by the mutation anchor).
+        """
+        total = len(records)
+        entries: list[Any] = [None] * total
+        completion_order: list[int] = []
+        pending: list[tuple[int, _PrologueJob, Mapping[str, Any], str]] = []
+        diagnostics_dir: Path | None = None
+        for index, record in enumerate(records):
+            digest = str(record.get("diagnostics_hash"))
+            entry = self.ta_cache.get(digest)
+            if entry is not None:
+                entries[index] = (record, digest, entry)
+                completion_order.append(index)
+                continue
+            if diagnostics_dir is None:
+                diagnostics_dir = self._diagnostics_dir(snapshot)
+            spec = self._load_persisted_provenance(diagnostics_dir, digest, record)
+            if self._cold_resume_rebuilds_via_evaluator():
+                if self.ta_evaluator is None:
+                    raise LaunchError(
+                        "the assembly has no bound T-A evaluator to rebuild a "
+                        "cold screen candidate"
+                    )
+                self.ta_evaluator(
+                    _ProposalView(
+                        proposal_id=str(
+                            record.get(
+                                "proposal_id", record.get("hypothesis_id", "")
+                            )
+                        ),
+                        proposed_factor_spec=spec,
+                        proposed_factor_spec_hash=str(
+                            record.get("factor_spec_hash", "")
+                        ),
+                    )
+                )
+            pending.append(
+                (
+                    index,
+                    _PrologueJob(str(diagnostics_dir), digest, spec, self.is_fold),
+                    record,
+                    digest,
+                )
+            )
+        if not pending:
+            return entries, completion_order
+        workers = max(1, int(self.screen_workers))
+        if workers == 1:
+            context = self._prologue_context(restore=True)
+            for index, job, record, digest in pending:
+                entry = _build_prologue_from_job(context, job)
+                self.ta_cache[job.diagnostics_hash] = entry
+                entries[index] = (record, digest, entry)
+                completion_order.append(index)
+        else:
+            self._run_parallel_prologue(
+                workers, pending, entries, completion_order
+            )
+        return entries, completion_order
+
+    def _run_parallel_prologue(
+        self,
+        workers: int,
+        pending: Sequence[tuple[int, _PrologueJob, Mapping[str, Any], str]],
+        entries: list[Any],
+        completion_order: list[int],
+    ) -> None:
+        """Rebuild the pending cold candidates in a spawned process pool."""
+        context = self._prologue_context()
+        pool = self._open_prologue_pool(workers, context)
+        future_to_index: dict[Future, int] = {}
+        job_by_index: dict[int, tuple[_PrologueJob, Mapping[str, Any], str]] = {}
+        try:
+            for index, job, record, digest in pending:
+                job_by_index[index] = (job, record, digest)
+                future_to_index[pool.submit(_build_prologue_worker, job)] = index
+            for future in self._prologue_completed(future_to_index):
+                index = future_to_index[future]
+                job, record, digest = job_by_index[index]
+                try:
+                    entry = future.result()
+                except Exception as exc:  # noqa: BLE001 - fail closed
+                    raise LaunchError(
+                        "a screen prologue worker failed for diagnostics_hash "
+                        f"{job.diagnostics_hash!r} "
+                        f"({type(exc).__name__}: {exc})"
+                    ) from exc
+                entries[index] = (record, digest, entry)
+                self.ta_cache[job.diagnostics_hash] = entry
+                completion_order.append(index)
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _build_exports(
         self,
@@ -1888,67 +2270,15 @@ class ProductionAssembly:
     def _load_persisted_entry(
         self, snapshot: Any, record: Mapping[str, Any], digest: str
     ) -> dict[str, Any]:
-        """Rehydrate one cache entry from the verified persisted diagnostics.
+        """Rehydrate one entry from its verified persisted diagnostics.
 
-        The content-addressed diagnostics is loaded and fully verified from
-        ``diagnostics_store`` (missing/corrupt/mismatched-hash fails closed),
-        its persisted FactorSpec provenance sidecar names the candidate's spec
-        (missing/mismatched fails closed), and the artifact is rehydrated from
-        its exact ``to_dict`` payload -- the T-A evaluator is **never** re-run
-        (P6-E5 C3-L-R5).  The panel/declaration are rebuilt from the persisted
-        spec with the same warm-path builders, and must name exactly the
-        persisted declaration hash or the cold path fails closed.
+        Thin one-record wrapper around :meth:`_load_persisted_entries` (the
+        P6-E5 C3-L-R6 cold-prologue path).
         """
-        from smart_beta.campaign import diagnostics_store as _store
-
-        diagnostics_dir = self._diagnostics_dir(snapshot)
-        try:
-            payload = _store.load_verified(diagnostics_dir, digest)
-        except _store.C1DiagnosticsError as exc:
-            raise LaunchError(
-                "the persisted T-A IS diagnostics for snapshot candidate "
-                f"{record.get('hypothesis_id')!r} is missing or corrupt "
-                f"(diagnostics_hash {digest!r})"
-            ) from exc
-        spec = self._load_persisted_provenance(diagnostics_dir, digest, record)
-        diagnostics = _rehydrate_diagnostics(digest, payload)
-        if self.ta_evaluator is None:
-            raise LaunchError(
-                "the assembly has no bound T-A evaluator to rebuild a cold "
-                "screen candidate"
-            )
-        if self._cold_resume_rebuilds_via_evaluator():
-            self.ta_evaluator(
-                _ProposalView(
-                    proposal_id=str(
-                        record.get(
-                            "proposal_id", record.get("hypothesis_id", "")
-                        )
-                    ),
-                    proposed_factor_spec=spec,
-                    proposed_factor_spec_hash=str(
-                        record.get("factor_spec_hash", "")
-                    ),
-                )
-            )
-        panel = self.panel_for(spec, self.is_fold)
-        declaration = self.declaration_builder(spec, panel, self.is_fold)
-        if str(declaration.declaration_hash) != str(diagnostics.declaration_hash):
-            raise LaunchError(
-                "the persisted T-A IS diagnostics for snapshot candidate "
-                f"{record.get('hypothesis_id')!r} names declaration "
-                f"{diagnostics.declaration_hash!r}, which does not match the "
-                f"rebuilt declaration {declaration.declaration_hash!r}"
-            )
-        return {
-            "diagnostics": diagnostics,
-            "provenance": {
-                "spec": spec,
-                "panel": panel,
-                "declaration": declaration,
-                "partition_fold": self.is_fold,
-            },
-        }
+        entries, _completion = self._load_persisted_entries(
+            snapshot, (record,)
+        )
+        return entries[0][2]
 
     def _cold_resume_rebuilds_via_evaluator(self) -> bool:
         """P6-E5 C3-L-R5: a verified persisted diagnostics is authoritative.
@@ -2289,13 +2619,22 @@ def assemble_production(
     return assembly
 
 
-def _make_declaration_builder(assembly: ProductionAssembly) -> Callable[..., Any]:
-    def build(spec: Any, panel: Any, fold: Fold) -> Any:
-        return _run.build_declaration(
-            spec=spec, panel=panel, fold=fold, bindings=assembly.bindings
-        )
+def _build_declaration_with_bindings(
+    spec: Any, panel: Any, fold: Fold, *, bindings: Any
+) -> Any:
+    """Module-level declaration builder (picklable for spawned cold workers)."""
+    return _run.build_declaration(
+        spec=spec, panel=panel, fold=fold, bindings=bindings
+    )
 
-    return build
+
+def _make_declaration_builder(assembly: ProductionAssembly) -> Callable[..., Any]:
+    # A ``functools.partial`` (not a closure) so the production builder is
+    # picklable and can be carried into the spawned cold-prologue workers
+    # (C3-L-R6).
+    from functools import partial
+
+    return partial(_build_declaration_with_bindings, bindings=assembly.bindings)
 
 
 def _make_ta_evaluator(
