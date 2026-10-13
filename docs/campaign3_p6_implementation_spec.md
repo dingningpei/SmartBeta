@@ -331,3 +331,41 @@ verified by the planner with `certify_candidate`):**
    - the 10-probe preflight;
    - the full suite;
    - **attempt 4 from scratch** (N = 100), under the standing authorization.
+
+## Erratum P6-E6 (APPROVED with P5-E2, 2026-10-13) — forwarding step C3-F
+
+- **New task C3-F**, owning new files only: `smart_beta/campaign/campaign3_forward.py`,
+  `tests/test_campaign3_forward.py`, `tests/fixtures/campaign3_forward/**`.
+- **Inputs:**
+  - the attempt-4 run directory;
+  - the persisted exports (screen cache) and diagnostics;
+  - production assembly components from `campaign3_launch` (read-only import): the
+    registry, admission records and procedure ref;
+  - the canonical K-PIT.
+- **Steps:**
+  1. rebuild the 99 `ScreeningCandidate`s through the launcher cold path (cached exports
+     only, with no rebuild allowed);
+  2. call the unchanged `campaign3_screen.rank_candidates`, and verify `content_hash`
+     against TB_SELECTION (seq 159) `ranking_table_hash`;
+  3. compute the forwarded id (rank 1 eligible) or NO_RESERVE_USE;
+  4. append one K-PIT **FORWARDING** HUMAN_DECISION record with schema
+     `campaign3-forwarding-v1`. It binds the active CAMPAIGN record hash, the
+     TB_SELECTION record hash, the ranking table hash, the forwarded id or
+     NO_RESERVE_USE, the P5 document SHA-256 including E2, and the `campaign3_forward.py`
+     SHA-256. The append is idempotent through a schema-scoped lookup;
+  5. write the report (JSON + MD) per P5-E2 item 6.
+- **Prohibited:** no T-C, no ACCESS record, no reserve path. The tests assert that no
+  `reserve_sealed` path is opened.
+- **Tests (synthetic):**
+  - forwarded = rank 1;
+  - ranking-hash mismatch → STOP;
+  - no eligible candidate → NO_RESERVE_USE;
+  - the control is never forwarded;
+  - FORWARDING is idempotent and scoped to the active CAMPAIGN record;
+  - the report contains the power and T-B disclosures.
+- **Mutations:**
+  - F-M1: forwarded = rank 2;
+  - F-M2: the hash check skipped;
+  - F-M3: the control forwardable;
+  - F-M4: a reserve path opened;
+  - F-M5: the FORWARDING record not bound to TB_SELECTION.
