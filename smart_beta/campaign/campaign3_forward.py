@@ -1,9 +1,12 @@
 """C3-F -- the Campaign-3 forwarding step (Erratum P6-E6, implementing P5-E2).
 
 Authority: the frozen ``docs/campaign3_p6_implementation_spec.md`` Erratum
-P6-E6 and the frozen ``docs/campaign3_p5_precommitment.md`` Erratum P5-E2
-(both APPROVED, binding; they supersede P5 D8/D10 and drop T-B).  Erratum
-P5-E2 item 2 replaces the D10 forwarding rule with:
+P6-E6 and the frozen, separate ``docs/campaign3_p5_erratum_e2.md`` Erratum
+P5-E2 (both APPROVED, binding; they supersede P5 D8/D10 and drop T-B).
+P5-E2 was moved out of ``docs/campaign3_p5_precommitment.md`` (restored to
+its bound content) into its own document; the FORWARDING record binds that
+document's SHA-256 separately from the precommitment SHA-256.  Erratum P5-E2
+item 2 replaces the D10 forwarding rule with:
 
     the forwarded hypothesis is **rank 1 of the D9 IS ranking table**
     (eligible = ASSESSED + CERTIFIED with an L envelope assessed in every
@@ -27,7 +30,8 @@ The forward step owns exactly these steps (P6-E6):
 4. compute the forwarded id (rank 1 eligible) or ``NO_RESERVE_USE``;
 5. append one ``FORWARDING`` ``HUMAN_DECISION`` record (schema
    ``campaign3-forwarding-v1``), idempotently, bound to the **active** CAMPAIGN
-   record and to the TB_SELECTION record;
+   record, to the TB_SELECTION record, to the P5 precommitment document
+   SHA-256 and to the separate P5-E2 document SHA-256;
 6. write the JSON + Markdown report.
 
 There is **no T-C computation**, **no ACCESS record** and **no reserve path**
@@ -71,6 +75,8 @@ __all__ = [
     "FORWARD",
     "REPORT_DIRNAME",
     "P5_PATH",
+    "P5_E2_PATH",
+    "P5_E2_DOCUMENT",
     "FORWARD_MODULE_PATH",
     "P5_E2_POWER_STATEMENT",
     "TB_INFEASIBILITY_DISCLOSURE",
@@ -106,8 +112,11 @@ FORWARDING_RECORD_TYPE = "FORWARDING"
 #: The forwarding report schema.
 FORWARDING_REPORT_SCHEMA = "campaign3-forwarding-report-v1"
 
-#: Erratum P5-E2 item 2: the decision rule, recorded verbatim in K-PIT.
-DECISION_RULE = "P5-E2: rank-1 of D9 IS ranking"
+#: Erratum P5-E2 item 2: the decision rule, recorded in K-PIT.  It cites the
+#: separate P5-E2 document that the record and the report bind by SHA-256.
+DECISION_RULE = (
+    "P5-E2 (docs/campaign3_p5_erratum_e2.md): rank-1 of D9 IS ranking"
+)
 
 #: The literal forwarded id used when no candidate is eligible.
 NO_RESERVE_USE = "NO_RESERVE_USE"
@@ -118,8 +127,15 @@ FORWARD = "FORWARD"
 #: The run-directory subdirectory the forwarding report is written to.
 REPORT_DIRNAME = "forwarding"
 
-#: The frozen P5 precommitment document (including erratum E2).
+#: The frozen P5 precommitment document (restored to its bound content).
 P5_PATH = _run.PRECOMMITMENT_PATH
+
+#: The separate P5-E2 amendment document (P5-E2 was moved out of the
+#: precommitment file, which was restored to its bound content).
+P5_E2_PATH = P5_PATH.parent / "campaign3_p5_erratum_e2.md"
+
+#: The repo-relative P5-E2 document reference recorded in the record/report.
+P5_E2_DOCUMENT = "docs/campaign3_p5_erratum_e2.md"
 
 #: This module's own source file (its SHA-256 is bound into the record).
 FORWARD_MODULE_PATH = Path(__file__).resolve()
@@ -206,6 +222,7 @@ class ForwardingInputs:
     tb_selection_ranking_table_hash: str
     run_dir: str
     p5_sha256: str
+    p5_e2_sha256: str
     forward_module_sha256: str
 
 
@@ -243,6 +260,8 @@ class ForwardingReport:
             "decision": self.decision,
             "decision_rule": DECISION_RULE,
             "p5_sha256": self.inputs.p5_sha256,
+            "p5_e2_sha256": self.inputs.p5_e2_sha256,
+            "p5_e2_document": P5_E2_DOCUMENT,
             "forward_module_sha256": self.inputs.forward_module_sha256,
             "dry_run": bool(self.dry_run),
             "forwarding_record_hash": self.forwarding_record_hash,
@@ -289,6 +308,22 @@ def _forward_module_sha256(path: Path | str = FORWARD_MODULE_PATH) -> str:
 
 def _p5_sha256(path: Path | str = P5_PATH) -> str:
     return _sha256_file(path)
+
+
+def _p5_e2_sha256(path: Path | str = P5_E2_PATH) -> str:
+    """SHA-256 of the separate P5-E2 document; fail closed if it is missing.
+
+    The FORWARDING record binds this document's SHA-256 (P6-E6), so a missing
+    document is a hard stop -- never a silent skip and never an empty digest.
+    """
+    candidate = Path(path)
+    if not candidate.is_file():
+        raise ForwardingError(
+            "the P5-E2 document is missing at "
+            f"{candidate}; the forwarding record binds its SHA-256 "
+            "(P6-E6), so forwarding is refused"
+        )
+    return _sha256_file(candidate)
 
 
 def _refuse_reserve_boundary(target: Path | str) -> None:
@@ -492,6 +527,7 @@ def _forwarding_payload(
     ranking_table_hash: str,
     forwarded_id: str,
     p5_sha256: str,
+    p5_e2_sha256: str,
     forward_module_sha256: str,
 ) -> dict[str, Any]:
     return {
@@ -506,6 +542,8 @@ def _forwarding_payload(
             "ranking_table_hash": ranking_table_hash,
             "forwarded_id": forwarded_id,
             "p5_sha256": p5_sha256,
+            "p5_e2_sha256": p5_e2_sha256,
+            "p5_e2_document": P5_E2_DOCUMENT,
             "forward_module_sha256": forward_module_sha256,
             "decision_rule": DECISION_RULE,
         },
@@ -573,6 +611,9 @@ def render_markdown(report: ForwardingReport) -> str:
         "- hash verified: "
         f"**{report.ranking_table_hash == report.inputs.tb_selection_ranking_table_hash}**"
     )
+    lines.append(f"- P5 precommitment SHA-256: `{report.inputs.p5_sha256}`")
+    lines.append(f"- P5-E2 document: `{P5_E2_DOCUMENT}`")
+    lines.append(f"- P5-E2 document SHA-256: `{report.inputs.p5_e2_sha256}`")
     lines.append("")
     lines.append("## IS ranking (D9, descriptive; IS is the generator-visible tier)")
     lines.append("")
@@ -691,6 +732,7 @@ def forward(
     rank_fn: Callable[..., Any] | None = None,
     assembly_factory: Callable[..., Any] | None = None,
     p5_path: Path | str = P5_PATH,
+    p5_e2_path: Path | str = P5_E2_PATH,
     forward_module_path: Path | str = FORWARD_MODULE_PATH,
 ) -> ForwardingResult:
     """Execute C3-F (P6-E6) once, or reconcile an already-written decision."""
@@ -761,6 +803,7 @@ def forward(
         tb_selection_ranking_table_hash=tb_ranking_hash,
         run_dir=str(run_dir),
         p5_sha256=_p5_sha256(p5_path),
+        p5_e2_sha256=_p5_e2_sha256(p5_e2_path),
         forward_module_sha256=_forward_module_sha256(forward_module_path),
     )
 
@@ -774,6 +817,7 @@ def forward(
             ranking_table_hash=ranking.content_hash,
             forwarded_id=forwarded_id,
             p5_sha256=inputs.p5_sha256,
+            p5_e2_sha256=inputs.p5_e2_sha256,
             forward_module_sha256=inputs.forward_module_sha256,
         )
         record, appended = _write_forwarding_record(

@@ -301,6 +301,11 @@ def test_report_contains_power_and_disclosures(tmp_path: Path) -> None:
     assert report["d12_break_even"] == F.D12_UNAVAILABLE_DISCLOSURE
     assert report["hash_verified"] is True
     assert report["forwarded_id"] == result.forwarded_id
+    # the report references the separate P5-E2 document and both bound hashes
+    assert report["p5_sha256"] == F._p5_sha256()
+    assert report["p5_e2_sha256"] == F._p5_e2_sha256()
+    assert report["p5_e2_document"] == F.P5_E2_DOCUMENT
+    assert F.P5_E2_DOCUMENT in report["decision_rule"]
     # the full IS ranking table is reproduced (descriptive)
     assert len(report["ranking"]["rows"]) == len(scene.ranking.rows)
 
@@ -309,6 +314,8 @@ def test_report_contains_power_and_disclosures(tmp_path: Path) -> None:
     assert F.TB_INFEASIBILITY_DISCLOSURE in markdown
     assert F.ATTEMPTS_1_3_DISCLOSURE in markdown
     assert F.D12_UNAVAILABLE_DISCLOSURE in markdown
+    assert F.P5_E2_DOCUMENT in markdown
+    assert F._p5_e2_sha256() in markdown
     assert CREDENTIAL_SENTINEL not in markdown
     assert CREDENTIAL_SENTINEL not in json_path.read_text(encoding="utf-8")
 
@@ -451,6 +458,45 @@ def test_forwarding_record_binds_tb_selection(tmp_path: Path) -> None:
     assert result.forwarding_record_hash == record.record_hash
 
 
+def test_forwarding_record_carries_both_p5_hashes(tmp_path: Path) -> None:
+    """Kills mutation F-M6 (p5_e2_sha256 omitted from the payload).
+
+    The FORWARDING record binds the precommitment SHA-256 and the separate
+    P5-E2 document SHA-256; both are present, distinct and non-empty.
+    """
+    scene = _scene(tmp_path)
+    result = _forward(scene)
+    forwarding = _forwarding_records(scene)[0].payload["forwarding"]
+    assert forwarding["p5_sha256"] == F._p5_sha256()
+    assert forwarding["p5_e2_sha256"] == F._p5_e2_sha256()
+    assert forwarding["p5_e2_document"] == F.P5_E2_DOCUMENT
+    assert forwarding["p5_sha256"] != forwarding["p5_e2_sha256"]
+    assert result.report.inputs.p5_e2_sha256 == F._p5_e2_sha256()
+
+
+def test_decision_rule_cites_the_separate_e2_document(tmp_path: Path) -> None:
+    """The recorded decision_rule cites the separate P5-E2 document."""
+    scene = _scene(tmp_path)
+    _forward(scene)
+    forwarding = _forwarding_records(scene)[0].payload["forwarding"]
+    assert "P5-E2 (docs/campaign3_p5_erratum_e2.md)" in forwarding[
+        "decision_rule"
+    ]
+
+
+def test_missing_p5_e2_document_stops_fail_closed(tmp_path: Path) -> None:
+    """A missing P5-E2 document is a fail-closed error; nothing is written."""
+    scene = _scene(tmp_path)
+    before = len(scene.log.read())
+    missing = tmp_path / "not_the_p5_e2.md"
+    assert not missing.exists()
+    with pytest.raises(F.ForwardingError):
+        _forward(scene, p5_e2_path=missing)
+    assert len(scene.log.read()) == before
+    assert not (scene.run_dir / F.REPORT_DIRNAME).exists()
+    assert _forwarding_records(scene) == []
+
+
 # ---------------------------------------------------------------------------
 # 6. dry run, no T-C, no ACCESS, no reserve, no literal
 # ---------------------------------------------------------------------------
@@ -560,7 +606,7 @@ def test_cli_writes_record_and_report(
 
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
-    assert [m["id"] for m in mutations] == [f"F-M{i}" for i in range(1, 6)]
+    assert [m["id"] for m in mutations] == [f"F-M{i}" for i in range(1, 7)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/campaign/campaign3_forward.py"
