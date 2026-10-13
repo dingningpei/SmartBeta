@@ -1,0 +1,62 @@
+[
+ {
+  "id": "F-M1",
+  "description": "the forwarded id is rank 2, not rank 1 of the D9 table",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "    return ranking.selected[0] if ranking.selected else NO_RESERVE_USE",
+    "new": "    return ranking.selected[1] if ranking.selected else NO_RESERVE_USE  # mutation F-M1: rank 2"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_forwarded_is_rank_one"
+ },
+ {
+  "id": "F-M2",
+  "description": "the ranking-table hash check against TB_SELECTION is skipped",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "    if ranking.content_hash != tb_ranking_hash:",
+    "new": "    if False:  # mutation F-M2: the ranking-hash check is skipped"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_ranking_hash_mismatch_stops"
+ },
+ {
+  "id": "F-M3",
+  "description": "the positive control is forwardable",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "    if control_id and forwarded_id == control_id:",
+    "new": "    if False:  # mutation F-M3: the control is forwardable"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_control_is_never_forwarded"
+ },
+ {
+  "id": "F-M4",
+  "description": "a reserve path is opened",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "    if \"reserve_sealed\" in text:\n        raise ForwardingError(\n            f\"the forwarding step refuses a reserve path: {text}\"\n        )",
+    "new": "    open(Path(\"reserve_sealed\") / \"leak\", \"w\")  # mutation F-M4: a reserve path opened\n    if \"reserve_sealed\" in text:\n        raise ForwardingError(\n            f\"the forwarding step refuses a reserve path: {text}\"\n        )"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_no_reserve_path_is_opened"
+ },
+ {
+  "id": "F-M5",
+  "description": "the FORWARDING record is not bound to the TB_SELECTION record",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "            \"tb_selection_record_hash\": tb_selection_record_hash,",
+    "new": "            \"tb_selection_record_hash\": \"\",  # mutation F-M5: not bound to TB_SELECTION"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_forwarding_record_binds_tb_selection"
+ }
+]
