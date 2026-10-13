@@ -607,6 +607,109 @@ def test_pool_tb_folds_concatenates_in_fold_order():
     assert record.b_series == (0.01, 0.02, 0.01, 0.02)
 
 
+def _fold_key(fold: Any) -> str:
+    from smart_beta.dataset_v1.delisting_bridge import fold_key
+
+    return fold_key(fold)
+
+
+def test_single_fold_tb_evaluator_injects_the_bound_fold(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """Kills mutation L-M20: the exporter's ``fold`` is required again.
+
+    The frozen :class:`campaign3_run.TbEvaluator` iterates ``folds=(fold,)``
+    and calls the exporter **without** a ``fold`` keyword.  The launcher's
+    single-fold wrapper must therefore default ``fold`` to the one fold the
+    evaluator is bound to, for both the OOS and the DEVELOPMENT_SEALED
+    (HOLDOUT) T-B fold, and build the export for exactly that fold.
+    """
+    assembly = _assembly(tmp_path)
+    # The fake adapter exposes only ``panel_of``; the bound panel builder is
+    # not the subject of this test.
+    assembly.panel_for = lambda spec, fold: fx.fake_panel()
+    # ``FakeDiagnostics`` is not content-addressable; skip the write-ahead
+    # persist (a fake hash).  The fold wiring is what is under test.
+    monkeypatch.setattr(
+        R, "_persist_diagnostics", lambda diagnostics, directory: "e" * 64
+    )
+
+    recorded: list[dict[str, Any]] = []
+
+    def recording_export(
+        *args: Any,
+        diagnostics: Any = None,
+        fold: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        recorded.append({"args": args, "fold": fold})
+        return fx.fake_export_series_fn()
+
+    assembly.export_series_fn = recording_export
+    spec = L.simple_factor_spec()
+    hypothesis_id = "h" * 64
+    assembly.proposal_lookup[hypothesis_id] = L._ProposalView(
+        proposal_id="p" * 64,
+        proposed_factor_spec=spec,
+        proposed_factor_spec_hash=spec.version,
+    )
+
+    oos_fold = assembly.partition.oos_folds[0]
+    sealed_fold = assembly.partition.holdout_fold
+    assert oos_fold != sealed_fold
+
+    for bound_fold in (oos_fold, sealed_fold):
+        evaluator = assembly._single_fold_tb_evaluator(bound_fold)
+        # The real frozen T-B evaluator, never a fake.
+        assert isinstance(evaluator, R.TbEvaluator)
+        before = len(recorded)
+        evaluation = evaluator(hypothesis_id)
+        # The exporter was called exactly once, without a ``fold`` keyword,
+        # and the wrapper supplied the bound fold (its P-Q realization).
+        assert len(recorded) == before + 1
+        call = recorded[-1]
+        assert call["fold"] == L._pqv2_fold(bound_fold)
+        declaration = call["args"][1]
+        assert declaration.base.fold_key == _fold_key(bound_fold)
+        assert evaluation.folds[0].fold_key == _fold_key(bound_fold)
+
+
+def test_single_fold_tb_evaluator_rejects_a_foreign_fold(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """An explicitly supplied fold must be the bound fold (fail closed)."""
+    assembly = _assembly(tmp_path)
+    assembly.panel_for = lambda spec, fold: fx.fake_panel()
+    monkeypatch.setattr(
+        R, "_persist_diagnostics", lambda diagnostics, directory: "e" * 64
+    )
+    assembly.export_series_fn = lambda *a, **k: fx.fake_export_series_fn()
+
+    spec = L.simple_factor_spec()
+    oos_fold = assembly.partition.oos_folds[0]
+    sealed_fold = assembly.partition.holdout_fold
+    evaluator = assembly._single_fold_tb_evaluator(oos_fold)
+    declaration = assembly.declaration_builder(spec, fx.fake_panel(), oos_fold)
+    wrapper = evaluator.export_series_fn
+
+    def _call(fold: Any) -> Any:
+        return wrapper(
+            assembly.dataset_root,
+            declaration,
+            spec,
+            fx.fake_panel(),
+            assembly.partition,
+            diagnostics=fx.FakeDiagnostics(),
+            fold=fold,
+        )
+
+    # The bound fold is accepted.
+    assert _call(oos_fold) is not None
+    # A different development-window fold (the sealed fold) fails closed.
+    with pytest.raises(L.LaunchError):
+        _call(sealed_fold)
+
+
 # ---------------------------------------------------------------------------
 # 7. cold-resume screen rebuild (P6-E5 C3-L-R3; mutation L-M9)
 # ---------------------------------------------------------------------------
@@ -1188,6 +1291,7 @@ def test_mutations_fixture_is_wellformed():
         "L-M17",
         "L-M18",
         "L-M19",
+        "L-M20",
     } <= ids
     for entry in entries:
         target = _REPO_ROOT / entry["file"]
