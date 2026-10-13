@@ -70,5 +70,17 @@
    }
   ],
   "test": "tests/test_campaign3_forward.py::test_forwarding_record_carries_both_p5_hashes"
+ },
+ {
+  "id": "F-M7",
+  "description": "the generation snapshot's diagnostics_dir is trusted blindly instead of the launcher assembly's bound resolution",
+  "file": "smart_beta/campaign/campaign3_forward.py",
+  "edits": [
+   {
+    "old": "    diagnostics_dir = _assembly_bound_dir(assembly, \"diagnostics_dir\")",
+    "new": "    diagnostics_dir = _snapshot_diagnostics_dir(generation)  # mutation F-M7: snapshot dir trusted blindly"
+   }
+  ],
+  "test": "tests/test_campaign3_forward.py::test_snapshot_dir_empty_assembly_dir_populated"
  }
 ]

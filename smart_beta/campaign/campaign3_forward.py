@@ -24,7 +24,13 @@ The forward step owns exactly these steps (P6-E6):
 1. rebuild the generation snapshot's ``ScreeningCandidate`` objects through
    the launcher cold path, using **cached exports only** -- if any candidate's
    ``pqv2_series`` export is missing from the screen cache the step stops with
-   :class:`ForwardingError`; it never rebuilds one;
+   :class:`ForwardingError`; it never rebuilds one.  The T-A diagnostics and
+   screen-cache directories are resolved from the production launcher
+   assembly's bound ``diagnostics_dir`` / ``screen_cache_dir`` (the persisted
+   generation snapshot's ``diagnostics_dir`` field is only a fallback, and
+   only when it actually holds the artifacts), every diagnostics is verified
+   with ``diagnostics_store.load_verified`` against its exact snapshot
+   ``diagnostics_hash`` and every export is verified by its content hash;
 2. call the unchanged ``rank_candidates``;
 3. verify the ranking table hash against the TB_SELECTION record;
 4. compute the forwarded id (rank 1 eligible) or ``NO_RESERVE_USE``;
@@ -57,6 +63,7 @@ from typing import Any
 from smart_beta.campaign import campaign3_launch as _launch
 from smart_beta.campaign import campaign3_run as _run
 from smart_beta.campaign import campaign3_screen as _screen
+from smart_beta.campaign import diagnostics_store as _store
 from smart_beta.science.contracts import content_hash
 from smart_beta.science.knowledge import (
     Channel,
@@ -221,6 +228,8 @@ class ForwardingInputs:
     tb_selection_record_hash: str
     tb_selection_ranking_table_hash: str
     run_dir: str
+    artifacts_dir: str
+    screen_cache_dir: str
     p5_sha256: str
     p5_e2_sha256: str
     forward_module_sha256: str
@@ -252,6 +261,10 @@ class ForwardingReport:
             "tb_selection_ranking_table_hash": (
                 self.inputs.tb_selection_ranking_table_hash
             ),
+            "artifacts": {
+                "diagnostics_dir": self.inputs.artifacts_dir,
+                "screen_cache_dir": self.inputs.screen_cache_dir,
+            },
             "hash_verified": (
                 self.ranking_table_hash
                 == self.inputs.tb_selection_ranking_table_hash
@@ -394,8 +407,21 @@ def _load_generation(run_dir: Path) -> _run.GenerationSnapshot:
 
 
 def _load_screen_export(cache_dir: Path | str, digest: str) -> Any:
-    """Load one cached export; a miss is a hard stop (never a rebuild)."""
-    series = _launch._load_screen_export(cache_dir, digest)
+    """Load one cached export; a miss or mismatch is a hard stop.
+
+    The launcher verifier raises on a present-but-corrupt export; that is
+    re-typed as a :class:`ForwardingError` so every cache failure shares the
+    one fail-closed type.  A missing export is a hard stop and is never
+    rebuilt (P6-E6 step 1).
+    """
+    try:
+        series = _launch._load_screen_export(cache_dir, digest)
+    except _launch.LaunchError as exc:
+        raise ForwardingError(
+            "the persisted screen export for diagnostics_hash "
+            f"{digest!r} in {cache_dir} failed its content-hash verification: "
+            f"{exc}"
+        ) from exc
     if series is None:
         raise ForwardingError(
             "the screen export cache is missing the export for "
@@ -405,38 +431,127 @@ def _load_screen_export(cache_dir: Path | str, digest: str) -> Any:
     return series
 
 
+def _candidate_digests(generation: _run.GenerationSnapshot) -> tuple[str, ...]:
+    """The exact ``diagnostics_hash`` of every snapshot candidate, in order."""
+    digests: list[str] = []
+    for record in generation.candidates:
+        digest = (
+            record.get("diagnostics_hash")
+            if isinstance(record, Mapping)
+            else None
+        )
+        if not isinstance(digest, str) or not digest:
+            raise ForwardingError(
+                "a generation candidate carries no diagnostics_hash; the "
+                "forwarding step cannot verify its cached artifacts"
+            )
+        digests.append(digest)
+    return tuple(digests)
+
+
+def _snapshot_diagnostics_dir(
+    generation: _run.GenerationSnapshot,
+) -> Path | None:
+    value = getattr(generation, "diagnostics_dir", None)
+    return Path(value) if value else None
+
+
+def _assembly_bound_dir(assembly: Any, name: str) -> Path | None:
+    """The directory the launcher assembly itself bound for ``name``.
+
+    ``assemble_production`` computes ``diagnostics_dir = runs / identity /
+    "diagnostics"`` and ``screen_cache_dir = runs / identity /
+    "screen_cache"`` and stores them on the assembly; those bound values are
+    the launcher's resolution and are authoritative.
+    """
+    value = getattr(assembly, name, None)
+    return Path(value) if value else None
+
+
+def _resolve_artifact_dirs(
+    assembly: Any, generation: _run.GenerationSnapshot
+) -> tuple[Path, Path]:
+    """Resolve the T-A diagnostics and screen-cache directories (P6-E6).
+
+    The production launcher's bound ``diagnostics_dir`` / ``screen_cache_dir``
+    are authoritative because the persisted generation snapshot's
+    ``diagnostics_dir`` field may name an empty or stale attempt directory
+    (mutation F-M7 trusts it blindly).  The snapshot field is therefore only a
+    fallback, and only when it actually holds every candidate's artifact.  The
+    screen cache is resolved the same way and, when the assembly binds none,
+    from the resolved diagnostics directory's sibling ``screen_cache``
+    (exactly the launcher rule).
+    """
+    digests = _candidate_digests(generation)
+    snapshot_dir = _snapshot_diagnostics_dir(generation)
+
+    diagnostics_dir = _assembly_bound_dir(assembly, "diagnostics_dir")
+    cache_dir = _assembly_bound_dir(assembly, "screen_cache_dir")
+
+    if diagnostics_dir is None and snapshot_dir is not None:
+        if digests and all(
+            (snapshot_dir / f"{digest}.json").is_file() for digest in digests
+        ):
+            diagnostics_dir = snapshot_dir
+
+    if cache_dir is None and snapshot_dir is not None:
+        snapshot_cache = snapshot_dir.parent / _launch.SCREEN_CACHE_DIRNAME
+        if digests and all(
+            (snapshot_cache / f"{digest}{_launch.SCREEN_EXPORT_SUFFIX}").is_file()
+            for digest in digests
+        ):
+            cache_dir = snapshot_cache
+
+    if diagnostics_dir is None:
+        raise ForwardingError(
+            "the launcher assembly binds no T-A diagnostics directory and the "
+            "generation snapshot's diagnostics_dir holds none of the "
+            "candidate artifacts; refusing to forward"
+        )
+    if cache_dir is None:
+        cache_dir = Path(diagnostics_dir).parent / _launch.SCREEN_CACHE_DIRNAME
+    _refuse_reserve_boundary(diagnostics_dir)
+    _refuse_reserve_boundary(cache_dir)
+    return Path(diagnostics_dir), Path(cache_dir)
+
+
+def _verify_cached_artifacts(
+    generation: _run.GenerationSnapshot,
+    diagnostics_dir: Path | str,
+    cache_dir: Path | str,
+) -> None:
+    """Verify every snapshot candidate's cached diagnostics and export.
+
+    Every diagnostics artifact must pass ``diagnostics_store.load_verified``
+    for its exact snapshot ``diagnostics_hash`` and every export must pass the
+    cache content-hash verification; a missing or mismatched artifact is a
+    :class:`ForwardingError` and is never rebuilt (P6-E6 step 1).
+    """
+    _refuse_reserve_boundary(diagnostics_dir)
+    _refuse_reserve_boundary(cache_dir)
+    for digest in _candidate_digests(generation):
+        try:
+            _store.load_verified(diagnostics_dir, digest)
+        except _store.C1DiagnosticsError as exc:
+            raise ForwardingError(
+                "the T-A diagnostics artifact for diagnostics_hash "
+                f"{digest!r} in {diagnostics_dir} is missing or corrupt: "
+                f"{exc}; the forwarding step never rebuilds a diagnostic "
+                "(P6-E6)"
+            ) from exc
+        _load_screen_export(cache_dir, digest)
+
+
 def _build_candidates_cached(
     assembly: Any, generation: _run.GenerationSnapshot
 ) -> tuple[tuple[Any, ...], Any]:
     """Rebuild the C3-S candidates through the launcher cold path.
 
-    Every candidate's ``pqv2_series`` export must already be in the run's
-    screen cache; a missing one stops the step before the launcher builder is
-    ever called, so an export is never rebuilt (P6-E6 step 1).  The run
-    directory's ``diagnostics``/``screen_cache`` directories are bound onto the
-    assembly from the persisted generation snapshot, so the cold path resolves
-    exactly the attempt's own artifacts.
+    The artifact directories are resolved from the launcher assembly and every
+    cached diagnostics/export is verified by :func:`forward` before this is
+    called, so the cold path resolves the same bound directories and never
+    rebuilds a missing artifact (P6-E6 step 1).
     """
-    diagnostics_dir = getattr(generation, "diagnostics_dir", None)
-    if not diagnostics_dir:
-        raise ForwardingError(
-            "the generation snapshot carries no persisted diagnostics directory"
-        )
-    diagnostics_path = Path(diagnostics_dir)
-    _refuse_reserve_boundary(diagnostics_path)
-    if hasattr(assembly, "diagnostics_dir"):
-        assembly.diagnostics_dir = diagnostics_path
-    cache_dir = diagnostics_path.parent / _launch.SCREEN_CACHE_DIRNAME
-    if hasattr(assembly, "screen_cache_dir"):
-        assembly.screen_cache_dir = cache_dir
-    for record in generation.candidates:
-        digest = record.get("diagnostics_hash") if isinstance(record, Mapping) else None
-        if not isinstance(digest, str) or not digest:
-            raise ForwardingError(
-                "a generation candidate carries no diagnostics_hash; the "
-                "forwarding step cannot verify its cached export"
-            )
-        _load_screen_export(cache_dir, digest)
     builder = getattr(assembly, "screen_candidate_builder", None)
     if builder is None:
         raise ForwardingConfigurationError(
@@ -450,6 +565,16 @@ def _build_candidates_cached(
                 "cached series export; the forwarding step never rebuilds one"
             )
     return tuple(candidates), control
+
+
+def _relative_artifact_path(path: Path | str, run_root: Path | str) -> str:
+    """The resolved artifact path relative to the campaign3 root (audit)."""
+    resolved = Path(path).resolve()
+    root = Path(run_root).resolve()
+    try:
+        return str(resolved.relative_to(root))
+    except ValueError:
+        return str(resolved)
 
 
 def _default_rank(
@@ -529,6 +654,8 @@ def _forwarding_payload(
     p5_sha256: str,
     p5_e2_sha256: str,
     forward_module_sha256: str,
+    artifacts_dir: str,
+    screen_cache_dir: str,
 ) -> dict[str, Any]:
     return {
         "decision_kind": "OTHER",
@@ -541,6 +668,10 @@ def _forwarding_payload(
             "tb_selection_record_hash": tb_selection_record_hash,
             "ranking_table_hash": ranking_table_hash,
             "forwarded_id": forwarded_id,
+            "artifacts": {
+                "diagnostics_dir": artifacts_dir,
+                "screen_cache_dir": screen_cache_dir,
+            },
             "p5_sha256": p5_sha256,
             "p5_e2_sha256": p5_e2_sha256,
             "p5_e2_document": P5_E2_DOCUMENT,
@@ -614,6 +745,14 @@ def render_markdown(report: ForwardingReport) -> str:
     lines.append(f"- P5 precommitment SHA-256: `{report.inputs.p5_sha256}`")
     lines.append(f"- P5-E2 document: `{P5_E2_DOCUMENT}`")
     lines.append(f"- P5-E2 document SHA-256: `{report.inputs.p5_e2_sha256}`")
+    lines.append(
+        "- resolved diagnostics dir (campaign3-relative): "
+        f"`{report.inputs.artifacts_dir}`"
+    )
+    lines.append(
+        "- resolved screen-cache dir (campaign3-relative): "
+        f"`{report.inputs.screen_cache_dir}`"
+    )
     lines.append("")
     lines.append("## IS ranking (D9, descriptive; IS is the generator-visible tier)")
     lines.append("")
@@ -773,6 +912,14 @@ def forward(
         )
 
     builder = candidate_builder or _build_candidates_cached
+
+    # Resolve the attempt's cached T-A diagnostics and screen exports exactly
+    # as the production launcher assembly does, and verify every artifact by
+    # its content hash before the cold path consumes it.  The generation
+    # snapshot's own diagnostics_dir is never trusted blindly (mutation F-M7).
+    diagnostics_dir, cache_dir = _resolve_artifact_dirs(assembly, generation)
+    _verify_cached_artifacts(generation, diagnostics_dir, cache_dir)
+
     candidates, control = builder(assembly, generation)
 
     if rank_fn is not None:
@@ -802,6 +949,8 @@ def forward(
         tb_selection_record_hash=tb_selection_record.record_hash,
         tb_selection_ranking_table_hash=tb_ranking_hash,
         run_dir=str(run_dir),
+        artifacts_dir=_relative_artifact_path(diagnostics_dir, run_root),
+        screen_cache_dir=_relative_artifact_path(cache_dir, run_root),
         p5_sha256=_p5_sha256(p5_path),
         p5_e2_sha256=_p5_e2_sha256(p5_e2_path),
         forward_module_sha256=_forward_module_sha256(forward_module_path),
@@ -819,6 +968,8 @@ def forward(
             p5_sha256=inputs.p5_sha256,
             p5_e2_sha256=inputs.p5_e2_sha256,
             forward_module_sha256=inputs.forward_module_sha256,
+            artifacts_dir=inputs.artifacts_dir,
+            screen_cache_dir=inputs.screen_cache_dir,
         )
         record, appended = _write_forwarding_record(
             log,

@@ -35,6 +35,7 @@ from smart_beta.campaign import campaign3_forward as F
 from smart_beta.campaign import campaign3_launch as L
 from smart_beta.campaign import campaign3_screen as S
 from smart_beta.campaign import campaign3_run as R
+from smart_beta.campaign import diagnostics_store as _store
 from smart_beta.science.knowledge import KnowledgeLog, RecordKind
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -142,14 +143,29 @@ def _candidates(n: int = 3, **kwargs: Any) -> tuple[Any, ...]:
     )
 
 
-def _persist_exports(candidates: tuple[Any, ...], run_dir: Path) -> None:
-    cache = run_dir / "screen_cache"
+def _persist_artifacts(
+    candidates: tuple[Any, ...],
+    base_dir: Path,
+    *,
+    diagnostics: bool = True,
+    exports: bool = True,
+) -> None:
+    """Persist candidate diagnostics + exports into the assembly base dir.
+
+    The base dir stands in for the production launcher's bound identity
+    directory (``runs/<identity>/{diagnostics,screen_cache}``); it is
+    deliberately distinct from the generation snapshot's own (empty)
+    ``diagnostics_dir`` so the resolution fix is exercised.
+    """
+    base_dir.mkdir(parents=True, exist_ok=True)
     for candidate in candidates:
-        L._persist_screen_export(
-            cache,
-            candidate.diagnostics.diagnostics_hash,
-            candidate.series_export,
-        )
+        digest = candidate.diagnostics.diagnostics_hash
+        if diagnostics:
+            _store.persist(candidate.diagnostics, base_dir / "diagnostics")
+        if exports:
+            L._persist_screen_export(
+                base_dir / "screen_cache", digest, candidate.series_export
+            )
 
 
 def _scene(
@@ -159,7 +175,8 @@ def _scene(
     control: Any | None = None,
     selected: tuple[str, ...] | None = None,
     ranking_hash: str | None = None,
-    persist_exports: bool = False,
+    persist_exports: bool = True,
+    persist_diagnostics: bool = True,
     mangle_control_into_ranking: bool = False,
 ) -> _Scene:
     kpit_path = tmp_path / "kpit.jsonl"
@@ -208,8 +225,13 @@ def _scene(
         selected_ids=ranking.selected,
     )
 
-    if persist_exports:
-        _persist_exports(candidates, run_dir)
+    if persist_exports or persist_diagnostics:
+        _persist_artifacts(
+            candidates,
+            run_dir / "assembly",
+            diagnostics=persist_diagnostics,
+            exports=persist_exports,
+        )
 
     assembly = X.FakeAssembly(
         candidates=candidates,
@@ -217,8 +239,8 @@ def _scene(
         registry=registry,
         admission_records=tuple(admission),
         procedure_ref=dict(S.ADMITTED_PROCEDURE_REF),
-        diagnostics_dir=run_dir / "diagnostics",
-        screen_cache_dir=run_dir / "screen_cache",
+        diagnostics_dir=run_dir / "assembly" / "diagnostics",
+        screen_cache_dir=run_dir / "assembly" / "screen_cache",
     )
     return _Scene(
         log=log,
@@ -380,8 +402,8 @@ def test_control_is_never_forwarded(tmp_path: Path) -> None:
 
 def test_missing_screen_export_stops_fail_closed(tmp_path: Path) -> None:
     """A missing cached export stops before the builder; never a rebuild."""
-    scene = _scene(tmp_path)
-    # no export persisted at all
+    scene = _scene(tmp_path, persist_exports=False)
+    # diagnostics persisted, but no export persisted at all
     with pytest.raises(F.ForwardingError):
         _forward(scene, cached=True)
     assert scene.assembly.builder_calls == []
@@ -393,6 +415,111 @@ def test_cached_export_path_rebuilds_candidates(tmp_path: Path) -> None:
     result = _forward(scene, cached=True)
     assert result.forwarded_id == scene.ranking.selected[0]
     assert len(scene.assembly.builder_calls) == 1
+
+
+def test_snapshot_dir_empty_assembly_dir_populated(tmp_path: Path) -> None:
+    """Kills mutation F-M7 (the snapshot diagnostics_dir is trusted blindly).
+
+    The generation snapshot's ``diagnostics_dir`` points at an empty attempt
+    directory; the production launcher persisted the T-A diagnostics and
+    screen exports under the assembly's bound identity directory instead.  The
+    forward step must use the assembly's resolution, verify every artifact and
+    succeed -- the snapshot field is never trusted blindly.
+    """
+    scene = _scene(tmp_path, persist_exports=True)
+    snapshot_dir = scene.run_dir / "diagnostics"
+    assert snapshot_dir.is_dir()
+    assert not any(snapshot_dir.iterdir())  # the snapshot dir is empty
+    first_digest = scene.candidates[0].diagnostics.diagnostics_hash
+    assert (scene.assembly.diagnostics_dir / f"{first_digest}.json").is_file()
+    assert (
+        scene.assembly.screen_cache_dir / f"{first_digest}.export.json"
+    ).is_file()
+
+    result = _forward(scene, cached=True)
+    assert result.forwarded_id == scene.ranking.selected[0]
+    assert result.report.inputs.artifacts_dir == "assembly/diagnostics"
+    assert result.report.inputs.screen_cache_dir == "assembly/screen_cache"
+    assert result.report_paths is not None
+    report = json.loads(result.report_paths[0].read_text(encoding="utf-8"))
+    assert report["artifacts"] == {
+        "diagnostics_dir": "assembly/diagnostics",
+        "screen_cache_dir": "assembly/screen_cache",
+    }
+    forwarding = _forwarding_records(scene)[0].payload["forwarding"]
+    assert forwarding["artifacts"] == {
+        "diagnostics_dir": "assembly/diagnostics",
+        "screen_cache_dir": "assembly/screen_cache",
+    }
+
+
+def test_decoy_diagnostics_in_base_dir_stops(tmp_path: Path) -> None:
+    """A base-dir file with the right name but wrong content fails closed.
+
+    Every diagnostics artifact is verified with
+    ``diagnostics_store.load_verified`` against its exact snapshot
+    ``diagnostics_hash``; a decoy is never accepted and nothing is written.
+    """
+    scene = _scene(tmp_path)
+    digest = scene.candidates[0].diagnostics.diagnostics_hash
+    decoy = scene.assembly.diagnostics_dir / f"{digest}.json"
+    decoy.write_text('{"decoy": true}\n', encoding="utf-8")
+    before = len(scene.log.read())
+    with pytest.raises(F.ForwardingError):
+        _forward(scene, cached=True)
+    assert scene.assembly.builder_calls == []
+    assert len(scene.log.read()) == before
+    assert not (scene.run_dir / F.REPORT_DIRNAME).exists()
+
+
+def test_decoy_export_in_base_dir_stops(tmp_path: Path) -> None:
+    """A base-dir export with the right name but wrong content fails closed.
+
+    Every export must pass the cache content-hash verification; a corrupt one
+    is re-typed as a :class:`ForwardingError` (never a launcher error) and
+    nothing is written.
+    """
+    scene = _scene(tmp_path)
+    digest = scene.candidates[0].diagnostics.diagnostics_hash
+    decoy = scene.assembly.screen_cache_dir / f"{digest}.export.json"
+    decoy.write_text('{"schema": "decoy"}\n', encoding="utf-8")
+    before = len(scene.log.read())
+    with pytest.raises(F.ForwardingError):
+        _forward(scene, cached=True)
+    assert scene.assembly.builder_calls == []
+    assert len(scene.log.read()) == before
+    assert not (scene.run_dir / F.REPORT_DIRNAME).exists()
+
+
+def test_snapshot_candidates_never_read_from_another_attempt(
+    tmp_path: Path, opened_paths: list[str]
+) -> None:
+    """Snapshot candidates come from the active attempt's generation.json.
+
+    A decoy sibling attempt with its own ``generation.json`` and a populated
+    diagnostics directory must never be consulted: only its generation.json is
+    read (and rejected as not bound to the active CAMPAIGN record), never its
+    candidates or artifacts.
+    """
+    scene = _scene(tmp_path)
+    decoy_dir = tmp_path / "runs" / "attempt3"
+    decoy_diag = decoy_dir / "diagnostics"
+    decoy_diag.mkdir(parents=True)
+    (decoy_dir / "generation.json").write_text(
+        json.dumps(
+            {
+                "campaign_record_hash": "3" * 64,
+                "candidates": [],
+                "diagnostics_dir": str(decoy_diag),
+            }
+        ),
+        encoding="utf-8",
+    )
+    opened_paths.clear()
+    result = _forward(scene, run_root=scene.run_dir.parent)
+    assert result.forwarded_id == scene.ranking.selected[0]
+    assert not any(str(decoy_diag) in path for path in opened_paths)
+    assert result.report.inputs.artifacts_dir == "attempt4/assembly/diagnostics"
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +733,7 @@ def test_cli_writes_record_and_report(
 
 def test_mutation_fixture_contract() -> None:
     mutations = json.loads(_MUTATIONS_PATH.read_text(encoding="utf-8"))
-    assert [m["id"] for m in mutations] == [f"F-M{i}" for i in range(1, 7)]
+    assert [m["id"] for m in mutations] == [f"F-M{i}" for i in range(1, 8)]
     for mutation in mutations:
         assert mutation["edits"], mutation["id"]
         assert mutation["file"] == "smart_beta/campaign/campaign3_forward.py"
