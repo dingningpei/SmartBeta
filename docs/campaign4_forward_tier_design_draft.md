@@ -96,3 +96,23 @@
 
 **Still open before a design freeze:** the F-Q2 proposal. **Not authorized:** the K-PIT
 append and any acquisition.
+
+## F-Q2 proposal (planner, 2026-10-14; awaiting approval)
+
+- **Vehicle:** one `HUMAN_DECISION` record, HUMAN channel, `decision_kind = "OTHER"`,
+  whose payload key `forward_precommitment` maps to
+  `{schema: "campaign4-forward-precommitment-v1", document_sha256, hypothesis_ids,
+  procedure_id: "EWC_T23_ONE_SIDED", procedure_version: "1.0.0", t_min: 24,
+  multiplicity: "HOLM_ALL_FORWARD_REGISTERED", access_scope: "FORWARD_LOOKBACK_ONLY",
+  first_forward_formation: "2026-09-30"}`. It uses the same pattern as the Campaign-3
+  CAMPAIGN, TB_SELECTION and FORWARDING records (K-PIT seq 46, 159, 160).
+- **Why no frozen consumer is affected** (planner grep of the frozen consumers):
+  - every Campaign-3 consumer selects records by its **own payload sub-key and schema**
+    (`campaign_precommitment` / `tb_selection` / `forwarding` with their `*_SCHEMA`
+    constants). This is the C3-R-R3 repair of the over-broad first-match lookup;
+  - no consumer dispatches on `decision_kind == "OTHER"` alone;
+  - so a record carrying only `forward_precommitment` is invisible to them, and no K-PIT
+    core schema change is needed.
+- **Writer:** a small new module with its own tests, which mirrors the C3 record
+  builders. It is appended only under a separate authorization, after the forward
+  precommitment document is frozen.
