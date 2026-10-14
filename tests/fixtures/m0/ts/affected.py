@@ -46,24 +46,39 @@ def build_case_and_assembly(
     tmp_path: Path,
     *,
     affected_keys: Sequence[str] = ("B", "E"),
+    incomplete_keys: Sequence[str] = (),
+    terminal_incomplete_keys: Sequence[str] = (),
     name: str = "ts_root",
 ) -> tuple[Any, Any]:
     """A production-shaped assembly over a synthetic store with terminations.
 
     Every key in ``affected_keys`` ends its listing one session after each
-    formation (``m = 1``), so it is ``ADMISSIBLE_TERMINAL`` in both legs as the
-    frozen grouping assigns it.
+    formation (``m = 1``), so it is ``ADMISSIBLE_TERMINAL`` in the leg the
+    frozen grouping assigns it.  Every key in ``incomplete_keys`` is a
+    non-admissible ``OBSERVED_PATH_INCOMPLETE`` member (finite factor value,
+    NaN forward return) and every key in ``terminal_incomplete_keys`` is a
+    non-admissible ``TERMINAL_OBSERVED_PATH_INCOMPLETE`` member.
     """
 
     T = parity.T
     fx = T._load_fixture()
     store = fx.SyntheticStore(tmp_path, name=name)
     store.standard()
+    affected = set(affected_keys)
+    incomplete = set(incomplete_keys)
+    terminal_incomplete = set(terminal_incomplete_keys)
     for member in store.members:
-        if member.key in set(affected_keys):
+        if member.key in affected:
             member.affected = True
             member.m = 1
             member.state = "COMPLETE"
+        elif member.key in incomplete:
+            member.affected = False
+            member.state = "INCOMPLETE"
+        elif member.key in terminal_incomplete:
+            member.affected = True
+            member.m = 1
+            member.state = "INCOMPLETE"
     store.build_d7b()
     store.build_sources()
     pq_bindings, identity_hash = store.build_identity()
@@ -143,3 +158,35 @@ def known_factor(factor_id: str) -> Any:
         if factor.factor_id == factor_id:
             return factor
     raise KeyError(factor_id)
+
+
+def contoured_panel(
+    assembly: Any,
+    factor: Any,
+    *,
+    high_keys: Sequence[str],
+    low_keys: Sequence[str] = (),
+    high_value: float = 1.0e6,
+    low_value: float = -1.0e6,
+) -> Any:
+    """The production panel with forced top and bottom group members.
+
+    The row grid (and hence the declaration binding) is the production one;
+    only the ``value`` column of the named universe keys is rewritten, so the
+    frozen ``assign_groups`` places ``high_keys`` in the highest-valued group
+    (the economic long leg for a ``sign = +1`` factor) and ``low_keys`` in the
+    lowest.
+    """
+
+    import pandas as pd
+
+    chosen = assembly.fast_panel_for(factor.spec, assembly.is_fold).copy()
+    high = set(high_keys)
+    low = set(low_keys)
+    members = chosen["stock_id"].astype(str)
+    chosen.loc[members.isin(high), "value"] = float(high_value)
+    chosen.loc[members.isin(low), "value"] = float(low_value)
+    chosen["date"] = pd.to_datetime(chosen["date"])
+    chosen["stock_id"] = chosen["stock_id"].astype("string")
+    chosen["value"] = chosen["value"].astype("float64")
+    return chosen

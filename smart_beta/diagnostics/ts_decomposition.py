@@ -50,18 +50,22 @@ returns are the finite-return means of the D7b economic long/short membership
 
 ``gap_gross(f) = LS_TS(f) - LS_T0(f)`` with ``LS_S = EW_long(S) - EW_short(S)``.
 
-The decomposition is
+The decomposition (ERRATUM E1) is
 
-``pred(f) = -(1/n_long) * sum_{affected long}(1 + r)
-            -(1/n_short) * sum_{affected short}(1 + r)``
+``pred(f) = -(1/n_long_finite) * sum_{affected long, finite}(1 + r)
+            -(1/n_short_finite) * sum_{affected short, finite}(1 + r)``
 
-where ``r`` is each affected member's T0 value and ``n_long``/``n_short`` are
-the frozen D7b accounting counts.  ``gap_gross`` and ``pred`` are reported
-separately; the frozen reading rule flags ``DECOMPOSITION_BROKEN`` when their
-real-data means differ by more than ``1e-9``.  ``net_gap`` is reported for
-reference only: it is the difference of this factor's raw pipeline ``net``
-series (``net_ts - net_t0``), the series a ``PQv2SeriesRecord`` exposes, with
-no re-orientation.
+where ``r`` is each affected member's T0 value and
+``n_long_finite``/``n_short_finite`` are the numbers of that leg's members
+with a finite T0 value (the same finite set the pipeline's equal-weight leg
+mean uses).  The frozen D7b accounting ``n_long``/``n_short`` (which also
+count non-admissible NaN-return members) and the affected fractions keep their
+accounting definitions and are reported alongside.  ``gap_gross`` and ``pred``
+are reported separately; the frozen reading rule flags ``DECOMPOSITION_BROKEN``
+when their real-data means differ by more than ``1e-9``.  ``net_gap`` is
+reported for reference only: it is the difference of this factor's raw
+pipeline ``net`` series (``net_ts - net_t0``), the series a
+``PQv2SeriesRecord`` exposes, with no re-orientation.
 """
 
 from __future__ import annotations
@@ -138,11 +142,19 @@ class TSDecompositionSpecError(TSDecompositionError):
 
 @dataclass(frozen=True)
 class FormationTS:
-    """One formation's T0/TS leg returns and the frozen decomposition."""
+    """One formation's T0/TS leg returns and the frozen decomposition.
+
+    ``n_long``/``n_short`` are the frozen D7b accounting counts (every leg
+    member, including non-admissible NaN-return members);
+    ``n_long_finite``/``n_short_finite`` count only the leg members with a
+    finite T0 value, which are the frozen E1 denominators of ``pred``.
+    """
 
     formation: str
     n_long: int
     n_short: int
+    n_long_finite: int
+    n_short_finite: int
     n_affected_long: int
     n_affected_short: int
     universe_affected_fraction: float | None
@@ -175,6 +187,8 @@ class FormationTS:
             "formation": self.formation,
             "n_long": int(self.n_long),
             "n_short": int(self.n_short),
+            "n_long_finite": int(self.n_long_finite),
+            "n_short_finite": int(self.n_short_finite),
             "n_affected_long": int(self.n_affected_long),
             "n_affected_short": int(self.n_affected_short),
             "universe_affected_fraction": _opt_float(
@@ -514,15 +528,22 @@ def _raw_diagnostics(
     assembly: Any,
     factor: _known.KnownFactor,
     selected_fold: Fold,
+    *,
+    panel: pd.DataFrame | None = None,
 ) -> tuple[Any, Any, Any]:
     """Run the frozen T-A evaluation.
 
     Returns ``(panel, declaration, diagnostics)`` so the caller reuses the
-    exact panel the evaluation consumed.
+    exact panel the evaluation consumed.  ``panel`` overrides the production
+    panel realization (the test seam C4M0-2 also exposes); the row grid must
+    still be the production one.
     """
 
     spec = factor.spec
-    panel = assembly.fast_panel_for(spec, selected_fold)
+    chosen_panel = (
+        assembly.fast_panel_for(spec, selected_fold) if panel is None else panel
+    )
+    panel = chosen_panel
     declaration = assembly.declaration_builder(spec, panel, selected_fold)
     evaluator = getattr(assembly, "ta_evaluator", None)
     roles = _eval.event_roles(spec)
@@ -613,8 +634,10 @@ def _formation_decomposition(
         if row.economic_leg == _d7b.ECONOMIC_SHORT and row.terminal_affected
     ]
 
-    long_t0 = _mean(_leg_values(t0_lookup, formation, long_ids))
-    short_t0 = _mean(_leg_values(t0_lookup, formation, short_ids))
+    long_t0_values = _leg_values(t0_lookup, formation, long_ids)
+    short_t0_values = _leg_values(t0_lookup, formation, short_ids)
+    long_t0 = _mean(long_t0_values)
+    short_t0 = _mean(short_t0_values)
     long_ts = _mean(_leg_values(ts_lookup, formation, long_ids))
     short_ts = _mean(_leg_values(ts_lookup, formation, short_ids))
     ls_t0 = None if long_t0 is None or short_t0 is None else long_t0 - short_t0
@@ -623,17 +646,25 @@ def _formation_decomposition(
 
     n_long = int(accounting.n_long)
     n_short = int(accounting.n_short)
+    # ERRATUM E1: the ``pred`` denominator is the number of leg members with a
+    # finite T0 value (the same finite set the pipeline's equal-weight leg mean
+    # uses), not the D7b accounting count that also includes the
+    # non-admissible NaN-return members.
+    n_long_finite = len(long_t0_values)
+    n_short_finite = len(short_t0_values)
     universe_fraction: float | None = None
     if accounting.n_universe:
         universe_fraction = accounting.n_affected / accounting.n_universe
     pred: float | None = None
-    if n_long > 0 and n_short > 0:
+    if n_long_finite > 0 and n_short_finite > 0:
         affected_long_returns = _leg_values(t0_lookup, formation, affected_long)
         affected_short_returns = _leg_values(t0_lookup, formation, affected_short)
         pred = -(
-            math.fsum(1.0 + value for value in affected_long_returns) / n_long
+            math.fsum(1.0 + value for value in affected_long_returns)
+            / n_long_finite
         ) - (
-            math.fsum(1.0 + value for value in affected_short_returns) / n_short
+            math.fsum(1.0 + value for value in affected_short_returns)
+            / n_short_finite
         )
 
     net_gap = (
@@ -643,6 +674,8 @@ def _formation_decomposition(
         formation=_as_date(formation).isoformat(),
         n_long=n_long,
         n_short=n_short,
+        n_long_finite=n_long_finite,
+        n_short_finite=n_short_finite,
         n_affected_long=len(affected_long),
         n_affected_short=len(affected_short),
         universe_affected_fraction=universe_fraction,
@@ -714,11 +747,13 @@ def evaluate_factor_decomposition(
     factor: _known.KnownFactor,
     *,
     fold: Fold | None = None,
+    panel: pd.DataFrame | None = None,
 ) -> FactorTSDiagnostic:
     """Decompose one factor's T0 -> TS gap on the IS fold.
 
     The IS firewall is asserted before any panel is built.  A NOT_CERTIFIED
-    factor is reported untouched (unassessed).
+    factor is reported untouched (unassessed).  ``panel`` overrides the
+    production panel realization (the test seam C4M0-2 also exposes).
     """
 
     selected_fold = fold if fold is not None else assembly.is_fold
@@ -728,7 +763,7 @@ def evaluate_factor_decomposition(
         return _unassessed(factor, factor.not_certified_reason)
 
     panel, declaration, diagnostics = _raw_diagnostics(
-        assembly, factor, selected_fold
+        assembly, factor, selected_fold, panel=panel
     )
     if diagnostics.not_assessed is not None:
         return _unassessed(factor, str(diagnostics.not_assessed))

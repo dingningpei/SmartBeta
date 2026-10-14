@@ -133,6 +133,50 @@ def test_decomposition_identity_on_affected_panel(tmp_path: Path):
     assert abs(diagnostic.mean_gap_gross - diagnostic.mean_pred) <= 1e-12
 
 
+def test_e1_finite_denominator_with_nan_leg_members(tmp_path: Path):
+    """ERRATUM E1: ``pred`` divides by each leg's FINITE-T0 count.
+
+    The long leg is forced to hold both a non-admissible
+    ``OBSERVED_PATH_INCOMPLETE`` member (``B``) and a non-admissible
+    ``TERMINAL_OBSERVED_PATH_INCOMPLETE`` member (``E``); the accounting
+    ``n_long`` counts all leg members while ``n_long_finite`` counts only the
+    one with a finite T0 value.  A finite ``ADMISSIBLE_TERMINAL`` member
+    (``A``) sits in the short leg, so the gap is genuinely non-zero and the
+    identity still holds to 1e-12.
+    """
+
+    _case, assembly = fx.build_case_and_assembly(
+        tmp_path,
+        affected_keys=("A",),
+        incomplete_keys=("B",),
+        terminal_incomplete_keys=("E",),
+    )
+    factor = fx.known_factor("KF-MOM12")
+    panel = fx.contoured_panel(
+        assembly, factor, high_keys=("B", "E"), low_keys=("A",)
+    )
+    diagnostic = TD.evaluate_factor_decomposition(assembly, factor, panel=panel)
+    assert diagnostic.assessed is True
+    assert diagnostic.n_formations == 4
+    for formation in diagnostic.formations:
+        # The long leg counts the two NaN members in the D7b accounting ...
+        assert formation.n_long > formation.n_long_finite
+        assert formation.n_long - formation.n_long_finite == 2
+        assert formation.n_long_finite >= 1
+        # ... but not in the finite denominator.
+        assert formation.n_short_finite == formation.n_short
+        # E is terminal-affected in the long leg, yet its NaN T0 is excluded
+        # from the E1 numerator (the finite affected member is A, in short).
+        assert formation.n_affected_long >= 1
+        assert formation.n_affected_short >= 1
+        assert formation.gap_gross is not None
+        assert formation.pred is not None
+        assert abs(formation.gap_gross - formation.pred) <= 1e-12
+        # The identity is non-trivial: a real affected member contributes.
+        assert formation.gap_gross != 0.0
+    assert abs(diagnostic.mean_gap_gross - diagnostic.mean_pred) <= 1e-12
+
+
 def test_affected_members_get_tau_minus_and_plus_one(tmp_path: Path):
     _case, assembly = fx.build_case_and_assembly(tmp_path)
     factor = fx.known_factor("KF-MOM12")
