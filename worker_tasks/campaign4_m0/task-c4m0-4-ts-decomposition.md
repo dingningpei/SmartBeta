@@ -107,3 +107,19 @@ in a caller-supplied directory.
 
 This spec is frozen, including the §5 reading rules, before any real-data M0-4 result
 exists. The Pi launch is authorized.
+
+## Erratum E1 (user-approved 2026-10-14: "好的"; issued before any real-data M0-4 result)
+
+- **Defect** (a specification defect, found in the planner review of `f867cd4`):
+  - §3 sets the `pred` denominators to D7b `FormationAccounting.n_long` / `n_short`.
+  - Those count **every** leg member, including non-admissible members, which carry
+    NaN returns (`TERMINAL_OBSERVED_PATH_INCOMPLETE`, `OBSERVED_PATH_INCOMPLETE`).
+  - The pipeline's leg mean, and therefore `gap_gross`, averages finite values only.
+  - So any non-admissible leg member would trigger a false DECOMPOSITION_BROKEN.
+- **Correction (binding):**
+  - In `pred(f)`, each leg's denominator is the **number of that leg's members with a
+    finite T0 value**. The numerator sums only affected members with a finite T0 value.
+  - `n_long` / `n_short` and the affected fractions keep their §3 definitions (D7b
+    accounting) and are still reported.
+  - The finite leg counts are reported as `n_long_finite` / `n_short_finite`.
+- **Unchanged:** the §5 rules and tolerances.
