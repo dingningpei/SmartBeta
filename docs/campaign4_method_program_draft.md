@@ -31,7 +31,7 @@
   - F3: all 99 candidates carry sign = 1. So direction errors cannot be seen in the
     `sign` column; they can only be found by reading each expression's stated hypothesis
     against its algebra.
-  - F4: the search space is narrow:
+  - F4: the search space is narrow (and a level of `dv`, i.e. a size or liquidity proxy, is not even expressible: `PQV2_EXPRESSION_NOT_CERTIFIED`, planner pre-check 2026-10-14):
     - inputs: TRI, daily return, dollar volume, and earnings-date events;
     - cross-sectional operators: `rank` and `standardize` only;
     - no market or beta term, no residualization, no signal combination;
@@ -47,7 +47,7 @@
 | ID | Diagnostic | Question it answers | Reading |
 |---|---|---|---|
 | M0-1 | **Direction audit.** For each of the 99 candidates, compare the generator's stated hypothesis text with the algebraic direction of its expression under F1 | did the generator invert direction systematically? | a high inversion rate → a prompt-contract defect (fix in M1-a) |
-| M0-2 | **Known-factor replication.** Run textbook signals through the identical pipeline (universe, h = 21, 5 groups, costs, T0/TS): 12-1 momentum, 1-month reversal, 12-month low volatility, EAR drift (the C3 positive control), and an Amihud-style illiquidity proxy from `dv` | does the pipeline reproduce the literature's sign and rough size on this universe and period? | textbook factors wrong-signed or degenerate → a pipeline/convention defect, which **blocks** everything else. Plausible → the pipeline is sound, and the problem is generator or search space |
+| M0-2 | **Known-factor replication.** Run textbook signals through the identical pipeline (universe, h = 21, 5 groups, costs, T0/TS): 12-1 momentum, 1-month reversal, 12-month low volatility, EAR drift (the C3 positive control), (an illiquidity/size proxy is not expressible in the certified grammar; see F4) | does the pipeline reproduce the literature's sign and rough size on this universe and period? | textbook factors wrong-signed or degenerate → a pipeline/convention defect, which **blocks** everything else. Plausible → the pipeline is sound, and the problem is generator or search space |
 | M0-3 | **Common exposure.** The correlation matrix and the first principal components of the 99 candidates' IS long-short series, plus each candidate's correlation with the M0-2 textbook factors | are the 99 candidates really a few repeated bets? | a dominant first component → the generator is not exploring; diversity constraints are needed |
 | M0-4 | **TS decomposition.** Per period and per leg: INCOMPLETE terminal legs, their TS penalty, and the share of the T0–TS gap they explain | is the TS failure a property of the factors (they hold delisting-prone names), or of the stress design? | input to M1-d. **Any change to the gating rule is decided on methodological grounds and disclosed** |
 | M0-5 | **The C3 positive control at IS.** EAR drift was planned as a T-B pipeline check, which never ran | did the one literature-backed signal behave? | combined with M0-2 |
@@ -98,6 +98,10 @@
 | K2 | authorize the M0 diagnostic **spec** (document-only; then a separate launch authorization) | yes, M0-2 first |
 | K3 | forward tier F (register `ed358470` now for post-C testing) | optional, cheap; can run alongside |
 
-## Decisions (user, 2026-10-14)
+## Decisions (user, 2026-10-14: "全部是可以")
 
-_(pending)_
+| ID | Decision |
+|---|---|
+| K1 | **Adopted.** This program replaces A'/F as the Campaign-4 direction |
+| K2 | **The M0 diagnostic spec is authorized** (document-only, M0-2 first). Pi launch needs a separate authorization after the freeze |
+| K3 | **The forward tier F is adopted.** The planner drafts its design: the K-PIT registration of `ed358470` and the post-C data path. The K-PIT append and any Tiingo acquisition each need their own authorization |
