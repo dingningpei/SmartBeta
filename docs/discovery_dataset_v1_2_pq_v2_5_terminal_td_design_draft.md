@@ -1,4 +1,4 @@
-# Dataset v1.2 — P-Q v2.5: calibrated terminal-stress scenario TD — design (DRAFT; document-only; nothing frozen)
+# Dataset v1.2 — P-Q v2.5: calibrated terminal-stress scenario TD — design (FROZEN 2026-10-14; document-only; not implemented)
 
 - **Authority:** `docs/campaign4_m1d_terminal_stress_design_draft.md` (direction frozen
   2026-10-14: B1, d = −0.55; decision D-M1d-3 authorizes this design document).
@@ -99,13 +99,28 @@ here):
 
 Any mismatch → STOP. The comparison is never patched.
 
-## 6. Identity literals (finalized at freeze)
+## 6. Identity literals (fixed at freeze)
 
-- **New ED line:** appends `terminal_stress_td(d=-0.55)` with version `pq-v2.5-ed-6`.
-- **New CE line:** `pq-v2.5-ce-5`.
 - **CS:** unchanged.
-- **Exact canonical lines:** written into this document at freeze; their hashes enter
-  `AUTHORITY_V2_5`.
+- **Construction of the lines below:** each is the v2.4 line, parsed, extended and
+  re-serialized as compact JSON in insertion order. This is the same serialization as
+  the v2.4 lines, verified by reproducing them byte for byte.
+  - ED appends one rule.
+  - CE adds `terminal_scenarios` before `version`.
+- **IDs:** each ID is the SHA-256 of its exact line, the v2.4 derivation (verified to
+  reproduce `f8370828…` and `c40d8724…`).
+
+**ED-ID v2.5** = `cfd767331c63ca9d2d85e4559830d3cbc88ed4cb5ae4ea098961d52666f4ffe2`:
+
+```
+{"rules":["tri_log_linear_prefix_cancellation","lag_shift","rolling_window_union_numerical","arithmetic_conservative_union","cross_sectional_whole_row","label_candidate_e_[f,next(e)]","dtr_{prev,s,next}","dv_{prev,s}","misdated_recorded_pm5","reserve_unknown_not_assessed","source_unresolved_unknown_not_assessed","add_sub_support_union","event_anchored_tri_window","event_primitive_price_independent","event_identity_unmapped_not_assessed","event_identity_contradicted_not_assessed","event_reserve_not_assessed","event_time_unavailable_not_assessed","event_source_excluded_not_assessed","event_timing_dual_scenario_k0_k1_preclose_15m","fold_parameterized_temporal_firewall","terminal_stress_td_tau_long_d_tau_short_minus_d_d_minus_0p55_b_leg_keyed"],"version":"pq-v2.5-ed-6"}
+```
+
+**CE-ID v2.5** = `882725daca1bae14faa91b25a3fc6c05e36045ffa25bf97035b5212ed85cbf82`:
+
+```
+{"classes":{"simple_exact":"GRAMMAR_SIMPLE_G_v1","std_x_rank_sandwich":"GRAMMAR_STD_X_RANK_G_v1","event_simple":"GRAMMAR_EVENT_G_v1"},"bounds":{"lookback_max":504,"window_min":2,"window_max":504},"denominators":["tri_ratio","rolling_mean_dv","rolling_std_ret_assumption_A_STD"],"event_data":{"acq_id":"f0d0ee1b4f5875b1d8ad970e041ebe73d8278cc283477378af4bb1bf9fa04f54","ev_id":"ff5e83ec253f007493bfc7341fd4dcc90606ee932855efe3313686d1afabcca3"},"event_window":"K_and_K_plus_1","other":"NOT_ASSESSED_UNLESS_SEPARATELY_FROZEN","terminal_scenarios":["T0","TS","TD_d_minus_0p55"],"version":"pq-v2.5-ce-5"}
+```
 
 ## 7. Tentative task plan (after this design is frozen; each wave frozen separately)
 
@@ -124,3 +139,11 @@ Any mismatch → STOP. The comparison is never patched.
 | V25-1 | adopt the new-modules-only architecture (§2) | yes; it is forced by the C3 bindings |
 | V25-2 | TD keyed on B's economic leg, as TS is (§1) | yes; identical semantics to TS, only τ differs |
 | V25-3 | freeze this design | after your review |
+
+## Decisions (user, 2026-10-14: "按照你的建议")
+
+| ID | Decision |
+|---|---|
+| V25-1 | **The new-modules-only architecture is adopted.** No file in `PINNED_CODE` or in the three C3-bound lists is modified |
+| V25-2 | **TD is keyed on B's economic leg**, identical to TS. Only τ differs (d = −0.55) |
+| V25-3 | **This design is frozen.** Each task wave (§7) needs its own spec freeze and launch authorization |
