@@ -9,7 +9,11 @@ from ``smart_beta`` (in particular nothing from ``delisting_bridge``, any
 ``pqv2_*`` module or the new ``pqv25`` package).  The scenario arithmetic is
 re-derived here from the frozen formulas:
 
-* ``v^X = (1.0 + r) * (1.0 + tau^X) - 1.0`` (design §1, erratum E1.1);
+* ``v^X = (1.0 + r) * (1.0 + tau^X) - 1.0`` (design §1, erratum E1.1),
+  applied **only** to the two terminal states; a plain ``ADMISSIBLE`` member
+  is unstressed and takes its observed return ``r`` itself (D7b sets
+  ``t0_value = ts_value = base`` for ``ADMISSIBLE``), so its ``v^T0``,
+  ``v^TS`` and ``v^TD`` are all that exact float;
 * ``x_lo = (1.0 + v^X) * lo - 1.0`` / ``x_hi = (1.0 + v^X) * hi - 1.0``
   (design §3.2, ``pqv2_labels._scenario``);
 * the SIMPLE exact-assignment per-period gross long-short under B and its
@@ -180,19 +184,25 @@ def scenario_tau(economic_leg: str, scenario: str, d: float = TD_D) -> float:
     raise ValueError(f"unknown scenario {scenario!r}")
 
 
-def effective_tau(
+def member_value(
     member: Member, economic_leg: str, scenario: str, d: float = TD_D
 ) -> float:
-    """The tau actually applied to a member.
+    """The scenario value ``v^X`` for one member (design §1, erratum E1.1).
 
-    Only the terminal-admissible states are stressed (design §1: the exact
-    set TS acts on).  Every other admissible member takes its T0 value, i.e.
-    ``tau == 0`` in every scenario, so ``v^TD == v^TS == v^T0`` for it.
+    A plain ``ADMISSIBLE`` member is unstressed: D7b sets
+    ``t0_value = ts_value = base`` (the observed return itself, with no
+    arithmetic) and ``v^TD = v^T0``, so all three scenarios return that exact
+    float.  Only ``ADMISSIBLE_TERMINAL`` / ``ADMISSIBLE_TERMINAL_EMPTY`` use
+    ``(1.0 + r) * (1.0 + tau) - 1.0``.
     """
 
+    if member.group is None or member.admissibility not in ACTIVE_STATES:
+        return math.nan
     if member.admissibility not in TERMINAL_STATES:
-        return 0.0
-    return scenario_tau(economic_leg, scenario, d)
+        return float(member.observed_return)
+    return scenario_value(
+        scenario_r(member), scenario_tau(economic_leg, scenario, d)
+    )
 
 
 def scenario_r(member: Member) -> float:
@@ -236,14 +246,15 @@ def member_scenarios(
     leg = economic_leg(member.group, sign, n_groups)
     if member.group is None or member.admissibility not in ACTIVE_STATES:
         r = math.nan
-    else:
+    elif member.admissibility in TERMINAL_STATES:
         r = scenario_r(member)
+    else:
+        r = float(member.observed_return)
     values: dict[str, float] = {}
     bounds_lo: dict[str, float] = {}
     bounds_hi: dict[str, float] = {}
     for scenario in SCENARIOS:
-        tau = effective_tau(member, leg, scenario, d)
-        value = scenario_value(r, tau)
+        value = member_value(member, leg, scenario, d)
         values[scenario] = value
         bounds_lo[scenario] = scenario_bound(value, float(member.lo))
         bounds_hi[scenario] = scenario_bound(value, float(member.hi))
@@ -356,10 +367,10 @@ __all__ = [
     "TERMINAL_STATES",
     "b_gross_long_short",
     "economic_leg",
-    "effective_tau",
     "evaluate_formation",
     "l_lower_envelope",
     "member_scenarios",
+    "member_value",
     "scenario_bound",
     "scenario_r",
     "scenario_tau",

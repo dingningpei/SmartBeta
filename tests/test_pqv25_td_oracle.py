@@ -256,6 +256,45 @@ def test_hand_computed_formation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# plain ADMISSIBLE members are unstressed
+# ---------------------------------------------------------------------------
+
+
+def test_plain_admissible_returns_observed_return_unchanged() -> None:
+    # D7b sets t0_value = ts_value = base for ADMISSIBLE, so the scenario
+    # value is r itself, not (1.0 + r) * (1.0 + 0.0) - 1.0.  Pick an r for
+    # which the two genuinely differ in floating point.
+    candidates = [0.1, 0.2, 0.3, -0.1, 0.7, 0.05, 1e-8, 1e-16]
+    differing = [r for r in candidates if (1.0 + r) * (1.0 + 0.0) - 1.0 != r]
+    assert differing, "no candidate r differs from the arithmetic form"
+    r = differing[0]
+
+    member = T.Member("P", 3, T.ADMISSIBLE, observed_return=r, lo=0.9, hi=1.1)
+    result = T.member_scenarios(member, sign=1, n_groups=3)
+    _assert_same_bits(result.r, r)
+    for scenario in T.SCENARIOS:
+        _assert_same_bits(result.values[scenario], r)
+
+    # Only the terminal states use the arithmetic form; terminal T0 is exactly
+    # (1.0 + r) * (1.0 + 0.0) - 1.0, which here differs from r.
+    terminal = T.Member(
+        "Q",
+        3,
+        T.ADMISSIBLE_TERMINAL,
+        r_obs=r,
+        observed_return=r,
+        lo=0.9,
+        hi=1.1,
+    )
+    terminal_result = T.member_scenarios(terminal, sign=1, n_groups=3)
+    assert terminal_result.values[T.SCENARIO_T0] != r
+    _assert_same_bits(
+        terminal_result.values[T.SCENARIO_T0],
+        (1.0 + r) * (1.0 + 0.0) - 1.0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # independence
 # ---------------------------------------------------------------------------
 
