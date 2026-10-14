@@ -1,4 +1,4 @@
-# Campaign-4 M0 — method diagnostics: plan (DRAFT for freeze; not authorized for launch)
+# Campaign-4 M0 — method diagnostics: plan (FROZEN 2026-10-14; C4M0-2 launch authorized; reference comparison R authorized)
 
 - **Authority:** `docs/campaign4_method_program_draft.md` §1, decision K2 (user,
   2026-10-14).
@@ -139,3 +139,11 @@ other cells are reported alongside.
   branch `campaign4/task-c4m0-2-known-factors`.
 - Review, merge and barrier follow CLAUDE.md §4. The routine pre-merge check may deselect
   item 12; the barrier runs the full suite.
+
+## Freeze (user, 2026-10-14: "我都同意")
+
+- **This plan is frozen**, including the §4 reading rules, before any real-data M0
+  result exists.
+- **The C4M0-2 Pi launch is authorized.**
+- **Reference comparison R is authorized:** a public Ken French CSV download, run by the
+  planner. It is used only as an external yardstick.
