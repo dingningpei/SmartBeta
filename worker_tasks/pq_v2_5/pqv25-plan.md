@@ -1,4 +1,4 @@
-# P-Q v2.5 — wave 1 plan: PQ25-A (authority) + PQ25-G (TD oracle) (DRAFT for freeze; not authorized)
+# P-Q v2.5 — wave 1 plan: PQ25-A (authority) + PQ25-G (TD oracle) (FROZEN 2026-10-14; PQ25-A + PQ25-G launch authorized)
 
 ## Authority
 
@@ -130,3 +130,7 @@ constants. This is the PQ22-G/PQ23-G oracle pattern.
   - `worktrees/task-pq25-g-oracle`.
 - Review, merge and barrier follow CLAUDE.md §4.
 - **Additional barrier check:** `verify_authority_v2_5()` passes on the merged master.
+
+## Freeze (user, 2026-10-14: "确认")
+
+Wave-1 plan frozen; PQ25-A and PQ25-G Pi launches authorized (parallel).
