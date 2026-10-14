@@ -32,12 +32,14 @@ import pytest
 import numpy as np
 
 from smart_beta.campaign import campaign3_eval as E
+from smart_beta.campaign import campaign3_launch as L
 from smart_beta.campaign.campaign1 import PERIODS_PER_YEAR as MONTHLY_PERIODS_PER_YEAR
 from smart_beta.diagnostics import known_factors as KF
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "m0" / "synthetic.py"
 _CAMPAIGN1 = _REPO_ROOT / "docs" / "campaign1_factorspecs.json"
+_SCRIPT = _REPO_ROOT / "scripts" / "run_m0_known_factors.py"
 
 
 def _load_fixture() -> Any:
@@ -45,6 +47,17 @@ def _load_fixture() -> Any:
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, _FIXTURE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_script() -> Any:
+    name = "m0_known_factors_script"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, _SCRIPT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -272,3 +285,32 @@ def test_factor_id_selection(tmp_path: Path):
     assert [item.factor_id for item in report.factors] == ["KF-LVOL"]
     with pytest.raises(KF.KnownFactorSpecError):
         KF.run_known_factors(assembly, factor_ids=("KF-NOPE",))
+
+
+# ---------------------------------------------------------------------------
+# 5. launcher script policy identity
+# ---------------------------------------------------------------------------
+
+
+def test_script_policy_identity_is_a_valid_sha256():
+    """The script's diagnostic identity must satisfy the frozen policy gate.
+
+    ``assemble_production`` builds the frozen ``ResearchPolicy`` from the
+    injected generator's ``prompt_template_hash`` via ``build_production_policy``;
+    a non-SHA-256 literal raises ``ResearchPolicyError`` before any panel is
+    built.  This exercises that exact policy-construction path offline.
+    """
+
+    import hashlib
+
+    script = _load_script()
+    value = script._DIAGNOSTIC_PROMPT_TEMPLATE_HASH
+    assert value == hashlib.sha256(
+        b"c4m0-known-factors-diagnostic"
+    ).hexdigest()
+    assert len(value) == 64
+    assert value == value.lower()
+    int(value, 16)  # a 64-char lowercase hex string
+
+    policy = L.build_production_policy(script.build_generator())
+    assert policy.prompt_template_hash == value
