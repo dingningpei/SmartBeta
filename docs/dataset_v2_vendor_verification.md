@@ -166,3 +166,40 @@ The only budget-adjacent options are compromises:
 
 **Planner recommendation:** do not build Dataset v2 under the current budget. Return to
 the S1 choice with Path B closed (decision pending).
+
+## 8. moomoo (Futu US) OpenAPI live probe (2026-10-14; user-authorized; quote context only)
+
+- **Setup:**
+  - the user's own moomoo account, through the local moomoo OpenD (GUI), at
+    `127.0.0.1:11111`;
+  - `moomoo-api` 10.11.7108 in a scratchpad venv;
+  - **quote context only**: no trade context was created.
+- **Data requested:** 7 codes, 2006-01-01 … 2015-12-31 only (nothing from the v1
+  development or reserve tiers). 4 of the 100 kline quota slots per 7 days were used.
+- **Retention:** raw CSVs were deleted after the run; only the summary was kept.
+- **Evidence category:** LIVE-RECORDED, single probe; not a certification.
+
+| Code (intended security) | Result |
+|---|---|
+| US.LEH (Lehman, bankrupt 2008) | `Unknown stock`, no data |
+| US.HNZ (Heinz, acquired 2013) | `Unknown stock`, no data |
+| US.YHOO (Yahoo, renamed AABA 2017) | `Unknown stock`, no data |
+| US.WM (Washington Mutual, failed 2008) | returns **Waste Management**, the current holder of the ticker. WaMu is absent |
+| US.EMC (EMC, acquired 2016) | resolves to a **Global X ETF**; 0 rows in the window |
+| US.DELL (Dell Inc., private 2013) | resolves to **Dell Technologies**; 0 rows before 2016 |
+| US.AAPL (control) | 2,329 rows; first date **2006-10-02**, a rolling 20-year window |
+
+- **Full-market static list:** 13,058 US stocks, **0** with `delisting = True`.
+- **`get_rehab`:** returns split and dividend events for listed names.
+
+**Ruling: moomoo/Futu OpenAPI is survivorship-biased.**
+- Delisted securities are absent.
+- Reused tickers resolve to their current holder.
+- History is a rolling 20 years.
+- It **fails R1 and the identity requirement**, and is not a Dataset v2 source.
+
+## 9. Conclusion of S2
+
+Under the ≤ ¥300/yr budget there is **no qualifying Dataset v2 source**. Path B is closed
+until the budget changes. The S1 choice returns to the user, with Path A (v1.2) and the
+forward tier F as the options.
