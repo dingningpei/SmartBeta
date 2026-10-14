@@ -97,7 +97,7 @@
 **Still open before a design freeze:** the F-Q2 proposal. **Not authorized:** the K-PIT
 append and any acquisition.
 
-## F-Q2 proposal (planner, 2026-10-14; awaiting approval)
+## F-Q2 proposal (planner, 2026-10-14; APPROVED by the user 2026-10-14: "同意")
 
 - **Vehicle:** one `HUMAN_DECISION` record, HUMAN channel, `decision_kind = "OTHER"`,
   whose payload key `forward_precommitment` maps to
