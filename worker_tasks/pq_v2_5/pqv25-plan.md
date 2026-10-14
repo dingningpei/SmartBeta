@@ -78,7 +78,7 @@
 - `smart_beta/dataset_v1/pqv25/authority.py`
 - `tests/test_pqv25_authority.py`
 
-## Task PQ25-G — independent TD oracle (`tests/oracles/pqv25_td_oracle.py`)
+## Task PQ25-G — independent TD oracle (`tests/pqv2_oracle/td_v25.py`)
 
 **Independence.** The oracle is written from the design §1 and E1 **only**. It must not
 import `delisting_bridge`, `pqv2_*` or `pqv25` modules other than for type-free
@@ -118,7 +118,7 @@ constants. This is the PQ22-G/PQ23-G oracle pattern.
 
 ### Owned files
 
-- `tests/oracles/pqv25_td_oracle.py`
+- `tests/pqv2_oracle/td_v25.py`
 - `tests/test_pqv25_td_oracle.py`
 - `tests/fixtures/pqv25/oracle/**`
 
