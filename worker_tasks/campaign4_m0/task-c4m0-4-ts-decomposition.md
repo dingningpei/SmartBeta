@@ -1,4 +1,4 @@
-# Task C4M0-4 — TS terminal-stress decomposition (DRAFT for freeze; not authorized for launch)
+# Task C4M0-4 — TS terminal-stress decomposition (FROZEN 2026-10-14; launch authorized)
 
 - **Authority:**
   - the frozen M0 plan `worker_tasks/campaign4_m0/campaign4-m0-plan.md` §2 binding
@@ -102,3 +102,8 @@ in a caller-supplied directory.
   - the script's real-assembly policy path must be covered by a test (the R2 defect);
   - any annualized number uses the monthly 12 (`campaign1.PERIODS_PER_YEAR`). None is
     needed here.
+
+## Freeze (user, 2026-10-14: "冻结这份 spec，并授权启动 C4M0-4")
+
+This spec is frozen, including the §5 reading rules, before any real-data M0-4 result
+exists. The Pi launch is authorized.
