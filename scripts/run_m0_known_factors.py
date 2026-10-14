@@ -28,6 +28,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -40,9 +41,30 @@ if str(_REPO_ROOT) not in sys.path:
 from smart_beta.campaign import campaign3_launch as _launch  # noqa: E402
 from smart_beta.diagnostics import known_factors as _known  # noqa: E402
 
-#: The generator is never invoked by this diagnostic; its prompt-template hash
-#: only feeds the (unused) policy/attempt identity.
-_DIAGNOSTIC_PROMPT_TEMPLATE_HASH = "c4m0-known-factors-diagnostic"
+#: A diagnostic-only identity hash (not a generator prompt).  The offline
+#: :class:`FixedArtifactGenerator` is never invoked by this diagnostic; its
+#: hash only feeds the unused policy/attempt identity, which the frozen
+#: ``campaign3_generation.build_campaign3_policy`` requires to be a 64-char
+#: lowercase hex SHA-256.  The literal is hashed at import so that the value
+#: is a genuine content address of the diagnostic identity.
+_DIAGNOSTIC_PROMPT_TEMPLATE_HASH = hashlib.sha256(
+    b"c4m0-known-factors-diagnostic"
+).hexdigest()
+
+
+def build_generator() -> _launch.FixedArtifactGenerator:
+    """The offline generator the diagnostic binds (never invoked).
+
+    The frozen control artifact and the diagnostic-only identity hash are the
+    exact inputs ``assemble_production`` forwards to
+    ``build_production_policy``; keeping the construction here lets the policy
+    path be exercised without a real dataset or a network call.
+    """
+
+    return _launch.FixedArtifactGenerator(
+        artifact=_launch.control_raw_artifact(),
+        prompt_template_hash=_DIAGNOSTIC_PROMPT_TEMPLATE_HASH,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,10 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    generator = _launch.FixedArtifactGenerator(
-        artifact=_launch.control_raw_artifact(),
-        prompt_template_hash=_DIAGNOSTIC_PROMPT_TEMPLATE_HASH,
-    )
+    generator = build_generator()
     assembly = _launch.assemble_production(
         args.dataset_root,
         args.knowledge_log,
