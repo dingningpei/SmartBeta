@@ -84,3 +84,15 @@
 | F-Q2 | registration vehicle | the planner checks the K-PIT schemas, then proposes |
 | F-Q3 | multiplicity across forward hypotheses | Holm over all registered at each test date |
 | F-Q4 | batch cadence and cost | yearly; confirm the Tiingo price first |
+
+## Decisions (user, 2026-10-14: "按照你的建议")
+
+| ID | Decision |
+|---|---|
+| F-Q1 | **(a)** A `FORWARD_LOOKBACK_ONLY` access scope. Reserve-dated rows may be read as **inputs** only. A test enforces that no label, return, group or statistic with formation ≤ C is computed or persisted |
+| F-Q2 | The planner checks the K-PIT schemas and frozen consumers, then proposes a registration vehicle for approval |
+| F-Q3 | Holm over all forward-registered hypotheses at each test date |
+| F-Q4 | One batch per year; the Tiingo price is confirmed before each batch |
+
+**Still open before a design freeze:** the F-Q2 proposal. **Not authorized:** the K-PIT
+append and any acquisition.
