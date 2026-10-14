@@ -65,6 +65,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import scipy.stats
 from smart_beta.campaign import campaign3_eval as _eval
 from smart_beta.campaign import campaign3_launch as _launch
+from smart_beta.campaign.campaign1 import PERIODS_PER_YEAR as _MONTHLY_PERIODS_PER_YEAR
 from smart_beta.dataset_v1 import delisting_bridge as _d7b
 from smart_beta.dataset_v1 import pqv2_envelope as _envelope
 from smart_beta.dataset_v1 import pqv2_series as _series
@@ -343,7 +344,13 @@ class CellStats:
     net_mean: float | None
     hac_t: float | None
     annualized_sr: float | None
-    periods_per_year: int
+    #: The economic annualization the SR uses: the frozen monthly-formation
+    #: literal ``campaign1.PERIODS_PER_YEAR`` (one series value per monthly
+    #: formation), never the declaration's ``periods_per_year``.
+    sr_periods_per_year: int
+    #: The declaration's frozen ``periods_per_year``, reported separately so
+    #: the discrepancy stays visible (C3 records 252 for a monthly series).
+    declaration_periods_per_year: int
     ewc_t: float | None
     ewc_p_one_sided: float | None
     ewc_status: str
@@ -361,7 +368,10 @@ class CellStats:
             "net_mean": _opt_float(self.net_mean),
             "hac_t": _opt_float(self.hac_t),
             "annualized_sr": _opt_float(self.annualized_sr),
-            "periods_per_year": int(self.periods_per_year),
+            "sr_periods_per_year": int(self.sr_periods_per_year),
+            "declaration_periods_per_year": int(
+                self.declaration_periods_per_year
+            ),
             "ewc_t": _opt_float(self.ewc_t),
             "ewc_p_one_sided": _opt_float(self.ewc_p_one_sided),
             "ewc_status": self.ewc_status,
@@ -614,7 +624,8 @@ def _cell_stats(
     cell: Any,
     record: Any,
     *,
-    periods_per_year: int,
+    sr_periods_per_year: int,
+    declaration_periods_per_year: int,
     bound_alpha: float,
 ) -> CellStats:
     coverage = _cell_coverage(cell)
@@ -632,7 +643,8 @@ def _cell_stats(
             net_mean=None,
             hac_t=None,
             annualized_sr=None,
-            periods_per_year=int(periods_per_year),
+            sr_periods_per_year=int(sr_periods_per_year),
+            declaration_periods_per_year=int(declaration_periods_per_year),
             ewc_t=None,
             ewc_p_one_sided=None,
             ewc_status="NOT_ASSESSED",
@@ -646,7 +658,9 @@ def _cell_stats(
     mean = _opt_float(summary.value)
     hac_t = _opt_float(summary.t_stat)
     sr = _opt_float(
-        _metrics.sharpe_ratio(values, periods_per_year=int(periods_per_year)).value
+        _metrics.sharpe_ratio(
+            values, periods_per_year=int(sr_periods_per_year)
+        ).value
     )
     ewc_t, ewc_p, ewc_status = _ewc_statistic(
         record.periods, values, bound_alpha=bound_alpha
@@ -664,7 +678,8 @@ def _cell_stats(
         net_mean=mean,
         hac_t=hac_t,
         annualized_sr=sr,
-        periods_per_year=int(periods_per_year),
+        sr_periods_per_year=int(sr_periods_per_year),
+        declaration_periods_per_year=int(declaration_periods_per_year),
         ewc_t=ewc_t,
         ewc_p_one_sided=ewc_p,
         ewc_status=ewc_status,
@@ -867,13 +882,14 @@ def evaluate_known_factor(
             bindings=_export_bindings(assembly),
         )
 
-    periods_per_year = int(declaration.base.periods_per_year)
+    declaration_periods_per_year = int(declaration.base.periods_per_year)
     records = {str(record.cell): record for record in export.records} if export else {}
     cells = tuple(
         _cell_stats(
             cell,
             records.get(str(cell.cell)),
-            periods_per_year=periods_per_year,
+            sr_periods_per_year=int(_MONTHLY_PERIODS_PER_YEAR),
+            declaration_periods_per_year=declaration_periods_per_year,
             bound_alpha=bound_alpha,
         )
         for cell in diagnostics.cells
@@ -1061,8 +1077,9 @@ def render_markdown(report: KnownFactorsReport) -> str:
         "",
         "## Cells (B/L x scenario)",
         "",
-        "| factor | cell | class | n | net mean | HAC t | EWC t | EWC p | ann SR |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| factor | cell | class | n | net mean | HAC t | EWC t | EWC p | "
+        "ann SR | SR ppy | decl ppy |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for factor in report.factors:
         if not factor.cells:
@@ -1070,7 +1087,7 @@ def render_markdown(report: KnownFactorsReport) -> str:
         for cell in factor.cells:
             lines.append(
                 "| {fid} | {cell} | {cls} | {n} | {mean} | {hac} | {ewc} | "
-                "{p} | {sr} |".format(
+                "{p} | {sr} | {srppy} | {declppy} |".format(
                     fid=factor.factor_id,
                     cell=cell.cell,
                     cls=factor.certified_class or "NOT_CERTIFIED",
@@ -1080,6 +1097,8 @@ def render_markdown(report: KnownFactorsReport) -> str:
                     ewc=_fmt(cell.ewc_t),
                     p=_fmt(cell.ewc_p_one_sided),
                     sr=_fmt(cell.annualized_sr),
+                    srppy=int(cell.sr_periods_per_year),
+                    declppy=int(cell.declaration_periods_per_year),
                 )
             )
     lines.extend(["", "## Group profile (observed T0)", ""])

@@ -51,6 +51,34 @@ def build_case_and_assembly(tmp_path: Path) -> tuple[Any, Any]:
     return parity.build_resumable_assembly(tmp_path, "simple")
 
 
+def _reconstruct(assembly: Any, factor: Any, panel: pd.DataFrame | None = None) -> Any:
+    from smart_beta.dataset_v1 import pqv2_series as _series
+
+    chosen = (
+        assembly.fast_panel_for(factor.spec, assembly.is_fold)
+        if panel is None
+        else panel
+    )
+    declaration = assembly.declaration_builder(
+        factor.spec, chosen, assembly.is_fold
+    )
+    scenarios, _formations = _series._reconstruct_non_event(
+        assembly.dataset_root,
+        declaration,
+        factor.spec,
+        chosen,
+        assembly.partition,
+        assembly.export_bindings,
+    )
+    return scenarios
+
+
+def reconstructed_net_series(assembly: Any, factor: Any) -> Any:
+    """The observed T0 net long-short series (the export's ``b_series``)."""
+
+    return _reconstruct(assembly, factor)[0].net
+
+
 def oracle_panel(assembly: Any, factor: Any) -> pd.DataFrame:
     """Build the direction-oracle panel: ``value`` = realized forward return.
 
@@ -60,22 +88,8 @@ def oracle_panel(assembly: Any, factor: Any) -> pd.DataFrame:
     grid with ``value`` replaced by the observed T0 forward return.
     """
 
-    from smart_beta.dataset_v1 import pqv2_series as _series
-
-    panel = assembly.fast_panel_for(factor.spec, assembly.is_fold)
-    declaration = assembly.declaration_builder(
-        factor.spec, panel, assembly.is_fold
-    )
-    scenarios, _formations = _series._reconstruct_non_event(
-        assembly.dataset_root,
-        declaration,
-        factor.spec,
-        panel,
-        assembly.partition,
-        assembly.export_bindings,
-    )
     frame = (
-        scenarios[0]
+        _reconstruct(assembly, factor)[0]
         .panel[["date", "stock_id", "forward_return"]]
         .rename(columns={"forward_return": "value"})
         .copy()

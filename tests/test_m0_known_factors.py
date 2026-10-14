@@ -29,7 +29,10 @@ from typing import Any
 import pandas as pd
 import pytest
 
+import numpy as np
+
 from smart_beta.campaign import campaign3_eval as E
+from smart_beta.campaign.campaign1 import PERIODS_PER_YEAR as MONTHLY_PERIODS_PER_YEAR
 from smart_beta.diagnostics import known_factors as KF
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -191,6 +194,26 @@ def test_build_known_factors_rejects_a_tampered_register(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # 4. determinism + report contract
 # ---------------------------------------------------------------------------
+
+
+def test_annualized_sr_uses_the_monthly_formation_annualization(tmp_path: Path):
+    _case, assembly = fx.build_case_and_assembly(tmp_path)
+    factor = _factor("KF-MOM12")
+    diagnostic = KF.evaluate_known_factor(assembly, factor)
+    cell = diagnostic.cell("B-T0")
+    assert cell is not None
+
+    # The SR annualizes the monthly-formation series with the frozen monthly
+    # literal, not the declaration's 252-for-a-monthly-series value.
+    assert cell.sr_periods_per_year == MONTHLY_PERIODS_PER_YEAR == 12
+    assert cell.declaration_periods_per_year == 252
+
+    net = fx.reconstructed_net_series(assembly, factor).to_numpy(dtype="float64")
+    finite = net[np.isfinite(net)]
+    expected = float(finite.mean() / finite.std(ddof=1) * np.sqrt(12.0))
+    inflated = float(finite.mean() / finite.std(ddof=1) * np.sqrt(252.0))
+    assert cell.annualized_sr == pytest.approx(expected)
+    assert cell.annualized_sr != pytest.approx(inflated)
 
 
 def test_two_runs_are_byte_identical(tmp_path: Path):
