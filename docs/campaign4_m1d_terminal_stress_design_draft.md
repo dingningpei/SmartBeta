@@ -1,4 +1,4 @@
-# Campaign-4 M1-d — role of terminal stress (TS) in selection and confirmation: design draft (nothing frozen)
+# Campaign-4 M1-d — role of terminal stress (TS) in selection and confirmation: design draft (direction FROZEN 2026-10-14: B1, d = −0.55)
 
 - **Status:** planner draft, 2026-10-14. Requested by the user, who asked for the three
   directions with pros, cons and literature.
@@ -167,3 +167,15 @@
   https://datacenter.safe-frankfurt.de/documents/Data_Description_CRSP_Shumway_20250317.pdf
 - Hou, Xue & Zhang (2020), *Replicating Anomalies*, RFS; NBER w23394:
   https://www.nber.org/papers/w23394.pdf
+
+## Decisions (user, 2026-10-14: "按照你的建议")
+
+| ID | Decision |
+|---|---|
+| D-M1d-1 | **B1**: an adversarial calibrated terminal stress, used in both ranking and confirmation. TS (±100%) and B2 are reported, never gated |
+| D-M1d-2 | **d = −0.55**, all exchanges |
+| D-M1d-3 | proceed to the P-Q v2.5 amendment design, document-only first; each later step needs its own freeze |
+
+**The direction is frozen as stated. It applies to Campaign-4 only.** Campaign-3's
+records stay under their own rules. The disclosure in the header is binding on every
+downstream document.
