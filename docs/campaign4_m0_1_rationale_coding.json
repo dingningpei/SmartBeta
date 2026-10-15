@@ -1,0 +1,404 @@
+{
+ "coded_on": "2026-10-15",
+ "coder": "planner (REVIEWER JUDGMENT)",
+ "coding": {
+  "03e4281fb024e3c4bfdb69062df3d4c9fb0c30575442aa3e991c82317ede8bf1": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "05c918522080bd804b3f3a3e623daac52561975458b869d514b0ecc9d2d7f247": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "0867d5d081fd382f4d62541e9dec2af50e680626aff213c10005f09fb15050af": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "0aa722f5977bd499c778bec1f9a8a7eaa8362f3757c5122bea79128c8825599c": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "0ac5eb611bec0fe926f8e5897ded52b490f50a4a948b05fd7dcf9c396424da5e": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "0ca0f33a8748591e4bce5b60ce50669ba935dcc1ad183aedcf42ddf8e89b89b3": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "164bad8f542b03ecfbd4cb4eb34746042088cb5d550bf446fa03cb9891ff70b2": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "186b802e555b912217ed25a534277b7e6d3e1bfd4e94800d0e005aaed608d217": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "18912cf8cad2e98604c3090155242be3a4a8c0dcc630ffcc235d96a1e26ddad8": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "18960de30661eefbc1df7d57bd08a4c62290db7669ced247ae400fe7509d56a2": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "1944fa278c78caf72ae361ef46805585cde85e4113730249842df0410ad792c5": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "1974c576b22de3bdf76b15bc657afddbbe55616a220cb2dd463db7f38b996c2a": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "19b847e6a814511769a7f5bf61ff38d7b559fe674e6b03e7428f33d98f0dd9b1": {
+   "driver": "REV",
+   "relation": "?"
+  },
+  "1cd8d7d712d1b218706c605accf338b3d841778640b9ac06682992f7361d73c7": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "1e232ec9fa617b2228e1f4977590d52703757d1a41e81e90ba20614dbd8aa32e": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "2120a18a073f2f05d33c95d5b4e767c4d572de1d61c0bed5884c94447833ca7e": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "2b7d5a92bfb065b93b616fdd61e57b03485f67be6806a2a2cecfb98c920ae108": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "2b9c150d31c321764309a461834464d1afe2acfd453b3b5a87c6494074faa5b1": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "306b79168fe2af28936b6ae2acb92f68cdf9f742a3d2193ea47e77e6162815d8": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "341595869d07b0b2a55cdd18c5e08ad10df417bc51e68149feacc1f509128dac": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "343584c81c22b16c275b5e58eb33dfe3ffda805ff549af2b27b297af15f8d10e": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "3501af0d990a6fc60338cf05f848e8e2ba4daf4c009509104c6e9b5aea2de91c": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "39ec6ffe03d36474c07d6c9f2c25e2ecc2d1a5844ca2de65d0d4a88108b622d6": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "3f7ccb23961c5a39f01375857dc97799923cfb6912a7e3caefbf6935e4e8567b": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "47b29f58a66459a0f73655caaba5742bd37aaa5b66d2c94df3a0a2932d2d5a25": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "4c66d6f855432f53fed1e3dae8ac05f0354eb258343bbc5725a27db1783143ea": {
+   "driver": "EAR",
+   "relation": "-"
+  },
+  "539cfa0d7b3b51c51ff348d10fc69c80fea566079683b33556ab9c595f446650": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "539e501c3f177cfbd89a7e84910446cef6d06236dadedd9e3741f6e8b5f7be9c": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "55d6029ee67cf325d6b279af21c7b9775def1f58eabf55b1c8c484439edfb306": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "595efaca75af1be85db0d5a22f3eceffe6bc640bc2d479eb251187fad87100a4": {
+   "driver": "REV",
+   "relation": "?"
+  },
+  "5962ec4c9568e26fc3a8a1d7f2c7ddb4a149e3ce5e05827acbd628f718af2191": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "6534d7806c64e4a9ccbdc4d051b0cd39b91e6d7747997dfc860744e80d565d96": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "6c4a0d90b1dc1134f561ba1a29c03faa622855afbf11a51f553ebb5decac322e": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "6f7418ae2aa65b4717f96f244236a72bf98f0e78ad749385d4e28b2410df512d": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "7008ecbe17d23ac69e6eae8ea0e7ea8c9e2a59f305e73d38c12d1d12a7a376a6": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "7487145d29102302ed4e2a93d15fac357d6b5f8c7f61d34290d0821087f3dd6c": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "768e5b598d1259e5abe3878d57397abf7be8b053450c328c3b83d1256ec7bb39": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "769f7901c20572b61942944a959568661d2041fcd3ee18ee0d63e9a85b2b9f64": {
+   "driver": "EAR",
+   "relation": "-"
+  },
+  "7824abc7f9aa2d9ef436500f3633a3a93a6e6553aecaa2897453aabc8d0dbc96": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "79d8b09f0c758751078587bf9583f0807f6525f644684ad536652b3e71bb5980": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "7ea843b788d36aab51e11ee7de49cf30785888fd546cd0cd706a554ebb808c92": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "7f359dc7a16111032ff29d9ef481ef98ac65e95330489c7c35723a34e461a917": {
+   "driver": "OTHER",
+   "relation": "?"
+  },
+  "816f4c9f04e1f9fd36e807601e85d3b638f62ca7eec6923a30ffa43b4c073821": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "81b953c763c2a5e7ddb78616001cd743d77c178a8f4d496d2a32287da21a9b21": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "826454036ff4dcab115608caa5ffb0aa32eeb4ffcd272e934abb8c04218c7048": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "850f2e2f77f02640079f1e34d168f57fc811b629b1b19a2dd791859937ff7ee1": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "8b6e9e173d09702bc92800e953f45f4fcb4d1a4c2a3296f3cb2b49fa2059f058": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "8d881024e2eb5a67bd4ec5f39bae1ae351dc857e8457fd9c54a99f41f01d2951": {
+   "driver": "EAR",
+   "relation": "-"
+  },
+  "8dea23a2ea7cc798032b082883b0cb608a0f96603df4ce22218a38da7e47bbc0": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "9006466569d85f1ba52d34493ffb60bdf71fcc5210ba6344b8907e2f208602b5": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "9649a19beaed76ac3eb92c6043fb98ce270d9bc03c4962d3a7722b3b2adb2406": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "997b2a299de3b534511059a96071def8bb0eb86db8b0640fcbda1650b2fc4dfc": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "9afedbcbe61ca462861a71e5e1c071988d11b6b6ada9ec2b1fe0ddc9514d7c7b": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "9ce231432a0dbaa58c842e77c1e7fcd35095e398f25a61bcadb4b556412b0254": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "9fa5f2f63139f6b98152d4167801bdc053ab332f9af04d7fd2c3f170905dc879": {
+   "driver": "REV",
+   "relation": "?"
+  },
+  "a0239d5d9c73e07dbf379c35a5c8cdd7c43c9051f4c5ff5226fb4eab867904de": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "a3a15480941ca67c72c44f3a463862edcdbfe41979f7cae6be9d16823812fdee": {
+   "driver": "EAR",
+   "relation": "-"
+  },
+  "a57bb863728944aee2514878c59cb53676c8746d0cd575fc3aca0bd35f18835d": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "a7803dddc19a702a3204a42c0ce35e6f4f838b927df4e8aa91ac23f11c29979e": {
+   "driver": "MOM",
+   "relation": "?"
+  },
+  "b1be1145efbe7625c94ba94f9c05b9674bbd97775684b3cf97a177f063572247": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "b2842c6dff213179cd17960e41a6e22c434b0a8a38b00da9c13c761e1765bc00": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "b46686cd5b7c29e2400b43f5b3ec7dcd0b6dd5fb5d2461bbdda75b05f2f81a15": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "b56a54337f5e64b8796669af580790714d9d443a35edb792213a5d0bc5a41a76": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "b83df4518720fee49c60a2516aa0d08fa3b5a510efc4bdfb6e6257dade399995": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "b8f03fcfa784d572ee2b3cf722eb7c551cd4e3dc4a76e0cef533727cccfa69b3": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "bbad51280814c61804a03b46f5056ae8fe6deaaf13b0392a2c2277f0ad582ebf": {
+   "driver": "MOM",
+   "relation": "-"
+  },
+  "bbcee3cc00cf54425576c97cd928b099196a43704ef8ab717d791750d49db190": {
+   "driver": "REV",
+   "relation": "-"
+  },
+  "bfa13721169397642057de6356ff1f821516aad70fc4844e53b5bf591ff274d9": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "bfb9f497d136ee9faec873f39a4a25aaf1de4bbeb2026143edcc54c82bd859c7": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "c0622a5b07346eb4b7ac947de3a532cec50b0eff8a534e899f3fbe497f21c229": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "c0cb267bbcf921fbd0deae22b37441d9f2ec61fc4ecedff90ae5ab81efdde433": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "c3fc461eb3429d4499e663a1ee36513468eb471cc978311af59407577f985548": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "c47e96a1ff2fe7ed98feff9771813ac496f7e27b285eb284cec2d82b741d59da": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "c5ddf11d6ee06b79434e9471dd564358d2a98f7bc94dda174b7b254d0cf7d186": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "c90ea248e601316bc6c58939156fdb927d4ee2838e1849e5c18ef64e93cf37e9": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "cb280bbd72b4d721880a264d1384b1c28f6aa9f87e0cbde6c5d0613fa030501a": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "d151478f7fc25d98e94a2482de828b0b5f6be9777af24fe9fab7f37759eecf18": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "d5ab2ad0d68abedd777ed873a04587d79f8a98b4e44533f2c88e013df18d29a2": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "d5e9b968cc3fc37cdf0aa340c195838d1a4abc657c886bbba94eb1224acb8e44": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "d697f1c57e8c67186855e0e906a5239cfa07e30e0e8ec2f251034613c6174083": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "d6c63fd574b4f5c5317e5f490111ec008527382aa32586ee03952e328c226b0e": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "d6d8d31f487be22b73244d8d442066a7073c5465c2a2fa5891c66340d7982631": {
+   "driver": "OTHER",
+   "relation": "?"
+  },
+  "d7838ea9dc30abb5ff1cb5aa52cb2ee5f5ab4a134b7ec9ca021f8a2ff0c39c27": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "dba548c38f1aa8532d88750c90cd265915a30930b888d730871ed47262ef2506": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "de4c67c2e9bf0ddd8478907c0b4732023bd76bd4b194c93438d3693ed60e53a0": {
+   "driver": "DVT",
+   "relation": "+"
+  },
+  "df28b10893b734cf7fbe3c9595c2ff2afb4c74f3e13b466d95a6ee53f37aff2b": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "df4b9e8cb1b0a13358014580a0f4eec16f1b33a3f738f884e62fe261fa234530": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "e13fbfb4eade4fc96bb009b6d9cabee78bfe281fd1c5bca579b6161db0e64f9f": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "e755cb3f97aba10aaf2cb973f6a3abc2a28ad65b292b5a8dc8694b6de100ffb3": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "e9a44a72e09d596b249c2031739ddba6579c258d79566c9d206daaddb5276a48": {
+   "driver": "REV",
+   "relation": "+"
+  },
+  "ece9bf75ce0f3c3e449dd5a13920824a89b081fa54765933173953008644d27e": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "ee4af31fb3be5bd155a796c5aa7a624bb9a567e9fec10f44729c776a1fa11a02": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "efa8bf8f5e531a7dd0df07df17a2590855f11b014dd19c578d0f6bdb088d24ba": {
+   "driver": "REV",
+   "relation": "?"
+  },
+  "f52aa8b53a38572b0c67dba28fcd0769d1bb681c0611ca2689b536ff0eef4b0f": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "f535c7d108638fdf6389ad92b811937b3433a32611d449bdaad486cd2b8037e7": {
+   "driver": "DVT",
+   "relation": "?"
+  },
+  "f743a46560574fd37e2e651187df07fc9e8d3863bc90f7accf2fd2009eaf544b": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "f75ce730cec0638b2ef2b25b752928d0095fcbc6374acd35f36d4388f2facccb": {
+   "driver": "MOM",
+   "relation": "+"
+  },
+  "f78a010e02b2a5567c3c489cc5dd97d385bcd03fc8ec41645995739fcd0dac7b": {
+   "driver": "EAR",
+   "relation": "+"
+  },
+  "fb755d302f4d9e19c8402edc248ef699a17016133e40294f590064ba7252982a": {
+   "driver": "EAR",
+   "relation": "?"
+  }
+ },
+ "method": "blind: coded from research_question, economic_rationale, generation_reason, spec description/hypothesis only; no expression AST and no per-candidate result was read (C4M0-13 spec 1.2)",
+ "schema": "campaign4-m0-1-rationale-coding-v1"
+}
