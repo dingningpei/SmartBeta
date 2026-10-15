@@ -1,4 +1,4 @@
-# P-Q v2.5 — wave 3: task PQ25-H (L-TD orchestration, TD cells, TD series) (DRAFT for freeze; not authorized)
+# P-Q v2.5 — wave 3: task PQ25-H (L-TD orchestration, TD cells, TD series) (FROZEN 2026-10-14; launch authorized)
 
 ## Authority
 
@@ -126,3 +126,7 @@ report.
   in-line T0 self-check cannot be made bitwise-equal, **STOP and report**. Do not
   redesign.
 - Review, merge and barrier follow CLAUDE.md §4, plus `verify_authority_v2_5()`.
+
+## Freeze (user, 2026-10-14: "冻结第三波的 spec，并授权启动 PQ25-H")
+
+This spec is frozen. The PQ25-H Pi launch is authorized.
