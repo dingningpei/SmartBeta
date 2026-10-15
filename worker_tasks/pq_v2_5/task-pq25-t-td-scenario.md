@@ -110,3 +110,10 @@ The design's `td_envelope.py` is folded into PQ25-H. **No methodology changes.**
 ## Freeze (user, 2026-10-14: "确认， 授权")
 
 This spec is frozen, including the wave re-plan (T → H → X). The PQ25-T Pi launch is authorized.
+
+## Barrier (2026-10-14)
+
+- Merged: PQ25-T `f2b7966` (merge `ab69a36`); 121 tests re-run independently.
+- Full suite at `ab69a36`: 6843 passed, 1 skipped, 869 s (exit 0).
+- `verify_authority_v2_5()` passes on master.
+- Review note, carried into PQ25-X: the in-line check uses `assert_frame_equal(check_exact=True)`, which treats `-0.0 == 0.0`. PQ25-X's byte-level barrier must compare float bit patterns.
