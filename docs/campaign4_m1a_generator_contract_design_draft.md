@@ -81,3 +81,12 @@ per run); expected far lower at DeepSeek prices.
 | Q2 | Adopt A1–A5 as the contract | yes |
 | Q3 | Adopt the §2 walk-forward design (two origins, control arm, descriptive reading) | yes |
 | Q4 | Diversity threshold 0.90 and family cap 30% | yes, fixed before any run |
+
+## Decisions (user, 2026-10-15: "我同意")
+
+| ID | Decision |
+|---|---|
+| Q1 | **Yes.** M0-1 and M0-3 run first, as task C4M0-13 (`worker_tasks/campaign4_m0/task-c4m0-13-direction-exposure.md`); its spec is frozen separately |
+| Q2 | **A1–A5 adopted** as the contract direction; the final contract is frozen after the C4M0-13 reading |
+| Q3 | **The §2 walk-forward design adopted** (two origins, control arm, descriptive reading) |
+| Q4 | **Fixed:** diversity threshold \|ρ\| > 0.90, family cap 30% |
