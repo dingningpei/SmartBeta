@@ -134,3 +134,9 @@ constants. This is the PQ22-G/PQ23-G oracle pattern.
 ## Freeze (user, 2026-10-14: "确认")
 
 Wave-1 plan frozen; PQ25-A and PQ25-G Pi launches authorized (parallel).
+
+## Wave-1 barrier (2026-10-14)
+
+- Merged: PQ25-A `d5f6ae7` (merge `37bd285`), PQ25-G `bc11b8d` (merge `a843546`; returned once).
+- Full suite at `a843546`: 6836 passed, 1 skipped, 853 s (exit 0).
+- `verify_authority_v2_5()` passes on master.
