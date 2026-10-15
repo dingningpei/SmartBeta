@@ -1,4 +1,4 @@
-# P-Q v2.5 — wave 4: task PQ25-X (real-data equivalence barrier) (DRAFT for freeze; not authorized)
+# P-Q v2.5 — wave 4: task PQ25-X (real-data equivalence barrier) (FROZEN 2026-10-14; launch authorized)
 
 ## Authority
 
@@ -87,3 +87,7 @@ factor:
 
 - One Pi worker via Herdr, worktree `worktrees/task-pq25-x-equivalence`.
 - **Stop rule** as in the previous waves.
+
+## Freeze (user, 2026-10-14: "冻结， 授权启动")
+
+This spec is frozen, including the PASS/FAIL rule, before any real-data v2.5 result. The PQ25-X Pi launch is authorized, as is the planner real IS run after merge.
