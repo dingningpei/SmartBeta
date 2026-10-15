@@ -54,6 +54,22 @@
 - **Open input (needed before freeze):** the desktop's CPU architecture, OS, and Python
   / numpy / pandas versions, and how the planner reaches it. Without these, E5 cannot be
   frozen.
+- **Desktop facts (planner, read-only SSH, 2026-10-14):**
+
+  | Item | Laptop (reference) | Desktop |
+  |---|---|---|
+  | Access | — | `ssh -p 2222 ning_pei_ding@192.168.1.20` (LAN, key auth) |
+  | Host / OS | macOS 27.0 | Windows host `DESKTOP-15C6NAG`, WSL2 Ubuntu 24.04.5 (kernel 6.18.54.1) |
+  | CPU | Apple silicon, arm64 | Intel i7-10700K, x86_64, 16 threads, AVX2 (no AVX-512); 31 GB RAM |
+  | Python | 3.12.5 | 3.12.3 (system), venv `~/smart_beta/.venv` |
+  | numpy / pandas / scipy | 2.5.3 / 3.0.5 / 1.18.1 | 2.5.3 / 3.0.5 / 1.18.1 |
+  | BLAS | Accelerate | scipy-openblas 0.3.34 (DYNAMIC_ARCH, Haswell kernel) |
+  | Repo | master | `~/smart_beta/main`, master at `c6c6257` (an ancestor of laptop master; stale, never fetched since); one untracked draft doc; `~/smart_beta/data_store` present |
+
+  - **Design consequence:** the library versions match, but the CPU ISA and the BLAS differ
+    (Accelerate vs OpenBLAS; FMA contraction and reduction order can differ). Bitwise
+    equality is therefore **not** expected a priori for BLAS-backed or reduction-heavy
+    paths; the probe is what decides. The gate stays bitwise (a difference is a STOP).
 - **Owned files:** `scripts/arch_equality_probe.py`, `tests/test_arch_equality_probe.py`,
   `tests/fixtures/arch_equality/**` (all new).
 
