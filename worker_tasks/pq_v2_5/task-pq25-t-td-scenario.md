@@ -1,4 +1,4 @@
-# P-Q v2.5 — wave 2: task PQ25-T (B-TD scenario) (DRAFT for freeze; not authorized)
+# P-Q v2.5 — wave 2: task PQ25-T (B-TD scenario) (FROZEN 2026-10-14; launch authorized)
 
 ## Authority
 
@@ -106,3 +106,7 @@ The design's `td_envelope.py` is folded into PQ25-H. **No methodology changes.**
 
 - One Pi worker via Herdr, worktree `worktrees/task-pq25-t-td-scenario`.
 - Review, merge and barrier follow CLAUDE.md §4, plus `verify_authority_v2_5()`.
+
+## Freeze (user, 2026-10-14: "确认， 授权")
+
+This spec is frozen, including the wave re-plan (T → H → X). The PQ25-T Pi launch is authorized.
