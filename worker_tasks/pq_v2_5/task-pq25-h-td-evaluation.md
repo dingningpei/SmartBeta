@@ -130,3 +130,9 @@ report.
 ## Freeze (user, 2026-10-14: "冻结第三波的 spec，并授权启动 PQ25-H")
 
 This spec is frozen. The PQ25-H Pi launch is authorized.
+
+## Barrier (2026-10-14)
+
+- Merged: PQ25-H `c75e1f0` (merge `b764048`); 290 tests re-run independently.
+- Full suite at `b764048`: 6856 passed, 1 skipped, 836 s (exit 0).
+- `verify_authority_v2_5()` passes on master.
