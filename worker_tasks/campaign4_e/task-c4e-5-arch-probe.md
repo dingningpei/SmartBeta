@@ -93,3 +93,10 @@ toleranced away, and no item is dropped to pass.
 
 This spec is frozen, including the gate rule. The C4E-5 Pi launch is authorized, as are the
 planner's desktop steps after merge.
+
+## Barrier (2026-10-15)
+
+- Merged: C4E-5 `72d2cc9` (merge `960fa55`); 7 tests + `--check` re-run independently.
+- Full suite at `960fa55`: 6872 passed, 1 skipped (exit 0).
+- Desktop gate: **FAIL** (6/8 items differ, last-bit float effects). STOP. See
+  `docs/campaign4_e/arch_equality_result.md`.
