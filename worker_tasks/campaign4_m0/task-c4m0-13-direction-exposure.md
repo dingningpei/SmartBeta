@@ -1,4 +1,4 @@
-# Campaign-4 M0 — task C4M0-13 (M0-1 direction audit + M0-3 common exposure) (DRAFT; not frozen)
+# Campaign-4 M0 — task C4M0-13 (M0-1 direction audit + M0-3 common exposure) (FROZEN 2026-10-15; launch authorized)
 
 ## Authority
 
@@ -164,3 +164,9 @@ planner-supplied output directory outside the repository data tiers.
 - One Pi worker via Herdr, worktree `worktrees/task-c4m0-13-direction-exposure`.
 - **Stop rule:** a missing frozen helper, an unreadable persisted input, or a driver that
   needs grammar changes → STOP and report.
+
+## Freeze (user, 2026-10-15: "我同意")
+
+This spec is frozen, including the §1.4 and §2.3 reading rules, before any C4M0-13 result
+exists. The C4M0-13 Pi launch is authorized, as are the planner's blind coding and the
+real IS run after merge.
