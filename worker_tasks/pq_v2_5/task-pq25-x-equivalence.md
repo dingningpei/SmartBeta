@@ -91,3 +91,11 @@ factor:
 ## Freeze (user, 2026-10-14: "冻结， 授权启动")
 
 This spec is frozen, including the PASS/FAIL rule, before any real-data v2.5 result. The PQ25-X Pi launch is authorized, as is the planner real IS run after merge.
+
+## Barrier (2026-10-14)
+
+- Merged: PQ25-X `0029e31` (merge `2d9604a`); 48 tests re-run independently.
+- Full suite at `2d9604a`: 6865 passed, 1 skipped, 882 s (exit 0).
+- `verify_authority_v2_5()` passes on master.
+- Real IS run: **PASS** (E1/E2/E3 all 11 factors, 52 TD cells, E4 violations 0);
+  production K-PIT hash unchanged. Result: `docs/discovery_dataset_v1_2_pq_v2_5_equivalence_result.md`.
