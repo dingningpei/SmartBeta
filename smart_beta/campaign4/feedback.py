@@ -1,7 +1,8 @@
 """Campaign-4 M1 -- treatment / control renderers (task C4M1-1).
 
 Authority: ``worker_tasks/campaign4_m1/task-c4m1-1-contract-core.md``
-section 5 and ``docs/campaign4_m1a_contract_calibration_draft.md`` section 2.
+section 5, ``docs/campaign4_m1a_contract_calibration_draft.md`` section 2 and
+the C4M1-1 erratum E1 (R1 firewall binding, R2 per-proposal control metrics).
 
 Two renderers live here:
 
@@ -12,22 +13,27 @@ Two renderers live here:
   nearest neighbour.
 * :func:`render_control_prompt` -- the **control** prompt: the frozen C3 v2
   template (hash-equal to :data:`PROMPT_TEMPLATE_V2_HASH`) rendered through
-  ``llm_generator.render_prompt`` with C3 structures whose IS metrics are
-  recomputed on the training periods with the same estimator the frozen
-  ``campaign3_eval.metrics_from_diagnostics`` uses
-  (:func:`smart_beta.evaluation.metrics.long_short_mean_tstat`).
+  ``llm_generator.render_prompt`` with a caller-supplied
+  :class:`~smart_beta.research.history.ResearchFeedback`.  The caller builds
+  that feedback the C3 way (C4M1-2's executor history), with the per-cell
+  metrics produced by :func:`control_metrics`.
 
 The frozen C4 prompt file ``smart_beta/research/prompts/campaign4_v1.txt`` is a
 byte-identical copy of ``worker_tasks/campaign4_m1/campaign4_v1_prompt.txt``;
 its SHA-256 is asserted at import against the frozen hash.  The only
 placeholder is ``<<<C4_FEEDBACK>>>``.
 
-Firewall
---------
+Firewall (erratum E1 R1)
+------------------------
 
-Both renderers take ``window_cut`` and raise :class:`C4FirewallError` if any
-value they are given carries a period at/after the cut.  No renderer can see a
-test-window value.
+The treatment renderer no longer trusts a single per-record date.  Each
+statistic it renders is a :class:`~smart_beta.campaign4.ranking.RankStatistic`
+carrying the ``window_cut`` it was computed under and the latest formation date
+it actually used (``last_period``).  :func:`render_c4_feedback` raises
+:class:`C4FirewallError` unless every statistic's ``window_cut`` equals the
+renderer's cut and every ``last_period`` is ``None`` or strictly before the
+cut.  The A4/A6 values carry the gate's ``window_cut``, which must also equal
+the renderer's cut.
 
 Nothing here reads a real dataset, opens a network path or writes the
 Knowledge-PIT.
@@ -47,13 +53,11 @@ from typing import Any
 import pandas as pd
 
 from smart_beta.campaign4.contract import C4ContractError, C4FirewallError
+from smart_beta.campaign4.ranking import RankStatistic
 from smart_beta.evaluation.metrics import long_short_mean_tstat
 from smart_beta.evaluation.spec import MetricValue
 from smart_beta.research import llm_generator, llm_generator_deepseek
 from smart_beta.research.history import (
-    DevelopmentFoldRole,
-    ExperimentFeedback,
-    FoldEvidence,
     GeneratorVisibleResearchHistory,
     ResearchFeedback,
 )
@@ -68,11 +72,11 @@ __all__ = [
     "C4_STATUSES",
     "FeedbackError",
     "FeedbackRecord",
-    "ControlSeries",
     "prompt_template_c4_hash",
     "load_prompt_template_c4",
     "render_c4_prompt",
     "render_c4_feedback",
+    "control_metrics",
     "render_control_prompt",
 ]
 
@@ -120,15 +124,6 @@ C4_STATUSES: frozenset[str] = frozenset(
         "SCHEMA_REJECTED",
     }
 )
-
-#: The deterministic C3-style control identities (never a clock / UUID).
-_CONTROL_EXPERIMENT_ID = hashlib.sha256(
-    b"campaign4:m1:control:experiment"
-).hexdigest()
-_CONTROL_HYPOTHESIS_ID = hashlib.sha256(
-    b"campaign4:m1:control:hypothesis"
-).hexdigest()
-_CONTROL_IS_FOLD_KEY = "campaign4-m1-control-is"
 
 
 def prompt_template_c4_hash() -> str:
@@ -209,6 +204,15 @@ def _round3(value: Any) -> float | None:
     return 0.0 if rounded == 0 else rounded
 
 
+def _finite_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 # ---------------------------------------------------------------------------
 # treatment feedback
 # ---------------------------------------------------------------------------
@@ -218,8 +222,11 @@ def _round3(value: Any) -> float | None:
 class FeedbackRecord:
     """One proposal's treatment feedback row.
 
-    ``period`` is the proposal's evaluation period; it is firewall-checked and
-    never rendered.  ``expression`` is the FactorSpec AST.
+    ``rank_stat`` / ``l_t0_ewc_t`` / ``l_td_ewc_t`` are the
+    :class:`~smart_beta.campaign4.ranking.RankStatistic` objects the renderer
+    firewall-checks (erratum E1 R1).  ``gate_window_cut`` is the ``window_cut``
+    of the :class:`~smart_beta.campaign4.diversity.DiversityGate` that produced
+    ``restatement`` / ``nearest``.
     """
 
     proposal_id: str
@@ -229,13 +236,13 @@ class FeedbackRecord:
     predicted_direction: str | None
     status: str
     reason: str | None
-    rank_stat: float | None
+    rank_stat: RankStatistic
     rank: int | None
-    l_t0_ewc_t: float | None
-    l_td_ewc_t: float | None
+    l_t0_ewc_t: RankStatistic
+    l_td_ewc_t: RankStatistic
     restatement: tuple[str | None, float | None] | None
     nearest: tuple[str, float] | None
-    period: date | str | datetime
+    gate_window_cut: date | str | datetime | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,13 +253,13 @@ class FeedbackRecord:
             "predicted_direction": self.predicted_direction,
             "status": self.status,
             "reason": self.reason,
-            "rank_stat": self.rank_stat,
+            "rank_stat": self.rank_stat.to_dict(),
             "rank": self.rank,
-            "l_t0_ewc_t": self.l_t0_ewc_t,
-            "l_td_ewc_t": self.l_td_ewc_t,
+            "l_t0_ewc_t": self.l_t0_ewc_t.to_dict(),
+            "l_td_ewc_t": self.l_td_ewc_t.to_dict(),
             "restatement": self.restatement,
             "nearest": self.nearest,
-            "period": self.period,
+            "gate_window_cut": self.gate_window_cut,
         }
 
 
@@ -268,18 +275,38 @@ def _coerce_feedback_record(value: Any) -> FeedbackRecord:
             predicted_direction=value.get("predicted_direction"),
             status=value["status"],
             reason=value.get("reason"),
-            rank_stat=value.get("rank_stat"),
+            rank_stat=value["rank_stat"],
             rank=value.get("rank"),
-            l_t0_ewc_t=value.get("l_t0_ewc_t"),
-            l_td_ewc_t=value.get("l_td_ewc_t"),
+            l_t0_ewc_t=value["l_t0_ewc_t"],
+            l_td_ewc_t=value["l_td_ewc_t"],
             restatement=value.get("restatement"),
             nearest=value.get("nearest"),
-            period=value["period"],
+            gate_window_cut=value.get("gate_window_cut"),
         )
     raise FeedbackError(
         f"a feedback record must be a FeedbackRecord or mapping, got "
         f"{type(value).__name__}"
     )
+
+
+def _check_statistic(stat: Any, cut: date, field_name: str) -> None:
+    """Fail closed unless ``stat`` was computed strictly before ``cut``."""
+
+    if not isinstance(stat, RankStatistic):
+        raise FeedbackError(
+            f"{field_name} must be a RankStatistic, got {type(stat).__name__}"
+        )
+    if _as_date(stat.window_cut) != cut:
+        raise C4FirewallError(
+            f"{field_name} was computed under window_cut "
+            f"{_as_date(stat.window_cut).isoformat()}, not the renderer's "
+            f"{cut.isoformat()}"
+        )
+    if stat.last_period is not None and _as_date(stat.last_period) >= cut:
+        raise C4FirewallError(
+            f"{field_name} used period {_as_date(stat.last_period).isoformat()} "
+            f"at/after the window cut {cut.isoformat()}"
+        )
 
 
 def _feedback_line(record: FeedbackRecord) -> dict[str, Any]:
@@ -293,10 +320,10 @@ def _feedback_line(record: FeedbackRecord) -> dict[str, Any]:
         "predicted_direction": record.predicted_direction,
         "status": record.status,
         "reason": record.reason,
-        "rank_stat": _round3(record.rank_stat),
+        "rank_stat": _round3(record.rank_stat.value),
         "rank": None if record.rank is None else int(record.rank),
-        "l_t0_ewc_t": _round3(record.l_t0_ewc_t),
-        "l_td_ewc_t": _round3(record.l_td_ewc_t),
+        "l_t0_ewc_t": _round3(record.l_t0_ewc_t.value),
+        "l_td_ewc_t": _round3(record.l_td_ewc_t.value),
         "restatement": (
             None
             if restatement is None
@@ -321,7 +348,7 @@ def render_c4_feedback(
     *,
     window_cut: date | str | datetime,
 ) -> str:
-    """Render the treatment feedback block.
+    """Render the treatment feedback block, firewall-bound to the statistics.
 
     With no proposals the block is exactly ``No prior proposals.``.  Otherwise
     it is one canonical compact JSON line per proposal, in proposal order.
@@ -338,55 +365,124 @@ def render_c4_feedback(
                 f"unknown feedback status {record.status!r}; expected one of "
                 f"{sorted(C4_STATUSES)}"
             )
-        if _as_date(record.period) >= cut:
-            raise C4FirewallError(
-                f"proposal {record.proposal_id!r} carries period "
-                f"{_as_date(record.period).isoformat()} at/after the window cut "
-                f"{cut.isoformat()}; the feedback is training-window only"
+        _check_statistic(record.rank_stat, cut, "rank_stat")
+        _check_statistic(record.l_t0_ewc_t, cut, "l_t0_ewc_t")
+        _check_statistic(record.l_td_ewc_t, cut, "l_td_ewc_t")
+        if record.gate_window_cut is not None:
+            if _as_date(record.gate_window_cut) != cut:
+                raise C4FirewallError(
+                    "the A4/A6 gate was built with window_cut "
+                    f"{_as_date(record.gate_window_cut).isoformat()}, not the "
+                    f"renderer's {cut.isoformat()}"
+                )
+        elif record.restatement is not None or record.nearest is not None:
+            raise FeedbackError(
+                "restatement/nearest require the A4 gate's window_cut"
             )
         lines.append(_canonical_json(_feedback_line(record)))
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# control prompt
+# control feedback
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ControlSeries:
-    """One C3-style cell's raw training-period return series.
+def _slice_before(
+    periods: Sequence[Any],
+    values: Sequence[Any],
+    cut: date,
+) -> tuple[tuple[Any, ...], tuple[float, ...]]:
+    """Keep the periods strictly before ``cut`` (paired with their values)."""
 
-    ``cell`` is e.g. ``B-T0`` / ``L-T0`` / ``B-TS`` / ``L-TS``.  The metrics
-    are recomputed from ``values`` by
-    :func:`~smart_beta.evaluation.metrics.long_short_mean_tstat`.
+    kept_periods: list[Any] = []
+    kept_values: list[float] = []
+    for period, value in zip(periods, values):
+        dated = _as_date(period)
+        if dated < cut:
+            kept_periods.append(period)
+            kept_values.append(float(value))
+    return tuple(kept_periods), tuple(kept_values)
+
+
+def control_metrics(
+    series_export: Any,
+    *,
+    not_assessed: bool,
+    window_cut: date | str | datetime,
+) -> tuple[MetricValue, ...]:
+    """The C3 control metrics of one export, recomputed on the training window.
+
+    The names, order and structure mirror
+    :func:`smart_beta.campaign3_eval.metrics_from_diagnostics`: for every record
+    in export order, ``<cell>_net_long_short_mean`` then ``<cell>_hac_t``, then
+    ``is_assessable``.  ``B`` cells use ``b_series`` and ``L`` cells use
+    ``l_series``; each value is recomputed on the periods strictly before
+    ``window_cut`` with :func:`~smart_beta.evaluation.metrics.long_short_mean_tstat`.
+
+    A NOT_ASSESSED cell yields ``value=None`` and ``n_obs=0`` (the frozen
+    function's shape for such a cell).  For an assessed cell ``n_obs`` is the
+    number of training periods the recomputed statistic consumed.
+    ``is_assessable`` follows ``not_assessed`` exactly as the frozen function
+    does.
     """
 
-    cell: str
-    periods: tuple[Any, ...]
-    values: tuple[float, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "cell": self.cell,
-            "periods": list(self.periods),
-            "values": list(self.values),
-        }
-
-
-def _coerce_control_series(value: Any) -> ControlSeries:
-    if isinstance(value, ControlSeries):
-        return value
-    if isinstance(value, Mapping):
-        return ControlSeries(
-            cell=value["cell"],
-            periods=tuple(value["periods"]),
-            values=tuple(float(item) for item in value["values"]),
+    cut = _as_date(window_cut)
+    records = tuple(getattr(series_export, "records", series_export))
+    metrics: list[MetricValue] = []
+    for record in records:
+        cell = str(record.cell).lower()
+        if not record.assessed:
+            metrics.append(
+                MetricValue(name=f"{cell}_net_long_short_mean", value=None, n_obs=0)
+            )
+            metrics.append(
+                MetricValue(name=f"{cell}_hac_t", value=None, n_obs=0)
+            )
+            continue
+        raw_values = (
+            record.b_series if str(record.estimand) == "B" else record.l_series
         )
-    raise FeedbackError(
-        "a control series must be a ControlSeries or mapping, got "
-        f"{type(value).__name__}"
+        used_periods, used_values = _slice_before(record.periods, raw_values, cut)
+        for period in used_periods:
+            if _as_date(period) >= cut:
+                raise C4FirewallError(
+                    f"control cell {record.cell!r} would use period "
+                    f"{_as_date(period).isoformat()} at/after the window cut "
+                    f"{cut.isoformat()}"
+                )
+        if not used_values:
+            metrics.append(
+                MetricValue(name=f"{cell}_net_long_short_mean", value=None, n_obs=0)
+            )
+            metrics.append(
+                MetricValue(name=f"{cell}_hac_t", value=None, n_obs=0)
+            )
+            continue
+        summary = long_short_mean_tstat(list(used_values))
+        n_obs = int(summary.n_obs)
+        metrics.append(
+            MetricValue(
+                name=f"{cell}_net_long_short_mean",
+                value=_finite_or_none(summary.value),
+                n_obs=n_obs,
+            )
+        )
+        metrics.append(
+            MetricValue(
+                name=f"{cell}_hac_t",
+                value=_finite_or_none(summary.t_stat),
+                n_obs=n_obs,
+            )
+        )
+    metrics.append(
+        MetricValue(
+            name="is_assessable",
+            value=0.0 if not_assessed else 1.0,
+            n_obs=0 if not_assessed else 1,
+        )
     )
+    return tuple(metrics)
 
 
 def _verified_v2_template() -> str:
@@ -402,50 +498,26 @@ def _verified_v2_template() -> str:
 
 def render_control_prompt(
     visible_history: GeneratorVisibleResearchHistory | None,
-    training_series: Sequence[Any],
+    feedback: ResearchFeedback,
     *,
     window_cut: date | str | datetime,
 ) -> str:
-    """Render the control prompt: the C3 v2 template with training-window C3
-    feedback metrics recomputed by the frozen estimator."""
+    """Render the control prompt: the C3 v2 template with C3-style feedback.
 
-    cut = _as_date(window_cut)
-    template = _verified_v2_template()
-    metrics: list[MetricValue] = []
-    for raw in training_series:
-        series = _coerce_control_series(raw)
-        if len(series.periods) != len(series.values):
-            raise FeedbackError(
-                f"control series {series.cell!r} has {len(series.periods)} "
-                f"periods but {len(series.values)} values"
-            )
-        for period in series.periods:
-            if _as_date(period) >= cut:
-                raise C4FirewallError(
-                    f"control series {series.cell!r} carries period "
-                    f"{_as_date(period).isoformat()} at/after the window cut "
-                    f"{cut.isoformat()}; the control feedback is training-window "
-                    "only"
-                )
-        summary = long_short_mean_tstat(list(series.values))
-        cell = str(series.cell).lower()
-        metrics.append(
-            summary.to_metric_value(f"{cell}_net_long_short_mean")
+    ``feedback`` is supplied by the caller (C4M1-2 builds it from the
+    executor's history, whose ``TaEvaluation.metrics`` come from
+    :func:`control_metrics`).  No experiment or hypothesis identity is
+    fabricated here.  ``window_cut`` is validated and carried for interface
+    parity; the training-window guarantee is owned by :func:`control_metrics`,
+    which sliced the export before the feedback was formed.
+    """
+
+    _as_date(window_cut)
+    if not isinstance(feedback, ResearchFeedback):
+        raise FeedbackError(
+            f"feedback must be a ResearchFeedback, got {type(feedback).__name__}"
         )
-        metrics.append(summary.to_metric_value(f"{cell}_hac_t"))
-    metrics.append(MetricValue(name="is_assessable", value=1.0, n_obs=1))
-
-    fold = FoldEvidence(
-        fold_key=_CONTROL_IS_FOLD_KEY,
-        role=DevelopmentFoldRole.IS,
-        metrics=tuple(metrics),
-    )
-    experiment = ExperimentFeedback(
-        experiment_id=_CONTROL_EXPERIMENT_ID,
-        hypothesis_id=_CONTROL_HYPOTHESIS_ID,
-        is_folds=(fold,),
-    )
-    feedback = ResearchFeedback(experiments=(experiment,))
+    template = _verified_v2_template()
     visible = (
         GeneratorVisibleResearchHistory()
         if visible_history is None

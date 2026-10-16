@@ -1,25 +1,17 @@
 """C4M1-1 -- contract-core tests (synthetic only).
 
 Authority: ``worker_tasks/campaign4_m1/task-c4m1-1-contract-core.md`` section
-"Tests (synthetic only)".  Every test is offline and synthetic: candidate
-payloads, factor panels, series records and C3 control series are hand-built;
-no ``data_store`` path, production artifact, reserve / holdout, Knowledge-PIT
-write or network path is touched, and no test calls ``git``.
-
-Coverage (the eight frozen test rows):
-
-1. A2 validation + the C3 normalizer accepting the stripped list;
-2. A4 gate / family cap;
-3. A6 restatement;
-4. the rank statistic;
-5. the test statistics;
-6. the training-window firewall (renderers + gate);
-7. the frozen prompt hashes and render determinism;
-8. the v2.5 admission guard on the TD path.
+"Tests (synthetic only)" plus the C4M1-1 erratum E1 (R1 firewall binding, R2
+per-proposal control metrics, R3 event test statistics).  Every test is offline
+and synthetic: candidate payloads, factor panels, series records and C3
+feedback structures are hand-built; no ``data_store`` path, production
+artifact, reserve / holdout, Knowledge-PIT write or network path is touched,
+and no test calls ``git``.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -30,6 +22,7 @@ import pandas as pd
 import pytest
 
 from smart_beta.campaign import campaign3_launch as _launch
+from smart_beta.campaign.campaign3_eval import metrics_from_diagnostics
 from smart_beta.campaign.campaign3_generation import build_campaign3_policy
 from smart_beta.campaign4 import contract as C
 from smart_beta.campaign4 import diversity as D
@@ -38,11 +31,18 @@ from smart_beta.campaign4 import ranking as R
 from smart_beta.dataset_v1 import pqv2_evaluation as E
 from smart_beta.dataset_v1.pqv2_series import PQv2SeriesExport, PQv2SeriesRecord
 from smart_beta.diagnostics import known_factors as KF
+from smart_beta.evaluation.metrics import long_short_mean_tstat
 from smart_beta.research import llm_generator, llm_generator_deepseek
 from smart_beta.research.generator import (
     GenerationEvent,
     RawArtifact,
     normalize_generation,
+)
+from smart_beta.research.history import (
+    DevelopmentFoldRole,
+    ExperimentFeedback,
+    FoldEvidence,
+    ResearchFeedback,
 )
 from smart_beta.spec.factor_spec import to_dict as spec_to_dict
 
@@ -108,19 +108,27 @@ def _series_record(
     periods: list[date],
     values: list[float],
     *,
+    estimand: str = "L",
+    b_series: list[float] | None = None,
     status: str | None = None,
     reason: str | None = None,
 ) -> PQv2SeriesRecord:
+    l_series = tuple(float(value) for value in values)
+    b_values = (
+        tuple(0.0 for _ in periods)
+        if b_series is None
+        else tuple(float(value) for value in b_series)
+    )
     return PQv2SeriesRecord(
         cell=cell,
-        estimand="L",
+        estimand=estimand,
         scenario="TD",
         event_scenario=None,
         periods=tuple(periods),
-        b_series=tuple(0.0 for _ in periods),
-        l_series=tuple(float(value) for value in values),
+        b_series=b_values,
+        l_series=l_series,
         gross_series=tuple(0.0 for _ in periods),
-        net_series=tuple(float(value) for value in values),
+        net_series=l_series,
         status=status,
         reason=reason,
         declaration_hash="c" * 64,
@@ -138,6 +146,84 @@ def _export(records: list[PQv2SeriesRecord]) -> PQv2SeriesExport:
 
 def _training_values(count: int = 30) -> list[float]:
     return [0.01 * ((index * 7) % 13 - 6) for index in range(count)]
+
+
+def _rank_stat(
+    *,
+    value: float | None = 0.5,
+    window_cut: date = _CUT,
+    last_period: date | None = date(2018, 1, 1),
+    status: str = R.VALID,
+) -> R.RankStatistic:
+    return R.RankStatistic(
+        status=status,
+        value=value,
+        reason=None,
+        scenarios=(),
+        window_cut=window_cut,
+        last_period=last_period,
+    )
+
+
+def _feedback_record(**overrides: Any) -> F.FeedbackRecord:
+    record = F.FeedbackRecord(
+        proposal_id="p1",
+        factor_spec_hash="f" * 64,
+        expression={"op": "field", "role": "tri"},
+        family="momentum",
+        predicted_direction="higher_return",
+        status="EVALUATED",
+        reason=None,
+        rank_stat=_rank_stat(value=1.23456),
+        rank=1,
+        l_t0_ewc_t=_rank_stat(value=0.5),
+        l_td_ewc_t=_rank_stat(value=0.6),
+        restatement=("D-MOM", 0.98765),
+        nearest=("p0", 0.91234),
+        gate_window_cut=_CUT,
+    )
+    return dataclasses.replace(record, **overrides)
+
+
+class _FakeCell:
+    def __init__(self, cell: str, value: Any, t_stat: Any, n_obs: int) -> None:
+        self.cell = cell
+        self.value = value
+        self.t_stat = t_stat
+        self.n_obs = n_obs
+
+
+class _FakeDiagnostics:
+    def __init__(self, cells: list[_FakeCell], not_assessed: str | None = None) -> None:
+        self.cells = tuple(cells)
+        self.not_assessed = not_assessed
+
+
+def _control_feedback() -> ResearchFeedback:
+    periods = _dates(date(2016, 1, 1), 30)
+    values = _training_values()
+    export = _export(
+        [
+            _series_record("B-T0", periods, values, estimand="B", b_series=values),
+            _series_record("L-T0", periods, values, estimand="L"),
+            _series_record("B-TS", periods, values, estimand="B", b_series=values),
+            _series_record("L-TS", periods, values, estimand="L"),
+        ]
+    )
+    metrics = F.control_metrics(
+        export, not_assessed=False, window_cut=periods[-1] + timedelta(days=1)
+    )
+    fold = FoldEvidence(
+        fold_key="c4-m1-control-is",
+        role=DevelopmentFoldRole.IS,
+        metrics=metrics,
+    )
+    experiment = ExperimentFeedback(
+        experiment_id=hashlib.sha256(b"campaign4:control:exp").hexdigest(),
+        hypothesis_id=hashlib.sha256(b"campaign4:control:hyp").hexdigest(),
+        is_folds=(fold,),
+    )
+    return ResearchFeedback(experiments=(experiment,))
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +246,6 @@ def test_a2_valid_entries_and_c3_normalizer_acceptance():
     for candidate in document["candidates"]:
         for key in C.A2_KEYS:
             assert key not in candidate
-        # The C3-required keys are untouched.
         assert "factor_spec" in candidate
         assert "research_question" in candidate
         assert "economic_rationale" in candidate
@@ -227,7 +312,6 @@ def test_a2_malformed_field_is_invalid_at_its_index(override, reason):
     assert not result.sidecar[1].valid
     assert result.sidecar[1].a2_status == C.A2_STATUS_INVALID
     assert result.sidecar[1].reason == reason
-    # The invalid entry still travels through the stripped list and is counted.
     assert result.n_candidates == 2
     assert len(result.stripped_document()["candidates"]) == 2
 
@@ -245,7 +329,6 @@ def test_a2_missing_fields_are_invalid():
     assert not result.sidecar[1].valid
     assert result.sidecar[1].reason == "predicted_relation-not-object"
 
-    # Each individual missing A2 key is caught at its own index.
     for missing_key, reason in (
         ("predicted_relation", "predicted_relation-not-object"),
         ("direction_check", "direction_check-empty"),
@@ -266,6 +349,7 @@ def test_raw_response_bytes_and_sha_are_kept():
     assert result.raw_bytes == raw.encode("utf-8")
     assert result.raw_sha256 == hashlib.sha256(raw.encode("utf-8")).hexdigest()
     assert result.to_dict()["raw_sha256"] == result.raw_sha256
+    assert result.to_dict()["raw_response"] == raw
 
 
 def test_top_level_schema_is_enforced():
@@ -311,7 +395,6 @@ def test_a4_later_formations_do_not_affect_rho():
     train = _dates(date(2017, 1, 1), 10)
     test = _dates(date(2018, 8, 1), 3)
     panel_a = _panel(train + test, stocks, _momentum)
-    # Equal to A on the test dates, independent on the training dates.
     leak = _panel(
         train + test,
         stocks,
@@ -321,10 +404,8 @@ def test_a4_later_formations_do_not_affect_rho():
     )
     gate = D.DiversityGate(window_cut=_CUT)
     assert gate.check("a", panel_a, "momentum").kind == D.ADMIT
-    # If test dates counted, this would be a near-duplicate; they must not.
     assert gate.check("leak", leak, "momentum").kind == D.ADMIT
 
-    # The converse: identical on the training dates, different on the test dates.
     same_train = _panel(
         train + test,
         stocks,
@@ -363,9 +444,8 @@ def test_a6_restatement_self_match():
     stocks = _stocks()
     dates = _dates(date(2017, 1, 1), 10)
     panel = _panel(dates, stocks, _momentum)
-    driver_panels = {"D-MOM": panel}
     gate = D.DiversityGate(window_cut=_CUT)
-    driver_id, max_abs_e = gate.restatement(panel, driver_panels)
+    driver_id, max_abs_e = gate.restatement(panel, {"D-MOM": panel})
     assert driver_id == "D-MOM"
     assert max_abs_e == pytest.approx(1.0)
 
@@ -386,7 +466,7 @@ def test_a6_restatement_independent_is_low():
 # ---------------------------------------------------------------------------
 
 
-def test_rank_statistic_is_minimum_over_event_scenarios():
+def test_rank_statistic_is_minimum_over_event_scenarios_and_binds_window():
     train = _dates(date(2016, 1, 1), 30)
     values0 = _training_values()
     values1 = [0.02 * ((index * 3) % 11) - 0.10 for index in range(30)]
@@ -401,6 +481,10 @@ def test_rank_statistic_is_minimum_over_event_scenarios():
     t1 = KF._ewc_statistic(train, values1, bound_alpha=0.05)[0]
     assert result.status == R.VALID
     assert result.value == pytest.approx(min(t0, t1))
+    # R1: the statistic carries the cut it was computed under and the latest
+    # period it used.
+    assert result.window_cut == _CUT
+    assert result.last_period == max(train)
 
 
 def test_rank_statistic_truncates_to_training_and_matches_hand_slice():
@@ -416,6 +500,7 @@ def test_rank_statistic_truncates_to_training_and_matches_hand_slice():
     expected = KF._ewc_statistic(sliced_periods, sliced_values, bound_alpha=0.05)[0]
     assert result.status == R.VALID
     assert result.value == pytest.approx(expected)
+    assert result.last_period == max(train)
 
 
 def test_rank_statistic_propagates_not_assessed():
@@ -427,6 +512,7 @@ def test_rank_statistic_propagates_not_assessed():
     assert result.status == R.NOT_ASSESSED
     assert result.reason == "PIT_MISSING"
     assert result.value is None
+    assert result.window_cut == _CUT
 
 
 def test_rank_statistic_insufficient_sample():
@@ -437,7 +523,7 @@ def test_rank_statistic_insufficient_sample():
     assert result.value is None
 
 
-def test_l_t0_ewc_t_matches_hand_slice():
+def test_l_t0_ewc_t_matches_hand_slice_and_binds_window():
     train = _dates(date(2016, 1, 1), 30)
     values = _training_values()
     record = _series_record("L-T0", train, values)
@@ -445,6 +531,8 @@ def test_l_t0_ewc_t_matches_hand_slice():
     expected = KF._ewc_statistic(train, values, bound_alpha=0.05)[0]
     assert result.status == R.VALID
     assert result.value == pytest.approx(expected)
+    assert result.window_cut == _CUT
+    assert result.last_period == max(train)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +551,7 @@ def test_test_statistics_12_periods_is_descriptive_only():
     assert result.positive_share == pytest.approx(
         sum(1 for value in values if value > 0) / 12
     )
+    assert [cell.cell for cell in result.cells] == ["L-TD"]
 
 
 def test_test_statistics_24_periods_has_a_t():
@@ -475,48 +564,68 @@ def test_test_statistics_24_periods_has_a_t():
     assert result.ewc_t == pytest.approx(expected)
 
 
+def test_test_statistics_event_headline_is_lower_mean_cell():
+    test = _dates(date(2018, 8, 1), 12)
+    k0 = [0.02 + 0.001 * index for index in range(12)]
+    k1 = [-0.02 - 0.001 * index for index in range(12)]
+    export = _export(
+        [
+            _series_record("L-TD-K0", test, k0),
+            _series_record("L-TD-K1", test, k1),
+        ]
+    )
+    result = R.test_statistics(export, _CUT)
+    # R3: per-cell descriptive statistics, headline = lower-mean cell.
+    assert [cell.cell for cell in result.cells] == ["L-TD-K0", "L-TD-K1"]
+    assert result.cells[0].net_mean == pytest.approx(sum(k0) / 12)
+    assert result.cells[1].net_mean == pytest.approx(sum(k1) / 12)
+    assert result.net_mean == pytest.approx(sum(k1) / 12)
+    assert result.net_sign == -1
+    assert result.n == 12
+
+
 # ---------------------------------------------------------------------------
-# 6. firewall
+# 6. firewall (R1)
 # ---------------------------------------------------------------------------
 
 
-def test_renderer_and_gate_firewalls():
+def test_gate_firewall():
     train = _dates(date(2017, 1, 1), 10)
     stocks = _stocks()
     panel = _panel(train, stocks, _momentum)
-
     gate = D.DiversityGate(window_cut=_CUT)
     with pytest.raises(C.C4FirewallError):
         gate.check("x", panel, "momentum", period=date(2018, 8, 1))
     with pytest.raises(C.C4FirewallError):
-        gate.restatement(
-            panel, {"D-MOM": panel}, period=date(2018, 8, 1)
-        )
+        gate.restatement(panel, {"D-MOM": panel}, period=date(2018, 8, 1))
     with pytest.raises(C.C4FirewallError):
         gate.assert_period(date(2018, 8, 1))
 
-    record = F.FeedbackRecord(
-        proposal_id="p1",
-        factor_spec_hash="f" * 64,
-        expression={"op": "field", "role": "tri"},
-        family="momentum",
-        predicted_direction="higher_return",
-        status="EVALUATED",
-        reason=None,
-        rank_stat=1.0,
-        rank=1,
-        l_t0_ewc_t=0.5,
-        l_td_ewc_t=0.6,
-        restatement=("D-MOM", 1.0),
-        nearest=None,
-        period=date(2018, 8, 1),
+
+def test_render_c4_feedback_rejects_statistic_with_later_cut():
+    record = _feedback_record(
+        rank_stat=_rank_stat(
+            window_cut=date(2020, 7, 31), last_period=date(2020, 6, 30)
+        )
     )
     with pytest.raises(C.C4FirewallError):
         F.render_c4_feedback([record], window_cut=_CUT)
 
-    late_series = [F.ControlSeries("B-T0", (date(2018, 8, 1),), (0.1,))]
+
+def test_render_c4_feedback_rejects_statistic_with_late_last_period():
+    record = _feedback_record(
+        rank_stat=_rank_stat(
+            window_cut=_CUT, last_period=date(2018, 8, 1)
+        )
+    )
     with pytest.raises(C.C4FirewallError):
-        F.render_control_prompt(None, late_series, window_cut=_CUT)
+        F.render_c4_feedback([record], window_cut=_CUT)
+
+
+def test_render_c4_feedback_rejects_gate_with_other_cut():
+    record = _feedback_record(gate_window_cut=date(2020, 7, 31))
+    with pytest.raises(C.C4FirewallError):
+        F.render_c4_feedback([record], window_cut=_CUT)
 
 
 # ---------------------------------------------------------------------------
@@ -538,22 +647,7 @@ def test_frozen_prompt_hashes():
 
 
 def test_treatment_feedback_line_and_determinism():
-    record = F.FeedbackRecord(
-        proposal_id="p1",
-        factor_spec_hash="f" * 64,
-        expression={"op": "field", "role": "tri"},
-        family="momentum",
-        predicted_direction="higher_return",
-        status="EVALUATED",
-        reason=None,
-        rank_stat=1.23456,
-        rank=1,
-        l_t0_ewc_t=0.5,
-        l_td_ewc_t=0.6,
-        restatement=("D-MOM", 0.98765),
-        nearest=("p0", 0.91234),
-        period=date(2018, 1, 1),
-    )
+    record = _feedback_record()
     first = F.render_c4_feedback([record], window_cut=_CUT)
     second = F.render_c4_feedback([record], window_cut=_CUT)
     assert first == second
@@ -571,23 +665,6 @@ def test_treatment_feedback_line_and_determinism():
     assert F.render_c4_feedback([], window_cut=_CUT) == "No prior proposals."
 
 
-def test_control_prompt_is_deterministic():
-    train = _dates(date(2016, 1, 1), 30)
-    values = _training_values()
-    series = [
-        F.ControlSeries("B-T0", tuple(train), tuple(values)),
-        F.ControlSeries("L-T0", tuple(train), tuple(values)),
-        F.ControlSeries("B-TS", tuple(train), tuple(values)),
-        F.ControlSeries("L-TS", tuple(train), tuple(values)),
-    ]
-    first = F.render_control_prompt(None, series, window_cut=_CUT)
-    second = F.render_control_prompt(None, series, window_cut=_CUT)
-    assert first == second
-    # The C3 v2 template's history token is substituted (no raw token remains).
-    assert llm_generator.VISIBLE_HISTORY_TOKEN not in first
-    assert llm_generator.IS_FEEDBACK_TOKEN not in first
-
-
 def test_c4_prompt_substitutes_the_feedback_token():
     rendered = F.render_c4_prompt("No prior proposals.")
     assert F.C4_FEEDBACK_TOKEN not in rendered
@@ -595,7 +672,109 @@ def test_c4_prompt_substitutes_the_feedback_token():
 
 
 # ---------------------------------------------------------------------------
-# 8. v2.5 admission guard
+# 8. control metrics (R2)
+# ---------------------------------------------------------------------------
+
+
+def test_control_metrics_equals_metrics_from_diagnostics():
+    periods = _dates(date(2016, 1, 1), 30)
+    b_values = _training_values()
+    l_values = [value + 0.005 for value in b_values]
+    export = _export(
+        [
+            _series_record(
+                "B-T0", periods, b_values, estimand="B", b_series=b_values
+            ),
+            _series_record("L-T0", periods, l_values, estimand="L"),
+        ]
+    )
+    cut = periods[-1] + timedelta(days=1)
+    got = F.control_metrics(export, not_assessed=False, window_cut=cut)
+
+    b_summary = long_short_mean_tstat(b_values)
+    l_summary = long_short_mean_tstat(l_values)
+    diagnostics = _FakeDiagnostics(
+        [
+            _FakeCell("B-T0", b_summary.value, b_summary.t_stat, b_summary.n_obs),
+            _FakeCell("L-T0", l_summary.value, l_summary.t_stat, l_summary.n_obs),
+        ]
+    )
+    assert got == metrics_from_diagnostics(diagnostics)
+
+
+def test_control_metrics_names_and_order_are_exact():
+    periods = _dates(date(2016, 1, 1), 30)
+    values = _training_values()
+    export = _export(
+        [
+            _series_record("B-T0", periods, values, estimand="B", b_series=values),
+            _series_record("L-T0", periods, values, estimand="L"),
+            _series_record("B-TS", periods, values, estimand="B", b_series=values),
+            _series_record("L-TS", periods, values, estimand="L"),
+        ]
+    )
+    cut = periods[-1] + timedelta(days=1)
+    got = F.control_metrics(export, not_assessed=False, window_cut=cut)
+    assert [metric.name for metric in got] == [
+        "b-t0_net_long_short_mean",
+        "b-t0_hac_t",
+        "l-t0_net_long_short_mean",
+        "l-t0_hac_t",
+        "b-ts_net_long_short_mean",
+        "b-ts_hac_t",
+        "l-ts_net_long_short_mean",
+        "l-ts_hac_t",
+        "is_assessable",
+    ]
+
+
+def test_control_metrics_truncates_before_cut():
+    periods = _dates(date(2016, 1, 1), 30)
+    values = _training_values()
+    export = _export([_series_record("L-T0", periods, values)])
+    cut = periods[20]
+    got = F.control_metrics(export, not_assessed=False, window_cut=cut)
+    expected = long_short_mean_tstat(values[:20])
+    assert got[0].name == "l-t0_net_long_short_mean"
+    assert got[0].value == pytest.approx(expected.value)
+    assert got[0].n_obs == 20
+    assert got[1].value == pytest.approx(expected.t_stat)
+    assert got[2].value == 1.0
+
+
+def test_control_metrics_not_assessed_cell_and_flag():
+    periods = _dates(date(2016, 1, 1), 30)
+    export = _export(
+        [
+            _series_record(
+                "L-T0",
+                periods,
+                [],
+                status="PIT_MISSING",
+                reason="PIT_MISSING",
+            )
+        ]
+    )
+    got = F.control_metrics(export, not_assessed=True, window_cut=_CUT)
+    assert got[0].name == "l-t0_net_long_short_mean"
+    assert got[0].value is None and got[0].n_obs == 0
+    assert got[1].name == "l-t0_hac_t"
+    assert got[1].value is None and got[1].n_obs == 0
+    assert got[2].name == "is_assessable"
+    assert got[2].value == 0.0 and got[2].n_obs == 0
+
+
+def test_control_prompt_is_deterministic():
+    feedback = _control_feedback()
+    first = F.render_control_prompt(None, feedback, window_cut=_CUT)
+    second = F.render_control_prompt(None, feedback, window_cut=_CUT)
+    assert first == second
+    assert llm_generator.VISIBLE_HISTORY_TOKEN not in first
+    assert llm_generator.IS_FEEDBACK_TOKEN not in first
+
+
+# ---------------------------------------------------------------------------
+# 9. v2.5 admission guard
 # ---------------------------------------------------------------------------
 
 

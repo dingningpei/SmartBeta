@@ -49,6 +49,7 @@ __all__ = [
     "INSUFFICIENT_SAMPLE",
     "RankingError",
     "RankStatistic",
+    "CellTestStatistics",
     "TestStatistics",
     "assert_v25_admitted",
     "window_series",
@@ -276,6 +277,27 @@ def _aggregate(
     return VALID, float(min(values)), None
 
 
+def _latest_used_period(
+    export: Any,
+    scenario: str,
+    window_cut: date,
+    side: str,
+) -> date | None:
+    """The latest formation date the statistic took from the export."""
+
+    latest: date | None = None
+    for cell_name in _l_cell_names(export, scenario):
+        record = export.get(cell_name)
+        if record is None or not record.assessed:
+            continue
+        periods, _values = window_series(record, window_cut, side)
+        for period in periods:
+            dated = _as_date(period)
+            if latest is None or dated > latest:
+                latest = dated
+    return latest
+
+
 # ---------------------------------------------------------------------------
 # result value objects
 # ---------------------------------------------------------------------------
@@ -287,18 +309,30 @@ class RankStatistic:
 
     ``value`` is the minimum one-sided EWC t over the TD scenarios when
     ``status == VALID``; otherwise ``None`` with ``reason`` set.
+
+    ``window_cut`` is the cut the statistic was computed under and
+    ``last_period`` is the latest formation date the statistic actually used
+    (``None`` when none was used).  Both are the firewall binding the C4M1-1
+    erratum E1 R1 requires: a renderer refuses a statistic whose ``window_cut``
+    differs from its own or whose ``last_period`` is at/after the cut.
     """
 
     status: str
     value: float | None
     reason: str | None
     scenarios: tuple[tuple[str, float | None, str, str | None], ...]
+    window_cut: date
+    last_period: date | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "value": self.value,
             "reason": self.reason,
+            "window_cut": self.window_cut.isoformat(),
+            "last_period": (
+                None if self.last_period is None else self.last_period.isoformat()
+            ),
             "scenarios": [
                 {
                     "cell": cell,
@@ -312,8 +346,36 @@ class RankStatistic:
 
 
 @dataclass(frozen=True)
+class CellTestStatistics:
+    """The test-window descriptive statistics of one assessed TD cell."""
+
+    cell: str
+    net_mean: float | None
+    net_sign: int
+    positive_share: float | None
+    n: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cell": self.cell,
+            "net_mean": self.net_mean,
+            "net_sign": self.net_sign,
+            "positive_share": self.positive_share,
+            "n": self.n,
+        }
+
+
+@dataclass(frozen=True)
 class TestStatistics:
-    """The test-window descriptive statistics (and EWC t when available)."""
+    """The test-window descriptive statistics (and EWC t when available).
+
+    ``cells`` carries the per-cell descriptive statistics of **every** assessed
+    TD cell (erratum E1 R3).  The headline ``net_mean`` / ``net_sign`` /
+    ``positive_share`` / ``n`` fields use the cell with the **lower** mean
+    (ties go to the earlier cell, K0 before K1), mirroring the minimum in the
+    rank statistic.  ``ewc_t`` is the minimum over cells with at least
+    :data:`MIN_EWC_PERIODS` test periods.
+    """
 
     status: str
     ewc_t: float | None
@@ -322,6 +384,7 @@ class TestStatistics:
     positive_share: float | None
     n: int
     reason: str | None
+    cells: tuple[CellTestStatistics, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -332,6 +395,7 @@ class TestStatistics:
             "positive_share": self.positive_share,
             "n": self.n,
             "reason": self.reason,
+            "cells": [cell.to_dict() for cell in self.cells],
         }
 
 
@@ -355,12 +419,18 @@ def rank_statistic(
     """
 
     assert_v25_admitted()
+    cut = _as_date(window_cut)
     results = _scenario_results(
-        td_export, "TD", window_cut, TRAINING, bound_alpha=bound_alpha, sign=sign
+        td_export, "TD", cut, TRAINING, bound_alpha=bound_alpha, sign=sign
     )
     status, value, reason = _aggregate(results)
     return RankStatistic(
-        status=status, value=value, reason=reason, scenarios=results
+        status=status,
+        value=value,
+        reason=reason,
+        scenarios=results,
+        window_cut=cut,
+        last_period=_latest_used_period(td_export, "TD", cut, TRAINING),
     )
 
 
@@ -381,9 +451,15 @@ def l_t0_ewc_t(
     results = _scenario_results(
         base_export, "T0", window_cut, TRAINING, bound_alpha=bound_alpha, sign=sign
     )
+    cut = _as_date(window_cut)
     status, value, reason = _aggregate(results)
     return RankStatistic(
-        status=status, value=value, reason=reason, scenarios=results
+        status=status,
+        value=value,
+        reason=reason,
+        scenarios=results,
+        window_cut=cut,
+        last_period=_latest_used_period(base_export, "T0", cut, TRAINING),
     )
 
 
@@ -405,14 +481,14 @@ def test_statistics(
     """
 
     assert_v25_admitted()
-    cells = _l_cell_names(td_export, "TD")
-    if not cells:
+    cell_names = _l_cell_names(td_export, "TD")
+    if not cell_names:
         raise RankingError(
             "the export has no L-TD cell (non-event or event form)"
         )
 
     assessed: list[tuple[str, tuple[Any, ...], tuple[float, ...]]] = []
-    for cell_name in cells:
+    for cell_name in cell_names:
         record = td_export.get(cell_name)
         if record is None or not record.assessed:
             continue
@@ -428,48 +504,74 @@ def test_statistics(
             positive_share=None,
             n=0,
             reason="no-assessed-td-cell",
+            cells=(),
         )
 
+    # Per-cell descriptive statistics of l_series x sign (erratum E1 R3).
+    cell_stats: list[CellTestStatistics] = []
+    for cell_name, _periods, values in assessed:
+        oriented = [value * float(int(sign)) for value in values]
+        n = len(oriented)
+        if n == 0:
+            cell_stats.append(
+                CellTestStatistics(
+                    cell=cell_name,
+                    net_mean=None,
+                    net_sign=0,
+                    positive_share=None,
+                    n=0,
+                )
+            )
+            continue
+        mean = float(sum(oriented) / n)
+        net_sign = 1 if mean > 0.0 else (-1 if mean < 0.0 else 0)
+        share = float(sum(1 for value in oriented if value > 0.0) / n)
+        cell_stats.append(
+            CellTestStatistics(
+                cell=cell_name,
+                net_mean=mean,
+                net_sign=net_sign,
+                positive_share=share,
+                n=n,
+            )
+        )
+
+    # The EWC t is the minimum over cells with at least 24 test periods.
     ewc_t: float | None = None
     for _cell_name, periods, values in assessed:
         if len(values) < MIN_EWC_PERIODS:
             continue
         oriented = [value * float(int(sign)) for value in values]
-        t_stat, status, _reason = _ewc(
+        t_stat, t_status, _reason = _ewc(
             periods, oriented, bound_alpha=bound_alpha
         )
-        if status == VALID and t_stat is not None:
+        if t_status == VALID and t_stat is not None:
             ewc_t = t_stat if ewc_t is None else min(ewc_t, t_stat)
 
-    _primary_cell, _primary_periods, primary_values = assessed[0]
-    n = len(primary_values)
-    if n == 0:
-        return TestStatistics(
-            status=INSUFFICIENT_SAMPLE,
-            ewc_t=ewc_t,
-            net_mean=None,
-            net_sign=0,
-            positive_share=None,
-            n=0,
-            reason="no-test-periods",
-        )
-    net_mean = float(sum(primary_values) / n)
-    net_sign = 1 if net_mean > 0.0 else (-1 if net_mean < 0.0 else 0)
-    positive_share = float(
-        sum(1 for value in primary_values if value > 0.0) / n
-    )
+    # The headline is the cell with the lower mean (ties go to K0/earlier).
+    headline: CellTestStatistics | None = None
+    for candidate in cell_stats:
+        if candidate.net_mean is None:
+            continue
+        if headline is None or candidate.net_mean < headline.net_mean:
+            headline = candidate
+
     if ewc_t is not None:
         status, reason = VALID, None
-    elif not any(len(values) >= MIN_EWC_PERIODS for _c, _p, values in assessed):
+    elif not any(
+        len(values) >= MIN_EWC_PERIODS for _c, _p, values in assessed
+    ):
         status, reason = INSUFFICIENT_SAMPLE, "fewer-than-24-test-periods"
     else:
         status, reason = NOT_ASSESSED, "ewc-not-computable"
+
     return TestStatistics(
         status=status,
         ewc_t=ewc_t,
-        net_mean=net_mean,
-        net_sign=net_sign,
-        positive_share=positive_share,
-        n=n,
+        net_mean=None if headline is None else headline.net_mean,
+        net_sign=0 if headline is None else headline.net_sign,
+        positive_share=None if headline is None else headline.positive_share,
+        n=0 if headline is None else headline.n,
         reason=reason,
+        cells=tuple(cell_stats),
     )
