@@ -405,6 +405,21 @@ def _slice_before(
     return tuple(kept_periods), tuple(kept_values)
 
 
+def _b_counterpart_cell(cell: str) -> str:
+    """The B cell of the same scenario / event scenario as ``cell``.
+
+    ``L-T0`` -> ``B-T0``; ``L-TS-K1`` -> ``B-TS-K1``; a B cell maps to itself.
+    """
+
+    return f"B-{cell[2:]}" if cell.startswith("L-") else cell
+
+
+def _count_before(periods: Sequence[Any], cut: date) -> int:
+    """The number of formation dates strictly before ``cut``."""
+
+    return sum(1 for period in periods if _as_date(period) < cut)
+
+
 def control_metrics(
     series_export: Any,
     *,
@@ -420,24 +435,35 @@ def control_metrics(
     ``l_series``; each value is recomputed on the periods strictly before
     ``window_cut`` with :func:`~smart_beta.evaluation.metrics.long_short_mean_tstat`.
 
-    A NOT_ASSESSED cell yields ``value=None`` and ``n_obs=0`` (the frozen
-    function's shape for such a cell).  For an assessed cell ``n_obs`` is the
-    number of training periods the recomputed statistic consumed.
-    ``is_assessable`` follows ``not_assessed`` exactly as the frozen function
-    does.
+    A NOT_ASSESSED cell yields ``value=None`` and ``n_obs`` equal to the number
+    of training periods (``< window_cut``) of the **B** cell of the same
+    scenario and event scenario (erratum E1 R4: the frozen function emits the
+    cell's B finite-period count, ``L-T0 -> B-T0`` / ``L-TS-K1 -> B-TS-K1``).
+    For an assessed cell ``n_obs`` is the number of training periods the
+    recomputed statistic consumed.  ``is_assessable`` follows ``not_assessed``
+    exactly as the frozen function does.
     """
 
     cut = _as_date(window_cut)
     records = tuple(getattr(series_export, "records", series_export))
+    by_cell = {str(record.cell): record for record in records}
     metrics: list[MetricValue] = []
     for record in records:
         cell = str(record.cell).lower()
         if not record.assessed:
-            metrics.append(
-                MetricValue(name=f"{cell}_net_long_short_mean", value=None, n_obs=0)
+            counterpart = by_cell.get(_b_counterpart_cell(str(record.cell)))
+            n_obs = (
+                0
+                if counterpart is None
+                else _count_before(counterpart.periods, cut)
             )
             metrics.append(
-                MetricValue(name=f"{cell}_hac_t", value=None, n_obs=0)
+                MetricValue(
+                    name=f"{cell}_net_long_short_mean", value=None, n_obs=n_obs
+                )
+            )
+            metrics.append(
+                MetricValue(name=f"{cell}_hac_t", value=None, n_obs=n_obs)
             )
             continue
         raw_values = (

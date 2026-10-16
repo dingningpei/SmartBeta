@@ -742,26 +742,46 @@ def test_control_metrics_truncates_before_cut():
     assert got[2].value == 1.0
 
 
-def test_control_metrics_not_assessed_cell_and_flag():
+def test_control_metrics_not_assessed_n_obs_mirrors_b_cell():
+    # R4: a NOT_ASSESSED L cell takes the B cell's training-period count.
     periods = _dates(date(2016, 1, 1), 30)
+    b_values = _training_values()
     export = _export(
         [
             _series_record(
-                "L-T0",
-                periods,
-                [],
-                status="PIT_MISSING",
-                reason="PIT_MISSING",
-            )
+                "B-T0", periods, b_values, estimand="B", b_series=b_values
+            ),
+            _series_record(
+                "L-T0", periods, [], status="PIT_MISSING", reason="PIT_MISSING"
+            ),
         ]
     )
-    got = F.control_metrics(export, not_assessed=True, window_cut=_CUT)
-    assert got[0].name == "l-t0_net_long_short_mean"
-    assert got[0].value is None and got[0].n_obs == 0
-    assert got[1].name == "l-t0_hac_t"
-    assert got[1].value is None and got[1].n_obs == 0
-    assert got[2].name == "is_assessable"
-    assert got[2].value == 0.0 and got[2].n_obs == 0
+    cut = periods[-1] + timedelta(days=1)
+    got = F.control_metrics(export, not_assessed=False, window_cut=cut)
+    by_name = {metric.name: metric for metric in got}
+    assert by_name["l-t0_net_long_short_mean"].value is None
+    assert by_name["l-t0_net_long_short_mean"].n_obs == 30
+    assert by_name["l-t0_hac_t"].value is None
+    assert by_name["l-t0_hac_t"].n_obs == 30
+
+    # The B count is itself truncated to the training window.
+    truncated = F.control_metrics(
+        export, not_assessed=False, window_cut=periods[20]
+    )
+    by_name = {metric.name: metric for metric in truncated}
+    assert by_name["l-t0_net_long_short_mean"].n_obs == 20
+
+    # A missing B counterpart falls back to 0.
+    lone = _export(
+        [_series_record("L-T0", periods, [], status="PIT_MISSING", reason="PIT")]
+    )
+    lone_metrics = F.control_metrics(lone, not_assessed=True, window_cut=cut)
+    assert lone_metrics[0].name == "l-t0_net_long_short_mean"
+    assert lone_metrics[0].value is None and lone_metrics[0].n_obs == 0
+    assert lone_metrics[1].name == "l-t0_hac_t"
+    assert lone_metrics[1].value is None and lone_metrics[1].n_obs == 0
+    assert lone_metrics[2].name == "is_assessable"
+    assert lone_metrics[2].value == 0.0 and lone_metrics[2].n_obs == 0
 
 
 def test_control_prompt_is_deterministic():
