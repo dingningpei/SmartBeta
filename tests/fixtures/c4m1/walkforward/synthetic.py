@@ -275,6 +275,24 @@ def make_exports(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SyntheticCell:
+    """A minimal diagnostics cell for the R1 history test."""
+
+    cell: str
+    value: float
+    t_stat: float
+    n_obs: int
+
+
+@dataclass(frozen=True)
+class SyntheticDiagnostics:
+    """A minimal full-IS diagnostics object for the R1 history test."""
+
+    cells: tuple
+    not_assessed: str | None = None
+
+
 class SyntheticEvaluationBuilder:
     """A deterministic ``spec -> CandidateEvaluation`` builder.
 
@@ -288,9 +306,11 @@ class SyntheticEvaluationBuilder:
         formations: Sequence[date] = IS_FORMATIONS,
         *,
         not_assessed_keys: Sequence[str] = (),
+        with_diagnostics: bool = False,
     ) -> None:
         self.formations = tuple(formations)
         self.not_assessed_keys = set(not_assessed_keys)
+        self.with_diagnostics = bool(with_diagnostics)
         self.calls: list[str] = []
 
     def __call__(self, spec: Any) -> CandidateEvaluation:
@@ -298,11 +318,23 @@ class SyntheticEvaluationBuilder:
         self.calls.append(key)
         base, td = make_exports(self.formations, panel_key(spec))
         not_assessed = panel_key(spec) in self.not_assessed_keys
+        diagnostics = None
+        if self.with_diagnostics:
+            # A full-IS diagnostics carries the whole fold (54 periods); the
+            # treatment history must never persist these numbers (erratum R1).
+            n_full = len(self.formations)
+            diagnostics = SyntheticDiagnostics(
+                cells=(
+                    SyntheticCell("B-T0", 0.01, 1.0, n_full),
+                    SyntheticCell("L-T0", 0.02, 2.0, n_full),
+                ),
+                not_assessed=None,
+            )
         return CandidateEvaluation(
             factor_spec_hash=key,
             declaration_hash="c" * 64,
             diagnostics_hash=hashlib.sha256(key.encode("utf-8")).hexdigest(),
-            diagnostics=None,
+            diagnostics=diagnostics,
             base_export=base,
             td_export=td,
             not_assessed=not_assessed,

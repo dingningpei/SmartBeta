@@ -65,7 +65,7 @@ from typing import Any
 
 from smart_beta.campaign.campaign3_eval import (
     TaEvaluation,
-    metrics_from_diagnostics,
+    is_certified,
 )
 from smart_beta.campaign.campaign3_generation import (
     TA_SEMANTIC_INPUTS,
@@ -75,12 +75,12 @@ from smart_beta.campaign.campaign3_generation import (
     Campaign3StopReason,
     GenerationJournal,
 )
-from smart_beta.evaluation.spec import MetricValue
 from smart_beta.experiment.registry import canonical_json
 from smart_beta.research.generator import (
     CandidateDisposition,
     GenerationEvent,
     NormalizationOutcome,
+    NormalizationStatus,
     RawArtifact,
 )
 from smart_beta.research.history import (
@@ -105,6 +105,7 @@ from smart_beta.research import llm_generator
 from smart_beta.campaign4.contract import (
     A2Sidecar,
     Campaign4Error,
+    C4ContractError,
     ContractParseResult,
     C4FirewallError,
     parse_campaign4_response,
@@ -144,6 +145,7 @@ __all__ = [
     "Campaign4StopReason",
     "build_campaign4_policy",
     "CandidateEvaluation",
+    "MalformedResponseSidecar",
     "GenerationEntry",
     "GenerationContext",
     "TreatmentGenerator",
@@ -281,6 +283,31 @@ class CandidateEvaluation:
     not_assessed_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class MalformedResponseSidecar:
+    """The audit sidecar of a treatment response the C4 contract refused.
+
+    Erratum R2: a treatment response that fails the C4 parse (invalid JSON,
+    a wrong ``schema_version`` or no ``candidates`` list) is passed unchanged
+    to the C3 boundary, so it is normalized as MALFORMED and counted rather
+    than stopping the run.  The raw bytes and their SHA-256 are retained here
+    exactly as the C4M1-1 contract sidecar retains them.
+    """
+
+    event_ordinal: int
+    raw_response: str
+    raw_sha256: str
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_ordinal": int(self.event_ordinal),
+            "raw_response": self.raw_response,
+            "raw_sha256": self.raw_sha256,
+            "detail": self.detail,
+        }
+
+
 # ---------------------------------------------------------------------------
 # per-entry C4 status
 # ---------------------------------------------------------------------------
@@ -364,6 +391,9 @@ class GenerationContext:
         self._current_contract: ContractParseResult | None = None
         self._sidecar_by_hash: dict[str, A2Sidecar] = {}
         self._expression_by_hash: dict[str, Mapping[str, Any]] = {}
+        self.malformed: list[MalformedResponseSidecar] = []
+        self._pending_malformed: tuple[str, str, str | None] | None = None
+        self._current_malformed: tuple[str, str, str | None] | None = None
         if arm == TREATMENT:
             self.gate: DiversityGate | None = DiversityGate(
                 window_cut=self.window_cut,
@@ -380,10 +410,29 @@ class GenerationContext:
     def set_pending_contract(self, parsed: ContractParseResult) -> None:
         self._pending_contract = parsed
 
+    def set_pending_malformed(
+        self, raw: bytes | bytearray | str, *, detail: str | None = None
+    ) -> None:
+        """Retain the raw bytes and SHA-256 of a refused treatment response.
+
+        Erratum R2: the response is still handed to the C3 boundary unchanged;
+        this sidecar keeps it auditable exactly as a valid contract sidecar
+        would.
+        """
+
+        data = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+        self._pending_malformed = (
+            data.decode("utf-8", "replace"),
+            hashlib.sha256(data).hexdigest(),
+            detail,
+        )
+
     def begin_event(self, ordinal: int) -> None:
         self._current_ordinal = int(ordinal)
         self._current_contract = self._pending_contract
         self._pending_contract = None
+        self._current_malformed = self._pending_malformed
+        self._pending_malformed = None
         self._sidecar_by_hash = {}
         self._expression_by_hash = {}
         contract = self._current_contract
@@ -417,6 +466,12 @@ class GenerationContext:
     def sidecar_for(self, factor_spec_hash: str) -> A2Sidecar | None:
         return self._sidecar_by_hash.get(factor_spec_hash)
 
+    @property
+    def current_malformed(self) -> bool:
+        """Whether the current event's treatment response failed the C4 parse."""
+
+        return self._current_malformed is not None
+
     # -- entries ---------------------------------------------------------
     def record(self, entry: GenerationEntry) -> None:
         if entry.raw_index is None:
@@ -431,17 +486,34 @@ class GenerationContext:
         ordinal: int,
         outcome: NormalizationOutcome | None,
         truncated_indices: frozenset[int] = frozenset(),
+        certification: Mapping[str, Any] | None = None,
     ) -> None:
-        """Assign response order and record every non-admitted entry.
+        """Assign response order and record every entry the evaluator did not see.
 
         ``GeneratorBoundary.normalize`` already guarantees contiguous
-        ``raw_index`` values (erratum P5-E1).  The admitted proposals were
-        recorded by the evaluator; every other entry is a ``SCHEMA_REJECTED``
-        row so it still appears in the A3 feedback and the trial accounting.
+        ``raw_index`` values (erratum P5-E1).  Erratum R2: a MALFORMED response
+        is counted and shown as one ``SCHEMA_REJECTED`` row.  Erratum R3:
+        ``NOT_CERTIFIED`` is taken from the executor's actual certification
+        result for the proposal, never inferred.
         """
 
         if outcome is None:
             return
+        # Erratum R2: a treatment response the C4 contract refused keeps its
+        # raw bytes and SHA-256 in the sidecar even when the C3 boundary
+        # normalized (and rejected) it rather than marking it MALFORMED.
+        self._store_malformed_sidecar(ordinal)
+        if outcome.status is NormalizationStatus.MALFORMED:
+            reason = (
+                outcome.event_reason.value
+                if outcome.event_reason is not None
+                else "MALFORMED"
+            )
+            self._record_rejected_row(
+                ordinal, reason=reason, raw_index=0, proposal_id=f"malformed:{ordinal}"
+            )
+            return
+        admitted_certification = certification or {}
         recorded = {
             entry.proposal_id: entry
             for entry in self.entries
@@ -456,15 +528,26 @@ class GenerationContext:
                 if entry is not None:
                     entry.raw_index = candidate.raw_index
                     continue
-                # An admitted candidate the evaluator never saw was refused by
-                # the non-empirical P-Q v2.3 certification: it is counted, not
-                # evaluated, and reported as NOT_CERTIFIED.
+                pid = candidate.proposal.proposal_id
+                classification = admitted_certification.get(pid)
                 fhash = candidate.proposal.proposed_factor_spec_hash
                 sidecar = self._sidecar_by_hash.get(fhash)
-                stat = _not_assessed_stat(self.window_cut, "NOT_CERTIFIED")
+                if classification is not None and is_certified(classification):
+                    # A certified, admitted candidate the evaluator did not see
+                    # is its own explicit anomaly, never mislabelled.
+                    status = "SCHEMA_REJECTED"
+                    reason = "CERTIFIED_NOT_EVALUATED"
+                else:
+                    status = "NOT_CERTIFIED"
+                    reason = (
+                        None
+                        if classification is None
+                        else getattr(classification, "reason", None)
+                    ) or "NOT_CERTIFIED"
+                stat = _not_assessed_stat(self.window_cut, reason)
                 self.entries.append(
                     GenerationEntry(
-                        proposal_id=candidate.proposal.proposal_id,
+                        proposal_id=pid,
                         factor_spec_hash=fhash,
                         expression=self._expression_by_hash.get(fhash, {}),
                         family=None if sidecar is None else sidecar.family,
@@ -473,8 +556,8 @@ class GenerationContext:
                             if sidecar is None or sidecar.predicted_relation is None
                             else str(sidecar.predicted_relation.get("direction"))
                         ),
-                        status="NOT_CERTIFIED",
-                        reason="NOT_CERTIFIED",
+                        status=status,
+                        reason=reason,
                         rank_stat=stat,
                         l_t0_ewc_t=stat,
                         l_td_ewc_t=stat,
@@ -509,6 +592,51 @@ class GenerationContext:
                     evaluated=False,
                 )
             )
+
+    def _store_malformed_sidecar(self, ordinal: int) -> None:
+        """Retain the raw bytes and SHA-256 of a refused treatment response."""
+
+        pending = self._current_malformed
+        if pending is None:
+            return
+        raw_response, raw_sha256, detail = pending
+        self.malformed.append(
+            MalformedResponseSidecar(
+                event_ordinal=ordinal,
+                raw_response=raw_response,
+                raw_sha256=raw_sha256,
+                detail=detail,
+            )
+        )
+
+    def _record_rejected_row(
+        self,
+        ordinal: int,
+        *,
+        reason: str,
+        raw_index: int = 0,
+        proposal_id: str | None = None,
+    ) -> None:
+        """Append one SCHEMA_REJECTED feedback row for an event with no entry."""
+
+        stat = _not_assessed_stat(self.window_cut, reason)
+        self.entries.append(
+            GenerationEntry(
+                proposal_id=proposal_id or f"unregistered:{ordinal}:{raw_index}",
+                factor_spec_hash="",
+                expression={},
+                family=None,
+                predicted_direction=None,
+                status="SCHEMA_REJECTED",
+                reason=reason,
+                rank_stat=stat,
+                l_t0_ewc_t=stat,
+                l_td_ewc_t=stat,
+                event_ordinal=ordinal,
+                raw_index=raw_index,
+                evaluated=False,
+            )
+        )
 
     def ordered_entries(self) -> list[GenerationEntry]:
         return sorted(
@@ -683,7 +811,19 @@ class TreatmentGenerator(_BaseGenerator):
     def _finish(self, raw_artifact: RawArtifact, tokens: int, cost: float | None):
         from smart_beta.campaign.campaign3_generation import GenerationOutput
 
-        parsed = self._parse(raw_artifact.content)
+        try:
+            parsed = self._parse(raw_artifact.content)
+        except C4ContractError as exc:
+            # Erratum R2: an unparseable / ill-shaped C4 response is not a run
+            # stop.  Pass the raw response unchanged to the C3 boundary, which
+            # normalizes it as MALFORMED (or rejects its candidates); the raw
+            # bytes and SHA-256 stay in the C4 sidecar.
+            self.ctx.set_pending_malformed(raw_artifact.content, detail=str(exc))
+            return GenerationOutput(
+                raw_artifact=raw_artifact,
+                tokens_used=tokens,
+                cost_used=cost,
+            )
         self.ctx.set_pending_contract(parsed)
         stripped = json.dumps(
             parsed.stripped_document(),
@@ -781,6 +921,11 @@ class Campaign4Evaluator:
         sign = int(getattr(spec, "sign", 1))
         family: str | None = None
         predicted_direction: str | None = None
+
+        # Erratum R2: a response the C4 contract refused is never evaluated,
+        # even if its candidates happen to be C3-normalizable.
+        if self.ctx.current_malformed:
+            return self._reject(proposal, "SCHEMA_REJECTED", "MALFORMED_RESPONSE")
 
         if self.arm == TREATMENT:
             sidecar = self.ctx.sidecar_for(fhash)
@@ -933,13 +1078,13 @@ class Campaign4Evaluator:
     def _ta_from_evaluation(
         self, proposal: Any, evaluation: CandidateEvaluation
     ) -> TaEvaluation:
-        metrics: tuple[MetricValue, ...] = ()
-        diagnostics = evaluation.diagnostics
-        if diagnostics is not None and hasattr(diagnostics, "cells"):
-            try:
-                metrics = metrics_from_diagnostics(diagnostics)
-            except Exception:  # noqa: BLE001 - a synthetic diagnostics may differ
-                metrics = ()
+        # Erratum R1: both arms persist the *training-window* metrics, exactly
+        # as the control arm does.  Full-IS numbers never enter the run state.
+        metrics = control_metrics(
+            evaluation.base_export,
+            not_assessed=bool(evaluation.not_assessed),
+            window_cut=self.window_cut,
+        )
         return TaEvaluation(
             proposal_id=proposal.proposal_id,
             factor_spec_hash=proposal.proposed_factor_spec_hash,
@@ -980,6 +1125,10 @@ class Campaign4Executor(Campaign3Executor):
     def _state_payload(self) -> dict[str, Any]:
         payload = super()._state_payload()
         payload["schema"] = CAMPAIGN4_EXECUTOR_SCHEMA
+        if self.ctx is not None:
+            payload["malformed_responses"] = [
+                item.to_dict() for item in self.ctx.malformed
+            ]
         return payload
 
     def _history_records(self, proposal: Any, evaluation: TaEvaluation):
@@ -1038,17 +1187,28 @@ class Campaign4Executor(Campaign3Executor):
             self.ctx.begin_event(event.invocation_ordinal)
         super()._process_event(event)
         if self.ctx is not None and event.event_id not in self._finalized_events:
+            outcome = self.boundary.outcome_for(event.event_id)
             truncated = frozenset(
                 item.raw_index
                 for item in self._truncated_candidates
                 if item.event_id == event.event_id
             )
+            certification: dict[str, Any] = {}
+            if outcome is not None:
+                for candidate in outcome.candidates:
+                    if candidate.disposition is CandidateDisposition.ADMITTED:
+                        pid = candidate.proposal.proposal_id
+                        certification[pid] = self._certified.get(pid)
             self.ctx.finalize_event(
                 event.invocation_ordinal,
-                self.boundary.outcome_for(event.event_id),
+                outcome,
                 truncated,
+                certification,
             )
             self._finalized_events.add(event.event_id)
+            # Persist the finalized entries / malformed sidecar even when this
+            # is the run's last event.
+            self._save_state()
 
 
 # ---------------------------------------------------------------------------

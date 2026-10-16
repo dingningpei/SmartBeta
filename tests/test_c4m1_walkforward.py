@@ -9,6 +9,7 @@ write or network path is touched, and no test calls ``git``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -358,7 +359,153 @@ def test_not_certified_candidate_is_counted_and_never_evaluated():
     )
     assert result.n_entries == 1
     assert [entry.status for entry in result.entries] == ["NOT_CERTIFIED"]
+    # R3: the label comes from the executor's certification result.
+    assert result.entries[0].reason == "PQV2_SIGN_NOT_CERTIFIED"
     assert len(builder.calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# R1 / R2 (review R1)
+# ---------------------------------------------------------------------------
+
+
+def test_treatment_history_metrics_are_training_window(tmp_path):
+    from smart_beta.campaign.campaign3_generation import GenerationJournal
+
+    builder = S.SyntheticEvaluationBuilder(with_diagnostics=True)
+    deps, _, treatment, _ = _make_deps(builder=builder)
+    journal_dir = tmp_path / "gen"
+    result = GEN.run_generation(
+        arm=GEN.TREATMENT,
+        policy=GEN.build_campaign4_policy(
+            prompt_template_hash=PROMPT_TEMPLATE_C4_HASH,
+            max_proposal_budget=2,
+        ),
+        window_cut=W.W1_CUT,
+        llm=treatment,
+        evaluate=builder,
+        panel_builder=lambda spec: S.make_panel(
+            S.IS_FORMATIONS, S.panel_key(spec)
+        ),
+        driver_panels={"D-MOM": S.make_panel(S.IS_FORMATIONS, "driver-mom")},
+        journal=GenerationJournal(journal_dir),
+    )
+    assert result.n_evaluated == 1
+    state = json.loads((journal_dir / "executor_state.json").read_text())
+    n_obs = [
+        metric["n_obs"]
+        for evidence in state["history"]["evidence"]
+        for fold in evidence["fold_evidence"]
+        for metric in fold["metrics"]
+    ]
+    assert n_obs, "expected persisted metrics"
+    assert max(n_obs) <= 30
+    assert 54 not in n_obs  # the full-IS count never enters the run state
+
+
+def test_malformed_treatment_response_is_counted_and_not_a_stop(tmp_path):
+    from smart_beta.campaign.campaign3_generation import GenerationJournal
+
+    deps, builder, treatment, _ = _make_deps(
+        treatment_responses=["not json", S.c4_response(_two_each())]
+    )
+    journal_dir = tmp_path / "gen"
+    result = GEN.run_generation(
+        arm=GEN.TREATMENT,
+        policy=GEN.build_campaign4_policy(
+            prompt_template_hash=PROMPT_TEMPLATE_C4_HASH,
+            max_proposal_budget=3,
+        ),
+        window_cut=W.W1_CUT,
+        llm=treatment,
+        evaluate=builder,
+        panel_builder=lambda spec: S.make_panel(
+            S.IS_FORMATIONS, S.panel_key(spec)
+        ),
+        driver_panels={"D-MOM": S.make_panel(S.IS_FORMATIONS, "driver-mom")},
+        journal=GenerationJournal(journal_dir),
+    )
+    # counted as one (a zero-entry MALFORMED event) and the run continued.
+    assert result.stop_reason == "proposal_budget_exhausted"
+    assert result.n_entries == 3
+    rejected = [entry for entry in result.entries if entry.status == "SCHEMA_REJECTED"]
+    assert len(rejected) == 1
+    state = json.loads((journal_dir / "executor_state.json").read_text())
+    sidecar = state["malformed_responses"][0]
+    assert sidecar["raw_response"] == "not json"
+    assert sidecar["raw_sha256"] == hashlib.sha256(b"not json").hexdigest()
+
+
+def test_malformed_last_event_still_persists_the_sidecar(tmp_path):
+    from smart_beta.campaign.campaign3_generation import GenerationJournal
+
+    deps, builder, treatment, _ = _make_deps(treatment_responses=["{bad"])
+    journal_dir = tmp_path / "gen"
+    GEN.run_generation(
+        arm=GEN.TREATMENT,
+        policy=GEN.build_campaign4_policy(
+            prompt_template_hash=PROMPT_TEMPLATE_C4_HASH,
+            max_proposal_budget=1,
+        ),
+        window_cut=W.W1_CUT,
+        llm=treatment,
+        evaluate=builder,
+        panel_builder=lambda spec: S.make_panel(
+            S.IS_FORMATIONS, S.panel_key(spec)
+        ),
+        driver_panels={"D-MOM": S.make_panel(S.IS_FORMATIONS, "driver-mom")},
+        journal=GenerationJournal(journal_dir),
+    )
+    state = json.loads((journal_dir / "executor_state.json").read_text())
+    assert state["malformed_responses"][0]["raw_response"] == "{bad"
+    assert state["malformed_responses"][0]["raw_sha256"] == hashlib.sha256(
+        b"{bad"
+    ).hexdigest()
+
+
+def test_wrong_schema_treatment_response_is_counted_and_not_evaluated(tmp_path):
+    from smart_beta.campaign.campaign3_generation import GenerationJournal
+
+    wrong_spec = S.spec_dict("wrong", numerator_lag=30, denominator_lag=253)
+    # A C3-valid candidate under the wrong schema: without the R2 guard the C3
+    # normalizer would admit and evaluate it (it ignores schema_version).
+    wrong_payload = json.dumps(
+        {
+            "schema_version": "campaign3-candidates-v1",
+            "candidates": [S.c3_candidate(wrong_spec)],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    deps, builder, treatment, _ = _make_deps(
+        treatment_responses=[wrong_payload, S.c4_response(_two_each())]
+    )
+    journal_dir = tmp_path / "gen"
+    result = GEN.run_generation(
+        arm=GEN.TREATMENT,
+        policy=GEN.build_campaign4_policy(
+            prompt_template_hash=PROMPT_TEMPLATE_C4_HASH,
+            max_proposal_budget=3,
+        ),
+        window_cut=W.W1_CUT,
+        llm=treatment,
+        evaluate=builder,
+        panel_builder=lambda spec: S.make_panel(
+            S.IS_FORMATIONS, S.panel_key(spec)
+        ),
+        driver_panels={"D-MOM": S.make_panel(S.IS_FORMATIONS, "driver-mom")},
+        journal=GenerationJournal(journal_dir),
+    )
+    assert result.stop_reason == "proposal_budget_exhausted"
+    assert result.n_entries == 3
+    # The wrong-schema candidate was counted but never evaluated.
+    assert len(builder.calls) == 1
+    rejected = [entry for entry in result.entries if entry.status == "SCHEMA_REJECTED"]
+    assert len(rejected) == 1
+    state = json.loads((journal_dir / "executor_state.json").read_text())
+    assert state["malformed_responses"][0]["raw_sha256"] == hashlib.sha256(
+        wrong_payload.encode("utf-8")
+    ).hexdigest()
 
 
 def test_generator_exception_stops_the_run():
