@@ -1,4 +1,4 @@
-# Campaign-4 M1 — task C4M1-1: contract core (A2 / A3 / A4 / A6, rank statistic, prompt) (DRAFT; not frozen)
+# Campaign-4 M1 — task C4M1-1: contract core (A2 / A3 / A4 / A6, rank statistic, prompt) (FROZEN 2026-10-16; launch authorized)
 
 ## Authority
 
@@ -10,7 +10,7 @@
 ### 1. `smart_beta/research/prompts/campaign4_v1.txt`
 
 - A byte-identical copy of `worker_tasks/campaign4_m1/campaign4_v1_prompt.txt`.
-- Its SHA-256 must equal the hash bound at freeze. Expose it as
+- Its SHA-256 must equal the frozen hash `2d616f1689a487d1e5f039f2cc1ab310367b0c47901cf9d4f371d0bffa92d05e`. Expose it as
   `campaign4.feedback.PROMPT_TEMPLATE_C4_HASH`, verified at load.
 - The only placeholder is `<<<C4_FEEDBACK>>>`.
 

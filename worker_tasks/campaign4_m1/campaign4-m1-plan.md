@@ -1,9 +1,9 @@
-# Campaign-4 M1 — wave plan: generator contract (M1-a) + walk-forward harness (M1-e) (DRAFT; not frozen)
+# Campaign-4 M1 — wave plan: generator contract (M1-a) + walk-forward harness (M1-e) (FROZEN 2026-10-16)
 
 ## Authority
 
 - `docs/campaign4_m1a_generator_contract_design_draft.md` (Q1–Q4, user 2026-10-15);
-- `docs/campaign4_m1a_contract_calibration_draft.md` (Q5–Q8, pending);
+- `docs/campaign4_m1a_contract_calibration_draft.md` (Q5–Q8, user 2026-10-16);
 - `docs/discovery_dataset_v1_2_pq_v2_5_admission.md` (v2.5 is the terminal-stress authority;
   the C4 wrappers enforce the admission);
 - `docs/campaign4_e/desktop_usage_policy.md` (cited results come from the laptop).

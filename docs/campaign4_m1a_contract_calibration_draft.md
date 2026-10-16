@@ -99,3 +99,12 @@ are never selected. The rule is not changed.
 A freeze authorizes the Pi launch of C4M1-1. C4M1-2 starts after C4M1-1 is merged. The four
 live DeepSeek runs happen after both merges and need **a separate run authorization**,
 because they spend money and generate trial count.
+
+## Decisions (user, 2026-10-16: "好的， 按照你的建议")
+
+| ID | Decision |
+|---|---|
+| Q5 | **(a):** W1 test = EWC t; W2 test = descriptive only (mean L-TD net return, sign, share of positive months; no t) |
+| Q6 | **A6 adopted** (restatement report, information only) |
+| Q7 | **Caps:** 4M tokens per run, plus a USD cap via a planner-supplied price table: USD 20 per run, USD 80 total |
+| Q8 | **Frozen:** the contract prompt at SHA-256 `2d616f1689a487d1e5f039f2cc1ab310367b0c47901cf9d4f371d0bffa92d05e`, the M1 plan, and the C4M1-1 / C4M1-2 specs. The C4M1-1 Pi launch is authorized; C4M1-2 launches after C4M1-1 is merged. **The four live DeepSeek runs still need a separate authorization** |

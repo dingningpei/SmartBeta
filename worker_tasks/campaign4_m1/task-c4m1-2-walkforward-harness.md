@@ -1,4 +1,4 @@
-# Campaign-4 M1 — task C4M1-2: C4 executor + walk-forward harness (DRAFT; not frozen)
+# Campaign-4 M1 — task C4M1-2: C4 executor + walk-forward harness (FROZEN 2026-10-16; launch after C4M1-1 is merged)
 
 ## Authority
 
@@ -65,7 +65,7 @@ Depends on C4M1-1, merged.
 - **Report** `c4_walkforward_report.json` (canonical, content-hashed) + `.md`:
   - per run:
     - selection;
-    - test statistics, with the W1 EWC t, and at W2 descriptive only, if Q5 = (a);
+    - test statistics, with the W1 EWC t, and at W2 descriptive only (Q5 = (a));
     - counts by status;
     - tokens and cost;
     - stop reason;
