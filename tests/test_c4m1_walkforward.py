@@ -783,3 +783,137 @@ def test_deepseek_transport_reuses_the_c3_adapter():
     assert out.cost_used == (10 * 1.0 + 5 * 2.0) / 1_000_000
     with pytest.raises(NotImplementedError):
         transport.generate(None, None)
+
+
+# ---------------------------------------------------------------------------
+# 10. production evaluator binding (review R2 / R4)
+# ---------------------------------------------------------------------------
+
+
+def _load_walkforward_script():
+    import importlib.util
+    import sys
+
+    script_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "run_c4_walkforward.py"
+    )
+    loader_spec = importlib.util.spec_from_file_location(
+        "c4_walkforward_script", script_path
+    )
+    module = importlib.util.module_from_spec(loader_spec)
+    sys.modules["c4_walkforward_script"] = module
+    loader_spec.loader.exec_module(module)
+    return module
+
+
+def test_production_evaluator_binds_like_the_admitted_v25_path(monkeypatch):
+    from types import SimpleNamespace
+
+    from smart_beta.dataset_v1 import pqv2_core as _pqv2_core
+    from smart_beta.dataset_v1.pqv25 import equivalence as _equiv
+    from smart_beta.dataset_v1.pqv25.authority import TD_D
+    from smart_beta.spec.factor_spec import FactorSpec
+
+    script = _load_walkforward_script()
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        script, "assert_v25_admitted", lambda: (order.append("assert"), 0.0)[1]
+    )
+
+    sentinel = object()
+    ta_evaluator = SimpleNamespace(
+        bindings="bound-bindings",
+        source_bindings="source-bindings",
+        pq_bindings="pq-bindings",
+        pq_read_records_fn="read-records",
+        sessions=("s1", "s2"),
+    )
+    declaration = SimpleNamespace(declaration_hash="c" * 64)
+    assembly = SimpleNamespace(
+        dataset_root=Path("/fake/root"),
+        partition=sentinel,
+        overlay=sentinel,
+        inputs={"k": "v"},
+        event_layer=sentinel,
+        export_bindings="export-bindings",
+        ta_evaluator=ta_evaluator,
+        is_fold=sentinel,
+    )
+    assembly.fast_panel_for = lambda spec, fold: sentinel
+    assembly.declaration_builder = lambda spec, panel, fold: declaration
+
+    captured: dict = {}
+
+    def fake_diagnostics(*args, **kwargs):
+        order.append("diagnostics")
+        captured["diag_args"] = args
+        captured["diag_kwargs"] = dict(kwargs)
+        diagnostics = SimpleNamespace(
+            base="base-frozen",
+            diagnostics_hash="d" * 64,
+            not_assessed=None,
+        )
+        captured["diag_obj"] = diagnostics
+        return diagnostics
+
+    def fake_export(*args, **kwargs):
+        order.append("base_export")
+        captured["base_args"] = args
+        captured["base_kwargs"] = dict(kwargs)
+        return "base-export"
+
+    def fake_td(*args, **kwargs):
+        order.append("td_export")
+        captured["td_args"] = args
+        captured["td_kwargs"] = dict(kwargs)
+        return "td-export"
+
+    assembly.export_series_fn = fake_export
+    monkeypatch.setattr(script, "build_pqv25_diagnostics", fake_diagnostics)
+    monkeypatch.setattr(script, "export_td_series", fake_td)
+
+    factor_spec = FactorSpec.from_dict(S.spec_dict("bindcheck"))
+    evaluation = script._build_evaluator(assembly)(factor_spec)
+
+    # assert_v25_admitted() is first, before any TD build.
+    assert order[0] == "assert"
+    assert order[1] == "diagnostics"
+
+    expected_evaluation = _equiv._evaluation_kwargs(assembly, event_layer=None)
+    diag_kwargs = dict(captured["diag_kwargs"])
+    assert diag_kwargs.pop("d") == TD_D
+    assert diag_kwargs == expected_evaluation
+    assert diag_kwargs["fold"] is _pqv2_core.DEVELOPMENT_FOLD
+    # The is_fold is never used as the P-Q fold (the R4 defect).
+    assert diag_kwargs["fold"] is not sentinel
+
+    expected_export = {
+        "overlay": expected_evaluation["overlay"],
+        "inputs": expected_evaluation["inputs"],
+        "source_bindings": expected_evaluation["source_bindings"],
+        "pq_bindings": expected_evaluation["pq_bindings"],
+        "pq_read_records_fn": expected_evaluation["pq_read_records_fn"],
+        "sessions": expected_evaluation["sessions"],
+        "event_layer": None,
+        "bindings": _equiv._export_bindings(assembly),
+        "fold": _pqv2_core.DEVELOPMENT_FOLD,
+    }
+    base_kwargs = dict(captured["base_kwargs"])
+    assert base_kwargs.pop("diagnostics") == "base-frozen"
+    assert base_kwargs == expected_export
+    td_kwargs = dict(captured["td_kwargs"])
+    assert td_kwargs.pop("d") == TD_D
+    assert td_kwargs.pop("diagnostics") is captured["diag_obj"]
+    assert td_kwargs == expected_export
+
+    # Positional call shape: (root, declaration, spec, panel, partition).
+    expected_args = [assembly.dataset_root, declaration, factor_spec, sentinel, sentinel]
+    assert list(captured["diag_args"]) == expected_args
+    assert list(captured["base_args"]) == expected_args
+    assert list(captured["td_args"]) == expected_args
+
+    # The evaluator returns the frozen exports.
+    assert evaluation.base_export == "base-export"
+    assert evaluation.td_export == "td-export"
+    assert evaluation.diagnostics is captured["diag_obj"]
