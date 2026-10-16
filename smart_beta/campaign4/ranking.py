@@ -472,12 +472,14 @@ def test_statistics(
 ) -> TestStatistics:
     """The test-window statistics of one candidate.
 
-    Always: the mean L-TD net return, its sign, the share of positive months
-    and ``n``.  When there are at least :data:`MIN_EWC_PERIODS` test periods
-    (and the EWC is computable) the test-period one-sided EWC t is included
-    (W1).  For an event candidate the EWC t is the minimum over the assessed
-    TD scenarios (mirroring :func:`rank_statistic`) and the descriptive
-    statistics come from the first assessed scenario cell.
+    ``cells`` carries the descriptive statistics (mean of ``l_series x sign``,
+    its sign, the share of positive months and ``n``) of **every** assessed TD
+    cell, in cell order.  The headline ``net_mean`` / ``net_sign`` /
+    ``positive_share`` / ``n`` fields use the cell with the **lower** mean
+    (ties go to the earlier cell, K0 before K1), mirroring the minimum in
+    :func:`rank_statistic`.  When there are at least
+    :data:`MIN_EWC_PERIODS` test periods (and the EWC is computable) ``ewc_t``
+    is the minimum over the assessed TD scenarios with enough periods (W1).
     """
 
     assert_v25_admitted()
