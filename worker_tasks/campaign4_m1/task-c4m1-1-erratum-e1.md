@@ -72,3 +72,20 @@ cell. Required:
 
 One new commit on the same branch, on top of `2eec225`. Do not amend. Report the SHA and
 the test count.
+
+## Second review (commit `18c6215`): R1–R3 accepted; R4 returned
+
+**Planner real-data check:**
+- Inputs: the 99 persisted C3 exports and C3's own persisted history metrics
+  (generator-visible, read-only).
+- `control_metrics` with the cut at 2020-07-31 reproduces every metric **value bitwise**:
+  99 of 99 experiments, max difference 0.
+
+**R4 (implementation defect):** for a NOT_ASSESSED cell, `n_obs` is 0, but the frozen
+function emits the cell's B finite-period count (54 in C3, e.g. `l-t0_hac_t`
+`{value: null, n_obs: 54}`).
+- Required: a NOT_ASSESSED cell's `n_obs` = the number of training periods (`< cut`) of
+  the B cell of the same scenario and event scenario (`L-T0` → `B-T0`, `L-TS-K1` →
+  `B-TS-K1`).
+- Test: a NOT_ASSESSED L cell next to an assessed B cell with 30 training periods →
+  `n_obs == 30`.
