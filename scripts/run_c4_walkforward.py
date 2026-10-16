@@ -58,12 +58,13 @@ from smart_beta.campaign4.generation import (  # noqa: E402
     TREATMENT,
 )
 from smart_beta.campaign4.ranking import assert_v25_admitted  # noqa: E402
+from smart_beta.dataset_v1 import pqv2_core as _pqv2_core  # noqa: E402
+from smart_beta.dataset_v1.pqv25 import equivalence as _equiv  # noqa: E402
 from smart_beta.dataset_v1.pqv25.authority import TD_D  # noqa: E402
 from smart_beta.dataset_v1.pqv25.evaluation import (  # noqa: E402
     build_pqv25_diagnostics,
 )
 from smart_beta.dataset_v1.pqv25.series import export_td_series  # noqa: E402
-from smart_beta.dataset_v1.pqv2_series import export_series  # noqa: E402
 from smart_beta.diagnostics import direction_exposure as _de  # noqa: E402
 from smart_beta.research.llm_generator import GenerationOutput, PriceTable  # noqa: E402
 from smart_beta.research.generator import RawArtifact  # noqa: E402
@@ -147,51 +148,74 @@ def _as_date(value: Any):
 
 
 def _build_evaluator(assembly: Any) -> Callable[[Any], CandidateEvaluation]:
-    """The production full-IS evaluator (v2.5 diagnostics + exports)."""
+    """The production full-IS evaluator, bound exactly as the admitted v2.5 path.
+
+    This reuses the frozen :mod:`smart_beta.dataset_v1.pqv25.equivalence`
+    private helpers by import -- ``_evaluation_kwargs`` (which pins
+    ``fold = pqv2_core.DEVELOPMENT_FOLD``; the IS scope comes from the
+    declaration's ``fold_key``), ``_event_layer_for`` (an event layer only for
+    event factors) and ``_export_bindings``.  The C4 evaluation is therefore
+    byte-for-byte the admitted PQ25-X evaluation, and the kwargs are never
+    re-derived here.
+    """
 
     def evaluate(spec: Any) -> CandidateEvaluation:
+        # Erratum (plan constraint 4): the v2.5 admission is asserted before
+        # any TD build.
         assert_v25_admitted()
-        panel = assembly.fast_panel_for(spec, assembly.is_fold)
-        declaration = assembly.declaration_builder(spec, panel, assembly.is_fold)
-        diagnostics = build_pqv25_diagnostics(
-            assembly.dataset_root,
-            declaration,
-            spec,
-            panel,
-            assembly.partition,
-            overlay=assembly.overlay,
-            inputs=assembly.inputs,
-            bindings=assembly.bindings,
-            event_layer=assembly.event_layer,
-            fold=assembly.is_fold,
-            d=TD_D,
+        selected_fold = assembly.is_fold
+        panel = assembly.fast_panel_for(spec, selected_fold)
+        declaration = assembly.declaration_builder(spec, panel, selected_fold)
+        event_layer = _equiv._event_layer_for(assembly, spec)
+        evaluation_kwargs = _equiv._evaluation_kwargs(
+            assembly, event_layer=event_layer
         )
-        base_export = export_series(
-            assembly.dataset_root,
+        root = assembly.dataset_root
+        partition = assembly.partition
+        diagnostics = build_pqv25_diagnostics(
+            root,
             declaration,
             spec,
             panel,
-            assembly.partition,
+            partition,
+            d=TD_D,
+            **evaluation_kwargs,
+        )
+        export_kwargs = {
+            "overlay": evaluation_kwargs["overlay"],
+            "inputs": evaluation_kwargs["inputs"],
+            "source_bindings": evaluation_kwargs["source_bindings"],
+            "pq_bindings": evaluation_kwargs["pq_bindings"],
+            "pq_read_records_fn": evaluation_kwargs["pq_read_records_fn"],
+            "sessions": evaluation_kwargs["sessions"],
+            "event_layer": event_layer,
+            "bindings": _equiv._export_bindings(assembly),
+            "fold": _pqv2_core.DEVELOPMENT_FOLD,
+        }
+        export_fn = getattr(assembly, "export_series_fn", None)
+        if export_fn is None:
+            raise SystemExit(
+                "the production assembly binds no export_series_fn; the C4 "
+                "evaluator cannot build the base T0/TS export"
+            )
+        base_export = export_fn(
+            root,
+            declaration,
+            spec,
+            panel,
+            partition,
             diagnostics=diagnostics.base,
-            overlay=assembly.overlay,
-            inputs=assembly.inputs,
-            bindings=assembly.bindings,
-            event_layer=assembly.event_layer,
-            fold=assembly.is_fold,
+            **export_kwargs,
         )
         td_export = export_td_series(
-            assembly.dataset_root,
+            root,
             declaration,
             spec,
             panel,
-            assembly.partition,
+            partition,
             diagnostics=diagnostics,
-            overlay=assembly.overlay,
-            inputs=assembly.inputs,
-            bindings=assembly.bindings,
-            event_layer=assembly.event_layer,
-            fold=assembly.is_fold,
             d=TD_D,
+            **export_kwargs,
         )
         return CandidateEvaluation(
             factor_spec_hash=factor_spec_hash(spec),
