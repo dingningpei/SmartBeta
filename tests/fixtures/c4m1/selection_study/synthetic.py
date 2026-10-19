@@ -67,6 +67,11 @@ __all__ = [
     "pool_shapes",
     "make_pool_run",
     "make_four_runs",
+    "LIMITED_W1_SHAPES",
+    "LIMITED_W2_SHAPES",
+    "limited_fixture",
+    "scripted_builder",
+    "scripted_builder_factory",
     "make_six_status_run",
     "fake_m1e_report",
 ]
@@ -408,24 +413,32 @@ def pool_series(
     return values
 
 
-def pool_specs(origin: str) -> list[dict[str, Any]]:
+def pool_specs(
+    origin: str,
+    shapes: Sequence[Sequence[Any]] | None = None,
+) -> list[dict[str, Any]]:
     """The six specs of one synthetic pool (unique panel key per origin)."""
 
+    table = POOL_SHAPES if shapes is None else shapes
     return [
         spec_dict(
             f"{origin.lower()}{name}",
             numerator_lag=_LAGS[name],
             denominator_lag=252,
         )
-        for name, *_rest in POOL_SHAPES
+        for name, *_rest in table
     ]
 
 
-def pool_scripts(origin: str) -> dict[str, dict[str, Any]]:
+def pool_scripts(
+    origin: str,
+    shapes: Sequence[Sequence[Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
     """``factor_spec_hash -> script`` for the six-shape pool of one origin."""
 
+    table = POOL_SHAPES if shapes is None else shapes
     scripts: dict[str, dict[str, Any]] = {}
-    for shape in POOL_SHAPES:
+    for shape in table:
         name = shape[0]
         spec = spec_dict(
             f"{origin.lower()}{name}",
@@ -447,13 +460,15 @@ def make_pool_run(
     arm: str,
     origin: str,
     builder: ScriptedBuilder,
+    shapes: Sequence[Sequence[Any]] | None = None,
     family_cap: int = 2,
 ) -> Any:
     """Write one synthetic M1-e-shaped run state with the six-shape pool."""
 
+    table = POOL_SHAPES if shapes is None else shapes
     candidates = [
         c4_candidate(spec, family=POOL_FAMILIES[name])
-        for (name, *_rest), spec in zip(POOL_SHAPES, pool_specs(origin))
+        for (name, *_rest), spec in zip(table, pool_specs(origin, table))
     ]
     responses = _responses(arm, candidates)
     return _run_generation(
@@ -468,20 +483,88 @@ def make_pool_run(
 
 
 def make_four_runs(
-    run_root: Path | str, *, builder: ScriptedBuilder, origins: Sequence[str] = ("W1", "W2")
+    run_root: Path | str,
+    *,
+    builder: ScriptedBuilder,
+    origins: Sequence[str] = ("W1", "W2"),
+    shapes: Mapping[str, Sequence[Sequence[Any]]] | None = None,
 ) -> dict[str, Path]:
-    """Write the four synthetic runs (both arms x both origins)."""
+    """Write the four synthetic runs (both arms x both origins).
+
+    ``shapes`` optionally overrides the shape table per origin (used by the
+    POOL-LIMITED fixture).
+    """
 
     root = Path(run_root)
     created: dict[str, Path] = {}
     for origin in origins:
+        table = None if shapes is None else shapes[origin]
         for arm in (GEN.TREATMENT, GEN.CONTROL):
             directory = root / f"{arm}_{origin}"
             make_pool_run(
-                directory, arm=arm, origin=origin, builder=builder
+                directory,
+                arm=arm,
+                origin=origin,
+                builder=builder,
+                shapes=table,
             )
             created[f"{arm}_{origin}"] = directory
     return created
+
+
+#: The POOL-LIMITED fixture: the **W1** pools satisfy the frozen condition
+#: (every W1 test level is negative and the S0 winner has the worst W1 test
+#: value, so the median W1 test t is <= 0 and the training-to-test Spearman
+#: correlation is <= 0), while the **W2** pools do *not* (all their test levels
+#: are positive).  Under the frozen W1-only reading the flag is therefore
+#: ``true``; an all-four-runs reading would say ``false``.
+LIMITED_W1_SHAPES: tuple[tuple[str, float, float, float, float, float, float], ...] = (
+    ("a", -0.06, 0.14, -0.100, 1e-4, 1e-4, 1e-4),
+    ("b", 0.030, 0.050, -0.050, 8.0, 1e-4, 1e-4),
+    ("c", 0.012, 0.014, -0.040, 1.2, 1.2, 1.2),
+    ("d", 0.011, 0.012, -0.030, 1.5, 1.5, 1.5),
+    ("e", 0.0095, 0.0105, -0.020, 1.8, 1.8, 1.8),
+    ("f", 0.008, 0.009, -0.010, 2.0, 2.0, 2.0),
+)
+
+#: The W2 pools of the same fixture: identical training shapes, all-positive
+#: test levels, so their median W2 test mean is > 0.
+LIMITED_W2_SHAPES: tuple[tuple[str, float, float, float, float, float, float], ...] = (
+    ("a", -0.06, 0.14, 0.100, 1e-4, 1e-4, 1e-4),
+    ("b", 0.030, 0.050, 0.050, 8.0, 1e-4, 1e-4),
+    ("c", 0.012, 0.014, 0.040, 1.2, 1.2, 1.2),
+    ("d", 0.011, 0.012, 0.030, 1.5, 1.5, 1.5),
+    ("e", 0.0095, 0.0105, 0.020, 1.8, 1.8, 1.8),
+    ("f", 0.008, 0.009, 0.010, 2.0, 2.0, 2.0),
+)
+
+
+def limited_fixture() -> Mapping[str, Sequence[Sequence[Any]]]:
+    return {"W1": LIMITED_W1_SHAPES, "W2": LIMITED_W2_SHAPES}
+
+
+def scripted_builder(
+    shapes: Mapping[str, Sequence[Sequence[Any]]] | None = None,
+) -> ScriptedBuilder:
+    """The pool scripts of both origins in one builder (parent or child)."""
+
+    scripts: dict[str, dict[str, Any]] = {}
+    for origin in ("W1", "W2"):
+        scripts.update(
+            pool_scripts(origin, None if shapes is None else shapes[origin])
+        )
+    return ScriptedBuilder(scripts=scripts)
+
+
+def scripted_builder_factory(dataset_root, knowledge_log, assembly_run_root):
+    """Module-level, picklable builder factory for the spawned cache workers.
+
+    Spawned workers start a clean interpreter, so the offline ``--jobs 2`` test
+    needs a factory it can resolve **by name**; the production path uses
+    ``run_c4_selection_study.build_production_evaluator`` instead.
+    """
+
+    return scripted_builder()
 
 
 def make_six_status_run(

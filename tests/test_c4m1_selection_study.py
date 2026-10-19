@@ -2,18 +2,20 @@
 
 Authority: ``worker_tasks/campaign4_m1/task-c4m1-3-selection-study.md`` section
 "Tests (synthetic only; ``tests/test_c4m1_selection_study.py``; no network, no
-real data)".  Every test is offline and in-process: scripted per-period series,
-synthetic M1-e-shaped run states produced by the real C4 executor path, and a
-synthetic M1-e-shaped report for the reproduction check.  No ``data_store``
-path, production artifact, reserve / holdout, Knowledge-PIT write or network
-path is touched, and no test calls ``git``.
+real data)".  Every test is offline: scripted per-period series, synthetic
+M1-e-shaped run states produced by the real C4 executor path, and a synthetic
+M1-e-shaped report for the reproduction check.  The ``--jobs 2`` test spawns
+fresh interpreters (``spawn``, never ``fork``); each one rebuilds the same
+synthetic builder through a module-level factory resolved by name.  No
+``data_store`` path, production artifact, reserve / holdout, Knowledge-PIT
+write or network path is touched, and no test calls ``git``.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -36,17 +38,21 @@ from tests.fixtures.c4m1.walkforward import synthetic as W
 
 
 def _load_script():
-    name = "c4_selection_study_script"
+    """Import ``scripts/run_c4_selection_study.py`` under its real module name.
+
+    The name matters: the ``--jobs 2`` test spawns fresh interpreters, and a
+    spawned worker can only unpickle a module-level function whose module it can
+    import.  Loading the script under a synthetic name would make the worker
+    functions unpicklable (review R2).
+    """
+
+    name = "run_c4_selection_study"
     if name in sys.modules:
         return sys.modules[name]
-    path = (
-        Path(__file__).resolve().parents[1] / "scripts" / "run_c4_selection_study.py"
-    )
-    loader_spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(loader_spec)
-    sys.modules[name] = module
-    loader_spec.loader.exec_module(module)
-    return module
+    scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    return importlib.import_module(name)
 
 
 def _hash_tree(root: Path) -> dict[str, str]:
@@ -615,6 +621,13 @@ def test_cached_series_reproduces_the_rank_statistic_bitwise(env, tmp_path):
 
 
 def test_report_is_identical_for_jobs_one_and_two(env, tmp_path):
+    """``--jobs 2`` uses spawned workers: same cache bytes, same report.
+
+    Run under ``-W error::DeprecationWarning`` (review R2): the ``fork`` start
+    method warned about a multi-threaded parent, so the workers are spawned
+    instead and no such warning may be raised.
+    """
+
     script = _load_script()
     report_one, code_one, _out_one = _run_study(env, tmp_path / "one")
     assert code_one == 0
@@ -629,12 +642,26 @@ def test_report_is_identical_for_jobs_one_and_two(env, tmp_path):
     metrics = script.warm_series_cache(
         cache=cache,
         specs=specs,
-        builder_factory=lambda: env.builder,
         jobs=2,
+        # A spawned worker starts a clean interpreter, so the offline builder is
+        # carried by name, not by a closure over this process.
+        builder_ref=(
+            "tests.fixtures.c4m1.selection_study.synthetic"
+            ":scripted_builder_factory"
+        ),
     )
     assert metrics["evaluated"] == metrics["requested"]
     assert metrics["requested"] == 12
     assert metrics["workers"] == 2
+    assert metrics["start_method"] == "spawn"
+
+    # The workers wrote exactly the cache the serial run wrote.
+    serial_cache = tmp_path / "one" / "cache"
+    for path in sorted(serial_cache.glob("*.json")):
+        parallel = cache.directory / path.name
+        assert parallel.is_file()
+        assert parallel.read_bytes() == path.read_bytes()
+
     report_two, code_two, _out_two = _run_study(env, tmp_path / "two", cache=cache)
     assert code_two == 0
 
@@ -743,38 +770,104 @@ def test_the_study_reports_the_frozen_reading(env, tmp_path):
         "S3": True,
     }
     assert report["flags"]["pool_limited"] is False
+    assert report["flags"]["pool_limited_reason"] is None
+    assert report["flags"]["pool_limited_basis"] == "W1 pools only (treatment_W1, control_W1)"
 
 
-def test_pool_limited_flag_reads_the_frozen_condition():
-    def run(name, median, spearman):
-        return {
-            "run": name,
-            "base_rate": {"median": median, "spearman": spearman},
-        }
+def _rate_run(arm, origin, median, spearman):
+    return {
+        "run": f"{arm}_{origin}",
+        "arm": arm,
+        "origin": origin,
+        "base_rate": {"median": median, "spearman": spearman},
+    }
 
-    negative = [
-        run("treatment_W1", -0.5, -0.4),
-        run("treatment_W2", -0.2, -0.1),
-        run("control_W1", -0.3, 0.0),
-        run("control_W2", 0.0, -0.2),
+
+def test_pool_limited_flag_reads_the_w1_pools_only():
+    # Both W1 pools non-positive => POOL-LIMITED, whatever the W2 pools say.
+    limited_w1 = [
+        _rate_run("treatment", "W1", -0.5, -0.4),
+        _rate_run("control", "W1", -0.3, 0.0),
+        _rate_run("treatment", "W2", 0.8, 0.7),
+        _rate_run("control", "W2", 0.9, 0.6),
     ]
-    assert SS._flag_pool_limited(negative)["pool_limited"] is True
+    flag = SS._flag_pool_limited(limited_w1)
+    assert flag["pool_limited"] is True
+    assert flag["pool_limited_reason"] is None
+    assert sorted(flag["pool_limited_detail"]) == ["control_W1", "treatment_W1"]
 
-    positive = [
-        run("treatment_W1", 0.5, -0.4),
-        run("treatment_W2", -0.2, -0.1),
-        run("control_W1", -0.3, 0.0),
-        run("control_W2", 0.0, -0.2),
+    # One W1 pool with a positive median is enough to clear the flag, even
+    # though both W2 pools are negative.
+    mixed = [
+        _rate_run("treatment", "W1", 0.5, -0.4),
+        _rate_run("control", "W1", -0.3, 0.0),
+        _rate_run("treatment", "W2", -0.8, -0.7),
+        _rate_run("control", "W2", -0.9, -0.6),
     ]
-    assert SS._flag_pool_limited(positive)["pool_limited"] is False
+    assert SS._flag_pool_limited(mixed)["pool_limited"] is False
 
+    # A non-positive W1 median with a *positive* W1 correlation also clears it.
+    positive_correlation = [
+        _rate_run("treatment", "W1", -0.5, 0.4),
+        _rate_run("control", "W1", -0.3, 0.0),
+    ]
+    assert SS._flag_pool_limited(positive_correlation)["pool_limited"] is False
+
+    # An undefined correlation never manufactures a POOL-LIMITED claim.
     undefined = [
-        run("treatment_W1", -0.5, None),
-        run("treatment_W2", -0.2, -0.1),
-        run("control_W1", -0.3, 0.0),
-        run("control_W2", 0.0, -0.2),
+        _rate_run("treatment", "W1", -0.5, None),
+        _rate_run("control", "W1", -0.3, 0.0),
     ]
     assert SS._flag_pool_limited(undefined)["pool_limited"] is False
+
+    # A missing W1 pool is *undetermined*, never False.
+    missing = [_rate_run("treatment", "W1", -0.5, -0.4)]
+    absent = SS._flag_pool_limited(missing)
+    assert absent["pool_limited"] is None
+    assert absent["pool_limited_reason"] == "W1-pool-missing"
+    assert absent["pool_limited_missing"] == ["control_W1"]
+
+
+def test_pool_limited_uses_the_w1_pools_end_to_end(tmp_path):
+    """W1 pools limited + W2 pools not limited => POOL-LIMITED true.
+
+    Under the pre-review all-four-runs reading this fixture would report
+    ``false`` (the W2 pools are positive), so it pins review R1 exactly.
+    """
+
+    root = tmp_path / "limited"
+    shapes = S.limited_fixture()
+    builder = S.scripted_builder(shapes)
+    run_root = root / "runs"
+    S.make_four_runs(run_root, builder=builder, shapes=shapes)
+    env = SimpleNamespace(root=root, run_root=run_root, runs={}, builder=builder)
+
+    report, exit_code, _out = _run_study(env, tmp_path / "study")
+
+    assert exit_code == 0
+    by_run = {run["run"]: run for run in report["runs"]}
+    for name in ("treatment_W1", "control_W1"):
+        assert by_run[name]["base_rate"]["median"] <= 0.0
+        assert by_run[name]["base_rate"]["spearman"] <= 0.0
+    for name in ("treatment_W2", "control_W2"):
+        assert by_run[name]["base_rate"]["median"] > 0.0
+        assert by_run[name]["base_rate"]["spearman"] > 0.0
+    assert report["flags"]["pool_limited"] is True
+    assert report["flags"]["pool_limited_reason"] is None
+    assert sorted(report["flags"]["pool_limited_detail"]) == [
+        "control_W1",
+        "treatment_W1",
+    ]
+
+
+def test_pool_limited_is_null_when_a_w1_run_is_missing(env, tmp_path):
+    report, exit_code, _out = _run_study(
+        env, tmp_path / "study", run_names=["treatment_W1", "treatment_W2"]
+    )
+    assert exit_code == 0
+    assert report["flags"]["pool_limited"] is None
+    assert report["flags"]["pool_limited_reason"] == "W1-pool-missing"
+    assert "control_W1" in report["flags"]["pool_limited_missing"]
 
 
 def test_no_kpit_write_and_the_m1e_run_root_is_untouched(env, tmp_path, monkeypatch):

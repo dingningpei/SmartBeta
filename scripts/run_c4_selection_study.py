@@ -15,6 +15,11 @@ pre-registered rules ``S0``--``S3`` (writing and hashing each selection file
 before any test-window value is read), and writes the canonical
 ``c4_selection_study_report.json`` + ``.md``.
 
+Cache warm-up is the only step that evaluates; ``--jobs N`` runs it in ``N``
+``spawn``-ed workers (never ``fork``), each of which builds its own read-only
+assembly through :func:`build_production_evaluator` and writes its own cache
+files atomically, so the resulting cache and report never depend on ``--jobs``.
+
 Firewall.  IS only: nothing opens an OOS, DEVELOPMENT_SEALED, HOLDOUT or
 reserve path.  Every rule value is computed from formation dates strictly
 before the window cut.  The Knowledge-PIT is only read (the assembly binds it);
@@ -37,6 +42,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib
 import multiprocessing
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -69,27 +75,102 @@ DEFAULT_RUNS = "treatment_W1,treatment_W2,control_W1,control_W2"
 # cache warm-up (the only step that evaluates; --jobs parallelises it)
 # ---------------------------------------------------------------------------
 
-#: Per-process child state.  With the ``fork`` start method the children
-#: inherit the parent's builder *factory* (a closure over the assembly wiring)
-#: and build their own assembly lazily, so no handle is shared across processes.
-_CHILD_STATE: dict[str, Any] = {"factory": None, "builder": None}
+
+def build_production_evaluator(
+    dataset_root: str | Path,
+    knowledge_log: str | Path,
+    assembly_run_root: str | Path,
+) -> Callable[[Any], Any]:
+    """The read-only production assembly + full-IS evaluator of one worker.
+
+    Reuses the frozen C4M1-2 wiring **by import** -- ``assemble_production``
+    plus ``run_c4_walkforward._build_evaluator`` / ``build_identity_generator``
+    -- exactly as the C3 production launcher does.  Nothing is copied.  The
+    Knowledge-PIT is only bound (never appended to) and the IS fold is asserted
+    before any panel is built.
+    """
+
+    assembly = _launch.assemble_production(
+        dataset_root,
+        knowledge_log,
+        assembly_run_root,
+        build_identity_generator(),
+    )
+    assert_is_fold(assembly.is_fold)
+    return _build_evaluator(assembly)
 
 
-def _warm_child(task: tuple[str, Mapping[str, Any]]) -> str:
-    """Evaluate one cache miss in a worker and write its cache file atomically."""
+def _resolve_builder(
+    builder_ref: str | None,
+    dataset_root: str | Path | None,
+    knowledge_log: str | Path | None,
+    assembly_run_root: str | Path | None,
+) -> Callable[[Any], Any]:
+    """The evaluator of one worker: the production path or a named factory.
 
-    cache_dir, spec_payload = task
-    if _CHILD_STATE.get("builder") is None:
-        factory = _CHILD_STATE.get("factory")
-        if factory is None:  # pragma: no cover - only without the fork method
+    ``builder_ref`` (``"module:attribute"``) is the offline-test hook: the named
+    module-level factory is called with ``(dataset_root, knowledge_log,
+    assembly_run_root)`` and must return a ``spec -> CandidateEvaluation``
+    builder.  It is resolved by name so it survives pickling into a spawned
+    worker; the production path needs no factory at all.
+    """
+
+    if builder_ref:
+        module_name, _, attribute = str(builder_ref).partition(":")
+        if not module_name or not attribute:
             raise SS.SelectionStudyError(
-                "the cache worker has no evaluator factory; --jobs > 1 needs "
-                "the fork start method"
+                f"builder_ref must be 'module:attribute', got {builder_ref!r}"
             )
-        _CHILD_STATE["builder"] = factory()
-    cache = SS.SeriesCache(Path(cache_dir))
+        factory = getattr(importlib.import_module(module_name), attribute)
+        return factory(dataset_root, knowledge_log, assembly_run_root)
+    if dataset_root is None or knowledge_log is None or assembly_run_root is None:
+        raise SS.SelectionStudyError(
+            "--jobs > 1 needs the dataset root, the K-PIT copy and the assembly "
+            "run root (or an explicit builder_ref)"
+        )
+    return build_production_evaluator(
+        dataset_root, knowledge_log, assembly_run_root
+    )
+
+
+#: The per-worker state, filled by :func:`worker_init` in each spawned child.
+#: ``spawn`` starts a clean interpreter, so nothing (no assembly, no dataset
+#: handle, no lock) is inherited from this process.
+_WORKER: dict[str, Any] = {"cache": None, "builder": None}
+
+
+def worker_init(
+    dataset_root: str | None,
+    knowledge_log: str | None,
+    assembly_run_root: str | None,
+    cache_dir: str,
+    builder_ref: str | None,
+) -> None:
+    """Module-level spawn initializer: one cache handle + one evaluator.
+
+    The arguments are plain picklable values only, so a spawned worker builds
+    its own read-only assembly (through :func:`build_production_evaluator`) and
+    writes its own cache files.
+    """
+
+    _WORKER["cache"] = SS.SeriesCache(Path(cache_dir))
+    _WORKER["builder"] = _resolve_builder(
+        builder_ref, dataset_root, knowledge_log, assembly_run_root
+    )
+
+
+def warm_one_spec(spec_payload: Mapping[str, Any]) -> str:
+    """Evaluate one cache miss in a spawned worker (atomic cache write)."""
+
+    cache = _WORKER["cache"]
+    builder = _WORKER["builder"]
+    if cache is None or builder is None:  # pragma: no cover - init guarantees it
+        raise SS.SelectionStudyError(
+            "the cache worker was not initialised; --jobs > 1 needs a worker "
+            "initializer"
+        )
     spec = FactorSpec.from_dict(dict(spec_payload))
-    return cache.get(spec, _CHILD_STATE["builder"]).factor_spec_hash
+    return cache.get(spec, builder).factor_spec_hash
 
 
 def _unique_specs(pools: Sequence[SS.RunPool]) -> list[Any]:
@@ -108,14 +189,23 @@ def warm_series_cache(
     *,
     cache: SS.SeriesCache,
     specs: Sequence[Any],
-    builder_factory: Callable[[], Callable[[Any], Any]],
     jobs: int = 1,
+    builder: Callable[[Any], Any] | None = None,
+    dataset_root: str | Path | None = None,
+    knowledge_log: str | Path | None = None,
+    assembly_run_root: str | Path | None = None,
+    builder_ref: str | None = None,
 ) -> dict[str, int]:
-    """Evaluate every cache miss once; ``jobs > 1`` uses a forked process pool.
+    """Evaluate every cache miss once; ``jobs > 1`` uses spawned workers.
 
-    The result (the cache contents) does not depend on ``jobs``: each worker
-    owns a disjoint set of specs and writes its own cache file atomically, and
-    the study body is serial and reads the cache only.
+    The result (the cache contents) never depends on ``jobs``: each worker owns
+    a disjoint set of specs and writes its own cache file atomically, and the
+    study body is serial and reads the cache only.  ``jobs > 1`` uses the
+    ``spawn`` start method (never ``fork``): every worker is a clean
+    interpreter that builds its own assembly from plain arguments
+    (:func:`worker_init`), so a multi-hour run cannot deadlock on a forked
+    lock.  ``builder`` (jobs 1 only) and ``builder_ref`` are the offline-test
+    hooks.
     """
 
     pending: list[Any] = []
@@ -132,34 +222,45 @@ def warm_series_cache(
         "already_cached": len(seen) - len(pending),
         "evaluated": 0,
         "workers": 1,
+        "start_method": "inline",
     }
     if not pending:
         return metrics
 
     workers = int(jobs)
     if workers <= 1:
-        builder = builder_factory()
+        evaluator = (
+            builder
+            if builder is not None
+            else _resolve_builder(
+                builder_ref, dataset_root, knowledge_log, assembly_run_root
+            )
+        )
         for spec in pending:
-            cache.get(spec, builder)
+            cache.get(spec, evaluator)
         metrics["evaluated"] = len(pending)
         return metrics
 
-    try:
-        context = multiprocessing.get_context("fork")
-    except ValueError as exc:  # pragma: no cover - platform dependent
-        raise SS.SelectionStudyError(
-            "--jobs > 1 requires the fork start method; use --jobs 1"
-        ) from exc
-    _CHILD_STATE["factory"] = builder_factory
-    _CHILD_STATE["builder"] = None
-    tasks = [(str(cache.directory), spec.to_dict()) for spec in pending]
-    # ``fork``: the children inherit the builder *factory* (never a built
-    # assembly), build their own read-only assembly on their first task and
-    # write their own cache files, so no dataset handle is shared.
-    with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
-        done = list(pool.map(_warm_child, tasks, chunksize=1))
+    initargs = (
+        None if dataset_root is None else str(dataset_root),
+        None if knowledge_log is None else str(knowledge_log),
+        None if assembly_run_root is None else str(assembly_run_root),
+        str(cache.directory),
+        builder_ref,
+    )
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=context,
+        initializer=worker_init,
+        initargs=initargs,
+    ) as pool:
+        done = list(
+            pool.map(warm_one_spec, [spec.to_dict() for spec in pending], chunksize=1)
+        )
     metrics["evaluated"] = len(done)
     metrics["workers"] = workers
+    metrics["start_method"] = context.get_start_method()
     return metrics
 
 
@@ -249,21 +350,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             assembly_run_root, m1e_root, what="the assembly run root"
         )
 
-        def builder_factory() -> Callable[[Any], Any]:
-            assembly = _launch.assemble_production(
-                args.dataset_root,
-                args.knowledge_log,
-                assembly_run_root,
-                build_identity_generator(),
-            )
-            assert_is_fold(assembly.is_fold)
-            return _build_evaluator(assembly)
-
         metrics = warm_series_cache(
             cache=cache,
             specs=specs,
-            builder_factory=builder_factory,
             jobs=args.jobs,
+            dataset_root=args.dataset_root,
+            knowledge_log=args.knowledge_log,
+            assembly_run_root=assembly_run_root,
         )
         print(
             "cache warm-up: "

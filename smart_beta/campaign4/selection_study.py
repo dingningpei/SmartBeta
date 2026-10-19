@@ -1474,16 +1474,28 @@ def _flag_promising(
 
 
 def _flag_pool_limited(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """POOL-LIMITED per study (draft section 3).
+    """POOL-LIMITED per study (draft section 3, review R1).
 
-    Applies when, in both arms, the pool's median test value is <= 0 and the
-    training-to-test Spearman correlation is <= 0.  Each run contributes the
-    statistic its own window defines (W1: EWC t; W2: the descriptive mean), so
-    the condition is evaluated on all four (arm x origin) pools.
+    The frozen condition is the **W1** one, in both arms:
+
+    * the pool's median W1 test EWC t is ``<= 0``; and
+    * the Spearman correlation between the S0 training value and the W1 test
+      t is ``<= 0``.
+
+    Only the two ``*_W1`` pools are read.  The W2 base rates stay in the report
+    as per-run descriptive values; they never enter this flag.  When a W1 run
+    is absent the flag is ``None`` (undetermined) with the reason
+    ``"W1-pool-missing"`` -- never ``False``.
     """
 
+    by_key = {(run["arm"], run["origin"]): run for run in runs}
     detail: dict[str, Any] = {}
-    for run in runs:
+    missing: list[str] = []
+    for arm in ARMS:
+        run = by_key.get((arm, "W1"))
+        if run is None:
+            missing.append(f"{arm}_W1")
+            continue
         rate = run["base_rate"]
         median = rate["median"]
         spearman = rate["spearman"]
@@ -1493,11 +1505,23 @@ def _flag_pool_limited(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "median_non_positive": median is not None and float(median) <= 0.0,
             "spearman_non_positive": spearman is not None and float(spearman) <= 0.0,
         }
-    all_runs = bool(detail) and all(
+    if missing:
+        return {
+            "pool_limited": None,
+            "pool_limited_reason": "W1-pool-missing",
+            "pool_limited_missing": missing,
+            "pool_limited_detail": detail,
+        }
+    both = all(
         item["median_non_positive"] and item["spearman_non_positive"]
         for item in detail.values()
     )
-    return {"pool_limited": all_runs, "detail": detail}
+    return {
+        "pool_limited": bool(both),
+        "pool_limited_reason": None,
+        "pool_limited_missing": [],
+        "pool_limited_detail": detail,
+    }
 
 
 def _selection_files_in_output(output_dir: Path) -> list[str]:
@@ -1849,7 +1873,10 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
             "promising": promising["promising"],
             "promising_detail": promising["detail"],
             "pool_limited": limited["pool_limited"],
-            "pool_limited_detail": limited["detail"],
+            "pool_limited_reason": limited["pool_limited_reason"],
+            "pool_limited_basis": "W1 pools only (treatment_W1, control_W1)",
+            "pool_limited_missing": limited["pool_limited_missing"],
+            "pool_limited_detail": limited["pool_limited_detail"],
         },
         "trial_accounting": trial,
         "reproduction": reproduction,
@@ -1908,7 +1935,13 @@ def render_report_markdown(report: Mapping[str, Any]) -> str:
             for rule, flag in sorted(report["flags"]["promising"].items())
         ),
         "",
-        f"POOL-LIMITED: **{_fmt(report['flags']['pool_limited'])}**",
+        "POOL-LIMITED (W1 pools only): "
+        f"**{_fmt(report['flags']['pool_limited'])}**"
+        + (
+            f" ({report['flags'].get('pool_limited_reason')})"
+            if report["flags"].get("pool_limited_reason")
+            else ""
+        ),
         "",
     ]
     for run in report["runs"]:
