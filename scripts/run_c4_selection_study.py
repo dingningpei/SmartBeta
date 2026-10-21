@@ -20,6 +20,12 @@ Cache warm-up is the only step that evaluates; ``--jobs N`` runs it in ``N``
 assembly through :func:`build_production_evaluator` and writes its own cache
 files atomically, so the resulting cache and report never depend on ``--jobs``.
 
+Reproduction.  ``--m1e-reports`` supplies the report whose ``counts["EVALUATED"]``
+is the frozen hard check (draft section 1).  Review R3: the count is read up
+front and compared against the pool **after** the VALID training-rank-statistic
+filter and **before** any selection file is written; a mismatch writes the
+report only (marked ``REPRODUCTION_FAILED``) and exits non-zero.
+
 Firewall.  IS only: nothing opens an OOS, DEVELOPMENT_SEALED, HOLDOUT or
 reserve path.  Every rule value is computed from formation dates strictly
 before the window cut.  The Knowledge-PIT is only read (the assembly binds it);
@@ -371,13 +377,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=output_dir,
         run_names=run_names,
         m1e_reports=tuple(Path(item) for item in args.m1e_reports),
+        # Review R3: the frozen hard check is each M1-e report's own
+        # counts["EVALUATED"], compared against the VALID-filtered pool before
+        # any selection file is written.
+        expected_evaluated=(
+            SS.expected_counts_from_reports(
+                [Path(item) for item in args.m1e_reports], run_names=run_names
+            )
+            if args.m1e_reports
+            else None
+        ),
     )
     report, exit_code = SS.run_selection_study(deps=deps)
     print(
         f"wrote {output_dir / 'c4_selection_study_report.json'} "
         f"(content_sha256={report['content_sha256']})"
     )
-    print(f"reproduction: {report['reproduction']['status']}")
+    print(
+        f"reproduction: {report['reproduction']['status']}"
+        + (
+            f" ({report['reproduction']['reason']})"
+            if report["reproduction"].get("reason")
+            else ""
+        )
+    )
     print(
         "flags: promising="
         + ", ".join(
