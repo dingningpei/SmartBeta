@@ -264,6 +264,61 @@ def test_pool_loader_refuses_an_ambiguous_state(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 1b. the VALID training-rank-statistic conjunct (review R3)
+# ---------------------------------------------------------------------------
+
+
+def test_state_evaluated_candidate_with_a_not_assessed_rank_stat_is_excluded(
+    tmp_path,
+):
+    """Review R3: NOT_ASSESSED is decided by the recomputed rank statistic.
+
+    A candidate the M1-e state labels EVALUATED (``assessed: true`` /
+    ``not_assessed_reason: null``) whose L-TD series makes the frozen rank
+    statistic NOT_ASSESSED must be labelled NOT_ASSESSED and excluded -- not
+    raised on, as the merged R2 code did.
+    """
+
+    builder = S.scripted_builder()
+    spec = S.pool_specs("W1")[0]
+    key = factor_spec_hash(FactorSpec.from_dict(spec))
+    # A flat training series: the frozen EWC reports DEGENERATE_VARIANCE, so the
+    # recomputed L-TD rank statistic is NOT_ASSESSED.
+    flat = [0.01] * len(S.IS_FORMATIONS)
+    builder.scripts[key] = {"cells": {"L-TD": flat}}
+
+    # The fixture property itself, independent of the code under test.
+    flat_stat = rank_statistic(S.candidate_series(flat, key=key), S.W1_CUT)
+    assert flat_stat.status == SS.NOT_ASSESSED
+    assert flat_stat.reason == "DEGENERATE_VARIANCE"
+
+    run_root = tmp_path / "runs"
+    S.make_four_runs(run_root, builder=builder, origins=("W1",))
+    env = SimpleNamespace(root=tmp_path, run_root=run_root, runs={}, builder=builder)
+
+    report, exit_code, _out = _run_study(
+        env, tmp_path / "study", run_names=["treatment_W1"]
+    )
+
+    assert exit_code == 0
+    run = report["runs"][0]
+    # The state labelled all six proposals EVALUATED; the VALID filter drops one.
+    assert run["pool"]["n_eligible"] == 5
+    assert run["pool"]["status_counts"]["NOT_ASSESSED"] == 1
+    excluded = [
+        item for item in run["pool_excluded"] if item["factor_spec_hash"] == key
+    ]
+    assert len(excluded) == 1
+    assert excluded[0]["status"] == SS.NOT_ASSESSED
+    assert excluded[0]["reason"] == "DEGENERATE_VARIANCE"
+    # It reaches neither the ranking nor any pre-declared reading.
+    assert key not in {item["factor_spec_hash"] for item in run["ranked"]}
+    assert key not in {
+        row["factor_spec_hash"] for row in run["base_rate"]["rows"]
+    }
+
+
+# ---------------------------------------------------------------------------
 # 2. the statistics
 # ---------------------------------------------------------------------------
 
@@ -710,6 +765,8 @@ def test_reproduction_matches_and_mismatches_are_fatal(env, tmp_path):
     assert written["reproduction"]["status"] == "REPRODUCTION_FAILED"
 
     # A wrong EVALUATED count is fatal too (the draft's 50/41/62/73 hard check).
+    # Review R3: it is checked after the VALID filter and *before* any selection
+    # file is written, so the run leaves a report but no selection file.
     wrong_count = copy.deepcopy(matching)
     wrong_count["runs"][0]["counts"]["EVALUATED"] += 1
     count_dir = tmp_path / "m1e_count"
@@ -717,9 +774,125 @@ def test_reproduction_matches_and_mismatches_are_fatal(env, tmp_path):
     (count_dir / "c4_walkforward_report.json").write_text(
         json.dumps(wrong_count), encoding="utf-8"
     )
-    counted, code, _out = _run_study(env, tmp_path / "counted", m1e_reports=[count_dir])
-    assert code != 0
+    counted, code, count_out = _run_study(
+        env, tmp_path / "counted", m1e_reports=[count_dir]
+    )
+    assert code == 1
     assert counted["reproduction"]["status"] == "REPRODUCTION_FAILED"
+    assert counted["reproduction"]["reason"] == "evaluated-count-mismatch"
+    assert counted["reproduction"]["selection_files_written"] is False
+    assert list(count_out.glob("selection_*.json")) == []
+
+
+def test_expected_count_mismatch_writes_no_selection_file(env, tmp_path):
+    """Review R3: the count check precedes every selection file."""
+
+    report, exit_code, _out = _run_study(env, tmp_path / "study")
+    assert exit_code == 0
+    matching = S.fake_m1e_report(report)
+    wrong = copy.deepcopy(matching)
+    wrong["runs"][0]["counts"]["EVALUATED"] += 1
+    m1e_dir = tmp_path / "m1e_count"
+    m1e_dir.mkdir()
+    (m1e_dir / "c4_walkforward_report.json").write_text(
+        json.dumps(wrong), encoding="utf-8"
+    )
+
+    failed, code, out = _run_study(
+        env, tmp_path / "mismatch", m1e_reports=[m1e_dir]
+    )
+
+    assert code == 1
+    assert failed["reproduction"]["status"] == "REPRODUCTION_FAILED"
+    assert failed["reproduction"]["reason"] == "evaluated-count-mismatch"
+    assert failed["reproduction"]["n_failed"] == 1
+    assert failed["reproduction"]["selection_files_written"] is False
+    # The report (json + md) is written; the selection files are not.
+    assert (out / "c4_selection_study_report.json").is_file()
+    assert (out / "c4_selection_study_report.md").is_file()
+    assert list(out.glob("selection_*.json")) == []
+    assert failed["outputs"] == []
+    assert "no selection files written" in (
+        out / "c4_selection_study_report.md"
+    ).read_text(encoding="utf-8")
+    # The pools are still reported (after the VALID filter).
+    assert failed["runs"] and all(
+        run["pool"]["n_eligible"] > 0 for run in failed["runs"]
+    )
+
+
+def test_cli_derives_expected_counts_from_a_supplied_m1e_report(env, tmp_path):
+    """Review R3: the CLI reads ``counts["EVALUATED"]`` and enforces it."""
+
+    script = _load_script()
+    report, exit_code, _out = _run_study(env, tmp_path / "study")
+    assert exit_code == 0
+    matching = S.fake_m1e_report(report)
+
+    good = tmp_path / "m1e_good"
+    good.mkdir()
+    (good / "c4_walkforward_report.json").write_text(
+        json.dumps(matching), encoding="utf-8"
+    )
+
+    names = [run["run"] for run in report["runs"]]
+    derived = SS.expected_counts_from_reports([good], run_names=names)
+    assert derived == {
+        run["run"]: run["pool"]["n_eligible"] for run in report["runs"]
+    }
+
+    # A warm cache means the CLI needs no dataset, no assembly and no network.
+    cache = SS.SeriesCache(tmp_path / "cli_cache", evaluate=env.builder)
+    for path in sorted(env.run_root.glob("*_*")):
+        if not (path / "executor_state.json").is_file():
+            continue
+        pool = SS.load_run_pool(path)
+        for candidate in pool.proposals:
+            cache.get(candidate.factor_spec)
+
+    def _cli(output_name, report_dir):
+        return script.main(
+            [
+                "--dataset-root",
+                "/nonexistent-dataset",
+                "--knowledge-log",
+                "/nonexistent-kpit",
+                "--m1e-run-root",
+                str(env.run_root),
+                "--series-cache",
+                str(cache.directory),
+                "--output-dir",
+                str(tmp_path / output_name),
+                "--m1e-reports",
+                str(report_dir),
+            ]
+        )
+
+    assert _cli("cli_good", good) == 0
+    good_out = tmp_path / "cli_good"
+    written = json.loads(
+        (good_out / "c4_selection_study_report.json").read_text(encoding="utf-8")
+    )
+    assert written["reproduction"]["status"] == "REPRODUCED"
+    assert len(list(good_out.glob("selection_*.json"))) == 16
+
+    wrong = copy.deepcopy(matching)
+    wrong["runs"][0]["counts"]["EVALUATED"] += 1
+    bad = tmp_path / "m1e_bad"
+    bad.mkdir()
+    (bad / "c4_walkforward_report.json").write_text(
+        json.dumps(wrong), encoding="utf-8"
+    )
+
+    assert _cli("cli_bad", bad) == 1
+    bad_out = tmp_path / "cli_bad"
+    assert list(bad_out.glob("selection_*.json")) == []
+    assert (
+        json.loads(
+            (bad_out / "c4_selection_study_report.json").read_text(encoding="utf-8")
+        )["reproduction"]["status"]
+        == "REPRODUCTION_FAILED"
+    )
 
 
 # ---------------------------------------------------------------------------

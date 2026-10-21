@@ -23,8 +23,8 @@ Pool reconstruction (which state fields mean EVALUATED)
 
 An M1-e run labels a proposal ``EVALUATED`` when it is certified, admitted by
 the A4 gate (treatment arm), actually evaluated, assessed, and carries a
-**VALID** training rank statistic.  Of those five conjuncts three are read
-straight from the persisted write-ahead state and two are structural:
+**VALID** training rank statistic.  Four conjuncts are read straight from the
+persisted write-ahead state and the fifth is recomputed:
 
 * **certified** -- ``state["certified"][proposal_id] is True`` (the executor's
   own ``is_certified`` result; a proposal absent from the map, or ``False``, is
@@ -46,9 +46,16 @@ straight from the persisted write-ahead state and two are structural:
 * **VALID training rank statistic** is *not* persisted (the state stores no
   rank statistic), so it is reconstructed by re-evaluating the candidate and
   recomputing :func:`~smart_beta.campaign4.ranking.rank_statistic` under the
-  run's own window cut.  A state-labelled ``EVALUATED`` candidate whose
-  recomputed statistic is not ``VALID`` is a contradiction and raises rather
-  than being guessed (task stop rule 1).
+  run's own window cut.  Review R3: an M1-e run decides NOT_ASSESSED from that
+  **recomputed** statistic rather than from a state field, so a candidate can
+  carry ``assessed``/``not_assessed_reason`` as EVALUATED in the state and
+  still be NOT_ASSESSED under the P-Q rule.  Such a candidate is therefore
+  *excluded* and labelled ``NOT_ASSESSED`` with the rank statistic's own
+  reason (:func:`filter_valid_candidates`); it does **not** raise.  A raise is
+  kept only for a genuine inconsistency -- a spec-hash mismatch or a missing
+  cached series.  Because the VALID filter can only run once the series are
+  loaded, the frozen EVALUATED-count hard check is made *after* it and
+  *before* any selection file is written (review R3).
 
 Ordering is the persisted registry order (``state["proposals"]``), which is the
 response order the run counted candidates in; ``proposal_order`` is that
@@ -138,6 +145,8 @@ __all__ = [
     "RuleSelection",
     "SelectionStudyDeps",
     "load_run_pool",
+    "filter_valid_candidates",
+    "expected_counts_from_reports",
     "assert_training_periods",
     "s0_stat",
     "s1_stat",
@@ -161,6 +170,28 @@ S3_SIZE = 5
 
 #: The persisted series-cache document schema.
 SERIES_CACHE_SCHEMA = "campaign4-m1s-series-cache-v1"
+
+#: The frozen EVALUATED definition (draft section 1; review R3).  Four persisted
+#: state conjuncts plus the recomputed training rank statistic.
+EVALUATED_DEFINITION = (
+    "state['certified'][pid] is True AND pid in state['evaluated'] AND "
+    "state['evaluated'][pid]['assessed'] is True AND "
+    "state['evaluated'][pid]['not_assessed_reason'] is None (A4/A2/schema "
+    "refusals all record assessed=False), AND the recomputed training "
+    "rank statistic at the run's window cut is VALID (a candidate that fails "
+    "only this last conjunct is labelled NOT_ASSESSED and excluded, never "
+    "raised)"
+)
+
+#: What the training values are computed from (a report field).
+_SELECTION_BASIS: dict[str, Any] = {
+    "series": "the TD record's long-side (l_series) per-period series",
+    "note": (
+        "the frozen rank/test path consumes l_series; the export's "
+        "net_series is cached alongside for audit"
+    ),
+    "training_only": True,
+}
 
 #: Pool / selection status vocabulary.
 EVALUATED = "EVALUATED"
@@ -659,9 +690,11 @@ def _state_status(
 ) -> tuple[str, str | None]:
     """The M1-e status this state records for one proposal, plus its reason.
 
-    ``status`` is :data:`EVALUATED` exactly for the five conjuncts documented in
-    the module docstring.  Every other proposal is labelled with the refusal the
-    state makes recoverable:
+    ``status`` is :data:`EVALUATED` exactly for the four persisted conjuncts
+    documented in the module docstring (the fifth -- a VALID training rank
+    statistic -- is recomputed by :func:`filter_valid_candidates`, review R3).
+    Every other proposal is labelled with the refusal the state makes
+    recoverable:
 
     * ``NOT_CERTIFIED`` -- the executor never certified the proposal;
     * ``NOT_EVALUATED`` -- certified, but no evaluation was recorded;
@@ -725,11 +758,20 @@ def load_run_pool(
 ) -> RunPool:
     """Rebuild one M1-e run's eligible pool from its ``executor_state.json``.
 
-    Read-only.  Raises :class:`SelectionStudyError` when the state cannot
-    identify ``EVALUATED`` unambiguously (task stop rule 1): a missing/foreign
-    schema, an unparsable run name, a proposal whose persisted spec hash does
-    not match the recomputed one, or a ``certified``/``evaluated`` record whose
-    shape is not the C4 one.
+    Read-only.  This is the *state-level* pool: certified, evaluated, assessed
+    and with no refusal reason.  The fifth EVALUATED conjunct (a VALID training
+    rank statistic) is applied afterwards by :func:`filter_valid_candidates`,
+    because it needs the cached series (review R3).
+
+    Raises :class:`SelectionStudyError` when the state cannot identify
+    ``EVALUATED`` unambiguously (task stop rule 1): a missing/foreign schema, an
+    unparsable run name, a proposal whose persisted spec hash does not match the
+    recomputed one, or a ``certified``/``evaluated`` record whose shape is not
+    the C4 one.
+
+    ``expected_evaluated`` is only recorded on the returned pool for the report;
+    the hard comparison against the M1-e count is made *after* the VALID filter,
+    before any selection file is written (draft section 1; review R3).
     """
 
     directory = Path(run_dir)
@@ -760,7 +802,7 @@ def load_run_pool(
     window_cut = ORIGINS[origin]
 
     proposals: list[PoolCandidate] = []
-    statuses: list[tuple[str, str]] = []
+    statuses: list[tuple[str, str, str | None]] = []
     for order, payload in enumerate(state["proposals"]):
         if not isinstance(payload, Mapping):
             raise SelectionStudyError(
@@ -803,13 +845,6 @@ def load_run_pool(
         statuses=tuple(statuses),
         expected_evaluated=expected_evaluated,
     )
-    if expected_evaluated is not None and len(pool.proposals) != int(
-        expected_evaluated
-    ):
-        raise SelectionStudyError(
-            f"{state_path.parent.name}: the state yields {len(pool.proposals)} "
-            f"EVALUATED proposals, the M1-e report records {expected_evaluated}"
-        )
     return pool
 
 
@@ -1103,6 +1138,71 @@ class RankedCandidate:
     @property
     def order(self) -> int:
         return self.candidate.proposal_order
+
+
+def filter_valid_candidates(
+    pool: RunPool, cache: SeriesCache
+) -> tuple[RunPool, tuple[RankedCandidate, ...], tuple[dict[str, Any], ...]]:
+    """Apply EVALUATED's fifth conjunct: a VALID training rank statistic.
+
+    Review R3 (the M1-e reality): NOT_ASSESSED is decided by the recomputed L-TD
+    rank statistic, not by a state field, so a state-labelled ``EVALUATED``
+    candidate whose statistic is ``NOT_ASSESSED``/``INSUFFICIENT_SAMPLE`` is
+    *excluded* here and labelled ``NOT_ASSESSED`` with the statistic's own
+    reason.  It never raises: only a genuine inconsistency (a cache miss, or an
+    ``s0_stat`` that does not reproduce ``rank_statistic`` bitwise) does.
+
+    Returns the filtered pool (its ``proposals`` are exactly the eligible
+    candidates, its ``statuses`` carry the relabel), the ranked candidates in
+    proposal order, and one exclusion record per dropped candidate.
+    """
+
+    kept: list[PoolCandidate] = []
+    ranked: list[RankedCandidate] = []
+    excluded: list[dict[str, Any]] = []
+    relabel: dict[str, str | None] = {}
+    for candidate in pool.proposals:
+        series = cache.get(candidate.factor_spec)
+        stat = rank_statistic(series, pool.window_cut)
+        if stat.status != VALID or stat.value is None:
+            relabel[candidate.proposal_id] = stat.reason
+            excluded.append(
+                {
+                    "proposal_id": candidate.proposal_id,
+                    "proposal_order": candidate.proposal_order,
+                    "factor_spec_hash": candidate.factor_spec_hash,
+                    "status": NOT_ASSESSED,
+                    "reason": stat.reason,
+                }
+            )
+            continue
+        s0 = s0_stat(series, pool.window_cut)
+        if s0 != float(stat.value):
+            raise SelectionStudyError(
+                f"{pool.directory.name}:{candidate.proposal_id}: s0_stat={s0!r} "
+                f"is not bitwise equal to rank_statistic={stat.value!r}; the "
+                "study cannot reproduce the M1-e rule"
+            )
+        ranked.append(
+            RankedCandidate(
+                candidate=candidate,
+                series=series,
+                rank_stat=stat,
+                s0=s0,
+                s1=s1_stat(series, pool.window_cut),
+                halves_positive=halves_positive(series, pool.window_cut),
+            )
+        )
+        kept.append(candidate)
+
+    statuses = tuple(
+        (proposal_id, NOT_ASSESSED, relabel[proposal_id])
+        if proposal_id in relabel
+        else (proposal_id, status, reason)
+        for proposal_id, status, reason in pool.statuses
+    )
+    filtered = replace(pool, proposals=tuple(kept), statuses=statuses)
+    return filtered, tuple(ranked), tuple(excluded)
 
 
 @dataclass(frozen=True)
@@ -1567,6 +1667,54 @@ class SelectionStudyDeps:
     trial_accounting: Mapping[str, Any] | None = None
 
 
+def _read_m1e_report(path: Path | str) -> tuple[Path, Mapping[str, Any]]:
+    """One M1-e report document (a report directory or the JSON file itself)."""
+
+    report_path = Path(path)
+    if report_path.is_dir():
+        report_path = report_path / "c4_walkforward_report.json"
+    if not report_path.is_file():
+        raise SelectionStudyError(f"the M1-e report {report_path} does not exist")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, Mapping) or not isinstance(report.get("runs"), list):
+        raise SelectionStudyError(
+            f"{report_path} carries no 'runs' list; it is not an M1-e report"
+        )
+    return report_path, report
+
+
+def expected_counts_from_reports(
+    paths: Sequence[Path | str],
+    *,
+    run_names: Sequence[str] | None = None,
+) -> dict[str, int]:
+    """The hard ``counts["EVALUATED"]`` of every run an M1-e report records.
+
+    Review R3: ``--m1e-reports`` supplies the report whose EVALUATED count is
+    the frozen hard check (draft section 1: 50 / 41 / 62 / 73).  It is read
+    here -- before any selection file is written -- and handed to
+    :func:`run_selection_study` as the expected size of the *VALID-filtered*
+    eligible pool.
+    """
+
+    wanted = None if run_names is None else set(str(name) for name in run_names)
+    counts: dict[str, int] = {}
+    for path in paths:
+        report_path, report = _read_m1e_report(path)
+        for entry in report["runs"]:
+            name = f"{entry.get('arm')}_{entry.get('origin')}"
+            if wanted is not None and name not in wanted:
+                continue
+            value = (entry.get("counts") or {}).get("EVALUATED")
+            if value is None:
+                raise SelectionStudyError(
+                    f"{report_path}: the run {name} records no "
+                    "counts['EVALUATED']; the hard count check cannot be made"
+                )
+            counts[name] = int(value)
+    return counts
+
+
 def _read_m1e_reports(
     paths: Sequence[Path], runs: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -1592,20 +1740,8 @@ def _read_m1e_reports(
         )
 
     for path in paths:
-        report_path = Path(path)
-        if report_path.is_dir():
-            report_path = report_path / "c4_walkforward_report.json"
-        if not report_path.is_file():
-            raise SelectionStudyError(
-                f"the M1-e report {report_path} does not exist"
-            )
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        report_runs = report.get("runs")
-        if not isinstance(report_runs, list):
-            raise SelectionStudyError(
-                f"{report_path} carries no 'runs' list; it is not an M1-e report"
-            )
-        for entry in report_runs:
+        report_path, report = _read_m1e_report(path)
+        for entry in report["runs"]:
             arm = str(entry.get("arm"))
             origin = str(entry.get("origin"))
             label = f"{arm}_{origin}"
@@ -1690,6 +1826,12 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
     (only after phase A finished for the whole study) reads the test windows and
     computes the pre-declared descriptive statistics, the pool base rate and the
     flags.
+
+    Review R3: the pool is the *VALID-filtered* one, and the frozen
+    EVALUATED-count hard check (the M1-e report's ``counts["EVALUATED"]``) is
+    applied right after that filter -- before phase A writes any selection
+    file.  A mismatch writes the report only, marked ``REPRODUCTION_FAILED``,
+    and returns exit code 1.
     """
 
     run_root = Path(deps.m1e_run_root)
@@ -1700,46 +1842,143 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pairs = _study_runs(run_root=run_root, run_names=deps.run_names)
-    expected = dict(deps.expected_evaluated or {})
 
-    # -- phase A: training values, selections, selection files --------------
+    # -- the expected EVALUATED counts (draft section 1; review R3) ---------
+    # ``--m1e-reports`` names the report whose ``counts["EVALUATED"]`` is the
+    # frozen hard check (50 / 41 / 62 / 73).  It is read now, so the comparison
+    # can happen after the VALID filter and before any selection file exists.
+    expected: dict[str, int] = {}
+    if deps.m1e_reports:
+        expected.update(
+            expected_counts_from_reports(
+                deps.m1e_reports,
+                run_names=[name for name, _directory in pairs],
+            )
+        )
+    for name, value in dict(deps.expected_evaluated or {}).items():
+        expected[str(name)] = int(value)
+
+    trial = dict(
+        deps.trial_accounting
+        or {
+            "selection_trials": len(pairs) * len(RULES),
+            "m1e_proposal_trials": 400,
+            "total_recorded": len(pairs) * len(RULES) + 400,
+            "note": "recorded only; this study makes no new proposals and no LLM calls",
+        }
+    )
+
+    # -- phase A, part 1: pools + EVALUATED's fifth (VALID) conjunct --------
     runs: list[dict[str, Any]] = []
     pools: dict[str, RunPool] = {}
     ranked_by_run: dict[str, list[RankedCandidate]] = {}
     composites: dict[tuple[str, str], CompositeSeries] = {}
     for name, directory in pairs:
-        pool = load_run_pool(
-            directory, expected_evaluated=expected.get(name)
+        pool = load_run_pool(directory, expected_evaluated=expected.get(name))
+        pool, ranked, excluded = filter_valid_candidates(pool, deps.cache)
+        ordered = sorted(
+            ranked, key=lambda item: (-float(item.s0), item.candidate.proposal_order)
         )
-        ranked: list[RankedCandidate] = []
-        for candidate in pool.proposals:
-            series = deps.cache.get(candidate.factor_spec)
-            stat = rank_statistic(series, pool.window_cut)
-            if stat.status != VALID or stat.value is None:
-                raise SelectionStudyError(
-                    f"{name}: the state labels {candidate.proposal_id} EVALUATED "
-                    f"but the recomputed training rank statistic is "
-                    f"{stat.status} ({stat.reason}); EVALUATED cannot be "
-                    "reconstructed unambiguously"
-                )
-            s0 = s0_stat(series, pool.window_cut)
-            if s0 != float(stat.value):
-                raise SelectionStudyError(
-                    f"{name}:{candidate.proposal_id}: s0_stat={s0!r} is not "
-                    f"bitwise equal to rank_statistic={stat.value!r}; the study "
-                    "cannot reproduce the M1-e rule"
-                )
-            ranked.append(
-                RankedCandidate(
-                    candidate=candidate,
-                    series=series,
-                    rank_stat=stat,
-                    s0=s0,
-                    s1=s1_stat(series, pool.window_cut),
-                    halves_positive=halves_positive(series, pool.window_cut),
-                )
-            )
+        pools[name] = pool
+        ranked_by_run[name] = list(ranked)
+        runs.append(
+            {
+                "run": name,
+                "arm": pool.arm,
+                "origin": pool.origin,
+                "window_cut": pool.window_cut.isoformat(),
+                "pool": pool.to_dict(),
+                "pool_excluded": list(excluded),
+                "ranked": [
+                    {
+                        "rank": index + 1,
+                        "proposal_id": item.candidate.proposal_id,
+                        "factor_spec_hash": item.candidate.factor_spec_hash,
+                        "proposal_order": item.candidate.proposal_order,
+                        "s0": float(item.s0),
+                        "s1": float(item.s1),
+                        "halves_positive": bool(item.halves_positive),
+                    }
+                    for index, item in enumerate(ordered)
+                ],
+                "selections": {},
+            }
+        )
 
+    # -- the hard EVALUATED-count check: after the VALID filter, before any
+    #    selection file is written (draft section 1; review R3) --------------
+    count_checks: list[dict[str, Any]] = [
+        {
+            "check": "evaluated_count",
+            "run": name,
+            "expected": int(expected[name]),
+            "actual": pools[name].n_eligible,
+            "ok": pools[name].n_eligible == int(expected[name]),
+        }
+        for name, _directory in pairs
+        if name in expected
+    ]
+    failed_counts = [item for item in count_checks if not item["ok"]]
+    if failed_counts:
+        # A mismatch writes the report only: no selection file, no test read.
+        body: dict[str, Any] = {
+            "campaign": "campaign4-m1s-selection-study",
+            "design": "docs/campaign4_m1s_selection_study_draft.md",
+            "task": "worker_tasks/campaign4_m1/task-c4m1-3-selection-study.md",
+            "rules": list(RULES),
+            "window_cuts": {key: ORIGINS[key].isoformat() for key in ORIGINS},
+            "s1_last_n": S1_LAST_N,
+            "s3_size": S3_SIZE,
+            "evaluated_definition": EVALUATED_DEFINITION,
+            "runs": [
+                {
+                    "run": run["run"],
+                    "arm": run["arm"],
+                    "origin": run["origin"],
+                    "window_cut": run["window_cut"],
+                    "pool": run["pool"],
+                    "pool_excluded": run["pool_excluded"],
+                    "ranked": run["ranked"],
+                    "selections": {},
+                    "tests": {},
+                    "base_rate": None,
+                }
+                for run in runs
+            ],
+            "flags": {
+                "promising": {},
+                "promising_detail": {},
+                "pool_limited": None,
+                "pool_limited_reason": "reproduction-failed",
+                "pool_limited_basis": "W1 pools only (treatment_W1, control_W1)",
+                "pool_limited_missing": [],
+                "pool_limited_detail": {},
+            },
+            "trial_accounting": trial,
+            "reproduction": {
+                "status": "REPRODUCTION_FAILED",
+                "reason": "evaluated-count-mismatch",
+                "n_checks": len(count_checks),
+                "n_failed": len(failed_counts),
+                "checks": count_checks,
+                "selection_files_written": False,
+            },
+            "selection_basis": dict(_SELECTION_BASIS),
+            "outputs": [],
+        }
+        report = {"content_sha256": _canonical_hash(body), **body}
+        _atomic_write_json(output_dir / "c4_selection_study_report.json", report)
+        _atomic_write_text(
+            output_dir / "c4_selection_study_report.md",
+            render_report_markdown(report),
+        )
+        return report, 1
+
+    # -- phase A, part 2: the rules + the selection files --------------------
+    for run in runs:
+        name = run["run"]
+        pool = pools[name]
+        ranked = ranked_by_run[name]
         ordered = sorted(
             ranked, key=lambda item: (-float(item.s0), item.candidate.proposal_order)
         )
@@ -1762,31 +2001,7 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
             if rule == "S3" and selection.status == SELECTED:
                 top = ordered[:S3_SIZE]
                 composites[(pool.arm, pool.origin)] = composite_series(top)
-
-        pools[name] = pool
-        ranked_by_run[name] = ranked
-        runs.append(
-            {
-                "run": name,
-                "arm": pool.arm,
-                "origin": pool.origin,
-                "window_cut": pool.window_cut.isoformat(),
-                "pool": pool.to_dict(),
-                "ranked": [
-                    {
-                        "rank": index + 1,
-                        "proposal_id": item.candidate.proposal_id,
-                        "factor_spec_hash": item.candidate.factor_spec_hash,
-                        "proposal_order": item.candidate.proposal_order,
-                        "s0": float(item.s0),
-                        "s1": float(item.s1),
-                        "halves_positive": bool(item.halves_positive),
-                    }
-                    for index, item in enumerate(ordered)
-                ],
-                "selections": run_selections,
-            }
-        )
+        run["selections"] = run_selections
 
     # -- phase B: the test windows (only now) ------------------------------
     for run in runs:
@@ -1830,17 +2045,8 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
         if deps.m1e_reports
         else {"status": "NOT_CHECKED", "n_checks": 0, "n_failed": 0, "checks": []}
     )
-    trial = dict(
-        deps.trial_accounting
-        or {
-            "selection_trials": len(pairs) * len(RULES),
-            "m1e_proposal_trials": 400,
-            "total_recorded": len(pairs) * len(RULES) + 400,
-            "note": "recorded only; this study makes no new proposals and no LLM calls",
-        }
-    )
 
-    body: dict[str, Any] = {
+    body = {
         "campaign": "campaign4-m1s-selection-study",
         "design": "docs/campaign4_m1s_selection_study_draft.md",
         "task": "worker_tasks/campaign4_m1/task-c4m1-3-selection-study.md",
@@ -1848,13 +2054,7 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
         "window_cuts": {name: ORIGINS[name].isoformat() for name in ORIGINS},
         "s1_last_n": S1_LAST_N,
         "s3_size": S3_SIZE,
-        "evaluated_definition": (
-            "state['certified'][pid] is True AND pid in state['evaluated'] AND "
-            "state['evaluated'][pid]['assessed'] is True AND "
-            "state['evaluated'][pid]['not_assessed_reason'] is None (A4/A2/schema "
-            "refusals all record assessed=False), AND the recomputed training "
-            "rank statistic at the run's window cut is VALID"
-        ),
+        "evaluated_definition": EVALUATED_DEFINITION,
         "runs": [
             {
                 "run": run["run"],
@@ -1862,6 +2062,7 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
                 "origin": run["origin"],
                 "window_cut": run["window_cut"],
                 "pool": run["pool"],
+                "pool_excluded": run["pool_excluded"],
                 "ranked": run["ranked"],
                 "selections": run["selections"],
                 "tests": run["tests"],
@@ -1880,14 +2081,7 @@ def run_selection_study(*, deps: SelectionStudyDeps) -> tuple[dict[str, Any], in
         },
         "trial_accounting": trial,
         "reproduction": reproduction,
-        "selection_basis": {
-            "series": "the TD record's long-side (l_series) per-period series",
-            "note": (
-                "the frozen rank/test path consumes l_series; the export's "
-                "net_series is cached alongside for audit"
-            ),
-            "training_only": True,
-        },
+        "selection_basis": dict(_SELECTION_BASIS),
         "outputs": _selection_files_in_output(output_dir),
     }
     content_hash = _canonical_hash(body)
@@ -1928,6 +2122,10 @@ def render_report_markdown(report: Mapping[str, Any]) -> str:
         f"- Reproduction: **{report['reproduction']['status']}** "
         f"({report['reproduction']['n_checks']} checks, "
         f"{report['reproduction']['n_failed']} failed)",
+    ]
+    if report["reproduction"].get("reason"):
+        lines.append(f"- Reproduction reason: `{report['reproduction']['reason']}`")
+    lines += [
         "",
         f"PROMISING: "
         + ", ".join(
@@ -1950,11 +2148,20 @@ def render_report_markdown(report: Mapping[str, Any]) -> str:
             f"{run['pool']['n_eligible']} eligible)"
         )
         lines.append("")
+        selections = run.get("selections") or {}
+        if not selections:
+            lines.append(
+                "- no selection files written: "
+                f"`{report['reproduction'].get('reason') or 'reproduction failed'}`"
+            )
+            lines.append("")
+            continue
+        tests = run.get("tests") or {}
         lines.append("| rule | status | pick | training value | test |")
         lines.append("|---|---|---|---|---|")
         for rule in report["rules"]:
-            selection = run["selections"][rule]
-            test = run["tests"][rule]
+            selection = selections[rule]
+            test = tests.get(rule)
             if selection["pick"] is not None:
                 pick = (
                     f"`{selection['pick']['proposal_id'][:24]}` "
@@ -1982,8 +2189,12 @@ def render_report_markdown(report: Mapping[str, Any]) -> str:
                 f"| {rule} | {selection['status']} | {pick} | "
                 f"{_fmt(selection['training_value'])} | {result} |"
             )
-        rate = run["base_rate"]
+        rate = run.get("base_rate")
         lines.append("")
+        if rate is None:
+            lines.append("- Pool base rate: not computed (no selection file written)")
+            lines.append("")
+            continue
         lines.append(
             f"- Pool base rate ({rate['statistic']}, n={rate['n']}): "
             f"median={_fmt(rate['median'])}, "
